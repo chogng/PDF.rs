@@ -1,5 +1,5 @@
 schema = 1
-version = "0.4.0"
+version = "0.5.0"
 status = "active"
 
 [[feature]]
@@ -66,10 +66,10 @@ introduced_in = "0.1.0"
 id = "quality.corpus-manager"
 owner = "quality-corpus"
 state = "PLANNED"
-profile = "m0.synthetic-artifacts.v1"
+profile = "m0.t0-corpus-manifest.v1"
 clauses = ["RPE-ARCH-001/12.19", "RPE-ARCH-001/12.20"]
 modules = ["tools/corpus"]
-tests = ["tools/corpus::tests"]
+tests = ["tools/corpus/src/manifest.rs::tests", "tools/corpus/tests/cli.rs", "tools/corpus/tests/repository_manifest.rs"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

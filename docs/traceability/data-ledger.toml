@@ -1,5 +1,5 @@
 schema = 1
-version = "0.3.0"
+version = "0.4.0"
 status = "active"
 
 [[data]]
@@ -17,5 +17,22 @@ generator_revision = "0.1.0"
 generator_schema = 2
 output_hash = "sha256:9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db"
 owner = "quality-corpus"
-update_policy = "replay the recorded DSL through tools/generate and update source/output/case hashes together"
+update_policy = "replay the recorded DSL and update source/output/case/corpus-manifest/ledger hashes together"
 delete_policy = "retain while the M0 synthetic failure-bundle contract is active"
+
+[[data]]
+id = "corpus.manifest.t0-bootstrap-v1"
+kind = "project-authored-corpus-manifest"
+source = "tests/corpus/manifests/t0-bootstrap-v1.toml"
+acquired_at = 2026-07-13
+version = "corpus-manifest-schema-1"
+source_hash = "sha256:4268cb945b6056d7732f22b0e90d9629f6d31ab2ba6f013e7011735989859d8e"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "disabled pending project-owner license approval; referenced object remains prohibited"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-corpus -- validate tests/corpus/manifests/t0-bootstrap-v1.toml ."
+owner = "quality-corpus"
+update_policy = "canonical re-encode, replay referenced generators, re-hash every object, and update ledger hash"
+delete_policy = "retain while the M0 T0 corpus-validation contract is active"

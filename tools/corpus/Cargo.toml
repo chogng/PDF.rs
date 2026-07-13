@@ -6,3 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+pdf-rs-digest = { path = "../digest" }
+
+[dev-dependencies]
+pdf-rs-generate = { path = "../generate" }

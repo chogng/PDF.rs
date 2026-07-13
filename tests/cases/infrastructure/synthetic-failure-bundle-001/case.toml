@@ -19,7 +19,7 @@ source = "tools/generate@0.1.0 dsl-schema-1 generator-schema-2 source-sha256:70f
 sha256 = "sha256:9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = false
-access = "generated-local"
+access = "repository"
 
 [features]
 ids = ["quality.failure-bundle", "quality.canonical-diff", "quality.minimal-pdf-generator"]
@@ -77,4 +77,4 @@ native = ["synthetic-m0"]
 external_observation = []
 
 [history]
-entries = ["2026-07-13: introduced as a draft pending independent oracle review", "2026-07-13: bound the generated input to executable DSL schema 1 and generator schema 2"]
+entries = ["2026-07-13: introduced as a draft pending independent oracle review", "2026-07-13: bound the generated input to executable DSL schema 1 and generator schema 2", "2026-07-13: aligned generated-local storage with the corpus repository access boundary"]

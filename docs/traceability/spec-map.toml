@@ -1,5 +1,5 @@
 schema = 1
-version = "0.4.0"
+version = "0.5.0"
 status = "active"
 
 [[requirement]]
@@ -26,9 +26,12 @@ tests = [
   "infrastructure/synthetic-failure-bundle-001",
   "tools/baseline::tests",
   "tools/baseline::process_harness",
+  "tools/corpus/src/manifest.rs::tests",
+  "tools/corpus/tests/cli.rs",
+  "tools/corpus/tests/repository_manifest.rs",
 ]
 status = "partial"
-notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, and a bounded replayable one-page/table-xref DSL profile are implemented alongside benchmark statistics and in-memory corpus governance. A reviewed PDFium executable and adapter, platform-enforced isolation, complete baseline-ledger evidence, broader DSL variants, continuous fuzzing, on-disk corpus/benchmark evidence, and T1+ scale gates remain open."
+notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a bounded replayable one-page/table-xref DSL profile, and a canonical content-verified T0 corpus manifest are implemented alongside benchmark statistics. A reviewed PDFium executable and adapter, platform-enforced isolation, complete baseline-ledger evidence, broader DSL variants, continuous fuzzing, benchmark evidence, and T1+ corpus scale gates remain open."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.6"
@@ -39,3 +42,23 @@ implementation = ["tools/generate"]
 tests = ["tools/generate::tests", "infrastructure/synthetic-failure-bundle-001"]
 status = "partial"
 notes = "The bounded m0.one-page-table.v1 profile compiles one PDF 1.7 page with configurable MediaBox/content and a traditional xref table. The wider xref, object-stream, filter, revision, encryption, and corruption dimensions remain open."
+
+[[requirement]]
+id = "RPE-ARCH-001/12.19"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Corpus objects are tiered and carry independently verifiable source, license, hash, redistribution, and access metadata."
+features = ["quality.corpus-manager"]
+implementation = ["tools/corpus"]
+tests = ["tools/corpus/src/manifest.rs::tests", "tools/corpus/tests/cli.rs", "tools/corpus/tests/repository_manifest.rs"]
+status = "partial"
+notes = "Canonical schema-1 T0 manifests are bounded, content-addressed, and locally reverified. External T1-T3 acquisition, authorization, storage, and scale evidence remain open."
+
+[[requirement]]
+id = "RPE-ARCH-001/12.20"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Corpus selection and metrics resist source, complexity, feature, page, and tuning/holdout bias."
+features = ["quality.corpus-manager"]
+implementation = ["tools/corpus"]
+tests = ["tools/corpus/src/lib.rs::tests"]
+status = "partial"
+notes = "The in-memory model provides deterministic content-identity ordering, tier selection, feature tags, aggregate page counts, and holdout partitioning. Stratified sampling, page-access weighting, private authorization, and fixed release evidence remain open."

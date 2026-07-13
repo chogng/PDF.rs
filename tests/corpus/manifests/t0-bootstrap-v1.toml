@@ -1,0 +1,15 @@
+schema = 1
+id = "t0-bootstrap-v1"
+version = "1"
+
+[[entry]]
+sha256 = "sha256:9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db"
+path = "tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf"
+tier = "T0"
+page_count = 1
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+source = "fixture.infrastructure.synthetic-failure-bundle-001"
+access = "repository"
+redistribution = "prohibited"
+features = ["syntax.core", "xref.table"]
+max_bytes = 65536

@@ -20,6 +20,10 @@ version = "0.1.0"
 [[package]]
 name = "pdf-rs-corpus"
 version = "0.1.0"
+dependencies = [
+ "pdf-rs-digest",
+ "pdf-rs-generate",
+]
 
 [[package]]
 name = "pdf-rs-digest"

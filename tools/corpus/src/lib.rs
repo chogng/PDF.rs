@@ -3,6 +3,16 @@
 
 //! Deterministic corpus metadata, selection, and release holdout partitioning.
 
+mod manifest;
+
+pub use manifest::{
+    CORPUS_MANIFEST_SCHEMA, CorpusManifestError, CorpusManifestErrorCategory,
+    CorpusManifestErrorCode, CorpusManifestLimits, CorpusManifestObject,
+    CorpusManifestRecoverability, CorpusManifestVerification, OnDiskCorpusManifest,
+    decode_manifest, encode_manifest, load_manifest_file, validate_manifest_file,
+    verify_manifest_objects,
+};
+
 use std::collections::BTreeSet;
 use std::fmt;
 
