@@ -1,11 +1,9 @@
 [package]
-name = "pdf-rs-quality"
+name = "pdf-rs-baseline"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-compare = { path = "../compare" }
 pdf-rs-digest = { path = "../digest" }
-pdf-rs-generate = { path = "../generate" }

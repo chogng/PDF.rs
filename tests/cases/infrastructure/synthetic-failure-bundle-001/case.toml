@@ -1,0 +1,80 @@
+schema = 1
+
+[identity]
+id = "infrastructure/synthetic-failure-bundle-001"
+title = "Synthetic parse, Scene, Text, and Pixel failure bundle"
+owner = "quality-corpus"
+status = "draft"
+introduced_in = "0.1.0"
+
+[specification]
+document = "RPE-ARCH-001"
+version = "0.3"
+clauses = ["12.3", "12.4", "12.18", "15.3/M0"]
+interpretation = "A deterministic synthetic mismatch must exercise every M0 artifact channel."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tools/generate@0.1.0 fixed-template schema 1"
+sha256 = "sha256:0207841ecfdcfbdf36876f956b8999d923ff917c09dd231dc52f5b0440ec5aa9"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = false
+access = "generated-local"
+
+[features]
+ids = ["quality.failure-bundle", "quality.canonical-diff", "quality.minimal-pdf-generator"]
+requirements = ["m0.synthetic-artifacts.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = true
+pixel = true
+diagnostic = true
+capability = true
+error = false
+
+[oracle]
+level = "O1"
+derivation = "expected/oracle.md"
+reviewers = ["pending-independent-review"]
+reference_may_generate = false
+last_reviewed = "pending"
+
+[budget]
+max_input_bytes = 65536
+max_objects = 64
+max_resolve_depth = 16
+max_stream_output_bytes = 1048576
+max_total_decode_bytes = 1048576
+max_image_pixels = 4096
+max_path_segments = 4096
+max_scene_commands = 4096
+max_group_depth = 8
+operator_fuel = 20000
+decode_fuel = 1048576
+watchdog_ms = 500
+
+[render]
+width = 4
+height = 4
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "synthetic-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["synthetic-m0"]
+external_observation = []
+
+[history]
+entries = ["2026-07-13: introduced as a draft pending independent oracle review"]

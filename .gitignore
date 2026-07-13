@@ -1,3 +1,4 @@
 /target/
 **/*.rs.bk
 .DS_Store
+/tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf

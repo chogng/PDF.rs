@@ -2,11 +2,14 @@
 
 These files are the machine-readable starting point for the audit chain defined by
 [`docs/standards/traceability-and-provenance.md`](../standards/traceability-and-provenance.md).
-They intentionally contain no approved records yet; `status = "initial"` means the
-ledger exists but does not claim coverage, approval, or baseline availability.
+Some ledgers now contain implementation records while approval-sensitive ledgers
+remain empty. `status = "active"` means records exist, not that their requirements
+are covered or release-approved; `status = "initial"` means only that the ledger
+schema exists. In particular, the baseline ledger remains empty until a reviewed
+external executable and complete fingerprint are available.
 
-Each ledger uses schema version `1` and a versioned document revision. Add records
-by replacing the corresponding empty array with array-of-table entries:
+Each ledger uses schema version `1` and a versioned document revision. Records use
+the following array-of-table forms:
 
 | File | Record form |
 | --- | --- |

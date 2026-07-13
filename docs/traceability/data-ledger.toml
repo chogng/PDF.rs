@@ -1,4 +1,21 @@
 schema = 1
-version = "0.1.0"
-status = "initial"
-data = []
+version = "0.2.0"
+status = "active"
+
+[[data]]
+id = "fixture.infrastructure.synthetic-failure-bundle-001"
+kind = "generated-test-pdf"
+source = "project-authored fixed template in tools/generate"
+acquired_at = 2026-07-13
+version = "generator-schema-1"
+source_hash = "sha256:0207841ecfdcfbdf36876f956b8999d923ff917c09dd231dc52f5b0440ec5aa9"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "disabled; generated locally and ignored pending project-owner license approval"
+contains_personal_data = false
+generated_by = "tools/generate"
+generator_revision = "0.1.0"
+generator_schema = 1
+output_hash = "sha256:0207841ecfdcfbdf36876f956b8999d923ff917c09dd231dc52f5b0440ec5aa9"
+owner = "quality-corpus"
+update_policy = "regenerate only through tools/generate and update case/data hashes together"
+delete_policy = "retain while the M0 synthetic failure-bundle contract is active"

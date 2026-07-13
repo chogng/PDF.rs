@@ -1,0 +1,15 @@
+schema = 1
+engine = "pdfium"
+source_checkout = "../../../../pdfium"
+upstream_revision = "c040cf96106a87220b814a1a892649cf2d7f1934"
+runner_schema = 1
+runner_executable = "REQUIRED_BEFORE_DIFFERENTIAL"
+build_hash = "REQUIRED_BEFORE_DIFFERENTIAL"
+build_flags_hash = "REQUIRED_BEFORE_DIFFERENTIAL"
+environment_hash = "REQUIRED_BEFORE_DIFFERENTIAL"
+license_manifest_hash = "REQUIRED_BEFORE_DIFFERENTIAL"
+fonts_hash = "REQUIRED_BEFORE_DIFFERENTIAL"
+color_hash = "REQUIRED_BEFORE_DIFFERENTIAL"
+platform = "REQUIRED_BEFORE_DIFFERENTIAL"
+distribution = "ci-only"
+oracle_authority = "O4"

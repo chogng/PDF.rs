@@ -1,0 +1,575 @@
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+//! Versioned, development-only protocol for process-isolated PDF baselines.
+//!
+//! This crate intentionally does not launch a process yet. A concrete runner
+//! must add a reviewed watchdog, concurrent pipe draining, kill/reap behavior,
+//! and sandbox policy before it can implement [`BaselineRunner`].
+
+use std::fmt;
+
+use pdf_rs_digest::{Sha256, sha256};
+
+const REQUEST_MAGIC: &[u8; 8] = b"PRSBREQ1";
+const RESPONSE_MAGIC: &[u8; 8] = b"PRSBOBS1";
+const SCHEMA_VERSION: u16 = 1;
+const REQUEST_HEADER_LEN: usize = 96;
+const RESPONSE_HEADER_LEN: usize = 108;
+
+/// The only authority an external black-box observation may carry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OracleAuthority {
+    /// Untrusted external implementation output used only to discover disagreements.
+    O4Observation,
+}
+
+/// Complete identity of a separately built baseline environment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BaselineDescriptor {
+    /// Stable adapter configuration identifier.
+    pub id: String,
+    /// External engine name.
+    pub engine: String,
+    /// Immutable upstream source revision.
+    pub upstream_revision: String,
+    /// Digest of the executable and runtime binary payloads.
+    pub build_hash: [u8; 32],
+    /// Digest of canonical build flags and toolchain configuration.
+    pub build_flags_hash: [u8; 32],
+    /// Digest of the host, sandbox, locale, and invocation environment.
+    pub environment_hash: [u8; 32],
+    /// Digest of the reviewed dependency and license manifest.
+    pub license_manifest_hash: [u8; 32],
+    /// Digest of the exact font files visible to the runner.
+    pub fonts_hash: [u8; 32],
+    /// Digest of the renderer and color-management configuration.
+    pub color_hash: [u8; 32],
+    /// Canonical target platform identifier.
+    pub platform: String,
+}
+
+/// A verified immutable corpus object and bounded page observation request.
+///
+/// PDF bytes are private and this type has no `Debug` implementation.
+pub struct BaselineRequest {
+    source_hash: [u8; 32],
+    pdf: Vec<u8>,
+    page: u32,
+    width: u32,
+    height: u32,
+}
+
+impl BaselineRequest {
+    /// Verifies that `pdf` has the caller's fixed corpus identity before storing it.
+    pub fn new(
+        expected_source_hash: [u8; 32],
+        pdf: Vec<u8>,
+        page: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, BaselineError> {
+        expected_rgba_len(width, height)?;
+        let actual = sha256(&pdf).map_err(|_| invalid_request())?;
+        if actual != expected_source_hash {
+            return Err(BaselineError::new(
+                BaselineErrorCode::SourceHashMismatch,
+                "RPE-BASELINE-0002",
+                "PDF bytes do not match the fixed corpus identity",
+            ));
+        }
+        Ok(Self {
+            source_hash: actual,
+            pdf,
+            page,
+            width,
+            height,
+        })
+    }
+
+    /// Returns the verified immutable PDF identity.
+    pub const fn source_hash(&self) -> [u8; 32] {
+        self.source_hash
+    }
+
+    /// Borrows the private PDF bytes for protocol encoding.
+    pub fn pdf(&self) -> &[u8] {
+        &self.pdf
+    }
+
+    /// Returns the zero-based requested page index.
+    pub const fn page(&self) -> u32 {
+        self.page
+    }
+
+    /// Returns the required output width in pixels.
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns the required output height in pixels.
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+/// Canonical artifacts bound to one descriptor and verified request.
+///
+/// This type deliberately has no `Debug` implementation because the artifacts
+/// can contain document text and pixels.
+pub struct BaselineObservation {
+    /// Complete build and environment identity supplied by the adapter.
+    pub descriptor: BaselineDescriptor,
+    /// Echoed and verified immutable PDF identity.
+    pub source_hash: [u8; 32],
+    /// Echoed and verified zero-based page index.
+    pub page: u32,
+    /// Canonical parse artifact bytes; potentially document-sensitive.
+    pub parse_json: Vec<u8>,
+    /// Canonical Scene artifact bytes; potentially document-sensitive.
+    pub scene_json: Vec<u8>,
+    /// Canonical positioned-text artifact bytes; document-sensitive.
+    pub text_json: Vec<u8>,
+    /// Verified RGBA width.
+    pub width: u32,
+    /// Verified RGBA height.
+    pub height: u32,
+    /// Row-major RGBA8 pixels; potentially document-sensitive.
+    pub rgba: Vec<u8>,
+}
+
+impl BaselineObservation {
+    /// Returns the fixed O4 authority ceiling for every external observation.
+    pub const fn authority(&self) -> OracleAuthority {
+        OracleAuthority::O4Observation
+    }
+}
+
+/// Stable baseline-protocol failure classes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BaselineErrorCode {
+    /// Request size, geometry, or descriptor framing is invalid.
+    InvalidRequest,
+    /// Supplied PDF bytes do not match the declared source digest.
+    SourceHashMismatch,
+    /// A response exceeds the caller's byte ceiling or cannot be allocated safely.
+    OutputLimit,
+    /// A response violates the fixed wire schema.
+    MalformedResponse,
+    /// The external runner reported a terminal observation failure.
+    RunnerFailed,
+    /// Source, descriptor, page, or geometry does not match the request.
+    IdentityMismatch,
+}
+
+/// Stable, content-redacted baseline protocol failure.
+#[derive(Debug)]
+pub struct BaselineError {
+    /// Machine-classifiable failure category.
+    pub code: BaselineErrorCode,
+    /// Stable project diagnostic identifier.
+    pub diagnostic_id: &'static str,
+    detail: &'static str,
+}
+
+impl BaselineError {
+    fn new(code: BaselineErrorCode, diagnostic_id: &'static str, detail: &'static str) -> Self {
+        Self {
+            code,
+            diagnostic_id,
+            detail,
+        }
+    }
+}
+
+impl fmt::Display for BaselineError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} ({:?}): {}",
+            self.diagnostic_id, self.code, self.detail
+        )
+    }
+}
+
+impl std::error::Error for BaselineError {}
+
+/// Interface implemented only by a reviewed, process-isolated adapter.
+pub trait BaselineRunner {
+    /// Describes the exact build and environment before accepting observations.
+    fn describe(&self) -> Result<BaselineDescriptor, BaselineError>;
+
+    /// Runs one bounded O4 observation.
+    ///
+    /// Implementations must concurrently drain pipes, enforce a watchdog, and
+    /// kill/reap the child on every timeout or transport failure.
+    fn observe(&self, request: &BaselineRequest) -> Result<BaselineObservation, BaselineError>;
+}
+
+/// Hashes every baseline build and environment identity field in canonical order.
+pub fn descriptor_identity(descriptor: &BaselineDescriptor) -> Result<[u8; 32], BaselineError> {
+    let mut hasher = Sha256::new();
+    hasher
+        .update(b"PDFRS-BASELINE-DESCRIPTOR-1")
+        .map_err(|_| invalid_request())?;
+    for value in [
+        descriptor.id.as_bytes(),
+        descriptor.engine.as_bytes(),
+        descriptor.upstream_revision.as_bytes(),
+        descriptor.platform.as_bytes(),
+    ] {
+        let length = u64::try_from(value.len()).map_err(|_| invalid_request())?;
+        hasher
+            .update(&length.to_be_bytes())
+            .map_err(|_| invalid_request())?;
+        hasher.update(value).map_err(|_| invalid_request())?;
+    }
+    for value in [
+        descriptor.build_hash,
+        descriptor.build_flags_hash,
+        descriptor.environment_hash,
+        descriptor.license_manifest_hash,
+        descriptor.fonts_hash,
+        descriptor.color_hash,
+    ] {
+        hasher.update(&value).map_err(|_| invalid_request())?;
+    }
+    hasher.finalize().map_err(|_| invalid_request())
+}
+
+/// Encodes a request bound to the complete expected baseline identity.
+pub fn encode_request(
+    request: &BaselineRequest,
+    descriptor: &BaselineDescriptor,
+) -> Result<Vec<u8>, BaselineError> {
+    let identity = descriptor_identity(descriptor)?;
+    let pdf_len = u64::try_from(request.pdf.len()).map_err(|_| invalid_request())?;
+    let capacity = REQUEST_HEADER_LEN
+        .checked_add(request.pdf.len())
+        .ok_or_else(invalid_request)?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(capacity)
+        .map_err(|_| invalid_request())?;
+    frame.extend_from_slice(REQUEST_MAGIC);
+    frame.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+    frame.extend_from_slice(&0_u16.to_be_bytes());
+    frame.extend_from_slice(&request.page.to_be_bytes());
+    frame.extend_from_slice(&request.width.to_be_bytes());
+    frame.extend_from_slice(&request.height.to_be_bytes());
+    frame.extend_from_slice(&pdf_len.to_be_bytes());
+    frame.extend_from_slice(&request.source_hash);
+    frame.extend_from_slice(&identity);
+    debug_assert_eq!(frame.len(), REQUEST_HEADER_LEN);
+    frame.extend_from_slice(&request.pdf);
+    Ok(frame)
+}
+
+/// Decodes a bounded response and verifies source, request geometry, and build identity.
+pub fn decode_response(
+    response: &[u8],
+    request: &BaselineRequest,
+    descriptor: BaselineDescriptor,
+    max_output_bytes: u64,
+) -> Result<BaselineObservation, BaselineError> {
+    if u64::try_from(response.len()).map_err(|_| output_limit())? > max_output_bytes {
+        return Err(output_limit());
+    }
+    if response.len() < RESPONSE_HEADER_LEN || &response[..8] != RESPONSE_MAGIC {
+        return Err(malformed_response());
+    }
+    let schema = read_u16(response, 8)?;
+    let status = read_u16(response, 10)?;
+    if schema != SCHEMA_VERSION || status != 0 {
+        return Err(if status == 0 {
+            malformed_response()
+        } else {
+            BaselineError::new(
+                BaselineErrorCode::RunnerFailed,
+                "RPE-BASELINE-0006",
+                "baseline reported an unsuccessful observation",
+            )
+        });
+    }
+
+    let parse_len = usize::try_from(read_u32(response, 12)?).map_err(|_| malformed_response())?;
+    let scene_len = usize::try_from(read_u32(response, 16)?).map_err(|_| malformed_response())?;
+    let text_len = usize::try_from(read_u32(response, 20)?).map_err(|_| malformed_response())?;
+    let page = read_u32(response, 24)?;
+    let width = read_u32(response, 28)?;
+    let height = read_u32(response, 32)?;
+    let rgba_len = usize::try_from(read_u64(response, 36)?).map_err(|_| malformed_response())?;
+    let source_hash: [u8; 32] = response[44..76]
+        .try_into()
+        .expect("fixed response header source identity is 32 bytes");
+    let response_identity: [u8; 32] = response[76..108]
+        .try_into()
+        .expect("fixed response header descriptor identity is 32 bytes");
+    let expected_identity = descriptor_identity(&descriptor)?;
+    if source_hash != request.source_hash
+        || response_identity != expected_identity
+        || page != request.page
+        || width != request.width
+        || height != request.height
+    {
+        return Err(BaselineError::new(
+            BaselineErrorCode::IdentityMismatch,
+            "RPE-BASELINE-0007",
+            "response identity does not match the request and descriptor",
+        ));
+    }
+    if rgba_len != expected_rgba_len(width, height).map_err(|_| malformed_response())? {
+        return Err(malformed_response());
+    }
+
+    let payload_len = parse_len
+        .checked_add(scene_len)
+        .and_then(|value| value.checked_add(text_len))
+        .and_then(|value| value.checked_add(rgba_len))
+        .ok_or_else(malformed_response)?;
+    let expected_len = RESPONSE_HEADER_LEN
+        .checked_add(payload_len)
+        .ok_or_else(malformed_response)?;
+    if response.len() != expected_len {
+        return Err(malformed_response());
+    }
+
+    let mut cursor = RESPONSE_HEADER_LEN;
+    let parse_json = copy_blob(response, &mut cursor, parse_len)?;
+    let scene_json = copy_blob(response, &mut cursor, scene_len)?;
+    let text_json = copy_blob(response, &mut cursor, text_len)?;
+    let rgba = copy_blob(response, &mut cursor, rgba_len)?;
+    Ok(BaselineObservation {
+        descriptor,
+        source_hash,
+        page,
+        parse_json,
+        scene_json,
+        text_json,
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn expected_rgba_len(width: u32, height: u32) -> Result<usize, BaselineError> {
+    if width == 0 || height == 0 {
+        return Err(invalid_request());
+    }
+    let bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(invalid_request)?;
+    usize::try_from(bytes).map_err(|_| invalid_request())
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, BaselineError> {
+    let value = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(malformed_response)?;
+    Ok(u16::from_be_bytes([value[0], value[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, BaselineError> {
+    let value = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(malformed_response)?;
+    Ok(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, BaselineError> {
+    let value = bytes
+        .get(offset..offset + 8)
+        .ok_or_else(malformed_response)?;
+    Ok(u64::from_be_bytes([
+        value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7],
+    ]))
+}
+
+fn copy_blob(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, BaselineError> {
+    let end = cursor.checked_add(len).ok_or_else(malformed_response)?;
+    let source = bytes.get(*cursor..end).ok_or_else(malformed_response)?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(len).map_err(|_| output_limit())?;
+    output.extend_from_slice(source);
+    *cursor = end;
+    Ok(output)
+}
+
+fn invalid_request() -> BaselineError {
+    BaselineError::new(
+        BaselineErrorCode::InvalidRequest,
+        "RPE-BASELINE-0001",
+        "request hash, length, or geometry is invalid",
+    )
+}
+
+fn output_limit() -> BaselineError {
+    BaselineError::new(
+        BaselineErrorCode::OutputLimit,
+        "RPE-BASELINE-0004",
+        "baseline response exceeds its configured output limit",
+    )
+}
+
+fn malformed_response() -> BaselineError {
+    BaselineError::new(
+        BaselineErrorCode::MalformedResponse,
+        "RPE-BASELINE-0005",
+        "baseline response frame is malformed",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor() -> BaselineDescriptor {
+        BaselineDescriptor {
+            id: "fixture-v1".into(),
+            engine: "fixture".into(),
+            upstream_revision: "test".into(),
+            build_hash: [7; 32],
+            build_flags_hash: [8; 32],
+            environment_hash: [9; 32],
+            license_manifest_hash: [10; 32],
+            fonts_hash: [11; 32],
+            color_hash: [12; 32],
+            platform: "test-platform".into(),
+        }
+    }
+
+    fn request() -> BaselineRequest {
+        let pdf = b"%PDF-1.7".to_vec();
+        BaselineRequest::new(sha256(&pdf).unwrap(), pdf, 2, 1, 1).unwrap()
+    }
+
+    fn response(
+        status: u16,
+        request: &BaselineRequest,
+        descriptor: &BaselineDescriptor,
+        parse: &[u8],
+        scene: &[u8],
+        text: &[u8],
+        rgba: &[u8],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(RESPONSE_MAGIC);
+        bytes.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+        bytes.extend_from_slice(&status.to_be_bytes());
+        bytes.extend_from_slice(&u32::try_from(parse.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&u32::try_from(scene.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&u32::try_from(text.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&request.page.to_be_bytes());
+        bytes.extend_from_slice(&request.width.to_be_bytes());
+        bytes.extend_from_slice(&request.height.to_be_bytes());
+        bytes.extend_from_slice(&u64::try_from(rgba.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&request.source_hash);
+        bytes.extend_from_slice(&descriptor_identity(descriptor).unwrap());
+        bytes.extend_from_slice(parse);
+        bytes.extend_from_slice(scene);
+        bytes.extend_from_slice(text);
+        bytes.extend_from_slice(rgba);
+        bytes
+    }
+
+    #[test]
+    fn request_frame_is_deterministic_and_identity_bound() {
+        let request = request();
+        let descriptor = descriptor();
+        let first = encode_request(&request, &descriptor).unwrap();
+        let second = encode_request(&request, &descriptor).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(&first[..8], REQUEST_MAGIC);
+        assert_eq!(first.len(), REQUEST_HEADER_LEN + request.pdf().len());
+        assert_eq!(&first[32..64], &request.source_hash);
+        assert_eq!(&first[64..96], &descriptor_identity(&descriptor).unwrap());
+
+        let mut changed_environment = descriptor.clone();
+        changed_environment.environment_hash[0] ^= 1;
+        assert_ne!(
+            first,
+            encode_request(&request, &changed_environment).unwrap()
+        );
+    }
+
+    #[test]
+    fn request_rejects_source_hash_mismatch_and_invalid_geometry() {
+        let mismatch = BaselineRequest::new([0; 32], b"not-empty".to_vec(), 0, 1, 1)
+            .err()
+            .unwrap();
+        assert_eq!(mismatch.code, BaselineErrorCode::SourceHashMismatch);
+        let empty = Vec::new();
+        let invalid = BaselineRequest::new(sha256(&empty).unwrap(), empty, 0, 0, 1)
+            .err()
+            .unwrap();
+        assert_eq!(invalid.code, BaselineErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn decodes_success_as_request_bound_o4_observation() {
+        let request = request();
+        let descriptor = descriptor();
+        let bytes = response(0, &request, &descriptor, b"{}", b"[]", b"[]", &[1, 2, 3, 4]);
+        let observation = decode_response(&bytes, &request, descriptor.clone(), 1024).unwrap();
+        assert_eq!(observation.authority(), OracleAuthority::O4Observation);
+        assert_eq!(observation.source_hash, request.source_hash);
+        assert_eq!(observation.page, request.page);
+        assert_eq!(observation.descriptor, descriptor);
+        assert_eq!(observation.parse_json, b"{}");
+        assert_eq!(observation.rgba, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn rejects_malformed_failed_oversized_and_mismatched_responses() {
+        let request = request();
+        let descriptor = descriptor();
+        let valid = response(0, &request, &descriptor, b"{}", b"[]", b"[]", &[0; 4]);
+        for bytes in [valid[..valid.len() - 1].to_vec(), {
+            let mut bad = valid.clone();
+            bad[0] = b'X';
+            bad
+        }] {
+            assert_eq!(
+                decode_response(&bytes, &request, descriptor.clone(), 1024)
+                    .err()
+                    .unwrap()
+                    .code,
+                BaselineErrorCode::MalformedResponse
+            );
+        }
+        let failed = response(1, &request, &descriptor, b"", b"", b"", &[0; 4]);
+        assert_eq!(
+            decode_response(&failed, &request, descriptor.clone(), 1024)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::RunnerFailed
+        );
+        assert_eq!(
+            decode_response(&valid, &request, descriptor.clone(), 1)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::OutputLimit
+        );
+        let mut identity = valid.clone();
+        identity[44] ^= 1;
+        assert_eq!(
+            decode_response(&identity, &request, descriptor.clone(), 1024)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::IdentityMismatch
+        );
+        let mut wrong_page = valid;
+        wrong_page[27] ^= 1;
+        assert_eq!(
+            decode_response(&wrong_page, &request, descriptor, 1024)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::IdentityMismatch
+        );
+    }
+}

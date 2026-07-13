@@ -1,4 +1,75 @@
 schema = 1
-version = "0.1.0"
-status = "initial"
-feature = []
+version = "0.2.0"
+status = "active"
+
+[[feature]]
+id = "quality.minimal-pdf-generator"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/generate"]
+tests = ["infrastructure/synthetic-failure-bundle-001"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.canonical-diff"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-ARCH-001/12.10", "RPE-ARCH-001/12.18"]
+modules = ["tools/compare"]
+tests = ["infrastructure/synthetic-failure-bundle-001"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.failure-bundle"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-STD-003/19", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/quality"]
+tests = ["infrastructure/synthetic-failure-bundle-001"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.baseline-protocol-boundary"
+owner = "baseline-release"
+state = "PLANNED"
+profile = "baseline-protocol-v1"
+clauses = ["AD-007", "RPE-STD-003/14", "RPE-STD-004/9"]
+modules = ["tools/baseline"]
+tests = ["tools/baseline::tests"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.benchmark-harness"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-ARCH-001/12.21", "RPE-STD-003/17"]
+modules = ["tools/benchmark"]
+tests = ["tools/benchmark::tests"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.corpus-manager"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-ARCH-001/12.19", "RPE-ARCH-001/12.20"]
+modules = ["tools/corpus"]
+tests = ["tools/corpus::tests"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"

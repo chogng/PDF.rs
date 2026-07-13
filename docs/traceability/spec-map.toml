@@ -1,4 +1,27 @@
 schema = 1
-version = "0.1.0"
-status = "initial"
-requirement = []
+version = "0.2.0"
+status = "active"
+
+[[requirement]]
+id = "RPE-ARCH-001/15.3/M0"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "M0 quality infrastructure produces deterministic synthetic artifacts and isolates external baselines."
+features = [
+  "quality.minimal-pdf-generator",
+  "quality.canonical-diff",
+  "quality.failure-bundle",
+  "quality.baseline-protocol-boundary",
+  "quality.benchmark-harness",
+  "quality.corpus-manager",
+]
+implementation = [
+  "tools/generate",
+  "tools/compare",
+  "tools/quality",
+  "tools/baseline",
+  "tools/benchmark",
+  "tools/corpus",
+]
+tests = ["infrastructure/synthetic-failure-bundle-001"]
+status = "partial"
+notes = "Synthetic parse/Scene/Text/Pixel bundle, baseline protocol boundary, benchmark statistics model, and in-memory corpus governance are implemented. The safe PDFium process adapter/executable, broad DSL, fuzzing, on-disk benchmark evidence, and T1+ corpus scale gates remain open."

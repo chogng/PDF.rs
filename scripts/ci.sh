@@ -26,7 +26,15 @@ cargo run --quiet --package pdf-rs-quality -- "$lane"
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo run --quiet --package pdf-rs-generate -- \
+    tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf
+cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases
+cargo run --quiet --package pdf-rs-quality -- check-product-purity .
+cargo run --quiet --package pdf-rs-quality -- \
+    synthetic-bundle \
+    tests/cases/infrastructure/synthetic-failure-bundle-001/case.toml \
+    target/ci-artifacts/m0-failure-bundles
 
 if [[ "$lane" == "pr" ]]; then
-    cargo doc --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --workspace --no-deps
 fi

@@ -3,5 +3,37 @@
 version = 4
 
 [[package]]
+name = "pdf-rs-baseline"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-digest",
+]
+
+[[package]]
+name = "pdf-rs-benchmark"
+version = "0.1.0"
+
+[[package]]
+name = "pdf-rs-compare"
+version = "0.1.0"
+
+[[package]]
+name = "pdf-rs-corpus"
+version = "0.1.0"
+
+[[package]]
+name = "pdf-rs-digest"
+version = "0.1.0"
+
+[[package]]
+name = "pdf-rs-generate"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-quality"
 version = "0.1.0"
+dependencies = [
+ "pdf-rs-compare",
+ "pdf-rs-digest",
+ "pdf-rs-generate",
+]
