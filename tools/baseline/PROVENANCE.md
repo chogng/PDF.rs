@@ -42,16 +42,29 @@ rather than making the API call wait indefinitely.
 
 # External observations
 
-No external executable was run and no O4 output was recorded. Results eventually
-produced through this API have O4 authority only. The self-authored fixture proves
-transport behavior, not PDF correctness.
+No external executable was run through this API and no O4 output was recorded.
+Results eventually produced through this API have O4 authority only. The
+self-authored fixture proves transport behavior, not PDF correctness.
 
 On 2026-07-13, build readiness and the advertised `pdfium_test` command surface
 were inspected at PDFium revision
 `c040cf96106a87220b814a1a892649cf2d7f1934`. The review was limited to repository
 metadata/build files, `README.md`, `testing/BUILD.gn`, the usage/options section of
 `testing/pdfium_test.cc`, and output-path matches in `testing/helpers/write.cc`.
-No PDFium implementation algorithm was copied, adapted, executed, or observed.
+No PDFium implementation algorithm was copied or adapted during that source
+review.
+
+A separate upstream build-readiness exercise on 2026-07-13 synced that revision
+in an isolated temporary checkout, built the stock `pdfium_unittests`,
+`pdfium_test`, and `pdfium_diff` targets, passed 1034 upstream C++ unit tests and
+one fixed upstream pixel test, and used `pdfium_test --show-pageinfo` to process
+the project's generated one-page fixture. The redacted hashes and counts are in
+`pdfium/evidence/pdfium-c040cf96-macos-arm64-build-readiness-v1.toml`; raw logs,
+source, dependencies, binaries, and upstream data are not committed. This
+exercise did not run the baseline protocol or adapter, consume the corpus
+manifest, produce an O4 comparison, measure performance, establish containment
+or runtime/license/font/color closure, register a baseline, or create release
+evidence.
 
 # Dependencies and generated data
 
@@ -103,3 +116,4 @@ external baseline runner exit condition.
 - 2026-07-13: Introduced process-isolation protocol schema version 1.
 - 2026-07-13: Added schema version 2, explicit channel outcomes, invocation
   identity, and a deadline/byte-limited direct-child supervision harness.
+- 2026-07-13: Recorded a non-baseline PDFium upstream build-readiness exercise.

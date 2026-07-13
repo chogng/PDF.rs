@@ -1,5 +1,5 @@
 schema = 1
-version = "0.5.0"
+version = "0.6.0"
 status = "active"
 
 [[data]]
@@ -53,3 +53,20 @@ validated_by = "cargo run --quiet --package pdf-rs-benchmark -- validate tests/p
 owner = "quality-corpus"
 update_policy = "recompute stored summaries, preserve non-verdict policy markers, and update report/corpus/ledger hashes together"
 delete_policy = "retain while the M0 benchmark report replay contract is active"
+
+[[data]]
+id = "baseline.evidence.pdfium-c040cf96-macos-arm64-build-readiness-v1"
+kind = "project-authored-upstream-build-readiness-evidence"
+source = "tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-build-readiness-v1.toml"
+acquired_at = 2026-07-13
+version = "pdfium-upstream-build-readiness-schema-1"
+source_hash = "sha256:b61d01628d96908a38edb94b4d08e810dfbd83c27dec2e5629e8449e941942a7"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository metadata only; no upstream source, binaries, fixtures, expectations, fonts, raw logs, or dependency closure"
+contains_personal_data = false
+authored_by = "baseline-release"
+format_schema = 1
+validated_by = "cargo test --package pdf-rs-baseline --test repository_readiness"
+owner = "baseline-release"
+update_policy = "rerun the pinned upstream recipe; create a new evidence id when revision, platform, build arguments, fixture, or toolchain changes; update report and ledger hashes together"
+delete_policy = "retain while the pinned PDFium build-readiness investigation is referenced"

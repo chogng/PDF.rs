@@ -1,0 +1,141 @@
+schema = 1
+id = "pdfium-c040cf96-macos-arm64-build-readiness-v1"
+evidence_class = "upstream-build-readiness"
+recorded_at = "2026-07-13T23:14:51Z"
+engine = "pdfium"
+upstream_repository = "https://pdfium.googlesource.com/pdfium/"
+github_mirror = "https://github.com/chromium/pdfium"
+github_mirror_status = "archived-read-only"
+upstream_revision = "c040cf96106a87220b814a1a892649cf2d7f1934"
+source_checkout_mode = "isolated-temporary-local-clone-plus-gclient-sync"
+checkout_configuration = "small"
+depot_tools_revision = "f065bb3b064a823049057fc680517d59e99146ce"
+
+readme_sha256 = "sha256:b68479a7dcbf39a22e3f3267ad3f4aa64be626fc126d0bc19a880c47a4e295b1"
+deps_sha256 = "sha256:159a923cb08aefef23ab03901cfcba145d76f3b181ef0fffb4f4cae44c29517f"
+root_license_sha256 = "sha256:1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9"
+
+platform = "macos-arm64"
+os_version = "macOS 26.4.1 (25E253)"
+kernel_release = "25.4.0"
+xcode_version = "Xcode 26.6 (17F113)"
+target_triple = "arm64-apple-darwin25.4.0"
+gn_version = "2435 (1d86777e7f25)"
+ninja_version = "1.12.1"
+clang_version = "23.0.0git (llvm-project 53d18800eda3b7407e53366f27ca78e922c6e0db)"
+clang_sha256 = "sha256:75228e26b09e1045e9f8b2cfcb5ad5b689c3ee3d74cdfab58e705260f70baf73"
+
+build_args = "use_remoteexec=false is_debug=false symbol_level=0 target_cpu=\"arm64\" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false"
+build_args_sha256 = "sha256:f88fb7eb62554e955bb8f7077c81be8f8f1f35de9aba7481b47c3b2dca8626dc"
+gn_targets_generated = 597
+initial_build_exit_code = 0
+initial_build_completed_steps = 1409
+initial_build_log_status = "not-retained"
+pdfium_unittests_sha256 = "sha256:70d9ce7af54ca7b26072f7f84b6eee766c7ea68512e85e1b9d2514a0342547ef"
+pdfium_unittests_bytes = 9329216
+pdfium_test_sha256 = "sha256:0d107f713edba2e3c6760b25b6a1ae355fee6ed6be39f36b55cdb35f3c1c2925"
+pdfium_test_bytes = 5185888
+pdfium_diff_sha256 = "sha256:ca572747c98e0cebbcbd77ed97f730c2181febf19a696fc2e2975c2b9b2247e4"
+pdfium_diff_bytes = 437968
+build_readiness_outcome = "pass"
+
+pixel_runner_pretest_environment_failures = 3
+pixel_runner_pretest_note = "three environment probes failed before fixture execution; the recorded official-vpython invocation is the only pixel-test execution"
+runtime_closure_status = "incomplete"
+license_manifest_status = "incomplete"
+font_fingerprint_status = "incomplete"
+color_fingerprint_status = "incomplete"
+sandbox_status = "not-evaluated"
+raw_logs_committed = false
+binaries_committed = false
+upstream_data_committed = false
+
+adapter_exercised = false
+pdf_rs_fixture_exercised = true
+pdf_rs_corpus_manifest_exercised = false
+product_correctness_eligible = false
+performance_eligible = false
+differential_eligible = false
+baseline_registration_eligible = false
+release_gate_eligible = false
+oracle_authority = "not-applicable"
+
+[[execution]]
+id = "gn-gen"
+kind = "upstream-build-configure"
+program = "buildtools/mac/gn"
+argv = ["gen", "out/Testing", "--args=use_remoteexec=false is_debug=false symbol_level=0 target_cpu=\"arm64\" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false"]
+cwd = "$PDFIUM_ROOT"
+exit_code = 0
+targets_generated = 597
+stdout_sha256 = "sha256:9e8d4028ae3f83f8a1e9ad5a1f3b3abb0ad10f4adedf07ec3e1b2c0b19ebf732"
+stdout_bytes = 47
+stderr_sha256 = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+stderr_bytes = 0
+
+[[execution]]
+id = "ninja-artifact-verification"
+kind = "upstream-build-artifact-verification"
+program = "third_party/ninja/ninja"
+argv = ["-C", "out/Testing", "pdfium_unittests", "pdfium_test", "pdfium_diff"]
+cwd = "$PDFIUM_ROOT"
+exit_code = 0
+artifact_state = "no-work-required-after-successful-initial-build"
+stdout_sha256 = "sha256:86c052fb09623e2846c7b8fd2572f091d68664a3e9b2bfb81ef583c1b6a3f614"
+stdout_bytes = 62
+stderr_sha256 = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+stderr_bytes = 0
+
+[[execution]]
+id = "pdfium-unittests"
+kind = "upstream-unit-tests"
+program = "out/Testing/pdfium_unittests"
+argv = ["--gtest_color=no"]
+cwd = "$PDFIUM_ROOT"
+exit_code = 0
+tests_run = 1034
+tests_passed = 1034
+tests_skipped = 0
+tests_failed = 0
+stderr_warning_count = 23
+stderr_classification = "repeated GoogleTest death-test fork/thread warning; suite completed"
+stdout_sha256 = "sha256:599da0bd07cf6712f795a820879e336073eb79514538e0dd4c8197e4650c3b78"
+stdout_bytes = 109640
+stderr_sha256 = "sha256:3951ea26b9cce9ec82b5ff4cfbd3b09db4606dc2cda27127845e8ae33b44f40c"
+stderr_bytes = 9706
+
+[[execution]]
+id = "pixel-rectangles-clipped"
+kind = "upstream-pixel-test"
+program = "$DEPOT_TOOLS/vpython3"
+argv = ["testing/tools/run_pixel_tests.py", "--build-dir", "out/Testing", "rectangles_clipped.in"]
+cwd = "$PDFIUM_ROOT"
+fixture = "testing/resources/pixel/rectangles_clipped.in"
+fixture_sha256 = "sha256:beba67494c22ced5e24051e03a7be26d3b054cceefb067382c0922f11567fff8"
+fixture_bytes = 548
+exit_code = 0
+tests_run = 1
+tests_passed = 1
+tests_skipped = 0
+tests_failed = 0
+stdout_sha256 = "sha256:8352906317cf2be1fdd0476326962e7c4e7328c1924f90ef303f5833fc6b8c24"
+stdout_bytes = 140
+stderr_sha256 = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+stderr_bytes = 0
+
+[[execution]]
+id = "pdf-rs-generated-fixture-pageinfo"
+kind = "project-fixture-parse-smoke"
+program = "out/Testing/pdfium_test"
+argv = ["--show-pageinfo", "$PDF_RS_ROOT/tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf"]
+cwd = "$TMPDIR"
+fixture = "tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf"
+fixture_sha256 = "sha256:9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db"
+fixture_bytes = 612
+exit_code = 0
+pages_processed = 1
+observed_page_info = "page 0 MediaBox 0,0,200,200; no CropBox, BleedBox, TrimBox, or ArtBox"
+stdout_sha256 = "sha256:95b7f6bf1388fdaaf810ce9c9aa5c34e7a461e414a44c0ea6396eccc0fd2e3f5"
+stdout_bytes = 122
+stderr_sha256 = "sha256:9d55bb604a60772bbc2e5cfb9f80e5f5225b5b0fbadaae335c7aba4f8256965e"
+stderr_bytes = 134
