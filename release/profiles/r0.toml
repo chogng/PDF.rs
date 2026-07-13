@@ -1,0 +1,45 @@
+schema = 1
+id = "release-r0-v1"
+spec_version = "0.2"
+status = "candidate"
+capability_profiles = [
+  "r0.syntax.v1",
+  "r0.graphics.basic.v1",
+  "r0.font.horizontal.v1",
+  "r0.text.horizontal-ltr.v1",
+]
+
+[corpus]
+manifest = "corpus/release-r0-v1/manifest.toml"
+hash = "REQUIRED_BEFORE_RC"
+min_files = 1000
+min_pages = 10000
+holdout_ratio = 0.20
+
+[gates]
+critical_page_rate = 0.0
+major_eligible_page_rate = 0.001
+dangerous_capability_false_positive = 0
+in_profile_unexpected_unsupported_rate = 0.005
+weighted_native_supported_rate_min = 0.75
+native_p95_ratio_max = 1.05
+winning_path_p95_ratio_max = 0.85
+winning_path_count_min = 2
+native_peak_memory_ratio_max = 1.00
+cancellation_p95_ms = 50
+cancellation_p99_ms = 100
+
+[benchmark]
+hardware_pool = "REQUIRED_BEFORE_RC"
+primary_paths = [
+  "cold-first-preview",
+  "first-full-quality-viewport",
+  "continuous-scroll",
+  "pinch-zoom",
+  "random-jump",
+  "search-first-result",
+]
+
+[platform.browser]
+engines = ["chromium", "firefox", "webkit"]
+image_digests = [] # release blocking until pinned

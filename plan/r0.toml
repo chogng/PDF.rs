@@ -1,0 +1,157 @@
+schema = 1
+id = "r0-development-plan"
+version = "0.1.0"
+status = "draft"
+planning_basis = "RPE-ARCH-001 v0.3, sections 2.6 and 15.3"
+last_updated = 2026-07-13
+max_parallel_milestones = 2
+max_parallel_work_items_per_milestone = 3
+
+[capacity]
+assumed_team_fte = 7.0
+delivery_allocation = 0.80
+assumed_delivery_fte = 5.6
+review_and_interrupt_reserve_fte = 1.4
+
+assumptions = [
+  "Role labels are accountable workstreams, not assignments to named people.",
+  "Planned FTE is average concurrent capacity for a milestone, not headcount or a hiring commitment.",
+  "Dates are draft planning targets and move when an upstream exit gate is not satisfied.",
+  "The seven-FTE planning model reserves twenty percent for review, incident response, maintenance, and unplanned conformance work.",
+  "At most two milestones may be active at once; M5 is the only planned parallel milestone branch.",
+  "An owner role may not be the sole reviewer of its own milestone exit gate.",
+  "M5 may start only after the protocol and surface schema are frozen, and may not exit before M4 CapabilityDecision and Native RenderPlan contracts are accepted.",
+  "M6 starts only after both the M4 desktop and M5 browser vertical-slice exit gates pass.",
+]
+
+[capacity.role_fte]
+spec_conformance = 0.75
+parser_security = 1.25
+graphics_color = 1.50
+font_text_a11y = 1.00
+runtime_platform = 1.00
+quality_corpus = 1.00
+baseline_release = 0.50
+
+[[milestone]]
+id = "M0"
+title = "Quality infrastructure"
+owner_role = "quality-corpus"
+reviewer_roles = ["spec-conformance", "baseline-release"]
+planned_fte = 4.5
+start_date = 2026-07-13
+target_date = 2026-08-28
+dependencies = []
+max_parallel_work_items = 3
+deliverables = [
+  "case manifest and generators",
+  "runner schema and parse/scene/text/pixel diff skeletons",
+  "benchmark harness and corpus manager",
+  "process-isolated external baseline runner",
+]
+exit_gate = "Synthetic parse, Scene, text, and pixel outputs produce a complete failure bundle; baseline and product build dependencies are isolated."
+
+[[milestone]]
+id = "M1"
+title = "Bytes and objects"
+owner_role = "parser-security"
+reviewer_roles = ["quality-corpus", "spec-conformance"]
+planned_fte = 4.0
+start_date = 2026-08-31
+target_date = 2026-10-30
+dependencies = ["M0"]
+max_parallel_work_items = 3
+deliverables = [
+  "SourceSnapshot and Range pause/resume",
+  "syntax, xref, and object layers",
+  "R0/R1 repair",
+]
+exit_gate = "Out-of-order Range, cancellation, and source-change E2E pass; page-count and outline services reach DIFFERENTIAL."
+
+[[milestone]]
+id = "M2"
+title = "Document and content"
+owner_role = "graphics-color"
+reviewer_roles = ["parser-security", "spec-conformance"]
+planned_fte = 4.5
+start_date = 2026-11-02
+target_date = 2027-01-29
+dependencies = ["M1"]
+max_parallel_work_items = 3
+deliverables = [
+  "page tree and resource resolution",
+  "Content VM",
+  "Scene v1",
+]
+exit_gate = "Scene normative cases and canonical diff are stable."
+
+[[milestone]]
+id = "M3"
+title = "Reference renderer"
+owner_role = "graphics-color"
+reviewer_roles = ["quality-corpus", "spec-conformance"]
+planned_fte = 3.5
+start_date = 2027-02-01
+target_date = 2027-04-30
+dependencies = ["M2"]
+max_parallel_work_items = 3
+deliverables = [
+  "paths and clipping",
+  "basic text, images, and transparency",
+  "reference-raster-v1",
+]
+exit_gate = "O0/O1 cases validate Reference; reviewed O3 goldens cover R0 Native graphics."
+
+[[milestone]]
+id = "M4"
+title = "Fast CPU and desktop vertical slice"
+owner_role = "runtime-platform"
+reviewer_roles = ["graphics-color", "quality-corpus"]
+planned_fte = 3.5
+start_date = 2027-05-03
+target_date = 2027-07-30
+dependencies = ["M3"]
+max_parallel_work_items = 3
+deliverables = [
+  "tile scheduling and complete cache keys",
+  "shared-memory surface transport",
+  "Native RenderPlan and CapabilityDecision",
+  "desktop open, scroll, and zoom vertical slice",
+]
+exit_gate = "R0-eligible basic pages reach CANARY and the desktop Native-only reading loop is usable."
+
+[[milestone]]
+id = "M5"
+title = "Browser vertical slice"
+owner_role = "runtime-platform"
+reviewer_roles = ["quality-corpus", "baseline-release"]
+planned_fte = 2.0
+start_date = 2027-04-05
+target_date = 2027-08-27
+dependencies = ["M2"]
+start_gates = ["protocol-and-surface-schema-frozen"]
+exit_dependencies = ["M4"]
+max_parallel_work_items = 3
+deliverables = [
+  "single Native Engine Worker",
+  "OffscreenCanvas and transferable surfaces",
+  "TypeScript viewer",
+]
+exit_gate = "Chromium, Firefox, and WebKit complete the R0 reading flow; resource and dependency scans find no external PDF engine."
+
+[[milestone]]
+id = "M6"
+title = "R0 release candidate"
+owner_role = "baseline-release"
+reviewer_roles = ["spec-conformance", "quality-corpus", "runtime-platform"]
+planned_fte = 5.0
+start_date = 2027-08-30
+target_date = 2027-10-29
+dependencies = ["M4", "M5"]
+max_parallel_work_items = 3
+deliverables = [
+  "Unicode, selection, copy, search, and links",
+  "release-r0-v1 candidate evidence",
+  "fixed-hardware performance results",
+]
+exit_gate = "Every R0 gate in RPE-ARCH-001 section 2.6 passes and the first-usable-version criteria in section 16.3 are satisfied."
