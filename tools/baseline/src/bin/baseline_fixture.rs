@@ -10,20 +10,14 @@ use std::process::{Command, ExitCode, Stdio};
 use std::thread;
 use std::time::Duration;
 
-const REQUEST_MAGIC: &[u8; 8] = b"PRSBREQ2";
-const RESPONSE_MAGIC: &[u8; 8] = b"PRSBOBS2";
-const SCHEMA_VERSION: u16 = 2;
-const REQUEST_HEADER_LEN: usize = 96;
-const RESPONSE_HEADER_LEN: usize = 112;
-const FIXTURE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+use pdf_rs_baseline::{
+    AdapterRequest, AdapterResponseChannels, BaselineChannel, decode_adapter_request,
+    encode_adapter_failure, encode_adapter_response,
+};
 
-struct Request {
-    page: u32,
-    width: u32,
-    height: u32,
-    source_hash: [u8; 32],
-    descriptor_identity: [u8; 32],
-}
+const FIXTURE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+const FIXTURE_REQUEST_FRAME_LIMIT: usize = FIXTURE_BYTE_LIMIT + 96;
+const FIXTURE_RESPONSE_FRAME_LIMIT: u64 = 32 * 1024 * 1024;
 
 fn main() -> ExitCode {
     match run() {
@@ -34,16 +28,66 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    let mode = arguments.first().map(String::as_str).ok_or(())?;
+    let environment_mode = env::var("PDF_RS_BASELINE_FIXTURE_MODE").ok();
+    let mode = arguments
+        .first()
+        .map(String::as_str)
+        .or(environment_mode.as_deref())
+        .ok_or(())?;
     match mode {
         "ok" => write_produced_response(read_request()?, 2, 0),
         "unsupported" => {
             let request = read_request()?;
-            write_response(request, 0, [1, 1, 0, 0], b"", b"", b"[]", &[0; 4])
+            write_channels(
+                &request,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Produced(b"[]"),
+                    BaselineChannel::Produced(&[0; 4]),
+                ),
+            )
         }
         "channel-failed" => {
             let request = read_request()?;
-            write_response(request, 0, [2, 0, 0, 0], b"", b"[]", b"[]", &[0; 4])
+            write_channels(
+                &request,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Failed,
+                    BaselineChannel::Produced(b"[]"),
+                    BaselineChannel::Produced(b"[]"),
+                    BaselineChannel::Produced(&[0; 4]),
+                ),
+            )
+        }
+        "pixel-only" => {
+            let request = read_request()?;
+            let rgba = filled(rgba_length(request.width(), request.height())?, 0)?;
+            write_channels(
+                &request,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Produced(&rgba),
+                ),
+            )
+        }
+        "pixel-failed" => {
+            let request = read_request()?;
+            write_channels(
+                &request,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Failed,
+                ),
+            )
+        }
+        "profile-violation" => {
+            let request = read_request()?;
+            write_produced_response(request, 2, 0)
         }
         "emit" => {
             let parse_bytes = parse_count(arguments.get(1))?;
@@ -73,7 +117,9 @@ fn run() -> Result<(), ()> {
         }
         "protocol-fail" => {
             let request = read_request()?;
-            write_response(request, 1, [2; 4], b"", b"", b"", b"")
+            let response =
+                encode_adapter_failure(&request, FIXTURE_RESPONSE_FRAME_LIMIT).map_err(|_| ())?;
+            write_frame(&response)
         }
         "nonzero" => {
             let _ = read_request()?;
@@ -87,9 +133,11 @@ fn run() -> Result<(), ()> {
             io::stdout().write_all(b"not-a-frame").map_err(|_| ())
         }
         "wrong-page" => {
-            let mut request = read_request()?;
-            request.page = request.page.checked_add(1).ok_or(())?;
-            write_produced_response(request, 2, 0)
+            let request = read_request()?;
+            let mut response = produced_response(&request, 2)?;
+            let wrong_page = request.page().checked_add(1).ok_or(())?;
+            response[28..32].copy_from_slice(&wrong_page.to_be_bytes());
+            write_frame(&response)
         }
         "inspect" => {
             if env::var_os("PATH").is_some()
@@ -109,36 +157,19 @@ fn run() -> Result<(), ()> {
     }
 }
 
-fn read_request() -> Result<Request, ()> {
-    let mut input = io::stdin().lock();
-    let mut header = [0_u8; REQUEST_HEADER_LEN];
-    input.read_exact(&mut header).map_err(|_| ())?;
-    if &header[..8] != REQUEST_MAGIC || read_u16(&header, 8)? != SCHEMA_VERSION {
+fn read_request() -> Result<AdapterRequest, ()> {
+    let limit = u64::try_from(FIXTURE_REQUEST_FRAME_LIMIT).map_err(|_| ())?;
+    let mut input = io::stdin().lock().take(limit.saturating_add(1));
+    let mut frame = Vec::new();
+    input.read_to_end(&mut frame).map_err(|_| ())?;
+    if frame.len() > FIXTURE_REQUEST_FRAME_LIMIT {
         return Err(());
     }
-    let pdf_length = usize::try_from(read_u64(&header, 24)?).map_err(|_| ())?;
-    if pdf_length > FIXTURE_BYTE_LIMIT {
-        return Err(());
-    }
-    let mut pdf = Vec::new();
-    pdf.try_reserve_exact(pdf_length).map_err(|_| ())?;
-    pdf.resize(pdf_length, 0);
-    input.read_exact(&mut pdf).map_err(|_| ())?;
-    let mut extra = [0_u8; 1];
-    if input.read(&mut extra).map_err(|_| ())? != 0 {
-        return Err(());
-    }
-    Ok(Request {
-        page: read_u32(&header, 12)?,
-        width: read_u32(&header, 16)?,
-        height: read_u32(&header, 20)?,
-        source_hash: header[32..64].try_into().map_err(|_| ())?,
-        descriptor_identity: header[64..96].try_into().map_err(|_| ())?,
-    })
+    decode_adapter_request(frame, limit).map_err(|_| ())
 }
 
 fn write_produced_response(
-    request: Request,
+    request: AdapterRequest,
     parse_bytes: usize,
     stderr_bytes: usize,
 ) -> Result<(), ()> {
@@ -146,50 +177,39 @@ fn write_produced_response(
         return Err(());
     }
     write_repeated(&mut io::stderr().lock(), b'E', stderr_bytes)?;
-    let parse = json_payload(parse_bytes)?;
-    let rgba_length = rgba_length(request.width, request.height)?;
-    let rgba = filled(rgba_length, 0)?;
-    write_response(request, 0, [0; 4], &parse, b"[]", b"[]", &rgba)
+    let response = produced_response(&request, parse_bytes)?;
+    write_frame(&response)
 }
 
-fn write_response(
-    request: Request,
-    outcome: u16,
-    statuses: [u8; 4],
-    parse: &[u8],
-    scene: &[u8],
-    text: &[u8],
-    rgba: &[u8],
+fn produced_response(request: &AdapterRequest, parse_bytes: usize) -> Result<Vec<u8>, ()> {
+    let parse = json_payload(parse_bytes)?;
+    let rgba_length = rgba_length(request.width(), request.height())?;
+    let rgba = filled(rgba_length, 0)?;
+    encode_adapter_response(
+        request,
+        AdapterResponseChannels::new(
+            BaselineChannel::Produced(&parse),
+            BaselineChannel::Produced(b"[]"),
+            BaselineChannel::Produced(b"[]"),
+            BaselineChannel::Produced(&rgba),
+        ),
+        FIXTURE_RESPONSE_FRAME_LIMIT,
+    )
+    .map_err(|_| ())
+}
+
+fn write_channels(
+    request: &AdapterRequest,
+    channels: AdapterResponseChannels<'_>,
 ) -> Result<(), ()> {
-    let payload_length = parse
-        .len()
-        .checked_add(scene.len())
-        .and_then(|value| value.checked_add(text.len()))
-        .and_then(|value| value.checked_add(rgba.len()))
-        .ok_or(())?;
-    let capacity = RESPONSE_HEADER_LEN.checked_add(payload_length).ok_or(())?;
-    let mut response = Vec::new();
-    response.try_reserve_exact(capacity).map_err(|_| ())?;
-    response.extend_from_slice(RESPONSE_MAGIC);
-    response.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
-    response.extend_from_slice(&outcome.to_be_bytes());
-    response.extend_from_slice(&statuses);
-    response.extend_from_slice(&u32::try_from(parse.len()).map_err(|_| ())?.to_be_bytes());
-    response.extend_from_slice(&u32::try_from(scene.len()).map_err(|_| ())?.to_be_bytes());
-    response.extend_from_slice(&u32::try_from(text.len()).map_err(|_| ())?.to_be_bytes());
-    response.extend_from_slice(&request.page.to_be_bytes());
-    response.extend_from_slice(&request.width.to_be_bytes());
-    response.extend_from_slice(&request.height.to_be_bytes());
-    response.extend_from_slice(&u64::try_from(rgba.len()).map_err(|_| ())?.to_be_bytes());
-    response.extend_from_slice(&request.source_hash);
-    response.extend_from_slice(&request.descriptor_identity);
-    response.extend_from_slice(parse);
-    response.extend_from_slice(scene);
-    response.extend_from_slice(text);
-    response.extend_from_slice(rgba);
-    debug_assert_eq!(response.len(), capacity);
+    let response =
+        encode_adapter_response(request, channels, FIXTURE_RESPONSE_FRAME_LIMIT).map_err(|_| ())?;
+    write_frame(&response)
+}
+
+fn write_frame(response: &[u8]) -> Result<(), ()> {
     let mut output = io::stdout().lock();
-    output.write_all(&response).map_err(|_| ())?;
+    output.write_all(response).map_err(|_| ())?;
     output.flush().map_err(|_| ())
 }
 
@@ -238,31 +258,4 @@ fn parse_count(value: Option<&String>) -> Result<usize, ()> {
         return Err(());
     }
     Ok(value)
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ()> {
-    let value: [u8; 2] = bytes
-        .get(offset..offset + 2)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())?;
-    Ok(u16::from_be_bytes(value))
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ()> {
-    let value: [u8; 4] = bytes
-        .get(offset..offset + 4)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())?;
-    Ok(u32::from_be_bytes(value))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, ()> {
-    let value: [u8; 8] = bytes
-        .get(offset..offset + 8)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())?;
-    Ok(u64::from_be_bytes(value))
 }

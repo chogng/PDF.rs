@@ -8,12 +8,14 @@
 //! add reviewed descendant, resource, filesystem, and network containment
 //! before using it with a real external engine.
 
+mod pdfium;
 mod process;
 
 use std::fmt;
 
 use pdf_rs_digest::{Sha256, sha256};
 
+pub use pdfium::{PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumPixelAdapter};
 pub use process::{ProcessBaselineRunner, ProcessLimits, ProcessSpec};
 
 const REQUEST_MAGIC: &[u8; 8] = b"PRSBREQ2";
@@ -120,6 +122,52 @@ impl BaselineRequest {
     }
 }
 
+/// A validated schema-2 request as seen by an external adapter process.
+///
+/// The request retains the private PDF bytes and the expected descriptor
+/// identity from the host frame. It deliberately has no `Debug`
+/// implementation.
+pub struct AdapterRequest {
+    source_hash: [u8; 32],
+    descriptor_identity: [u8; 32],
+    pdf: Vec<u8>,
+    page: u32,
+    width: u32,
+    height: u32,
+}
+
+impl AdapterRequest {
+    /// Returns the verified immutable PDF identity.
+    pub const fn source_hash(&self) -> [u8; 32] {
+        self.source_hash
+    }
+
+    /// Returns the host-supplied descriptor identity that the response must echo.
+    pub const fn descriptor_identity(&self) -> [u8; 32] {
+        self.descriptor_identity
+    }
+
+    /// Borrows the private PDF bytes.
+    pub fn pdf(&self) -> &[u8] {
+        &self.pdf
+    }
+
+    /// Returns the zero-based requested page index.
+    pub const fn page(&self) -> u32 {
+        self.page
+    }
+
+    /// Returns the exact requested output width.
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns the exact requested output height.
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+}
+
 /// Per-channel result from an external baseline.
 ///
 /// `Unsupported` and `Failed` never carry placeholder content, preventing an
@@ -157,6 +205,38 @@ impl<T> fmt::Debug for BaselineChannel<T> {
             Self::Unsupported => "Unsupported",
             Self::Failed => "Failed",
         })
+    }
+}
+
+/// Borrowed channel payloads supplied by an adapter for one successful response.
+///
+/// Produced values must be non-empty. Unsupported and failed channels carry no
+/// placeholder bytes. This type deliberately has no `Debug` implementation.
+pub struct AdapterResponseChannels<'a> {
+    /// Canonical parse artifact outcome.
+    pub parse_json: BaselineChannel<&'a [u8]>,
+    /// Canonical Scene artifact outcome.
+    pub scene_json: BaselineChannel<&'a [u8]>,
+    /// Canonical positioned-text artifact outcome.
+    pub text_json: BaselineChannel<&'a [u8]>,
+    /// Row-major straight-alpha RGBA8 outcome.
+    pub rgba: BaselineChannel<&'a [u8]>,
+}
+
+impl<'a> AdapterResponseChannels<'a> {
+    /// Creates an explicit four-channel response without synthesizing missing data.
+    pub const fn new(
+        parse_json: BaselineChannel<&'a [u8]>,
+        scene_json: BaselineChannel<&'a [u8]>,
+        text_json: BaselineChannel<&'a [u8]>,
+        rgba: BaselineChannel<&'a [u8]>,
+    ) -> Self {
+        Self {
+            parse_json,
+            scene_json,
+            text_json,
+            rgba,
+        }
     }
 }
 
@@ -424,6 +504,197 @@ pub fn encode_request(
     Ok(frame)
 }
 
+/// Decodes and verifies one complete schema-2 request frame for an adapter.
+///
+/// The frame must fit `max_frame_bytes`, contain exactly the declared PDF
+/// length, have zero reserved bits, and bind the embedded bytes to the supplied
+/// source digest. PDF content is never included in diagnostics.
+pub fn decode_adapter_request(
+    mut frame: Vec<u8>,
+    max_frame_bytes: u64,
+) -> Result<AdapterRequest, BaselineError> {
+    if u64::try_from(frame.len()).map_err(|_| request_limit())? > max_frame_bytes {
+        return Err(request_limit());
+    }
+    if frame.len() < REQUEST_HEADER_LEN
+        || &frame[..8] != REQUEST_MAGIC
+        || read_request_u16(&frame, 8)? != SCHEMA_VERSION
+        || read_request_u16(&frame, 10)? != 0
+    {
+        return Err(invalid_request());
+    }
+
+    let page = read_request_u32(&frame, 12)?;
+    let width = read_request_u32(&frame, 16)?;
+    let height = read_request_u32(&frame, 20)?;
+    expected_rgba_len(width, height)?;
+    let pdf_len = usize::try_from(read_request_u64(&frame, 24)?).map_err(|_| invalid_request())?;
+    let expected_len = REQUEST_HEADER_LEN
+        .checked_add(pdf_len)
+        .ok_or_else(invalid_request)?;
+    if frame.len() != expected_len {
+        return Err(invalid_request());
+    }
+
+    let source_hash: [u8; 32] = frame[32..64]
+        .try_into()
+        .expect("fixed request source identity is 32 bytes");
+    let descriptor_identity: [u8; 32] = frame[64..96]
+        .try_into()
+        .expect("fixed request descriptor identity is 32 bytes");
+    let pdf = frame.split_off(REQUEST_HEADER_LEN);
+    if sha256(&pdf).map_err(|_| invalid_request())? != source_hash {
+        return Err(BaselineError::new(
+            BaselineErrorCode::SourceHashMismatch,
+            "RPE-BASELINE-0002",
+            "PDF bytes do not match the fixed corpus identity",
+        ));
+    }
+
+    Ok(AdapterRequest {
+        source_hash,
+        descriptor_identity,
+        pdf,
+        page,
+        width,
+        height,
+    })
+}
+
+/// Encodes a successful schema-2 adapter response bound to its request.
+///
+/// Produced RGBA must have exactly `width * height * 4` bytes. Unsupported and
+/// failed channels are encoded without payloads, and the complete frame must
+/// fit `max_frame_bytes`.
+pub fn encode_adapter_response(
+    request: &AdapterRequest,
+    channels: AdapterResponseChannels<'_>,
+    max_frame_bytes: u64,
+) -> Result<Vec<u8>, BaselineError> {
+    encode_adapter_frame(request, 0, channels, max_frame_bytes)
+}
+
+/// Encodes an identity-bound terminal adapter failure.
+///
+/// A terminal failure marks every channel failed and carries no document data.
+pub fn encode_adapter_failure(
+    request: &AdapterRequest,
+    max_frame_bytes: u64,
+) -> Result<Vec<u8>, BaselineError> {
+    encode_adapter_frame(
+        request,
+        1,
+        AdapterResponseChannels::new(
+            BaselineChannel::Failed,
+            BaselineChannel::Failed,
+            BaselineChannel::Failed,
+            BaselineChannel::Failed,
+        ),
+        max_frame_bytes,
+    )
+}
+
+fn encode_adapter_frame(
+    request: &AdapterRequest,
+    outcome: u16,
+    channels: AdapterResponseChannels<'_>,
+    max_frame_bytes: u64,
+) -> Result<Vec<u8>, BaselineError> {
+    let (parse_status, parse) = adapter_channel_parts(channels.parse_json)?;
+    let (scene_status, scene) = adapter_channel_parts(channels.scene_json)?;
+    let (text_status, text) = adapter_channel_parts(channels.text_json)?;
+    let (pixel_status, rgba) = adapter_channel_parts(channels.rgba)?;
+    if outcome == 1
+        && [parse_status, scene_status, text_status, pixel_status]
+            .into_iter()
+            .any(|status| status != WireChannelStatus::Failed)
+    {
+        return Err(invalid_request());
+    }
+    if !pixel_length_is_valid(pixel_status, rgba.len(), request.width, request.height)? {
+        return Err(invalid_request());
+    }
+
+    let payload_len = parse
+        .len()
+        .checked_add(scene.len())
+        .and_then(|value| value.checked_add(text.len()))
+        .and_then(|value| value.checked_add(rgba.len()))
+        .ok_or_else(output_limit)?;
+    let frame_len = RESPONSE_HEADER_LEN
+        .checked_add(payload_len)
+        .ok_or_else(output_limit)?;
+    if u64::try_from(frame_len).map_err(|_| output_limit())? > max_frame_bytes {
+        return Err(output_limit());
+    }
+
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(frame_len)
+        .map_err(|_| output_limit())?;
+    frame.extend_from_slice(RESPONSE_MAGIC);
+    frame.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+    frame.extend_from_slice(&outcome.to_be_bytes());
+    frame.extend_from_slice(&[
+        adapter_status_byte(parse_status),
+        adapter_status_byte(scene_status),
+        adapter_status_byte(text_status),
+        adapter_status_byte(pixel_status),
+    ]);
+    frame.extend_from_slice(
+        &u32::try_from(parse.len())
+            .map_err(|_| output_limit())?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(
+        &u32::try_from(scene.len())
+            .map_err(|_| output_limit())?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(
+        &u32::try_from(text.len())
+            .map_err(|_| output_limit())?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(&request.page.to_be_bytes());
+    frame.extend_from_slice(&request.width.to_be_bytes());
+    frame.extend_from_slice(&request.height.to_be_bytes());
+    frame.extend_from_slice(
+        &u64::try_from(rgba.len())
+            .map_err(|_| output_limit())?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(&request.source_hash);
+    frame.extend_from_slice(&request.descriptor_identity);
+    debug_assert_eq!(frame.len(), RESPONSE_HEADER_LEN);
+    frame.extend_from_slice(parse);
+    frame.extend_from_slice(scene);
+    frame.extend_from_slice(text);
+    frame.extend_from_slice(rgba);
+    Ok(frame)
+}
+
+fn adapter_channel_parts(
+    channel: BaselineChannel<&[u8]>,
+) -> Result<(WireChannelStatus, &[u8]), BaselineError> {
+    match channel {
+        BaselineChannel::Produced(value) if !value.is_empty() => {
+            Ok((WireChannelStatus::Produced, value))
+        }
+        BaselineChannel::Produced(_) => Err(invalid_request()),
+        BaselineChannel::Unsupported => Ok((WireChannelStatus::Unsupported, &[])),
+        BaselineChannel::Failed => Ok((WireChannelStatus::Failed, &[])),
+    }
+}
+
+const fn adapter_status_byte(status: WireChannelStatus) -> u8 {
+    match status {
+        WireChannelStatus::Produced => 0,
+        WireChannelStatus::Unsupported => 1,
+        WireChannelStatus::Failed => 2,
+    }
+}
+
 /// Decodes a bounded response and verifies source, request geometry, and build identity.
 pub fn decode_response(
     response: &[u8],
@@ -583,6 +854,23 @@ fn expected_rgba_len(width: u32, height: u32) -> Result<usize, BaselineError> {
     usize::try_from(bytes).map_err(|_| invalid_request())
 }
 
+fn read_request_u16(bytes: &[u8], offset: usize) -> Result<u16, BaselineError> {
+    let value = bytes.get(offset..offset + 2).ok_or_else(invalid_request)?;
+    Ok(u16::from_be_bytes([value[0], value[1]]))
+}
+
+fn read_request_u32(bytes: &[u8], offset: usize) -> Result<u32, BaselineError> {
+    let value = bytes.get(offset..offset + 4).ok_or_else(invalid_request)?;
+    Ok(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn read_request_u64(bytes: &[u8], offset: usize) -> Result<u64, BaselineError> {
+    let value = bytes.get(offset..offset + 8).ok_or_else(invalid_request)?;
+    Ok(u64::from_be_bytes([
+        value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7],
+    ]))
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, BaselineError> {
     let value = bytes
         .get(offset..offset + 2)
@@ -632,7 +920,7 @@ pub(crate) fn output_limit() -> BaselineError {
     )
 }
 
-fn malformed_response() -> BaselineError {
+pub(crate) fn malformed_response() -> BaselineError {
     BaselineError::new(
         BaselineErrorCode::MalformedResponse,
         "RPE-BASELINE-0005",
@@ -774,6 +1062,156 @@ mod tests {
         assert_ne!(
             first,
             encode_request(&request, &changed_invocation).unwrap()
+        );
+    }
+
+    #[test]
+    fn adapter_codec_round_trips_identity_and_partial_channels() {
+        let request = request();
+        let baseline_descriptor = descriptor();
+        let frame = encode_request(&request, &baseline_descriptor).unwrap();
+        let adapter = decode_adapter_request(frame.clone(), 1024).unwrap();
+        assert_eq!(adapter.source_hash(), request.source_hash());
+        assert_eq!(
+            adapter.descriptor_identity(),
+            descriptor_identity(&baseline_descriptor).unwrap()
+        );
+        assert_eq!(adapter.pdf(), request.pdf());
+        assert_eq!(adapter.page(), request.page());
+        assert_eq!(adapter.width(), request.width());
+        assert_eq!(adapter.height(), request.height());
+
+        let response = encode_adapter_response(
+            &adapter,
+            AdapterResponseChannels::new(
+                BaselineChannel::Unsupported,
+                BaselineChannel::Failed,
+                BaselineChannel::Produced(b"[]"),
+                BaselineChannel::Produced(&[1, 2, 3, 4]),
+            ),
+            1024,
+        )
+        .unwrap();
+        let observation =
+            decode_response(&response, &request, baseline_descriptor.clone(), 1024).unwrap();
+        assert_eq!(observation.parse_json, BaselineChannel::Unsupported);
+        assert_eq!(observation.scene_json, BaselineChannel::Failed);
+        assert_eq!(
+            observation.text_json,
+            BaselineChannel::Produced(b"[]".to_vec())
+        );
+        assert_eq!(
+            observation.rgba,
+            BaselineChannel::Produced(vec![1, 2, 3, 4])
+        );
+
+        let failure = encode_adapter_failure(&adapter, 1024).unwrap();
+        assert_eq!(
+            decode_response(&failure, &request, baseline_descriptor, 1024)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::RunnerFailed
+        );
+    }
+
+    #[test]
+    fn adapter_request_decoder_rejects_noncanonical_or_unbound_frames() {
+        let request = request();
+        let descriptor = descriptor();
+        let frame = encode_request(&request, &descriptor).unwrap();
+
+        assert_eq!(
+            decode_adapter_request(frame.clone(), u64::try_from(frame.len() - 1).unwrap())
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::RequestLimit
+        );
+        for changed in [
+            {
+                let mut changed = frame.clone();
+                changed[10] = 1;
+                changed
+            },
+            {
+                let mut changed = frame.clone();
+                changed.extend_from_slice(b"trailing");
+                changed
+            },
+            frame[..frame.len() - 1].to_vec(),
+        ] {
+            assert_eq!(
+                decode_adapter_request(changed, 1024).err().unwrap().code,
+                BaselineErrorCode::InvalidRequest
+            );
+        }
+
+        let mut changed_pdf = frame;
+        let last = changed_pdf.len() - 1;
+        changed_pdf[last] ^= 1;
+        assert_eq!(
+            decode_adapter_request(changed_pdf, 1024)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::SourceHashMismatch
+        );
+    }
+
+    #[test]
+    fn adapter_response_encoder_rejects_placeholders_geometry_and_limits() {
+        let request = request();
+        let descriptor = descriptor();
+        let frame = encode_request(&request, &descriptor).unwrap();
+        let adapter = decode_adapter_request(frame, 1024).unwrap();
+
+        for rgba in [&[][..], &[0, 1, 2][..], &[0; 8][..]] {
+            assert_eq!(
+                encode_adapter_response(
+                    &adapter,
+                    AdapterResponseChannels::new(
+                        BaselineChannel::Unsupported,
+                        BaselineChannel::Unsupported,
+                        BaselineChannel::Unsupported,
+                        BaselineChannel::Produced(rgba),
+                    ),
+                    1024,
+                )
+                .unwrap_err()
+                .code,
+                BaselineErrorCode::InvalidRequest
+            );
+        }
+        assert_eq!(
+            encode_adapter_response(
+                &adapter,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Produced(b""),
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Produced(&[0; 4]),
+                ),
+                1024,
+            )
+            .unwrap_err()
+            .code,
+            BaselineErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            encode_adapter_response(
+                &adapter,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Produced(&[0; 4]),
+                ),
+                115,
+            )
+            .unwrap_err()
+            .code,
+            BaselineErrorCode::OutputLimit
         );
     }
 

@@ -175,6 +175,10 @@ impl ProcessSpec {
             .map_err(|_| invalid_process_config())?;
         hasher.finalize().map_err(|_| invalid_process_config())
     }
+
+    pub(crate) fn arguments_are_empty(&self) -> bool {
+        self.arguments.is_empty()
+    }
 }
 
 /// Deadline- and byte-limited supervisor for one externally contained direct child.
