@@ -10,20 +10,20 @@ introduced_in = "0.1.0"
 [specification]
 document = "RPE-ARCH-001"
 version = "0.3"
-clauses = ["12.3", "12.4", "12.18", "15.3/M0"]
+clauses = ["12.3", "12.4", "12.6", "12.18", "15.3/M0"]
 interpretation = "A deterministic synthetic mismatch must exercise every M0 artifact channel."
 
 [provenance]
 kind = "self-authored-generated"
-source = "tools/generate@0.1.0 fixed-template schema 1"
-sha256 = "sha256:0207841ecfdcfbdf36876f956b8999d923ff917c09dd231dc52f5b0440ec5aa9"
+source = "tools/generate@0.1.0 dsl-schema-1 generator-schema-2 source-sha256:70f51cde27704589f0d2018d7bc18fd3595c7a95246f1791b02076b211727e85"
+sha256 = "sha256:9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = false
 access = "generated-local"
 
 [features]
 ids = ["quality.failure-bundle", "quality.canonical-diff", "quality.minimal-pdf-generator"]
-requirements = ["m0.synthetic-artifacts.v1"]
+requirements = ["m0.synthetic-artifacts.v1", "m0.one-page-table.v1"]
 
 [validity]
 class = "valid"
@@ -77,4 +77,4 @@ native = ["synthetic-m0"]
 external_observation = []
 
 [history]
-entries = ["2026-07-13: introduced as a draft pending independent oracle review"]
+entries = ["2026-07-13: introduced as a draft pending independent oracle review", "2026-07-13: bound the generated input to executable DSL schema 1 and generator schema 2"]

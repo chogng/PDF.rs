@@ -1,15 +1,15 @@
 schema = 1
-version = "0.3.0"
+version = "0.4.0"
 status = "active"
 
 [[feature]]
 id = "quality.minimal-pdf-generator"
 owner = "quality-corpus"
 state = "PLANNED"
-profile = "m0.synthetic-artifacts.v1"
+profile = "m0.one-page-table.v1"
 clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
 modules = ["tools/generate"]
-tests = ["infrastructure/synthetic-failure-bundle-001"]
+tests = ["tools/generate::tests", "infrastructure/synthetic-failure-bundle-001"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

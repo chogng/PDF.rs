@@ -28,6 +28,9 @@ version = "0.1.0"
 [[package]]
 name = "pdf-rs-generate"
 version = "0.1.0"
+dependencies = [
+ "pdf-rs-digest",
+]
 
 [[package]]
 name = "pdf-rs-quality"

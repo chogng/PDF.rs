@@ -1,35 +1,68 @@
 #![forbid(unsafe_code)]
 
 use std::env;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Take};
+use std::path::Path;
 use std::process::ExitCode;
 
-use pdf_rs_generate::generate_one_page_pdf;
+use pdf_rs_generate::{GenerateLimits, compile_dsl};
 
 fn main() -> ExitCode {
     let mut arguments = env::args_os().skip(1);
-    let Some(output_path) = arguments.next() else {
-        eprintln!("usage: pdf-rs-generate <output.pdf>");
+    let Some(source_path) = arguments.next() else {
+        usage();
         return ExitCode::from(2);
     };
-
+    let Some(output_path) = arguments.next() else {
+        usage();
+        return ExitCode::from(2);
+    };
     if arguments.next().is_some() {
-        eprintln!("usage: pdf-rs-generate <output.pdf>");
+        usage();
         return ExitCode::from(2);
     }
 
-    let pdf = match generate_one_page_pdf() {
-        Ok(pdf) => pdf,
-        Err(error) => {
-            eprintln!("failed to generate PDF: {error}");
+    let limits = GenerateLimits::default();
+    let source = match read_bounded(Path::new(&source_path), limits.max_source_bytes()) {
+        Ok(source) => source,
+        Err(()) => {
+            eprintln!("failed to read bounded DSL source");
             return ExitCode::FAILURE;
         }
     };
-
-    if let Err(error) = fs::write(output_path, pdf) {
-        eprintln!("failed to write PDF: {error}");
+    let generated = match compile_dsl(&source, limits) {
+        Ok(generated) => generated,
+        Err(error) => {
+            eprintln!("failed to compile PDF fixture: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if fs::write(output_path, generated.bytes()).is_err() {
+        eprintln!("failed to write generated PDF");
         return ExitCode::FAILURE;
     }
-
     ExitCode::SUCCESS
+}
+
+fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, ()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if !metadata.file_type().is_file() || metadata.len() > u64::try_from(limit).map_err(|_| ())? {
+        return Err(());
+    }
+    let capacity = limit.checked_add(1).ok_or(())?;
+    let mut source = Vec::new();
+    source.try_reserve_exact(capacity).map_err(|_| ())?;
+    let file = File::open(path).map_err(|_| ())?;
+    let take_limit = u64::try_from(capacity).map_err(|_| ())?;
+    let mut bounded: Take<File> = file.take(take_limit);
+    bounded.read_to_end(&mut source).map_err(|_| ())?;
+    if source.len() > limit {
+        return Err(());
+    }
+    Ok(source)
+}
+
+fn usage() {
+    eprintln!("usage: pdf-rs-generate <source.dsl> <output.pdf>");
 }

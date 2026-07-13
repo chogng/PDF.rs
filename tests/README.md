@@ -1,10 +1,10 @@
 # Test suites
 
 The repository follows RPE-STD-003's layered layout. Every non-trivial fixture
-under `cases/` carries a validated `case.toml`; generated inputs keep their source
-description and provenance beside the bytes. The M0 input is generated locally by
-the CI entry point and intentionally ignored until its custom test-data license is
-approved for redistribution.
+under `cases/` carries a validated `case.toml`; generated inputs keep their
+executable source and provenance beside the bytes. CI replays the bounded M0 DSL
+source before validating its output. The generated PDF remains locally ignored
+until its custom test-data license is approved for redistribution.
 
 - `cases/`: T0 atomic and regression fixtures.
 - `models/`, `properties/`, `metamorphic/`: deterministic model-based suites.

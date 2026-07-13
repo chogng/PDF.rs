@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+pdf-rs-digest = { path = "../digest" }
+
 [lib]
 name = "pdf_rs_generate"
 path = "src/lib.rs"
