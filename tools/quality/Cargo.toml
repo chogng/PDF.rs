@@ -9,3 +9,7 @@ publish = false
 pdf-rs-compare = { path = "../compare" }
 pdf-rs-digest = { path = "../digest" }
 pdf-rs-generate = { path = "../generate" }
+
+[dev-dependencies]
+pdf-rs-benchmark = { path = "../benchmark" }
+pdf-rs-corpus = { path = "../corpus" }

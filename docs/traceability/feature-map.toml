@@ -1,5 +1,5 @@
 schema = 1
-version = "0.6.0"
+version = "0.7.0"
 status = "active"
 
 [[feature]]
@@ -9,7 +9,7 @@ state = "PLANNED"
 profile = "m0.one-page-table.v1"
 clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
 modules = ["tools/generate"]
-tests = ["tools/generate::tests", "infrastructure/synthetic-failure-bundle-001"]
+tests = ["tools/generate::tests", "tools/quality/tests/parser_mutation_smoke.rs", "infrastructure/synthetic-failure-bundle-001"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -57,7 +57,7 @@ state = "PLANNED"
 profile = "m0.synthetic-benchmark-replay.v1"
 clauses = ["RPE-ARCH-001/12.21", "RPE-ARCH-001/12.22", "RPE-ARCH-001/12.23", "RPE-STD-003/17"]
 modules = ["tools/benchmark"]
-tests = ["tools/benchmark/src/report.rs::tests", "tools/benchmark/tests/cli.rs", "tools/benchmark/tests/repository_report.rs"]
+tests = ["tools/benchmark/src/report.rs::tests", "tools/benchmark/tests/cli.rs", "tools/benchmark/tests/repository_report.rs", "tools/quality/tests/parser_mutation_smoke.rs"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -69,7 +69,7 @@ state = "PLANNED"
 profile = "m0.t0-corpus-manifest.v1"
 clauses = ["RPE-ARCH-001/12.19", "RPE-ARCH-001/12.20"]
 modules = ["tools/corpus"]
-tests = ["tools/corpus/src/manifest.rs::tests", "tools/corpus/tests/cli.rs", "tools/corpus/tests/repository_manifest.rs"]
+tests = ["tools/corpus/src/manifest.rs::tests", "tools/corpus/tests/cli.rs", "tools/corpus/tests/repository_manifest.rs", "tools/quality/tests/parser_mutation_smoke.rs"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

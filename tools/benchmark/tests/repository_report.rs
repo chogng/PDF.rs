@@ -83,7 +83,7 @@ fn repository_report_is_canonical_non_verdict_and_ledger_bound() {
     assert_line(feature, "profile = \"m0.synthetic-benchmark-replay.v1\"");
     assert_line(
         feature,
-        "tests = [\"tools/benchmark/src/report.rs::tests\", \"tools/benchmark/tests/cli.rs\", \"tools/benchmark/tests/repository_report.rs\"]",
+        "tests = [\"tools/benchmark/src/report.rs::tests\", \"tools/benchmark/tests/cli.rs\", \"tools/benchmark/tests/repository_report.rs\", \"tools/quality/tests/parser_mutation_smoke.rs\"]",
     );
     assert_line(feature, "benchmarks = []");
 
@@ -97,7 +97,7 @@ fn repository_report_is_canonical_non_verdict_and_ledger_bound() {
     );
     assert_line(
         benchmark_requirement,
-        "tests = [\"tools/benchmark/src/report.rs::tests\", \"tools/benchmark/tests/cli.rs\", \"tools/benchmark/tests/repository_report.rs\"]",
+        "tests = [\"tools/benchmark/src/report.rs::tests\", \"tools/benchmark/tests/cli.rs\", \"tools/benchmark/tests/repository_report.rs\", \"tools/quality/tests/parser_mutation_smoke.rs\"]",
     );
     assert!(benchmark_requirement.contains("explicitly remain performance-ineligible"));
 

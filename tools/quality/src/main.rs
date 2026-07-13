@@ -28,12 +28,12 @@ fn selection_for(lane: &str) -> Option<Selection> {
         "local" => Some(Selection {
             lane: "local",
             reason: "pre-submit feedback for code and deterministic T0 infrastructure",
-            checks: "fmt,clippy,test,case-manifests,product-purity,synthetic-failure-bundle",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,synthetic-failure-bundle",
         }),
         "pr" => Some(Selection {
             lane: "pr",
             reason: "merge gate for the complete required Rust quality baseline",
-            checks: "fmt,clippy,test,case-manifests,product-purity,synthetic-failure-bundle,doc",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,synthetic-failure-bundle,doc",
         }),
         _ => None,
     }

@@ -2,7 +2,8 @@
 
 Repository quality-lane selection, strict case-manifest validation, product
 dependency-purity scanning, content addressing, and deterministic synthetic
-failure-bundle generation.
+failure-bundle generation. It also owns the cross-tool fixed parser-mutation
+smoke that exercises the generator DSL, corpus manifest, and benchmark report.
 
 # Semantic owner
 
@@ -21,6 +22,16 @@ The manifest reader intentionally accepts a canonical TOML v1 subset: root
 schema, named tables, scalar values, and single-line string arrays. It rejects
 unknown/duplicate fields before checking every required semantic group.
 
+The `m0.parser-mutation-smoke.v1` integration test binds the exact SHA-256 of
+the three existing canonical inputs. For each parser it selects seven stable
+byte anchors and streams exactly 103 independent cases: six truncations, six
+deletions, 42 selected-byte replacements, 42 named boundary-token insertions,
+six fixed eight-byte duplications, and one input-limit violation. Each mutant is
+discarded before the next, cannot exceed 4,096 bytes, and is decoded twice under
+an explicit 2,048-byte codec input limit. Accepted artifacts and complete error
+fingerprints must repeat exactly; internal/hash failures and content-bearing
+diagnostics are rejected.
+
 Bundle addresses hash a domain separator followed by lexically sorted artifact
 names and length-prefixed bytes, including the validated source `case.toml` and
 verified adjacent generated input. `manifest.toml` records but is not included
@@ -37,7 +48,8 @@ counterparts used to exercise the artifact channel; they are not PDFium output.
 # Dependencies and generated data
 
 - Rust standard library.
-- Local tooling crates `pdf-rs-generate`, `pdf-rs-compare`, and `pdf-rs-digest`.
+- Local tooling crates `pdf-rs-generate`, `pdf-rs-compare`, `pdf-rs-digest`,
+  plus test-only `pdf-rs-corpus` and `pdf-rs-benchmark` dependencies.
 - No external packages, engines, fonts, color data, or user documents.
 
 # Tests and fuzz targets
@@ -45,8 +57,15 @@ counterparts used to exercise the artifact channel; they are not PDFium output.
 Tests cover required manifest groups, malformed syntax, duplicates, hash/oracle/
 budget validation, deterministic bundle addressing, source/render/contract
 binding, artifact completeness, mismatch diagnostics, idempotent writes, and
-rejection of product-to-tools or full-engine dependencies. A manifest
-parser fuzz target and interrupted-write recovery are planned before T1 inputs.
+rejection of product-to-tools or full-engine dependencies. The cross-tool
+mutation smoke covers canonical-seed identity, bounded fixed mutations,
+repeatable success/error observations, explicit input-limit rejection, and
+synthetic secret/seed-marker redaction.
+
+This is not a registered fuzz target. It has no coverage guidance, randomness,
+dictionary, corpus growth, sanitizer, watchdog, minimizer, nightly campaign, or
+release eligibility. Continuous parser fuzzing, automated failure bundles, and
+interrupted-write recovery remain planned before T1 inputs.
 
 # Known deviations and unsupported cases
 
@@ -64,8 +83,12 @@ parser fuzz target and interrupted-write recovery are planned before T1 inputs.
   closures, binaries, Wasm imports, dynamic libraries, packages, and network
   manifests remain separate release-blocking scans; this command does not claim
   that broader proof.
+- Passing the fixed mutation smoke proves only that the enumerated project-authored
+  cases produced repeatable bounded results in the ordinary test process. It is
+  not coverage evidence and has no per-case wall-clock watchdog.
 
 # History
 
 - 2026-07-13: Added canonical manifest schema 1, SHA-256 addressing, and complete
   synthetic parse/Scene/Text/Pixel failure bundles.
+- 2026-07-13: Added the bounded cross-tool deterministic parser-mutation smoke.

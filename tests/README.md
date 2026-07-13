@@ -15,7 +15,9 @@ the manifest does not make the PDF redistributable.
 - `models/`, `properties/`, `metamorphic/`: deterministic model-based suites.
 - `lifecycle/`: controlled scheduler, Range, cancellation, and resource tests.
 - `browser/`, `desktop/`: platform end-to-end suites.
-- `fuzz/`: targets, dictionaries, seeds, owners, and minimizer contracts.
+- `fuzz/`: registry and campaign contracts; M0 currently documents only a
+  fixed deterministic parser-mutation smoke run by ordinary workspace tests,
+  with no registered fuzz target or release-fuzz evidence.
 - `corpus/manifests/`: canonical hashed corpus indices; M0 currently contains
   only the generated T0 object, while licensed T1-T3 indices remain pending.
 - `performance/`: benchmark-report contract fixtures; M0 currently contains

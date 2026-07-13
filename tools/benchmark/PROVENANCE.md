@@ -82,9 +82,12 @@ CLI tests cover command shape, successful non-verdict evidence, corpus binding f
 environment/value/path redaction. A repository test binds the report hash, canonical corpus hash,
 data-ledger governance metadata, specification snapshot, and CI validation order.
 
-No fuzz target exists in this M0 slice. The public constructors bound state through validation and
-checked arithmetic; deterministic mutation smoke and continuous fuzzing remain required before
-measured or externally supplied reports are accepted.
+No fuzz target exists in this M0 slice. The central `m0.parser-mutation-smoke.v1` quality integration
+test replays 103 fixed, bounded anchor mutations against the canonical report under an explicit
+2,048-byte decode limit. It checks exact outcome repeatability, canonical re-encoding on success,
+non-internal failures, and environment/secret redaction. This ordinary regression test is not
+coverage-guided or release-fuzz evidence; registered continuous fuzzing and automated minimization
+remain required before measured or externally supplied reports are accepted.
 
 # Known deviations and unsupported cases
 

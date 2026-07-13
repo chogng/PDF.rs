@@ -44,7 +44,9 @@ dependencies = [
 name = "pdf-rs-quality"
 version = "0.1.0"
 dependencies = [
+ "pdf-rs-benchmark",
  "pdf-rs-compare",
+ "pdf-rs-corpus",
  "pdf-rs-digest",
  "pdf-rs-generate",
 ]

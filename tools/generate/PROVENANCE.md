@@ -84,8 +84,11 @@ of non-file and oversized inputs, plus symbolic-link rejection on Unix. CI then 
 adjacent ignored PDF before manifest and bundle validation.
 
 No continuous fuzz target exists in this M0 slice. Deterministic truncation and selected mutation
-cases are covered in unit tests, but future grammar and corruption-mode work must add a registered
-fuzz target, seed corpus, dictionary, timeout, and structure-aware minimizer.
+cases are covered in unit tests. The central `m0.parser-mutation-smoke.v1` quality integration test
+also replays 103 fixed, bounded anchor mutations against the canonical DSL and checks exact outcome
+repeatability without logging source bytes. It is not coverage-guided or release-fuzz evidence;
+future grammar and corruption-mode work must add a registered fuzz target, seed corpus, dictionary,
+timeout, and structure-aware minimizer.
 
 # Known deviations and unsupported cases
 

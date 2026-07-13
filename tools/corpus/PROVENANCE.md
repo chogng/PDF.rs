@@ -70,6 +70,13 @@ source, access, redistribution, and byte ceiling across the T0 manifest, case
 manifest, and data ledger without depending on the ignored PDF being present
 before tests run.
 
+The central `m0.parser-mutation-smoke.v1` quality integration test additionally
+replays 103 fixed, bounded anchor mutations against the canonical manifest under
+an explicit 2,048-byte decode limit. It checks exact outcome repeatability,
+canonical re-encoding on success, non-internal failures, and path/secret
+redaction. It is an ordinary regression test, not a registered or continuous
+fuzz target, coverage gate, minimizer, or release-fuzz result.
+
 # Known deviations and unsupported cases
 
 The executable profile is limited to canonical, locally rooted T0 manifests.
