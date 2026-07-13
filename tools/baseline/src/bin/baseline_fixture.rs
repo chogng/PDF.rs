@@ -29,10 +29,12 @@ fn main() -> ExitCode {
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = env::args().skip(1).collect();
     let environment_mode = env::var("PDF_RS_BASELINE_FIXTURE_MODE").ok();
+    let executable_mode = executable_mode();
     let mode = arguments
         .first()
         .map(String::as_str)
         .or(environment_mode.as_deref())
+        .or(executable_mode.as_deref())
         .ok_or(())?;
     match mode {
         "ok" => write_produced_response(read_request()?, 2, 0),
@@ -82,6 +84,35 @@ fn run() -> Result<(), ()> {
                     BaselineChannel::Unsupported,
                     BaselineChannel::Unsupported,
                     BaselineChannel::Failed,
+                ),
+            )
+        }
+        "pixel-parse-failed" => write_pixel_profile_violation(read_request()?, 0),
+        "pixel-scene-failed" => write_pixel_profile_violation(read_request()?, 1),
+        "pixel-text-failed" => write_pixel_profile_violation(read_request()?, 2),
+        "pixel-unsupported" => {
+            let request = read_request()?;
+            write_channels(
+                &request,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                ),
+            )
+        }
+        "pixel-only-marker" => {
+            fs::write("spawned", b"spawned").map_err(|_| ())?;
+            let request = read_request()?;
+            let rgba = filled(rgba_length(request.width(), request.height())?, 0)?;
+            write_channels(
+                &request,
+                AdapterResponseChannels::new(
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Unsupported,
+                    BaselineChannel::Produced(&rgba),
                 ),
             )
         }
@@ -157,6 +188,15 @@ fn run() -> Result<(), ()> {
     }
 }
 
+fn executable_mode() -> Option<String> {
+    env::current_exe()
+        .ok()?
+        .file_name()?
+        .to_str()?
+        .strip_prefix("pdf-rs-baseline-fixture-")
+        .map(str::to_owned)
+}
+
 fn read_request() -> Result<AdapterRequest, ()> {
     let limit = u64::try_from(FIXTURE_REQUEST_FRAME_LIMIT).map_err(|_| ())?;
     let mut input = io::stdin().lock().take(limit.saturating_add(1));
@@ -205,6 +245,29 @@ fn write_channels(
     let response =
         encode_adapter_response(request, channels, FIXTURE_RESPONSE_FRAME_LIMIT).map_err(|_| ())?;
     write_frame(&response)
+}
+
+fn write_pixel_profile_violation(request: AdapterRequest, failed_channel: usize) -> Result<(), ()> {
+    let rgba = filled(rgba_length(request.width(), request.height())?, 0)?;
+    let parse = if failed_channel == 0 {
+        BaselineChannel::Failed
+    } else {
+        BaselineChannel::Unsupported
+    };
+    let scene = if failed_channel == 1 {
+        BaselineChannel::Failed
+    } else {
+        BaselineChannel::Unsupported
+    };
+    let text = if failed_channel == 2 {
+        BaselineChannel::Failed
+    } else {
+        BaselineChannel::Unsupported
+    };
+    write_channels(
+        &request,
+        AdapterResponseChannels::new(parse, scene, text, BaselineChannel::Produced(&rgba)),
+    )
 }
 
 fn write_frame(response: &[u8]) -> Result<(), ()> {

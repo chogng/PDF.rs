@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -24,6 +24,7 @@ const MAX_WATCHDOG: Duration = Duration::from_secs(300);
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const CLEANUP_GRACE: Duration = Duration::from_millis(250);
 const PIPE_BUFFER_BYTES: usize = 8 * 1024;
+const MAX_HELPER_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Hard limits for one direct-child baseline invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +179,31 @@ impl ProcessSpec {
 
     pub(crate) fn arguments_are_empty(&self) -> bool {
         self.arguments.is_empty()
+    }
+
+    pub(crate) fn environment_is_empty(&self) -> bool {
+        self.environment.is_empty()
+    }
+
+    pub(crate) fn executable_sha256(&self) -> Result<[u8; 32], BaselineError> {
+        let mut file = File::open(&self.executable).map_err(|_| invalid_process_config())?;
+        let length = file.metadata().map_err(|_| invalid_process_config())?.len();
+        if length == 0 || length > MAX_HELPER_EXECUTABLE_BYTES {
+            return Err(invalid_process_config());
+        }
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|_| invalid_process_config())?;
+            if read == 0 {
+                return hasher.finalize().map_err(|_| invalid_process_config());
+            }
+            hasher
+                .update(&buffer[..read])
+                .map_err(|_| invalid_process_config())?;
+        }
     }
 }
 

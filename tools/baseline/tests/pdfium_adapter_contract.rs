@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use pdf_rs_baseline::{
     BaselineChannel, BaselineDescriptor, BaselineErrorCode, BaselineRequest, BaselineRunner,
-    OracleAuthority, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumPixelAdapter, ProcessLimits, ProcessSpec,
+    OracleAuthority, PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE,
+    PdfiumPixelAdapter, ProcessLimits, ProcessSpec,
 };
 use pdf_rs_digest::sha256;
 
@@ -63,12 +64,17 @@ fn pixel_profile_accepts_only_explicit_pixel_outcomes() {
 #[test]
 fn pixel_profile_rejects_a_helper_that_fabricates_semantic_channels() {
     let directory = TestDirectory::new("violation");
-    let error = runner("profile-violation", &directory)
-        .observe(&request())
-        .err()
-        .unwrap();
-    assert_eq!(error.code, BaselineErrorCode::MalformedResponse);
-    assert_eq!(error.diagnostic_id, "RPE-BASELINE-0005");
+    for mode in [
+        "profile-violation",
+        "pixel-parse-failed",
+        "pixel-scene-failed",
+        "pixel-text-failed",
+        "pixel-unsupported",
+    ] {
+        let error = runner(mode, &directory).observe(&request()).err().unwrap();
+        assert_eq!(error.code, BaselineErrorCode::MalformedResponse, "{mode}");
+        assert_eq!(error.diagnostic_id, "RPE-BASELINE-0005", "{mode}");
+    }
 }
 
 #[test]
@@ -103,6 +109,69 @@ fn pixel_profile_rejects_wrong_identity_and_helper_arguments() {
             .code,
         BaselineErrorCode::InvalidProcessConfig
     );
+
+    let (mut descriptor, process, limits) = parts("pixel-only", &directory, Vec::new());
+    descriptor.build_hash[0] ^= 1;
+    assert_eq!(
+        PdfiumPixelAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+
+    let limits = ordinary_limits();
+    let (descriptor, process, limits) = parts_with_limits(
+        "pixel-only",
+        &directory,
+        Vec::new(),
+        vec![("UNREVIEWED_BEHAVIOR".into(), "enabled".into())],
+        limits,
+    );
+    assert_eq!(
+        PdfiumPixelAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+}
+
+#[test]
+fn pixel_geometry_is_rejected_before_the_helper_is_spawned() {
+    let directory = TestDirectory::new("preflight-pipe");
+    let limits = ProcessLimits::new(1024, 115, 1024, Duration::from_secs(2)).unwrap();
+    let (descriptor, process, limits) = parts_with_limits(
+        "pixel-only-marker",
+        &directory,
+        Vec::new(),
+        Vec::new(),
+        limits,
+    );
+    let adapter = PdfiumPixelAdapter::new(descriptor, process, limits).unwrap();
+    let error = adapter.observe(&request()).err().unwrap();
+    assert_eq!(error.code, BaselineErrorCode::OutputLimit);
+    assert!(!directory.path().join("spawned").exists());
+
+    let directory = TestDirectory::new("preflight-profile");
+    let limits = ProcessLimits::new(1024, 128 * 1024 * 1024, 1024, Duration::from_secs(2)).unwrap();
+    let (descriptor, process, limits) = parts_with_limits(
+        "pixel-only-marker",
+        &directory,
+        Vec::new(),
+        Vec::new(),
+        limits,
+    );
+    let adapter = PdfiumPixelAdapter::new(descriptor, process, limits).unwrap();
+    let width = 4097;
+    let height = 4097;
+    assert!(u64::from(width) * u64::from(height) * 4 > PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES);
+    let error = adapter
+        .observe(&request_with_geometry(width, height))
+        .err()
+        .unwrap();
+    assert_eq!(error.code, BaselineErrorCode::OutputLimit);
+    assert!(!directory.path().join("spawned").exists());
 }
 
 fn runner(mode: &str, directory: &TestDirectory) -> PdfiumPixelAdapter {
@@ -115,21 +184,31 @@ fn parts(
     directory: &TestDirectory,
     arguments: Vec<String>,
 ) -> (BaselineDescriptor, ProcessSpec, ProcessLimits) {
-    let limits = ProcessLimits::new(1024, 1024, 1024, Duration::from_secs(2)).unwrap();
+    parts_with_limits(mode, directory, arguments, Vec::new(), ordinary_limits())
+}
+
+fn parts_with_limits(
+    mode: &str,
+    directory: &TestDirectory,
+    arguments: Vec<String>,
+    environment: Vec<(String, String)>,
+    limits: ProcessLimits,
+) -> (BaselineDescriptor, ProcessSpec, ProcessLimits) {
+    let executable = fixture_executable(mode, directory);
     let process = ProcessSpec::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_pdf-rs-baseline-fixture")),
+        &executable,
         arguments,
-        vec![("PDF_RS_BASELINE_FIXTURE_MODE".into(), mode.into())],
+        environment,
         directory.path(),
         "test-only-direct-child-no-grandchildren",
     )
     .unwrap();
-    let executable = fs::read(env!("CARGO_BIN_EXE_pdf-rs-baseline-fixture")).unwrap();
+    let executable_bytes = fs::read(executable).unwrap();
     let mut descriptor = BaselineDescriptor {
         id: PDFIUM_PIXEL_ADAPTER_PROFILE.into(),
         engine: "pdfium".into(),
         upstream_revision: "self-authored-contract-fixture".into(),
-        build_hash: sha256(&executable).unwrap(),
+        build_hash: sha256(&executable_bytes).unwrap(),
         build_flags_hash: digest(b"test-only-no-pdfium-build"),
         environment_hash: digest(b"cleared-env-contract-fixture"),
         invocation_hash: [1; 32],
@@ -143,8 +222,25 @@ fn parts(
 }
 
 fn request() -> BaselineRequest {
+    request_with_geometry(1, 1)
+}
+
+fn request_with_geometry(width: u32, height: u32) -> BaselineRequest {
     let pdf = b"%PDF-1.7".to_vec();
-    BaselineRequest::new(sha256(&pdf).unwrap(), pdf, 0, 1, 1).unwrap()
+    BaselineRequest::new(sha256(&pdf).unwrap(), pdf, 0, width, height).unwrap()
+}
+
+fn ordinary_limits() -> ProcessLimits {
+    ProcessLimits::new(1024, 1024, 1024, Duration::from_secs(2)).unwrap()
+}
+
+fn fixture_executable(mode: &str, directory: &TestDirectory) -> PathBuf {
+    let source = PathBuf::from(env!("CARGO_BIN_EXE_pdf-rs-baseline-fixture"));
+    let destination = directory
+        .path()
+        .join(format!("pdf-rs-baseline-fixture-{mode}"));
+    fs::copy(source, &destination).unwrap();
+    destination
 }
 
 fn digest(value: &[u8]) -> [u8; 32] {
