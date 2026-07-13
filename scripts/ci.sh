@@ -31,6 +31,9 @@ cargo run --quiet --package pdf-rs-generate -- \
     tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf
 cargo run --quiet --package pdf-rs-corpus -- \
     validate tests/corpus/manifests/t0-bootstrap-v1.toml .
+cargo run --quiet --package pdf-rs-benchmark -- \
+    validate tests/performance/m0-synthetic-benchmark-replay-v1.toml \
+    tests/corpus/manifests/t0-bootstrap-v1.toml
 cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .
 cargo run --quiet --package pdf-rs-quality -- \

@@ -29,96 +29,97 @@ impl BenchmarkSchemaVersion {
     }
 }
 
-/// Cache state under which samples were collected.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum CacheState {
-    /// Process, code, document, font, object, and browser caches are intentionally cold.
-    Cold,
-    /// The scenario intentionally reuses declared caches from a prior run.
-    Warm,
+macro_rules! stable_string_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $spelling:literal
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        pub enum $name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+        }
+
+        impl $name {
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Returns the stable report spelling.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $spelling),+
+                }
+            }
+
+            pub(crate) fn parse(value: &str) -> Option<Self> {
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|candidate| candidate.as_str() == value)
+            }
+        }
+    };
 }
 
-impl CacheState {
-    /// Returns the stable metadata spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Cold => "cold",
-            Self::Warm => "warm",
-        }
+stable_string_enum! {
+    /// Cache state under which samples were collected.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum CacheState {
+        /// Process, code, document, font, object, and browser caches are intentionally cold.
+        Cold => "cold",
+        /// The scenario intentionally reuses declared caches from a prior run.
+        Warm => "warm",
     }
 }
 
-/// Versioned benchmark scenario taxonomy from RPE-ARCH-001 section 12.22.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum BenchmarkScenario {
-    /// Cold process, code, document, and cache open.
-    ColdOpen,
-    /// Reopen with explicitly declared warm caches.
-    WarmReopen,
-    /// Time until the first recognizable preview is available.
-    FirstVisiblePreview,
-    /// Time until every target tile in the current viewport reaches full quality.
-    FirstFullQualityViewport,
-    /// Stable continuous-scroll behavior.
-    ContinuousScroll,
-    /// Fast wheel or pinch behavior including stale-work handling.
-    FastWheelOrPinch,
-    /// Jump to a non-adjacent page or range.
-    RandomJump,
-    /// Large scanned-document path.
-    LargeScan,
-    /// Vector- or CAD-heavy path.
-    VectorCad,
-    /// CJK- or text-heavy path.
-    CjkTextHeavy,
-    /// Malformed-input repair or bounded rejection path.
-    Malformed,
-    /// Time until the first search result is available.
-    SearchFirstResult,
-}
-
-impl BenchmarkScenario {
-    /// Returns the stable report spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ColdOpen => "cold-open",
-            Self::WarmReopen => "warm-reopen",
-            Self::FirstVisiblePreview => "first-visible-preview",
-            Self::FirstFullQualityViewport => "first-full-quality-viewport",
-            Self::ContinuousScroll => "continuous-scroll",
-            Self::FastWheelOrPinch => "fast-wheel-or-pinch",
-            Self::RandomJump => "random-jump",
-            Self::LargeScan => "large-scan",
-            Self::VectorCad => "vector-cad",
-            Self::CjkTextHeavy => "cjk-text-heavy",
-            Self::Malformed => "malformed",
-            Self::SearchFirstResult => "search-first-result",
-        }
+stable_string_enum! {
+    /// Versioned benchmark scenario taxonomy from RPE-ARCH-001 section 12.22.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum BenchmarkScenario {
+        /// Cold process, code, document, and cache open.
+        ColdOpen => "cold-open",
+        /// Reopen with explicitly declared warm caches.
+        WarmReopen => "warm-reopen",
+        /// Time until the first recognizable preview is available.
+        FirstVisiblePreview => "first-visible-preview",
+        /// Time until every target tile in the current viewport reaches full quality.
+        FirstFullQualityViewport => "first-full-quality-viewport",
+        /// Stable continuous-scroll behavior.
+        ContinuousScroll => "continuous-scroll",
+        /// Fast wheel or pinch behavior including stale-work handling.
+        FastWheelOrPinch => "fast-wheel-or-pinch",
+        /// Jump to a non-adjacent page or range.
+        RandomJump => "random-jump",
+        /// Large scanned-document path.
+        LargeScan => "large-scan",
+        /// Vector- or CAD-heavy path.
+        VectorCad => "vector-cad",
+        /// CJK- or text-heavy path.
+        CjkTextHeavy => "cjk-text-heavy",
+        /// Malformed-input repair or bounded rejection path.
+        Malformed => "malformed",
+        /// Time until the first search result is available.
+        SearchFirstResult => "search-first-result",
     }
 }
 
-/// Timing boundary used by a benchmark sample set.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum TimingDomain {
-    /// Isolated component time, excluding the surrounding user path.
-    Component,
-    /// Engine time for a user path, excluding network transfer and host presentation.
-    Engine,
-    /// End-to-end user-path time including network transfer.
-    IncludingNetwork,
-}
-
-impl TimingDomain {
-    /// Returns the stable report spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Component => "component",
-            Self::Engine => "engine",
-            Self::IncludingNetwork => "including-network",
-        }
+stable_string_enum! {
+    /// Timing boundary used by a benchmark sample set.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum TimingDomain {
+        /// Isolated component time, excluding the surrounding user path.
+        Component => "component",
+        /// Engine time for a user path, excluding network transfer and host presentation.
+        Engine => "engine",
+        /// End-to-end user-path time including network transfer.
+        IncludingNetwork => "including-network",
     }
 }
 
@@ -461,6 +462,18 @@ mod tests {
         assert_ne!(TimingDomain::Engine, TimingDomain::IncludingNetwork);
         assert_eq!(TimingDomain::Engine.as_str(), "engine");
         assert_eq!(TimingDomain::IncludingNetwork.as_str(), "including-network");
+        for &value in CacheState::ALL {
+            assert_eq!(CacheState::parse(value.as_str()), Some(value));
+        }
+        for &value in BenchmarkScenario::ALL {
+            assert_eq!(BenchmarkScenario::parse(value.as_str()), Some(value));
+        }
+        for &value in TimingDomain::ALL {
+            assert_eq!(TimingDomain::parse(value.as_str()), Some(value));
+        }
+        assert_eq!(CacheState::parse("unknown"), None);
+        assert_eq!(BenchmarkScenario::parse("unknown"), None);
+        assert_eq!(TimingDomain::parse("unknown"), None);
     }
 
     #[test]

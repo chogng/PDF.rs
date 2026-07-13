@@ -1,5 +1,5 @@
 schema = 1
-version = "0.5.0"
+version = "0.6.0"
 status = "active"
 
 [[requirement]]
@@ -29,9 +29,12 @@ tests = [
   "tools/corpus/src/manifest.rs::tests",
   "tools/corpus/tests/cli.rs",
   "tools/corpus/tests/repository_manifest.rs",
+  "tools/benchmark/src/report.rs::tests",
+  "tools/benchmark/tests/cli.rs",
+  "tools/benchmark/tests/repository_report.rs",
 ]
 status = "partial"
-notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a bounded replayable one-page/table-xref DSL profile, and a canonical content-verified T0 corpus manifest are implemented alongside benchmark statistics. A reviewed PDFium executable and adapter, platform-enforced isolation, complete baseline-ledger evidence, broader DSL variants, continuous fuzzing, benchmark evidence, and T1+ corpus scale gates remain open."
+notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a bounded replayable one-page/table-xref DSL profile, a canonical content-verified T0 corpus manifest, and a canonical non-verdict synthetic benchmark report are implemented. A reviewed PDFium executable and adapter, platform-enforced isolation, complete baseline-ledger evidence, broader DSL variants, continuous fuzzing, measured benchmark evidence, and T1+ corpus scale gates remain open."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.6"
@@ -62,3 +65,33 @@ implementation = ["tools/corpus"]
 tests = ["tools/corpus/src/lib.rs::tests"]
 status = "partial"
 notes = "The in-memory model provides deterministic content-identity ordering, tier selection, feature tags, aggregate page counts, and holdout partitioning. Stratified sampling, page-access weighting, private authorization, and fixed release evidence remain open."
+
+[[requirement]]
+id = "RPE-ARCH-001/12.21"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Benchmark results bind build and environment metadata, corpus identity, timing domain, cache state, raw samples, and descriptive statistics."
+features = ["quality.benchmark-harness"]
+implementation = ["tools/benchmark"]
+tests = ["tools/benchmark/src/report.rs::tests", "tools/benchmark/tests/cli.rs", "tools/benchmark/tests/repository_report.rs"]
+status = "partial"
+notes = "Canonical schema-1 synthetic reports preserve raw integer samples, recompute stored summaries, bind the exact T0 corpus manifest, and explicitly remain performance-ineligible. Real clocks, measured environments, correctness and memory companions, and fixed hardware remain open."
+
+[[requirement]]
+id = "RPE-ARCH-001/12.22"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Benchmark scenarios distinguish cache state, component and user paths, and engine versus network timing boundaries."
+features = ["quality.benchmark-harness"]
+implementation = ["tools/benchmark"]
+tests = ["tools/benchmark/src/metadata.rs::tests", "tools/benchmark/src/report.rs::tests"]
+status = "partial"
+notes = "The complete scenario and timing taxonomies are typed and canonical reports enforce cold-open/cache consistency. Executable Native product-path producers remain open."
+
+[[requirement]]
+id = "RPE-ARCH-001/12.23"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Benchmark reports retain raw samples and derive median, p95, p99, count adequacy, and regression evidence without fastest-run bias."
+features = ["quality.benchmark-harness"]
+implementation = ["tools/benchmark"]
+tests = ["tools/benchmark/src/statistics.rs::tests", "tools/benchmark/src/report.rs::tests"]
+status = "partial"
+notes = "Nearest-rank statistics are deterministic and stored summaries are tamper-checked. Confidence intervals, historical distributions, noise policy, and performance verdicts remain explicitly unavailable."

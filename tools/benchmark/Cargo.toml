@@ -6,3 +6,5 @@ rust-version = "1.93"
 publish = false
 
 [dependencies]
+pdf-rs-corpus = { path = "../corpus" }
+pdf-rs-digest = { path = "../digest" }

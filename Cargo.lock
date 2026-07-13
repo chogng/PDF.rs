@@ -12,6 +12,10 @@ dependencies = [
 [[package]]
 name = "pdf-rs-benchmark"
 version = "0.1.0"
+dependencies = [
+ "pdf-rs-corpus",
+ "pdf-rs-digest",
+]
 
 [[package]]
 name = "pdf-rs-compare"

@@ -18,7 +18,9 @@ the manifest does not make the PDF redistributable.
 - `fuzz/`: targets, dictionaries, seeds, owners, and minimizer contracts.
 - `corpus/manifests/`: canonical hashed corpus indices; M0 currently contains
   only the generated T0 object, while licensed T1-T3 indices remain pending.
-- `performance/`: fixed-scenario component and user-path benchmarks.
+- `performance/`: benchmark-report contract fixtures; M0 currently contains
+  only canonical synthetic pipeline validation data that is explicitly
+  ineligible for performance decisions or release evidence.
 
 An empty suite is pending, not passing. CI lanes must report why each suite was
 selected or explicitly unavailable.

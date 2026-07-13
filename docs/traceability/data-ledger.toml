@@ -1,5 +1,5 @@
 schema = 1
-version = "0.4.0"
+version = "0.5.0"
 status = "active"
 
 [[data]]
@@ -36,3 +36,20 @@ validated_by = "cargo run --quiet --package pdf-rs-corpus -- validate tests/corp
 owner = "quality-corpus"
 update_policy = "canonical re-encode, replay referenced generators, re-hash every object, and update ledger hash"
 delete_policy = "retain while the M0 T0 corpus-validation contract is active"
+
+[[data]]
+id = "benchmark.report.m0-synthetic-benchmark-replay-v1"
+kind = "project-authored-synthetic-benchmark-report"
+source = "tests/performance/m0-synthetic-benchmark-replay-v1.toml"
+acquired_at = 2026-07-13
+version = "m0.synthetic-benchmark-replay.v1"
+source_hash = "sha256:2d66bab0542d92e443922d4a2d2ee72f382558d5c35153bc598370747d621527"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "disabled pending project-owner license approval; repository validation only"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-benchmark -- validate tests/performance/m0-synthetic-benchmark-replay-v1.toml tests/corpus/manifests/t0-bootstrap-v1.toml"
+owner = "quality-corpus"
+update_policy = "recompute stored summaries, preserve non-verdict policy markers, and update report/corpus/ledger hashes together"
+delete_policy = "retain while the M0 benchmark report replay contract is active"
