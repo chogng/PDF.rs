@@ -1,5 +1,5 @@
 schema = 1
-version = "0.2.0"
+version = "0.3.0"
 status = "active"
 
 [[requirement]]
@@ -22,6 +22,10 @@ implementation = [
   "tools/benchmark",
   "tools/corpus",
 ]
-tests = ["infrastructure/synthetic-failure-bundle-001"]
+tests = [
+  "infrastructure/synthetic-failure-bundle-001",
+  "tools/baseline::tests",
+  "tools/baseline::process_harness",
+]
 status = "partial"
-notes = "Synthetic parse/Scene/Text/Pixel bundle, baseline protocol boundary, benchmark statistics model, and in-memory corpus governance are implemented. The safe PDFium process adapter/executable, broad DSL, fuzzing, on-disk benchmark evidence, and T1+ corpus scale gates remain open."
+notes = "Synthetic parse/Scene/Text/Pixel bundle, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor with a self-authored transport fixture, benchmark statistics model, and in-memory corpus governance are implemented. A reviewed PDFium executable and adapter, platform-enforced process-tree/resource/private-filesystem/network isolation, complete baseline-ledger evidence, broad DSL, fuzzing, on-disk benchmark evidence, and T1+ corpus scale gates remain open."

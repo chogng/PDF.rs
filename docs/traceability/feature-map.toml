@@ -1,5 +1,5 @@
 schema = 1
-version = "0.2.0"
+version = "0.3.0"
 status = "active"
 
 [[feature]]
@@ -42,10 +42,10 @@ introduced_in = "0.1.0"
 id = "quality.baseline-protocol-boundary"
 owner = "baseline-release"
 state = "PLANNED"
-profile = "baseline-protocol-v1"
+profile = "baseline-protocol-v2"
 clauses = ["AD-007", "RPE-STD-003/14", "RPE-STD-004/9"]
 modules = ["tools/baseline"]
-tests = ["tools/baseline::tests"]
+tests = ["tools/baseline::tests", "tools/baseline::process_harness"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

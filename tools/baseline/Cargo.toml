@@ -7,3 +7,10 @@ publish = false
 
 [dependencies]
 pdf-rs-digest = { path = "../digest" }
+
+[[bin]]
+name = "pdf-rs-baseline-fixture"
+path = "src/bin/baseline_fixture.rs"
+test = false
+bench = false
+doc = false
