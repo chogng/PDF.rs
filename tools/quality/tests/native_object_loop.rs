@@ -3,6 +3,10 @@ use pdf_rs_bytes::{
     SourceIdentity, SourceRevision, SourceSnapshot, SourceStableId, SourceValidator,
     SourceValidatorKind,
 };
+use pdf_rs_cache::{
+    ReadyAdmission, ReadyLookup, ReadyStore, ReadyStoreBinding, ReadyStoreEpoch, ReadyStoreKey,
+    ReadyStoreLimits, ReadyStoreSessionId,
+};
 use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_document::{
     AttestRevisionJob, AttestedObject, AttestedObjectJobContext, AttestedObjectPoll,
@@ -18,6 +22,8 @@ use pdf_rs_xref::{OpenXrefJob, XrefEntryKind, XrefJobContext, XrefLimits, XrefPo
 const PDF_BYTES: u64 = 612;
 const PDF_SHA256: &str = "9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db";
 const SOURCE_STABLE_ID: [u8; 32] = [0x6e; 32];
+const READY_STORE_SESSION_ID: ReadyStoreSessionId = ReadyStoreSessionId::new(0x6e61_7469_7665_0001);
+const READY_STORE_EPOCH: ReadyStoreEpoch = ReadyStoreEpoch::new(1);
 const PDFIUM_O4_EVIDENCE: &str = include_str!(
     "../../baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml"
 );
@@ -423,14 +429,91 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
             .and_then(|value| value.checked_add(resolved_footprint.chain_capacity_bytes()))
             .unwrap()
     );
-    let resolved_catalog = direct_dictionary(resolved_root.object(), source);
-    assert!(matches!(
-        dictionary_value(resolved_catalog, b"Type"),
-        SyntaxObject::Name(name) if name.bytes() == b"Catalog"
-    ));
+    let ready_binding =
+        ReadyStoreBinding::for_index(&attested, READY_STORE_SESSION_ID, READY_STORE_EPOCH);
+    let ready_key = ReadyStoreKey::new(ready_binding, root_reference, chain_limits);
+    let mut ready_store = ReadyStore::new(ready_binding, ReadyStoreLimits::default())
+        .expect("canonical session Ready-store metadata fits its owner budget");
+    let metadata_baseline = ready_store.stats().metadata_bytes();
+    assert!(metadata_baseline > 0);
+    assert_eq!(ready_store.stats().entries(), 0);
+    assert_eq!(ready_store.stats().value_heap_bytes(), 0);
+    assert_eq!(ready_store.stats().resident_bytes(), metadata_baseline);
+
+    let expected_ready_heap = resolved_footprint
+        .syntax_heap_bytes()
+        .checked_add(resolved_footprint.chain_capacity_bytes())
+        .unwrap();
+    let admitted = match ready_store
+        .try_admit(ready_key, resolved_root, &NeverCancelledDocument)
+        .expect("canonical Ready admission must not fail")
+    {
+        ReadyAdmission::Admitted(admitted) => admitted,
+        ReadyAdmission::Rejected(rejected) => {
+            panic!(
+                "canonical resolved root must be retained: {:?}",
+                rejected.reason()
+            )
+        }
+    };
+    assert!(!admitted.replaced());
+    assert_eq!(admitted.evicted(), 0);
+    let admitted_stats = ready_store.stats();
+    assert_eq!(admitted_stats.entries(), 1);
+    assert_eq!(admitted_stats.admissions(), 1);
+    assert_eq!(admitted_stats.replacements(), 0);
+    assert_eq!(admitted_stats.evictions(), 0);
+    assert_eq!(admitted_stats.value_heap_bytes(), expected_ready_heap);
     assert_eq!(
-        dictionary_value(resolved_catalog, b"Pages").as_reference(),
-        Some(ObjectRef::new(2, 0).unwrap())
+        admitted_stats.resident_bytes(),
+        metadata_baseline.checked_add(expected_ready_heap).unwrap()
+    );
+    assert_eq!(
+        admitted_stats.peak_resident_bytes(),
+        admitted_stats.resident_bytes()
+    );
+    let ready_store_admitted_resident_bytes = admitted_stats.resident_bytes();
+
+    {
+        let cached_root = match ready_store
+            .lookup(ready_key, &NeverCancelledDocument)
+            .expect("canonical exact Ready lookup must not fail")
+        {
+            ReadyLookup::Hit(value) => value,
+            ReadyLookup::Miss(reason) => {
+                panic!("canonical exact Ready key must hit: {reason:?}")
+            }
+        };
+        assert_eq!(cached_root.root(), root_reference);
+        assert_eq!(cached_root.terminal(), root_reference);
+        assert_eq!(cached_root.limits(), chain_limits);
+        assert_eq!(cached_root.object().attestation(), &objects[0]);
+        let resolved_catalog = direct_dictionary(cached_root.object(), source);
+        assert!(matches!(
+            dictionary_value(resolved_catalog, b"Type"),
+            SyntaxObject::Name(name) if name.bytes() == b"Catalog"
+        ));
+        assert_eq!(
+            dictionary_value(resolved_catalog, b"Pages").as_reference(),
+            Some(ObjectRef::new(2, 0).unwrap())
+        );
+    }
+    let hit_stats = ready_store.stats();
+    assert_eq!(hit_stats.hits(), 1);
+    assert_eq!(hit_stats.misses(), 0);
+    assert_eq!(
+        hit_stats.resident_bytes(),
+        ready_store_admitted_resident_bytes
+    );
+    assert_eq!(ready_store.clear(), 1);
+    let cleared_stats = ready_store.stats();
+    assert_eq!(cleared_stats.entries(), 0);
+    assert_eq!(cleared_stats.value_heap_bytes(), 0);
+    assert_eq!(cleared_stats.metadata_bytes(), metadata_baseline);
+    assert_eq!(cleared_stats.resident_bytes(), metadata_baseline);
+    assert_eq!(
+        cleared_stats.peak_resident_bytes(),
+        ready_store_admitted_resident_bytes
     );
 
     let access_caps = ObjectWorkCaps::new(
@@ -562,14 +645,14 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     );
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true resident_footprint_accounted=true pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_store_clear_baseline=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.19.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.19.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.20.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.20.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -655,9 +738,22 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(resident_feature.contains("fuzz_targets = []"));
     assert!(resident_feature.contains("benchmarks = []"));
 
+    let ready_store_feature = record_with_id(FEATURE_MAP, "feature", "runtime.session-ready-store")
+        .expect("the session Ready-store feature record must exist");
+    assert!(ready_store_feature.contains("owner = \"runtime-platform\""));
+    assert!(ready_store_feature.contains("state = \"PLANNED\""));
+    assert!(ready_store_feature.contains("profile = \"m1.session-ready-store.v1\""));
+    assert!(ready_store_feature.contains("modules = [\"runtime/cache\"]"));
+    assert!(ready_store_feature.contains("runtime/cache::ready_store"));
+    assert!(ready_store_feature.contains("runtime/cache::repository_policy"));
+    assert!(ready_store_feature.contains("tools/quality::native_object_loop"));
+    assert!(ready_store_feature.contains("fuzz_targets = []"));
+    assert!(ready_store_feature.contains("benchmarks = []"));
+
     for requirement_id in [
         "RPE-ARCH-001/5.3",
         "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/9.1",
         "RPE-ARCH-001/12.6",
         "RPE-ARCH-001/15.3/M0",
     ] {

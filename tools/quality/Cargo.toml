@@ -13,6 +13,7 @@ pdf-rs-generate = { path = "../generate" }
 [dev-dependencies]
 pdf-rs-benchmark = { path = "../benchmark" }
 pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-cache = { path = "../../runtime/cache" }
 pdf-rs-corpus = { path = "../corpus" }
 pdf-rs-document = { path = "../../core/document" }
 pdf-rs-object = { path = "../../core/object" }

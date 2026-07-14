@@ -1,5 +1,5 @@
 schema = 1
-version = "0.19.0"
+version = "0.20.0"
 status = "active"
 
 [[feature]]
@@ -117,7 +117,7 @@ state = "PLANNED"
 profile = "m1.session-ready-store.v1"
 clauses = ["RPE-ARCH-001/4.1-4.2", "RPE-ARCH-001/9.1", "RPE-STD-001/5-7", "RPE-STD-002/10", "RPE-STD-005/5-7"]
 modules = ["runtime/cache"]
-tests = ["runtime/cache::ready_store", "runtime/cache::repository_policy"]
+tests = ["runtime/cache::ready_store", "runtime/cache::repository_policy", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
