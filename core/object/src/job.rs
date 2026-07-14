@@ -230,7 +230,7 @@ impl OpenObjectJob {
         }
         let prefix_bytes = u64::from(target.xref_offset() != 0);
         let available = target
-            .revision_startxref()
+            .object_upper_bound()
             .checked_sub(target.xref_offset())
             .and_then(|value| value.checked_add(prefix_bytes))
             .ok_or_else(|| {
@@ -374,7 +374,7 @@ impl OpenObjectJob {
             None => return Some(self.fail_internal(Some(object_start))),
         };
         let range = match ByteRange::new(range_start, window) {
-            Ok(value) if value.end_exclusive() <= self.target.revision_startxref() => value,
+            Ok(value) if value.end_exclusive() <= self.target.object_upper_bound() => value,
             _ => return Some(self.fail_internal(Some(object_start))),
         };
         if !charged {
@@ -435,7 +435,7 @@ impl OpenObjectJob {
                         source: self.target.snapshot().identity(),
                         reference: self.target.reference(),
                         xref_offset: object_start,
-                        revision_startxref: self.target.revision_startxref(),
+                        object_upper_bound: self.target.object_upper_bound(),
                         limits: self.limits,
                         syntax_limits: self.syntax_limits,
                     },
@@ -467,14 +467,14 @@ impl OpenObjectJob {
                     }
                     Ok(EnvelopeParse::Stream(envelope)) => {
                         let data_end = envelope.data_span.end_exclusive();
-                        let remaining = match self.target.revision_startxref().checked_sub(data_end)
+                        let remaining = match self.target.object_upper_bound().checked_sub(data_end)
                         {
                             Some(value) if value != 0 => value,
                             _ => {
                                 return Some(self.fail(ObjectError::for_code(
-                                    ObjectErrorCode::InvalidStreamLength,
+                                    ObjectErrorCode::ObjectCrossesPhysicalBound,
                                     Some(self.target.reference()),
-                                    Some(envelope.length_value_span.start()),
+                                    Some(self.target.object_upper_bound()),
                                 )));
                             }
                         };
@@ -488,7 +488,7 @@ impl OpenObjectJob {
                     }
                     Ok(EnvelopeParse::NeedMore { minimum_end }) => {
                         let available =
-                            match self.target.revision_startxref().checked_sub(range_start) {
+                            match self.target.object_upper_bound().checked_sub(range_start) {
                                 Some(value) => value,
                                 None => return Some(self.fail_internal(Some(object_start))),
                             };
@@ -528,7 +528,7 @@ impl OpenObjectJob {
             _ => return Some(self.fail_internal(None)),
         };
         let range = match ByteRange::new(data_end, window) {
-            Ok(value) if value.end_exclusive() <= self.target.revision_startxref() => value,
+            Ok(value) if value.end_exclusive() <= self.target.object_upper_bound() => value,
             _ => return Some(self.fail_internal(Some(data_end))),
         };
         if !charged {
@@ -618,7 +618,7 @@ impl OpenObjectJob {
                         Some(ObjectPoll::Ready(object))
                     }
                     Ok(BoundaryParse::NeedMore { minimum_end }) => {
-                        let available = match self.target.revision_startxref().checked_sub(data_end)
+                        let available = match self.target.object_upper_bound().checked_sub(data_end)
                         {
                             Some(value) => value,
                             None => return Some(self.fail_internal(Some(data_end))),
@@ -740,9 +740,9 @@ impl OpenObjectJob {
         if current >= cap || required > cap {
             if cap == available {
                 return Err(ObjectError::for_code(
-                    ObjectErrorCode::UnexpectedEndOfObject,
+                    ObjectErrorCode::ObjectCrossesPhysicalBound,
                     Some(self.target.reference()),
-                    Some(minimum_end),
+                    Some(self.target.object_upper_bound()),
                 ));
             }
             return Err(ObjectError::resource(
@@ -767,6 +767,13 @@ impl OpenObjectJob {
     }
 
     fn object_span(&self, endobj_span: ByteSpan) -> Result<ByteSpan, ObjectError> {
+        if endobj_span.end_exclusive() > self.target.object_upper_bound() {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::ObjectCrossesPhysicalBound,
+                Some(self.target.reference()),
+                Some(self.target.object_upper_bound()),
+            ));
+        }
         let len = endobj_span
             .end_exclusive()
             .checked_sub(self.target.xref_offset())
@@ -817,8 +824,5 @@ impl fmt::Debug for OpenObjectJob {
 }
 
 fn is_object_header_boundary(byte: u8) -> bool {
-    matches!(
-        byte,
-        0 | b'\t' | b'\n' | 12 | b'\r' | b' ' | b')' | b'>' | b']' | b'}'
-    )
+    matches!(byte, 0 | b'\t' | b'\n' | 12 | b'\r' | b' ')
 }

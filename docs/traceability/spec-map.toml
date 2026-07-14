@@ -1,5 +1,5 @@
 schema = 1
-version = "0.13.0"
+version = "0.14.0"
 status = "active"
 
 [[requirement]]
@@ -26,11 +26,11 @@ notes = "The m1.syntax-core.v1 bootstrap strictly parses bounded contiguous wind
 id = "RPE-ARCH-001/5.4"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
 summary = "Native cross-reference parsing discovers the final startxref and validates bounded traditional xref tables."
-features = ["core.traditional-xref", "core.indirect-object-framing"]
-implementation = ["core/xref", "core/object"]
-tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "tools/quality::native_object_loop"]
+features = ["core.traditional-xref", "core.indirect-object-framing", "core.base-revision-candidate-index"]
+implementation = ["core/xref", "core/object", "core/document"]
+tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "core/document::revision_index", "core/document::limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
 status = "partial"
-notes = "The m1.traditional-xref.v1 bootstrap is limited to a known-length immutable source, bounded reverse discovery of the final line-delimited startxref marker, and strict resumable parsing of one complete traditional base xref table and trailer with checked geometry and a retained full snapshot. The sibling m1.indirect-object-framing.v1 job accepts untrusted xref-derived geometry, validates the preceding token boundary plus exact number/generation/obj header, and frames a direct value or directly sized stream with separate envelope and data-end reads. A test-only quality loop generates the canonical 612-byte input, parses its xref section, and frames all four in-use targets without introducing a sibling product dependency. A product document/revision compositor with physical object bounds, plus xref streams, hybrid files, Prev chains, indirect Length, object streams, repair, unknown-length sources, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, R0 conformance, or Native differential maturity."
+notes = "The m1.traditional-xref.v1 bootstrap is limited to a known-length immutable source, bounded reverse discovery of the final line-delimited startxref marker, and strict resumable parsing of one complete traditional base xref table and trailer with checked geometry and a retained full snapshot. The sibling m1.indirect-object-framing.v1 job accepts untrusted xref-derived geometry, requires a preceding PDF whitespace byte plus the exact number/generation/obj header, and frames a direct value or directly sized stream without crossing its independently supplied physical upper bound. The m1.strict-base-revision-index.v1 product composition bootstrap sorts one traditional base section's in-use offsets into checked, non-overlapping candidate physical intervals and supplies those bounds to object jobs. These intervals remain untrusted candidates: the index does not attest that an offset names a top-level object rather than bytes embedded in a comment, string, or stream, and it is not an object resolver. Xref streams, hybrid files, Prev chains and revision precedence, indirect Length, object streams, repair, unknown-length sources, top-level attestation, reference-cycle states, caching, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, R0 conformance, a complete resolver, or Native differential maturity."
 
 [[requirement]]
 id = "RPE-ARCH-001/15.3/M0"

@@ -27,9 +27,14 @@ fn reference() -> ObjectRef {
 }
 
 fn open() -> OpenObjectJob {
-    let target =
-        IndirectObjectTarget::new(snapshot(), reference(), OBJECT_OFFSET, REVISION_STARTXREF)
-            .expect("test target geometry is valid");
+    let target = IndirectObjectTarget::new(
+        snapshot(),
+        reference(),
+        OBJECT_OFFSET,
+        REVISION_STARTXREF,
+        REVISION_STARTXREF,
+    )
+    .expect("test target geometry is valid");
     OpenObjectJob::new(
         target,
         ObjectJobContext::new(

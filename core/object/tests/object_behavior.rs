@@ -90,8 +90,19 @@ fn target(
     offset: u64,
     startxref: u64,
 ) -> IndirectObjectTarget {
-    IndirectObjectTarget::new(source, reference, offset, startxref)
+    IndirectObjectTarget::new(source, reference, offset, startxref, startxref)
         .expect("test target geometry is valid")
+}
+
+fn bounded_target(
+    source: SourceSnapshot,
+    reference: ObjectRef,
+    offset: u64,
+    object_upper_bound: u64,
+    startxref: u64,
+) -> IndirectObjectTarget {
+    IndirectObjectTarget::new(source, reference, offset, object_upper_bound, startxref)
+        .expect("test target physical geometry is valid")
 }
 
 fn job(target: IndirectObjectTarget, limits: ObjectLimits) -> OpenObjectJob {
@@ -345,6 +356,166 @@ impl ByteSource for UnexpectedEofSource {
     fn poll(&self, _request: ReadRequest) -> ReadPoll<pdf_rs_bytes::ByteSlice> {
         ReadPoll::EndOfFile
     }
+}
+
+#[test]
+fn physical_object_bounds_stop_framing_before_later_bytes_are_requested() {
+    let mut direct = b"1 0 obj\n[null\n".to_vec();
+    let direct_upper = u64::try_from(direct.len()).unwrap();
+    direct.extend_from_slice(b"2 0 obj\nnull\nendobj\n]\nendobj\n");
+    let direct_startxref = u64::try_from(direct.len()).unwrap();
+    direct.extend_from_slice(b"xref\n");
+
+    let direct_store = supplied_store(&direct);
+    let direct_source = RecordingSource {
+        store: &direct_store,
+        requests: Mutex::new(Vec::new()),
+    };
+    let direct_target = bounded_target(
+        direct_store.snapshot(),
+        object_ref(1, 0),
+        0,
+        direct_upper,
+        direct_startxref,
+    );
+    assert_eq!(direct_target.object_upper_bound(), direct_upper);
+    assert_eq!(direct_target.revision_startxref(), direct_startxref);
+    let mut direct_job = job(direct_target, ObjectLimits::default());
+    let direct_error = match direct_job.poll(&direct_source, &NeverCancelled) {
+        ObjectPoll::Failed(error) => error,
+        other => panic!("an unterminated first interval must fail, got {other:?}"),
+    };
+    assert_eq!(
+        direct_error.code(),
+        ObjectErrorCode::ObjectCrossesPhysicalBound
+    );
+    assert_eq!(direct_error.offset(), Some(direct_upper));
+    assert!(
+        direct_source
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.range().end_exclusive() <= direct_upper)
+    );
+
+    let mut stream = b"1 0 obj\n<< /Length 4 >>\nstream\nABCD".to_vec();
+    let stream_upper = u64::try_from(stream.len()).unwrap();
+    stream.extend_from_slice(b"\nendstream\nendobj\n");
+    let stream_startxref = u64::try_from(stream.len()).unwrap();
+    stream.extend_from_slice(b"xref\n");
+
+    let stream_store = supplied_store(&stream);
+    let stream_source = RecordingSource {
+        store: &stream_store,
+        requests: Mutex::new(Vec::new()),
+    };
+    let mut stream_job = job(
+        bounded_target(
+            stream_store.snapshot(),
+            object_ref(1, 0),
+            0,
+            stream_upper,
+            stream_startxref,
+        ),
+        ObjectLimits::default(),
+    );
+    let stream_error = match stream_job.poll(&stream_source, &NeverCancelled) {
+        ObjectPoll::Failed(error) => error,
+        other => panic!("a stream ending at its physical bound must fail, got {other:?}"),
+    };
+    assert_eq!(
+        stream_error.code(),
+        ObjectErrorCode::ObjectCrossesPhysicalBound
+    );
+    assert_eq!(stream_error.offset(), Some(stream_upper));
+    assert_eq!(stream_job.stats().boundary_attempts(), 0);
+    assert!(
+        stream_source
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.range().end_exclusive() <= stream_upper)
+    );
+
+    let mut terminal = b"1 0 obj\n<< /Length 4 >>\nstream\nABCD\nendst".to_vec();
+    let terminal_upper = u64::try_from(terminal.len()).unwrap();
+    terminal.extend_from_slice(b"ream\nendobj\n");
+    let terminal_startxref = u64::try_from(terminal.len()).unwrap();
+    terminal.extend_from_slice(b"xref\n");
+
+    let terminal_store = supplied_store(&terminal);
+    let terminal_source = RecordingSource {
+        store: &terminal_store,
+        requests: Mutex::new(Vec::new()),
+    };
+    let mut terminal_job = job(
+        bounded_target(
+            terminal_store.snapshot(),
+            object_ref(1, 0),
+            0,
+            terminal_upper,
+            terminal_startxref,
+        ),
+        ObjectLimits::default(),
+    );
+    let terminal_error = match terminal_job.poll(&terminal_source, &NeverCancelled) {
+        ObjectPoll::Failed(error) => error,
+        other => panic!("a split stream terminal must fail at its bound, got {other:?}"),
+    };
+    assert_eq!(
+        terminal_error.code(),
+        ObjectErrorCode::ObjectCrossesPhysicalBound
+    );
+    assert_eq!(terminal_error.offset(), Some(terminal_upper));
+    assert_eq!(terminal_job.stats().boundary_attempts(), 1);
+    assert!(
+        terminal_source
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.range().end_exclusive() <= terminal_upper)
+    );
+
+    let legal_body = b"1 0 obj\nnull\nendobj\n";
+    let legal_upper = u64::try_from(legal_body.len()).unwrap();
+    let mut legal = legal_body.to_vec();
+    legal.extend_from_slice(b"unused bytes before xref\n");
+    let legal_startxref = u64::try_from(legal.len()).unwrap();
+    legal.extend_from_slice(b"xref\n");
+
+    let legal_store = supplied_store(&legal);
+    let legal_source = RecordingSource {
+        store: &legal_store,
+        requests: Mutex::new(Vec::new()),
+    };
+    let mut legal_job = job(
+        bounded_target(
+            legal_store.snapshot(),
+            object_ref(1, 0),
+            0,
+            legal_upper,
+            legal_startxref,
+        ),
+        ObjectLimits::default(),
+    );
+    let object = match legal_job.poll(&legal_source, &NeverCancelled) {
+        ObjectPoll::Ready(object) => object,
+        other => panic!("a complete bounded object must frame, got {other:?}"),
+    };
+    assert_eq!(object.object_upper_bound(), legal_upper);
+    assert_eq!(object.revision_startxref(), legal_startxref);
+    assert!(object.object_span().end_exclusive() <= legal_upper);
+    assert!(
+        legal_source
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.range().end_exclusive() <= legal_upper)
+    );
 }
 
 #[test]
@@ -604,7 +775,7 @@ fn exact_header_checks_reject_number_generation_whitespace_and_token_middle_offs
         ObjectErrorCode::InvalidObjectHeader
     );
 
-    for prefix in [b'%', b'/', b'(', b'<', b'[', b'{'] {
+    for prefix in [b'%', b'/', b'(', b'<', b'[', b'{', b')', b'>', b']', b'}'] {
         let mut embedded = vec![prefix];
         embedded.extend_from_slice(b"1 0 obj\nnull\nendobj\n");
         let startxref = u64::try_from(embedded.len()).unwrap();
@@ -655,7 +826,7 @@ fn object_envelope_rejects_wrong_keywords_and_non_dictionary_streams() {
 }
 
 #[test]
-fn logical_startxref_boundary_never_masquerades_as_a_token_delimiter() {
+fn physical_object_boundary_never_masquerades_as_a_token_delimiter() {
     for body in [
         b"1 0 obj\nnull\nendobj".as_slice(),
         b"1 0 obj\n<< /Length 0 >>\nstream\n\nendstream\nendobj".as_slice(),
@@ -668,7 +839,7 @@ fn logical_startxref_boundary_never_masquerades_as_a_token_delimiter() {
             startxref,
             ObjectLimits::default(),
         );
-        assert_eq!(error.code(), ObjectErrorCode::UnexpectedEndOfObject);
+        assert_eq!(error.code(), ObjectErrorCode::ObjectCrossesPhysicalBound);
         assert_eq!(error.category(), ObjectErrorCategory::Syntax);
     }
 }
@@ -806,25 +977,31 @@ fn target_snapshot_cancellation_and_job_context_are_terminal_and_classified() {
         SourceValidator::new(SourceValidatorKind::FrozenResponse, [0x27; 32]),
     );
     assert_eq!(
-        IndirectObjectTarget::new(unknown, object_ref(1, 0), 0, 10)
+        IndirectObjectTarget::new(unknown, object_ref(1, 0), 0, 10, 10)
             .unwrap_err()
             .code(),
         ObjectErrorCode::UnknownSourceLength
     );
     assert_eq!(
-        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 10, 10)
+        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 10, 10, 10)
             .unwrap_err()
             .code(),
         ObjectErrorCode::InvalidTarget
     );
     assert_eq!(
-        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 1, 21)
+        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 1, 19, 21)
             .unwrap_err()
             .code(),
         ObjectErrorCode::InvalidTarget
     );
     assert_eq!(
-        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 1, 20)
+        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 1, 19, 20)
+            .unwrap_err()
+            .code(),
+        ObjectErrorCode::InvalidTarget
+    );
+    assert_eq!(
+        IndirectObjectTarget::new(snapshot(20), object_ref(1, 0), 1, 19, 18)
             .unwrap_err()
             .code(),
         ObjectErrorCode::InvalidTarget

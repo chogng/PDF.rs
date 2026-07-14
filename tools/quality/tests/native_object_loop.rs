@@ -4,10 +4,12 @@ use pdf_rs_bytes::{
     SourceValidatorKind,
 };
 use pdf_rs_digest::{hex_digest, sha256};
+use pdf_rs_document::{
+    CandidateRevisionIndex, DocumentLimits, NeverCancelled as NeverCancelledDocument, RevisionId,
+};
 use pdf_rs_generate::generate_one_page_pdf;
 use pdf_rs_object::{
-    IndirectObjectTarget, IndirectObjectValue, ObjectJobContext, ObjectLimits, ObjectPoll,
-    OpenObjectJob,
+    IndirectObjectValue, ObjectJobContext, ObjectLimits, ObjectPoll, OpenObjectJob,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits, SyntaxObject};
 use pdf_rs_xref::{OpenXrefJob, XrefEntryKind, XrefJobContext, XrefLimits, XrefPoll, XrefSection};
@@ -22,6 +24,7 @@ const FEATURE_MAP: &str = include_str!("../../../docs/traceability/feature-map.t
 const SPEC_MAP: &str = include_str!("../../../docs/traceability/spec-map.toml");
 const STARTXREF: u64 = 449;
 const OBJECT_OFFSETS: [u64; 4] = [186, 235, 292, 396];
+const OBJECT_UPPER_BOUNDS: [u64; 4] = [235, 292, 396, 449];
 const OBJECT_SPANS: [(u64, u64); 4] = [(186, 234), (235, 291), (292, 395), (396, 448)];
 const HEADER_SPANS: [(u64, u64); 4] = [(186, 193), (235, 242), (292, 299), (396, 403)];
 const ENDOBJ_SPANS: [(u64, u64); 4] = [(228, 234), (285, 291), (389, 395), (442, 448)];
@@ -202,17 +205,42 @@ fn generated_pdf_completes_xref_to_indirect_object_loop() {
         .collect::<Vec<_>>();
     assert_eq!(in_use_offsets, OBJECT_OFFSETS);
 
+    let candidate_index = CandidateRevisionIndex::from_xref(
+        &section,
+        RevisionId::new(1),
+        DocumentLimits::default(),
+        &NeverCancelledDocument,
+    )
+    .expect("canonical xref metadata yields a bounded candidate revision index");
+    assert_eq!(candidate_index.snapshot(), source);
+    assert_eq!(candidate_index.revision_id(), RevisionId::new(1));
+    assert_eq!(candidate_index.startxref(), STARTXREF);
+    assert_eq!(candidate_index.root(), ObjectRef::new(1, 0).unwrap());
+    assert_eq!(candidate_index.stats().total_entries(), 5);
+    assert_eq!(candidate_index.stats().in_use_entries(), 4);
+    assert_eq!(candidate_index.physical_intervals().len(), 4);
+    for (index, interval) in candidate_index.physical_intervals().iter().enumerate() {
+        let number = u32::try_from(index + 1).unwrap();
+        assert_eq!(interval.revision_id(), RevisionId::new(1));
+        assert_eq!(interval.reference(), ObjectRef::new(number, 0).unwrap());
+        assert_eq!(interval.xref_offset(), OBJECT_OFFSETS[index]);
+        assert_eq!(interval.object_upper_bound(), OBJECT_UPPER_BOUNDS[index]);
+        assert_eq!(
+            interval.len(),
+            OBJECT_UPPER_BOUNDS[index] - OBJECT_OFFSETS[index]
+        );
+    }
+
     let mut objects = Vec::with_capacity(OBJECT_OFFSETS.len());
-    for entry in section.entries() {
-        let XrefEntryKind::InUse { offset } = entry.kind() else {
-            continue;
-        };
-        let reference = ObjectRef::new(entry.object_number(), entry.generation())
-            .expect("in-use xref rows name valid indirect references");
-        let target =
-            IndirectObjectTarget::new(section.snapshot(), reference, offset, section.startxref())
-                .expect("canonical xref geometry yields a valid object target");
-        let number = u64::from(entry.object_number());
+    for interval in candidate_index.physical_intervals() {
+        let reference = interval.reference();
+        let target = candidate_index
+            .unattested_target(reference)
+            .expect("canonical candidate interval yields a bounded unattested target");
+        assert_eq!(target.xref_offset(), interval.xref_offset());
+        assert_eq!(target.object_upper_bound(), interval.object_upper_bound());
+        assert_eq!(target.revision_startxref(), STARTXREF);
+        let number = u64::from(reference.number());
         let mut job = OpenObjectJob::new(
             target,
             ObjectJobContext::new(
@@ -242,6 +270,7 @@ fn generated_pdf_completes_xref_to_indirect_object_loop() {
         assert_eq!(object.revision_startxref(), STARTXREF);
         assert_eq!(object.reference(), ObjectRef::new(number, 0).unwrap());
         assert_eq!(object.xref_offset(), OBJECT_OFFSETS[index]);
+        assert_eq!(object.object_upper_bound(), OBJECT_UPPER_BOUNDS[index]);
         assert_eq!(
             (
                 object.header_span().start(),
@@ -293,14 +322,14 @@ fn generated_pdf_completes_xref_to_indirect_object_loop() {
     assert_eq!(&pdf[payload_start..payload_end], b"q\nQ\n");
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.13.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.13.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.14.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.14.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -312,6 +341,18 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(feature.contains("tests = [\"tools/quality::native_object_loop\"]"));
     assert!(feature.contains("fuzz_targets = []"));
     assert!(feature.contains("benchmarks = []"));
+
+    let candidate_feature =
+        record_with_id(FEATURE_MAP, "feature", "core.base-revision-candidate-index")
+            .expect("the candidate revision-index feature record must exist");
+    assert!(candidate_feature.contains("owner = \"parser-security\""));
+    assert!(candidate_feature.contains("state = \"PLANNED\""));
+    assert!(candidate_feature.contains("profile = \"m1.strict-base-revision-index.v1\""));
+    assert!(candidate_feature.contains("modules = [\"core/document\"]"));
+    assert!(candidate_feature.contains("core/document::revision_index"));
+    assert!(candidate_feature.contains("tools/quality::native_object_loop"));
+    assert!(candidate_feature.contains("fuzz_targets = []"));
+    assert!(candidate_feature.contains("benchmarks = []"));
 
     for requirement_id in [
         "RPE-ARCH-001/5.3",
@@ -334,4 +375,11 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         .expect("the M0 quality-infrastructure requirement must exist");
     assert!(m0_requirement.contains("\"quality.native-object-loop\""));
     assert!(m0_requirement.contains("Native/PDFium differential evidence"));
+
+    let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")
+        .expect("the xref architecture requirement must exist");
+    assert!(xref_requirement.contains("\"core.base-revision-candidate-index\""));
+    assert!(xref_requirement.contains("\"core/document\""));
+    assert!(xref_requirement.contains("top-level attestation"));
+    assert!(xref_requirement.contains("does not claim M1 exit"));
 }

@@ -109,6 +109,8 @@ pub enum ObjectErrorCode {
     JobAlreadyComplete,
     /// An exact request inside the bound snapshot unexpectedly reached source EOF.
     UnexpectedEndOfSource,
+    /// Object syntax or declared stream data crosses its indexed physical interval.
+    ObjectCrossesPhysicalBound,
 }
 
 /// Coarse indirect-object failure category.
@@ -277,6 +279,11 @@ impl ObjectError {
                 ObjectErrorCategory::Source,
                 ObjectRecoverability::ReopenSource,
                 "RPE-OBJECT-0020",
+            ),
+            ObjectErrorCode::ObjectCrossesPhysicalBound => (
+                ObjectErrorCategory::Syntax,
+                ObjectRecoverability::CorrectInput,
+                "RPE-OBJECT-0021",
             ),
         };
         Self {

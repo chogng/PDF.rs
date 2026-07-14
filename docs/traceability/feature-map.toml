@@ -1,5 +1,5 @@
 schema = 1
-version = "0.13.0"
+version = "0.14.0"
 status = "active"
 
 [[feature]]
@@ -46,6 +46,18 @@ profile = "m1.indirect-object-framing.v1"
 clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
 modules = ["core/object"]
 tests = ["core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.base-revision-candidate-index"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.strict-base-revision-index.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/document"]
+tests = ["core/document::revision_index", "core/document::limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

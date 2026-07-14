@@ -40,6 +40,16 @@ name = "pdf-rs-digest"
 version = "0.1.0"
 
 [[package]]
+name = "pdf-rs-document"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-object",
+ "pdf-rs-syntax",
+ "pdf-rs-xref",
+]
+
+[[package]]
 name = "pdf-rs-generate"
 version = "0.1.0"
 dependencies = [
@@ -63,6 +73,7 @@ dependencies = [
  "pdf-rs-compare",
  "pdf-rs-corpus",
  "pdf-rs-digest",
+ "pdf-rs-document",
  "pdf-rs-generate",
  "pdf-rs-object",
  "pdf-rs-syntax",

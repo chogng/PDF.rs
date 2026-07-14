@@ -14,7 +14,7 @@ pub(crate) struct EnvelopeContext {
     pub(crate) source: SourceIdentity,
     pub(crate) reference: ObjectRef,
     pub(crate) xref_offset: u64,
-    pub(crate) revision_startxref: u64,
+    pub(crate) object_upper_bound: u64,
     pub(crate) limits: ObjectLimits,
     pub(crate) syntax_limits: SyntaxLimits,
 }
@@ -197,11 +197,11 @@ pub(crate) fn parse_envelope(
                     Some(length_value_span.start()),
                 )
             })?;
-            if data_end >= context.revision_startxref {
+            if data_end >= context.object_upper_bound {
                 return Err(ObjectError::for_code(
-                    ObjectErrorCode::InvalidStreamLength,
+                    ObjectErrorCode::ObjectCrossesPhysicalBound,
                     Some(reference),
-                    Some(length_value_span.start()),
+                    Some(context.object_upper_bound),
                 ));
             }
             let data_span = ByteSpan::new(data_start, stream_length).map_err(|_| {

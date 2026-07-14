@@ -11,6 +11,7 @@ pub struct IndirectObjectTarget {
     snapshot: SourceSnapshot,
     reference: ObjectRef,
     xref_offset: u64,
+    object_upper_bound: u64,
     revision_startxref: u64,
 }
 
@@ -20,6 +21,7 @@ impl IndirectObjectTarget {
         snapshot: SourceSnapshot,
         reference: ObjectRef,
         xref_offset: u64,
+        object_upper_bound: u64,
         revision_startxref: u64,
     ) -> Result<Self, ObjectError> {
         let Some(source_len) = snapshot.len() else {
@@ -29,9 +31,14 @@ impl IndirectObjectTarget {
                 None,
             ));
         };
-        if xref_offset >= revision_startxref || revision_startxref >= source_len {
-            let offset = if xref_offset >= revision_startxref {
+        if xref_offset >= object_upper_bound
+            || object_upper_bound > revision_startxref
+            || revision_startxref >= source_len
+        {
+            let offset = if xref_offset >= object_upper_bound {
                 xref_offset
+            } else if object_upper_bound > revision_startxref {
+                object_upper_bound
             } else {
                 revision_startxref
             };
@@ -45,6 +52,7 @@ impl IndirectObjectTarget {
             snapshot,
             reference,
             xref_offset,
+            object_upper_bound,
             revision_startxref,
         })
     }
@@ -64,6 +72,11 @@ impl IndirectObjectTarget {
         self.xref_offset
     }
 
+    /// Returns the exclusive physical bound supplied by the revision object index.
+    pub const fn object_upper_bound(self) -> u64 {
+        self.object_upper_bound
+    }
+
     /// Returns the cross-reference offset anchoring the target revision.
     pub const fn revision_startxref(self) -> u64 {
         self.revision_startxref
@@ -77,6 +90,7 @@ impl fmt::Debug for IndirectObjectTarget {
             .field("snapshot", &self.snapshot)
             .field("reference", &self.reference)
             .field("xref_offset", &self.xref_offset)
+            .field("object_upper_bound", &self.object_upper_bound)
             .field("revision_startxref", &self.revision_startxref)
             .finish()
     }
@@ -89,6 +103,7 @@ pub struct IndirectObject {
     reference: ObjectRef,
     revision_startxref: u64,
     xref_offset: u64,
+    object_upper_bound: u64,
     header_span: ByteSpan,
     object_span: ByteSpan,
     endobj_span: ByteSpan,
@@ -108,6 +123,7 @@ impl IndirectObject {
             reference: target.reference,
             revision_startxref: target.revision_startxref,
             xref_offset: target.xref_offset,
+            object_upper_bound: target.object_upper_bound,
             header_span,
             object_span,
             endobj_span,
@@ -133,6 +149,11 @@ impl IndirectObject {
     /// Returns the absolute offset at which the validated object header begins.
     pub const fn xref_offset(&self) -> u64 {
         self.xref_offset
+    }
+
+    /// Returns the exclusive physical bound used while framing this object.
+    pub const fn object_upper_bound(&self) -> u64 {
+        self.object_upper_bound
     }
 
     /// Returns the exact span of the object-number, generation, and `obj` header.
@@ -164,6 +185,7 @@ impl fmt::Debug for IndirectObject {
             .field("reference", &self.reference)
             .field("revision_startxref", &self.revision_startxref)
             .field("xref_offset", &self.xref_offset)
+            .field("object_upper_bound", &self.object_upper_bound)
             .field("header_span", &self.header_span)
             .field("object_span", &self.object_span)
             .field("endobj_span", &self.endobj_span)

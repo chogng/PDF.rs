@@ -5,7 +5,8 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_object::{
     IndirectObjectTarget, NeverCancelled, ObjectError, ObjectErrorCategory, ObjectErrorCode,
-    ObjectJobContext, ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectPoll, OpenObjectJob,
+    ObjectJobContext, ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectPoll,
+    ObjectRecoverability, OpenObjectJob,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 
@@ -94,7 +95,7 @@ fn open_job(
     object_limits: ObjectLimits,
 ) -> (RangeStore, OpenObjectJob) {
     let store = supplied_store(bytes);
-    let target = IndirectObjectTarget::new(store.snapshot(), reference(), 0, startxref)
+    let target = IndirectObjectTarget::new(store.snapshot(), reference(), 0, startxref, startxref)
         .expect("matrix target geometry must be valid");
     let open = OpenObjectJob::new(target, context(), object_limits, SyntaxLimits::default())
         .expect("matrix job configuration must be valid");
@@ -122,12 +123,17 @@ fn assert_stable_failure(
         ObjectPoll::Ready(_) => panic!("expected {expected:?}, got a ready object"),
         ObjectPoll::Pending { .. } => panic!("a completely supplied matrix source must not pend"),
     };
-    assert_eq!(error.code(), expected, "logical cut at {startxref}");
+    assert_eq!(error.code(), expected, "physical-bound cut at {startxref}");
     assert_eq!(error.reference(), Some(reference()));
+    if expected == ObjectErrorCode::ObjectCrossesPhysicalBound {
+        assert_eq!(error.offset(), Some(startxref));
+        assert_eq!(error.recoverability(), ObjectRecoverability::CorrectInput);
+        assert_eq!(error.diagnostic_id(), "RPE-OBJECT-0021");
+    }
     assert_eq!(
         open.poll(&store, &NeverCancelled),
         ObjectPoll::Failed(error),
-        "failed re-poll at logical cut {startxref}"
+        "failed re-poll at physical-bound cut {startxref}"
     );
     error
 }
@@ -248,7 +254,7 @@ fn every_stream_envelope_and_boundary_split_grows_without_losing_crlf() {
 }
 
 #[test]
-fn every_direct_logical_cut_requires_the_delimiter_after_endobj() {
+fn every_direct_physical_bound_cut_requires_the_delimiter_after_endobj() {
     let (bytes, complete_startxref) = fixture(DIRECT_BODY);
     for cut in 1..=complete_startxref {
         if cut == complete_startxref {
@@ -258,7 +264,7 @@ fn every_direct_logical_cut_requires_the_delimiter_after_endobj() {
                 &bytes,
                 cut,
                 ObjectLimits::default(),
-                ObjectErrorCode::UnexpectedEndOfObject,
+                ObjectErrorCode::ObjectCrossesPhysicalBound,
             );
             assert_eq!(error.category(), ObjectErrorCategory::Syntax);
         }
@@ -266,23 +272,21 @@ fn every_direct_logical_cut_requires_the_delimiter_after_endobj() {
 }
 
 #[test]
-fn every_stream_logical_cut_has_one_stable_geometry_outcome() {
+fn every_stream_physical_bound_cut_has_one_stable_geometry_outcome() {
     let body = stream_body(b"\r\n");
     let (bytes, complete_startxref) = fixture(&body);
-    let data_start = u64::try_from(find(&body, b"stream\r\n") + b"stream\r\n".len()).unwrap();
-    let data_end = data_start + u64::try_from(STREAM_PAYLOAD.len()).unwrap();
 
     for cut in 1..=complete_startxref {
         if cut == complete_startxref {
             let open = assert_ready(&bytes, cut, ObjectLimits::default());
             assert_eq!(open.stats().declared_stream_bytes(), 3);
         } else {
-            let expected = if (data_start..=data_end).contains(&cut) {
-                ObjectErrorCode::InvalidStreamLength
-            } else {
-                ObjectErrorCode::UnexpectedEndOfObject
-            };
-            let error = assert_stable_failure(&bytes, cut, ObjectLimits::default(), expected);
+            let error = assert_stable_failure(
+                &bytes,
+                cut,
+                ObjectLimits::default(),
+                ObjectErrorCode::ObjectCrossesPhysicalBound,
+            );
             assert_eq!(error.category(), ObjectErrorCategory::Syntax, "cut {cut}");
         }
     }
@@ -323,6 +327,7 @@ fn source_envelope_boundary_and_stream_limits_accept_exact_and_reject_one_more()
             snapshot(direct_source_len),
             reference(),
             0,
+            direct_startxref,
             direct_startxref,
         )
         .unwrap(),

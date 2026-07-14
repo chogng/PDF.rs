@@ -11,8 +11,10 @@ Parser/Security owns indirect-object header validation, direct `/Length` policy,
 framing, source identity, deterministic budgets, cancellation, and stable object failures.
 `core/bytes` owns immutable source snapshots and byte delivery, while `core/syntax` owns direct
 object and keyword syntax. `core/xref` is a sibling consumer of syntax rather than an object-crate
-dependency; a future document/revision layer composes validated xref entries into
-`IndirectObjectTarget` values and owns reference graphs, revision precedence, and caching.
+dependency. `core/document` now composes one validated traditional base section into candidate
+physical intervals and supplies their bounds through `IndirectObjectTarget`; it does not yet
+attest top-level object placement. Future document/revision work owns trusted reference graphs,
+revision precedence, and caching.
 
 # Normative sources
 
@@ -38,13 +40,16 @@ claim.
 # Algorithms and derivations
 
 - An object job binds a complete known-length `SourceSnapshot`, expected `ObjectRef`, xref offset,
-  and revision `startxref` upper bound. It rejects inconsistent geometry before reading and
-  compares the complete snapshot on every poll. The completed object retains the full snapshot.
+  an independent exclusive physical upper bound, and the revision `startxref`. It requires
+  `xref_offset < object_upper_bound <= startxref < source_len`, rejects inconsistent geometry
+  before reading, and compares the complete snapshot on every poll. Envelope, payload-end, and
+  terminal-boundary work is capped by the physical bound. The completed object retains the full
+  snapshot and that bound.
 - The envelope range includes the byte immediately before a nonzero xref offset. That byte must be
-  whitespace or a closing delimiter that can separate a top-level token; comment, name, string,
-  hexadecimal, array, and other opening delimiters are rejected. The first parsed object-number
-  span must also begin exactly at the xref offset. Together with exact number, generation, and
-  `obj` checks, this prevents accepting leading trivia, obvious opening-context offsets, or an
+  one of the PDF whitespace bytes NUL, horizontal tab, line feed, form feed, carriage return, or
+  space; closing delimiters and all other bytes are rejected. The first parsed object-number span
+  must also begin exactly at the xref offset. Together with exact number, generation, and `obj`
+  checks, this prevents accepting leading trivia, obvious adjacent token continuations, or an
   offset into the middle of a longer numeric token. It does not prove global top-level context.
 - Envelope windows grow geometrically from a bounded initial size. The parser recognizes one
   direct value and a borrowed terminal keyword without speculative rollback. `endobj` completes a
@@ -69,6 +74,11 @@ claim.
   256-iteration probes, and the object-owned `/Length` scan applies the same bound. Cancellation,
   malformed input, unsupported behavior, resource exhaustion, source failure, and internal
   failure remain separate terminal policies.
+- Syntax, a declared stream payload, or terminal framing that would require bytes beyond the
+  supplied candidate interval fails as `ObjectCrossesPhysicalBound` with diagnostic
+  `RPE-OBJECT-0021`, category `Syntax`, recovery `CorrectInput`, and the exclusive bound as its
+  offset. This distinguishes candidate-index geometry failure from source EOF, ordinary malformed
+  stream framing, and configured resource exhaustion.
 - The public one-shot poll keeps its ready value inline. A documented Clippy exception avoids an
   additional infallible, untracked heap allocation solely to equalize enum variant sizes.
   Object results and polls are move-only rather than exposing an unbudgeted deep `Clone`.
@@ -102,8 +112,10 @@ header and stream spans, xref-number/generation/token-boundary checks, two-phase
 tickets, disconnected envelope/boundary supply with a missing payload middle, request priority,
 direct `/Length` policies, strict LF/CRLF boundaries, incorrect lengths without repair scanning,
 cumulative read/parse budgets, cancellation, full snapshot mismatch, one-shot lifecycle, and
-redacted diagnostics. A framing matrix exhausts every initial envelope/boundary split and logical
-truncation point for the bootstrap fixtures, plus exact and one-less runtime resource boundaries.
+redacted diagnostics. A framing matrix exhausts every initial envelope/boundary split and
+direct/stream candidate physical-bound cut for the bootstrap fixtures,
+and exact and one-less runtime resource boundaries. Physical-bound cases assert stable
+`RPE-OBJECT-0021` policy and terminal re-poll behavior.
 Separate tests cover all limit-profile relationships and hard ceilings, lower source-error policy
 mapping, and repository dependency/purity rules. A `tools/quality` integration test generates the
 canonical PDF, parses its traditional xref section, and frames every in-use target while checking
@@ -120,17 +132,16 @@ Native/external-engine differential is claimed in this bootstrap slice.
   document services remain unimplemented.
 - `IndirectObjectTarget` carries xref-derived geometry but is publicly constructible so the object
   crate remains independent of its xref sibling. The object job therefore treats every target as
-  untrusted and revalidates source geometry, the preceding token boundary, and the full object
-  header. A test-only quality loop now composes the canonical xref and object jobs; a reusable
-  product document/revision compositor remains future work.
+  untrusted and revalidates source geometry, its independent physical upper bound, the preceding
+  PDF-whitespace byte, and the full object header. The product `core/document` bootstrap now
+  derives candidate intervals for one strict traditional base section, while the quality loop
+  exercises the canonical xref-to-object path.
 - The one-byte predecessor check proves only an obvious local token boundary. It cannot prove that
   a syntactically matching header is top-level rather than embedded after whitespace in a comment,
-  string, or stream. Rejecting overlapping/embedded targets requires the future physical object
-  interval index and document/revision composition and remains a security-relevant gate before
-  treating this bootstrap as a complete resolver.
-- The revision `startxref` is the current upper bound because no physical next-object offset index
-  exists yet. This prevents crossing into the xref section but does not prove that a declared
-  stream span avoids every intervening object; a future revision index must provide that bound.
+  string, or stream. The candidate document index prevents a framed object from crossing the next
+  indexed physical offset but does not authenticate the offset's lexical context. Top-level
+  attestation remains a security-relevant gate before treating this bootstrap as a complete
+  resolver.
 - Only known-length immutable snapshots and strict behavior are accepted. R1/R2 repair, unknown
   length, platform Range scheduling/coalescing, cancellation delivery and ticket unsubscription,
   terminal completion/cancel/close arbitration, and browser/desktop E2E remain future work.
@@ -147,3 +158,6 @@ Native/external-engine differential is claimed in this bootstrap slice.
   ByteSource state, deterministic limits, behavior tests, and repository purity governance.
 - 2026-07-13: Added canonical generated-PDF composition coverage through the external
   `tools/quality` test boundary without changing the product dependency graph.
+- 2026-07-13: Added independent candidate physical bounds, PDF-whitespace predecessor policy,
+  stable `RPE-OBJECT-0021` crossing diagnostics, and document-index governance without claiming
+  top-level attestation.
