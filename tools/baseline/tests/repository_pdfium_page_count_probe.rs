@@ -6,7 +6,7 @@ use pdf_rs_digest::sha256;
 
 const REPORT_ID: &str = "pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1";
 const REPORT_HASH: &str = "44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878";
-const DATA_LEDGER_VERSION: &str = "0.9.0";
+const DATA_LEDGER_VERSION: &str = "0.10.0";
 const DATA_LEDGER_SOURCE_HASH: &str =
     "44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878";
 const REPORT: &[u8] = include_bytes!(

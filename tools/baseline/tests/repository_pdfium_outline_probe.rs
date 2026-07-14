@@ -209,7 +209,7 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
 #[test]
 fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
     let ledger = include_str!("../../../docs/traceability/data-ledger.toml");
-    assert_line(ledger, "version = \"0.9.0\"");
+    assert_line(ledger, "version = \"0.10.0\"");
     let record = array_record(
         ledger,
         "data",

@@ -117,6 +117,22 @@ weaken Native's Parent/Count/cycle/duplicate checks, advance `core.strict-page-c
 `PLANNED`, or establish M1 exit. No helper binary, PDF bytes, canonical JSON bytes, PDFium source,
 dependency payload, or raw log is committed.
 
+A separate release-mode boundary-performance probe then reused that exact helper at PDF.rs
+revision `0f6cbde39e8e49dbcd3f784a07684a2ff7302c2c` from a clean detached local clone. One hash-fixed
+128-page traditional-xref fixture received five warmups and 50 interleaved timed samples per engine
+in each of two independent command runs. All 100 timed and ten warmup behavior comparisons returned
+the exact canonical page count. Native's complete in-memory RangeStore/xref/attestation/strict-count
+path recorded 0.378 ms and 0.360 ms trial medians; the schema-2 PDFium cold-child/init/load/count/
+response boundary recorded 7.882 ms and 7.896 ms. The report commits every raw timing sample,
+nearest-rank p95/p99, and conservative sign-test median intervals in
+`pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1.toml`.
+
+This is empirical development-boundary evidence with `performance_eligible=false`, not an
+engine-kernel performance differential. The scopes are different, the machine is not a fixed
+performance pool, CPU affinity/background load were not controlled, peak memory was not measured,
+and the helper remains uncontained with incomplete runtime and license closure. The raw command
+logs remain uncommitted, while their hashes and byte counts bind the committed sample vectors.
+
 # Dependencies and generated data
 
 Runtime code uses the Rust standard library plus the local development-only
@@ -142,6 +158,8 @@ second default-ignored test compares the bounded PDFium bookmark observation
 with Native on valid topology and records the expected `/Prev` strictness
 difference. A third default-ignored test compares Native and PDFium page counts for valid one-page
 and nested three-page trees and records the expected mismatched-root-Count strictness difference.
+The fourth default-ignored test is release-only and records two explicit raw-sample trials for the
+fixed 128-page behavior and unequal-scope Native/PDFium development boundaries.
 Contract tests require both semantic profiles to produce bounded UTF-8, newline-terminated parse
 output while every non-parse channel is unsupported. A streaming decoder fuzz target remains
 planned before baseline registration or untrusted corpus execution.
@@ -186,6 +204,12 @@ needed to adjudicate Parent links, cycles, duplicate children, or recursively re
 Its `page_count=4` observation on the mismatched positive root Count therefore remains an expected
 strictness difference and cannot replace the Native page-tree validator.
 
+The boundary-performance probe cannot isolate PDFium's engine time from schema-2 encode/decode,
+process creation, supervisor polling, library initialization, document load, response I/O, and
+child reaping. Its Native side likewise includes RangeStore materialization, xref open, candidate
+construction, base attestation, and strict traversal. The reported ratio must not be presented as
+algorithm parity or used as a performance gate.
+
 # History
 
 - 2026-07-13: Introduced process-isolation protocol schema version 1.
@@ -199,3 +223,5 @@ strictness difference and cannot replace the Native page-tree validator.
   `/Prev` strictness difference.
 - 2026-07-14: Added the source-only PDFium page-count adapter and a non-gating Native/PDFium
   comparison with exact repeatable valid counts and an expected root-Count strictness difference.
+- 2026-07-14: Recorded two raw-sample 128-page page-count boundary-performance trials with exact
+  behavior agreement and explicit `performance_eligible=false` scope separation.

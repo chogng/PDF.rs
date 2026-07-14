@@ -1,0 +1,198 @@
+schema = 1
+id = "pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1"
+evidence_class = "external-o4-page-count-boundary-performance-and-behavior-probe"
+recorded_at = "2026-07-14T13:52:59Z"
+engine = "pdfium"
+upstream_repository = "https://pdfium.googlesource.com/pdfium/"
+upstream_revision = "c040cf96106a87220b814a1a892649cf2d7f1934"
+pdf_rs_revision = "0f6cbde39e8e49dbcd3f784a07684a2ff7302c2c"
+pdf_rs_measurement_checkout = "clean-local-shared-clone-detached-at-pdf-rs-revision"
+pdf_rs_measurement_checkout_status = "clean-before-and-after-measurement-excluding-ignored-cargo-target"
+
+platform = "macos-arm64"
+os_version = "macOS 26.4.1 (25E253)"
+kernel_release = "25.4.0"
+hardware_model = "Mac Studio Mac14,13"
+cpu = "Apple M2 Max"
+cpu_cores = "12 (8 performance and 4 efficiency)"
+memory = "32 GB"
+power_source = "AC Power"
+thermal_state = "no thermal, performance, or CPU power warning recorded"
+hardware_pool = "local-development-machine-not-fixed-performance-pool"
+cpu_affinity = "not-fixed"
+background_load = "not-controlled"
+
+rustc_version = "rustc 1.93.0 (254b59607 2026-01-19)"
+rustc_host = "aarch64-apple-darwin"
+rustc_llvm_version = "21.1.8"
+cargo_version = "cargo 1.93.0 (083ac5135 2025-12-15)"
+pdf_rs_build_profile = "cargo-release-optimized"
+pdf_rs_feature_flags = "workspace-default-no-extra-features"
+xcode_version = "Xcode 26.6 (17F113)"
+gn_version = "2435 (1d86777e7f25)"
+ninja_version = "1.12.1"
+
+adapter_profile = "pdfium-public-c-api-page-count-v1"
+runner_schema = 2
+public_pdfium_c_api_only = true
+protocol_identity_verified = true
+executable_hash_verified_before_runner_construction = true
+normalized_public_api_observation = true
+
+prerequisite_page_count_evidence = "tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml"
+prerequisite_page_count_evidence_sha256 = "sha256:44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878"
+adapter_config = "tools/baseline/pdfium/page_count_adapter.toml"
+adapter_config_sha256 = "sha256:5bd98b4f17c7d9b2c85549538a2e9434d00ced21fad453c5ef48218ec8526fa1"
+helper_build_definition = "tools/baseline/pdfium/helper/page_count.BUILD.gn"
+helper_build_definition_sha256 = "sha256:6917644bc1f3cda337b9ebe241c33cdaf484d43beb9b4e0c8e0ea294b74fc1dc"
+helper_source = "tools/baseline/pdfium/helper/pdf_rs_pdfium_page_count_probe.cc"
+helper_source_sha256 = "sha256:525b5cb6a4d9570868c54825e973a18b1113f92316a526f157032eda79907958"
+helper_root_overlay = "tools/baseline/pdfium/helper/pdfium-page-count-root.patch"
+helper_root_overlay_sha256 = "sha256:ea8ec29a7c82593a4512bb23164ab38852839ec1bff0664b2f77701b6baad5a0"
+host_adapter_source = "tools/baseline/src/pdfium_page_count.rs"
+host_adapter_source_sha256 = "sha256:29a34b573a88b7add0523030740c453593ce3b21fb2f046e4a6b0dcc0faa6d9b"
+measurement_harness = "tools/baseline/tests/pdfium_page_count_performance.rs"
+measurement_harness_sha256 = "sha256:6511cbb2067c5d7bf3c11d199acb45f05923e5673a5d640d2186e6771a2b055c"
+helper_executable_sha256 = "sha256:a8675a5c15077b9a7843d1f3311091ecabcb25b5511a497655f7c977a1838b9c"
+helper_executable_bytes = 3683040
+descriptor_build_hash_scope = "helper executable bytes only; runtime binary closure incomplete"
+
+build_args = "use_remoteexec=false is_debug=false symbol_level=0 target_cpu=\"arm64\" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false"
+build_flags_sha256 = "sha256:f88fb7eb62554e955bb8f7077c81be8f8f1f35de9aba7481b47c3b2dca8626dc"
+helper_reverification_command = "cd $PDFIUM_ROOT && third_party/ninja/ninja -C out/Adapter pdf_rs_pdfium_page_count_probe"
+helper_reverification_exit_code = 0
+helper_reverification_ninja_state = "no-work-required"
+
+environment_policy = "env-clear-empty"
+argv = []
+working_directory = "$PDF_RS_MEASUREMENT_ROOT"
+isolation_profile = "uncontained-local-pdfium-page-count-performance-probe-v1"
+max_request_bytes = 262144
+max_stdout_bytes = 176
+max_stderr_bytes = 4096
+watchdog_ms = 2000
+stderr_policy = "bounded-discard-not-recorded"
+
+environment_declaration = "env-clear direct-child local page-count performance probe; runtime and platform closure incomplete"
+environment_sha256 = "sha256:810e4557f96820d601024646cfbed3a84c06b012ce77e3f3dce7dd3d02fab6c5"
+invocation_sha256 = "sha256:51bf20f91325ca847060673d1ed557aae37d6f277b2236a3c69caab7c248ae34"
+invocation_reproducibility = "host-canonical-path-bound"
+license_declaration = "license closure incomplete; root license checked only"
+license_manifest_sha256 = "sha256:a24b65450d72dbe77cefc83a18257a4ebf3152ec8dce78e5191308d7b1292cf1"
+fonts_declaration = "not-applicable-no-font-rendering; runtime font closure not evaluated"
+fonts_sha256 = "sha256:37aa8cdbe4b642bba1cc18ad8efe95bc2a06391063fe90f3752d5059fc6c8b94"
+color_declaration = "not-applicable-no-pixel-output"
+color_sha256 = "sha256:9c6299c45ed23a027752789a0bec67986037e0ef5740c74dda3112cf5d02e0f6"
+descriptor_identity_sha256 = "sha256:b6901fc938c392ef4cbc57b0ad0bbd85e6016df1c5691dd44bc86089cc1d15b7"
+
+runtime_closure_status = "incomplete"
+license_manifest_status = "incomplete"
+font_fingerprint_status = "not-evaluated-no-font-rendering"
+color_fingerprint_status = "not-applicable-no-pixel-output"
+sandbox_status = "direct-child-supervision-only"
+executable_replacement_protection_status = "not-established"
+
+measurement_command = "cd $PDF_RS_MEASUREMENT_ROOT && PDF_RS_PDFIUM_PAGE_COUNT_ADAPTER=$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_page_count_probe cargo test --release --package pdf-rs-baseline --test pdfium_page_count_performance -- --ignored --exact real_pdfium_page_count_wide_cold_process_performance_probe --nocapture --test-threads=1"
+measurement_command_runs = 2
+measurement_command_passed = 2
+trial_count = 2
+warmup_runs_per_engine_per_trial = 5
+sample_runs_per_engine_per_trial = 50
+timed_sample_runs_per_engine = 100
+validated_runs_per_engine_including_warmups = 110
+helper_process_runs = 110
+sample_order = "interleaved; even index Native then PDFium, odd index PDFium then Native"
+timer = "std::time::Instant wall-clock elapsed nanoseconds"
+cache_state = "warm executable and operating-system pages after five per-engine warmups; new Native stores/jobs and new PDFium direct child/library/document for every timed sample"
+statistic_definition = "nearest-rank p50/p95/p99 over 50 samples per trial; minimum and maximum exact"
+median_confidence_interval_definition = "distribution-free sign-test order statistics ranks 18 and 33 for n=50; conservative 96.716 percent coverage reported as median_ci95"
+
+fixture_id = "inline-strict-page-count-flat-128-page-v1"
+fixture_generator = "self-authored-traditional-xref-test-builder"
+fixture_sha256 = "sha256:c5d8b0d76e9ea6267f8f1868d326a3f87a811db39422b259da1ac58d713fc6f4"
+fixture_bytes = 15137
+fixture_page_count = 128
+fixture_hash_verified = true
+fixture_pdf_committed = false
+
+native_measurement_scope = "full in-memory RangeStore materialization, traditional xref open, base-revision candidate construction and attestation, and strict page-tree count"
+pdfium_measurement_scope = "schema-2 request encode, cold direct-child spawn, PDFium library initialize, memory-document load, FPDF_GetPageCount, response write, child wait, and response decode"
+measurement_scopes_equal = false
+measurement_scope_classification = "different-development-boundary-latencies-not-engine-kernel-parity"
+
+trial_1_cargo_build_state = "fresh release build completed before timed test"
+trial_1_native_raw_ns = "385333,390792,349792,421459,347500,411333,352625,387792,351292,379625,344208,378042,346667,383416,323333,378542,380500,390542,350542,376500,349375,390792,385459,517875,348917,394125,344875,384792,373750,423083,344416,395625,364125,378625,358166,379334,344792,386250,365833,430792,353250,401792,355583,404458,331583,560958,333417,373958,348250,391875"
+trial_1_pdfium_raw_ns = "7853792,7493167,7891083,7611500,7951292,7517209,7083417,7934459,7970042,5398334,7732042,7919000,7919416,7587833,7481541,7673083,7565125,7898583,7934292,7942708,7901083,7669917,7551792,7927000,7965708,7880250,7649125,7888625,7979416,7910292,7859583,7940416,7975458,5392042,7590500,7962167,7935375,7894417,7958208,7884458,7772333,7923000,7901667,7578916,7881583,7959125,7870416,7875250,7774542,7755667"
+trial_1_native_minimum_ns = 323333
+trial_1_native_median_ns = 378042
+trial_1_native_p95_ns = 430792
+trial_1_native_p99_ns = 560958
+trial_1_native_maximum_ns = 560958
+trial_1_native_median_ci95_low_ns = 355583
+trial_1_native_median_ci95_high_ns = 385333
+trial_1_pdfium_minimum_ns = 5392042
+trial_1_pdfium_median_ns = 7881583
+trial_1_pdfium_p95_ns = 7970042
+trial_1_pdfium_p99_ns = 7979416
+trial_1_pdfium_maximum_ns = 7979416
+trial_1_pdfium_median_ci95_low_ns = 7772333
+trial_1_pdfium_median_ci95_high_ns = 7910292
+trial_1_pdfium_to_native_median_ratio_milli = 20848
+trial_1_raw_log_sha256 = "sha256:1822541ec414f64816302cd260ce8dda541214eba9499ced60bf940ff897826c"
+trial_1_raw_log_bytes = 2664
+
+trial_2_cargo_build_state = "no-work release build before timed test"
+trial_2_native_raw_ns = "396000,407167,349375,399375,386750,376083,359541,380083,330666,391333,342875,369166,319958,360250,348042,445959,341541,377916,325959,372042,336709,357167,370500,372500,385291,375125,346083,357958,333708,379583,348375,351125,333417,411333,333125,401166,338083,387791,354042,391292,324125,372542,345958,387042,338666,371042,336208,392334,335167,401625"
+trial_2_pdfium_raw_ns = "7929458,7917250,7888750,8081000,8102583,7942667,7483959,7476000,7976958,7954959,7937500,7846291,7736583,7906459,7883791,7670875,7841042,7636750,7913625,7951917,7686334,7964666,7789375,7955792,7889208,7977000,7947208,7991833,7427125,7797958,7720125,7896417,7889000,7688500,7920583,7925500,7666750,7905125,7976500,7896292,7903292,7977208,7348334,7856000,7916250,7876500,7922500,7693042,7903708,7742666"
+trial_2_native_minimum_ns = 319958
+trial_2_native_median_ns = 360250
+trial_2_native_p95_ns = 407167
+trial_2_native_p99_ns = 445959
+trial_2_native_maximum_ns = 445959
+trial_2_native_median_ci95_low_ns = 348375
+trial_2_native_median_ci95_high_ns = 376083
+trial_2_pdfium_minimum_ns = 7348334
+trial_2_pdfium_median_ns = 7896417
+trial_2_pdfium_p95_ns = 7991833
+trial_2_pdfium_p99_ns = 8102583
+trial_2_pdfium_maximum_ns = 8102583
+trial_2_pdfium_median_ci95_low_ns = 7856000
+trial_2_pdfium_median_ci95_high_ns = 7920583
+trial_2_pdfium_to_native_median_ratio_milli = 21919
+trial_2_raw_log_sha256 = "sha256:59c56dbb831c518f6e3353e5c96b632b260abb9d3471dacce0543d13fb5488a5"
+trial_2_raw_log_bytes = 2664
+
+native_trial_median_range_ns = "360250..378042"
+pdfium_trial_median_range_ns = "7881583..7896417"
+pdfium_to_native_trial_median_ratio_range = "20.848x..21.919x"
+
+behavior_output_sha256 = "sha256:7288f861e07e1f237da0a59d322d56c03d4756ec0e33b7608acce35661237c37"
+behavior_observable = "canonical scalar document page count"
+behavior_native_count = 128
+behavior_pdfium_count = 128
+behavior_timed_comparisons = 100
+behavior_warmup_comparisons = 10
+behavior_differences = 0
+behavior_counts_exact = true
+behavior_repeat_outputs_identical = true
+native_vs_pdfium_behavior_differential = true
+
+oracle_authority = "O4"
+performance_observation_recorded = true
+performance_scope_comparable = false
+performance_eligible = false
+correctness_eligible = false
+product_correctness_eligible = false
+differential_eligible = false
+baseline_registration_eligible = false
+release_gate_eligible = false
+performance_ineligibility_reasons = "different measurement scopes; local non-fixed hardware pool; CPU affinity and background load uncontrolled; no peak-memory measurement; incomplete runtime and license closure; no platform sandbox; one self-authored synthetic fixture only"
+behavior_verdict = "100-timed-and-10-warmup-page-count-observations-exact"
+performance_verdict = "repeatable-development-boundary-latencies-recorded-without-engine-kernel-parity-claim"
+
+raw_timing_samples_committed = true
+raw_logs_committed = false
+helper_binary_committed = false
+pdfium_source_committed = false
+page_count_json_bytes_committed = false
+upstream_data_committed = false

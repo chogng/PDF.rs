@@ -152,6 +152,13 @@ That real O4 comparison is still non-gating and unregistered, does not change th
 loop's older `pages_processed=1` smoke classification, leaves the page-count feature `PLANNED`, and
 does not establish M1 exit.
 
+A release-mode baseline-tool follow-up uses one separate hash-fixed 128-page fixture for two
+50-sample trials. All timed and warmup Native/PDFium counts agree. It records Native full
+in-memory strict-path medians of 0.360-0.378 ms and PDFium schema-2 cold-child boundary medians of
+7.882-7.896 ms, but the evidence remains `performance_eligible=false` because those scopes are
+not engine-kernel parity and the local machine is not a fixed performance pool. This measurement
+does not alter the synthetic benchmark-report contract or this Native object loop.
+
 # Dependencies and generated data
 
 - Rust standard library.
@@ -229,7 +236,9 @@ interrupted-write recovery remain planned before T1 inputs.
   milestones. Equality with one non-eligible external pageinfo smoke does not
   advance the feature to DIFFERENTIAL. The separate real page-count probe adds exact, repeatable
   valid observations plus one expected strictness difference, but remains non-gating and
-  unregistered and likewise does not advance the feature or complete M1 exit.
+  unregistered and likewise does not advance the feature or complete M1 exit. Its 128-page
+  boundary-performance follow-up adds raw local timing samples but remains unequal-scope,
+  performance-ineligible, and outside every release threshold.
 
 # History
 
@@ -255,3 +264,5 @@ interrupted-write recovery remain planned before T1 inputs.
   smoke while retaining the explicit non-differential boundary.
 - 2026-07-14: Recorded the separate real page-count probe's exact repeatable valid results and
   expected mismatched-root-Count strictness difference without changing this loop or M1 maturity.
+- 2026-07-14: Recorded the separate 128-page raw-sample boundary-performance batch without
+  changing the synthetic benchmark contract or establishing a performance gate.

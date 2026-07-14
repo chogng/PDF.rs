@@ -1,5 +1,5 @@
 schema = 1
-version = "0.9.0"
+version = "0.10.0"
 status = "active"
 
 [[data]]
@@ -121,3 +121,20 @@ validated_by = "cargo test --package pdf-rs-baseline --test repository_pdfium_pa
 owner = "baseline-release"
 update_policy = "create a new evidence id when revision, platform, helper, build flags, fixtures, process policy, observable schema, or observed outputs change"
 delete_policy = "retain while the PDFium O4 page-count differential probe is referenced"
+
+[[data]]
+id = "baseline.evidence.pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1"
+kind = "project-authored-external-o4-page-count-boundary-performance-evidence"
+source = "tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1.toml"
+acquired_at = 2026-07-14
+version = "pdfium-o4-page-count-boundary-performance-probe-schema-1"
+source_hash = "sha256:bdd25b8d8843e62b500987a87080f0956ac8fe6ee7cdc351b6dc1689acd06e31"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository metadata, project-authored harness, and raw timing samples only; no PDFium source, dependencies, helper binary, generated PDF bytes, page-count JSON bytes, or raw execution logs"
+contains_personal_data = false
+authored_by = "baseline-release"
+format_schema = 1
+validated_by = "cargo test --package pdf-rs-baseline --test repository_pdfium_page_count_performance_probe"
+owner = "baseline-release"
+update_policy = "create a new evidence id when either engine revision, platform, helper, build flags, fixture, process policy, measurement scope, warmup/sample count, or observed output changes"
+delete_policy = "retain while the PDFium O4 page-count boundary-performance probe is referenced"

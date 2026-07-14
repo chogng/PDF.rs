@@ -93,6 +93,22 @@ product-correctness evidence, a release gate, or a claim that the `core.strict-p
 has advanced beyond `PLANNED` or that M1 exit is complete. The older one-page
 `pdfium_test --show-pageinfo` execution remains a separate build-readiness smoke observation.
 
+A release-mode follow-up at PDF.rs revision
+`0f6cbde39e8e49dbcd3f784a07684a2ff7302c2c` reused the exact hash-bound page-count helper on one
+self-authored 128-page traditional-xref fixture. Two independent trials each performed five
+warmups and 50 interleaved timed samples per engine. All 100 timed and ten warmup comparisons
+returned the exact canonical count of 128. Native's full in-memory RangeStore/xref/attestation/
+strict-page-count path recorded trial medians of 0.378 ms and 0.360 ms; the schema-2 PDFium cold
+direct-child/init/load/count/response boundary recorded 7.882 ms and 7.896 ms. Raw nanosecond
+samples, p95, p99, and conservative median confidence intervals are recorded in
+`evidence/pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1.toml`.
+
+Those timings intentionally have `performance_eligible=false`: the measured scopes are different,
+the local Mac is not a fixed performance pool, CPU affinity/background load were uncontrolled,
+peak memory was not measured, and the helper remains uncontained with incomplete runtime/license
+closure. The 20.848x-21.919x ratio is therefore a reproducible development-boundary observation,
+not a PDFium-kernel-versus-Native-kernel performance claim or release threshold.
+
 Stock `pdfium_test` can produce raster images and plain text in separate
 invocations, but it does not provide this protocol's canonical
 Parse/Scene/positioned-Text artifacts. The direct helper therefore reports those
@@ -211,3 +227,21 @@ PDF_RS_PDFIUM_PAGE_COUNT_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_page_co
 The valid results are exact and repeatable only for the two fixed fixtures. The mismatched positive
 root Count is an expected strictness difference, and the probe remains outside CI and every product
 or release path.
+
+## Run the page-count boundary-performance probe
+
+Use a clean PDF.rs checkout detached at the revision recorded by the evidence, plus the exact
+already-built page-count helper. The test refuses a debug build and remains ignored by default:
+
+```sh
+PDF_RS_PDFIUM_PAGE_COUNT_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_page_count_probe" \
+  cargo test --release --package pdf-rs-baseline \
+  --test pdfium_page_count_performance -- \
+  --ignored --exact real_pdfium_page_count_wide_cold_process_performance_probe \
+  --nocapture --test-threads=1
+```
+
+Run the command twice to reproduce the recorded batch. Each command validates the fixture and
+helper hashes, performs five untimed warmups per engine, then emits 50 raw samples per engine with
+the exact behavior result and summaries. Do not compare the reported ratio with an engine-only
+benchmark: the Native and PDFium measurement scopes are explicitly different.
