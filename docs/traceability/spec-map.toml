@@ -1,5 +1,5 @@
 schema = 1
-version = "0.7.0"
+version = "0.8.0"
 status = "active"
 
 [[requirement]]
@@ -26,6 +26,9 @@ tests = [
   "infrastructure/synthetic-failure-bundle-001",
   "tools/baseline::tests",
   "tools/baseline::process_harness",
+  "tools/baseline::pdfium_adapter_contract",
+  "tools/baseline::pdfium_real_adapter",
+  "tools/baseline::repository_pdfium_probe",
   "tools/corpus/src/manifest.rs::tests",
   "tools/corpus/tests/cli.rs",
   "tools/corpus/tests/repository_manifest.rs",
@@ -35,7 +38,7 @@ tests = [
   "tools/quality/tests/parser_mutation_smoke.rs",
 ]
 status = "partial"
-notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a bounded replayable one-page/table-xref DSL profile, a canonical content-verified T0 corpus manifest, a canonical non-verdict synthetic benchmark report, and a fixed 103-case-per-parser deterministic mutation smoke are implemented. A reviewed PDFium executable and adapter, platform-enforced isolation, complete baseline-ledger evidence, broader DSL variants, registered coverage-guided and continuous fuzzing, automated minimization/failure bundles, measured benchmark evidence, and T1+ corpus scale gates remain open."
+notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a source-only PDFium public-C-API pixel adapter with one non-gating O4 probe, a bounded replayable one-page/table-xref DSL profile, a canonical content-verified T0 corpus manifest, a canonical non-verdict synthetic benchmark report, and a fixed 103-case-per-parser deterministic mutation smoke are implemented. Platform-enforced isolation, complete runtime/license/font/color closure and baseline-ledger registration, Native/PDFium differential evidence, broader DSL variants, registered coverage-guided and continuous fuzzing, automated minimization/failure bundles, measured benchmark evidence, and T1+ corpus scale gates remain open."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.6"

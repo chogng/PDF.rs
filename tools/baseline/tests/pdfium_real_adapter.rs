@@ -5,49 +5,37 @@ use std::time::Duration;
 use pdf_rs_baseline::{
     BaselineChannel, BaselineDescriptor, BaselineErrorCode, BaselineRequest, BaselineRunner,
     OracleAuthority, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumPixelAdapter, ProcessLimits, ProcessSpec,
+    descriptor_identity,
 };
 use pdf_rs_compare::{PixelArtifact, compare_pixels};
 use pdf_rs_digest::sha256;
 use pdf_rs_generate::{GenerateLimits, compile_dsl};
 
-const PDFIUM_REVISION: &str = "c040cf96106a87220b814a1a892649cf2d7f1934";
-const PDFIUM_BUILD_ARGS: &str = "use_remoteexec=false is_debug=false symbol_level=0 target_cpu=\"arm64\" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false";
-const PDFIUM_ARGS_GN: &str = concat!(
-    "use_remoteexec = false\n",
-    "is_debug = false\n",
-    "symbol_level = 0\n",
-    "target_cpu = \"arm64\"\n",
-    "pdf_is_standalone = true\n",
-    "pdf_enable_v8 = false\n",
-    "pdf_enable_xfa = false\n",
-    "pdf_use_skia = false\n",
-    "pdf_enable_fontations = false\n",
-    "is_component_build = false\n",
-);
-const FIXTURE_SOURCE_HASH: &str =
-    "9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db";
-const EXPECTED_WHITE_RGBA_HASH: &str =
-    "8667e718294e9e0df1d30600ba3eeb201f764aad2dad72748643e4a285e1d1f7";
-const COLOR_PROBE_DSL: &str = concat!(
-    "document(version: \"1.7\") {\n",
-    "  object(1) = catalog(pages: ref(2));\n",
-    "  object(2) = pages(kids: [ref(3)], count: 1);\n",
-    "  object(3) = page(\n",
-    "    media_box: [0, 0, 200, 200],\n",
-    "    resources: {},\n",
-    "    contents: ref(4)\n",
-    "  );\n",
-    "  stream(4) { \"q\\n",
-    "0 0 1 rg 0 100 100 100 re f\\n",
-    "1 1 0 rg 100 100 100 100 re f\\n",
-    "1 0 0 rg 0 0 100 100 re f\\n",
-    "0 1 0 rg 100 0 100 100 re f\\n",
-    "Q\\n\" }\n",
-    "  xref(kind: table);\n",
-    "}\n",
-);
-const WIDTH: u32 = 4;
-const HEIGHT: u32 = 4;
+#[path = "support/pdfium_probe.rs"]
+mod probe;
+
+use probe::*;
+
+#[test]
+fn analytic_probe_inputs_are_fixed_without_running_pdfium() {
+    assert_eq!(COLOR_PROBE_DSL.len(), COLOR_PROBE_SOURCE_BYTES);
+    assert_eq!(
+        hex(&sha256(COLOR_PROBE_DSL.as_bytes()).unwrap()),
+        COLOR_PROBE_SOURCE_HASH
+    );
+    let generated = compile_dsl(COLOR_PROBE_DSL.as_bytes(), GenerateLimits::default()).unwrap();
+    assert_eq!(generated.bytes().len(), COLOR_PROBE_PDF_BYTES);
+    assert_eq!(hex(&generated.source_sha256()), COLOR_PROBE_SOURCE_HASH);
+    assert_eq!(hex(&generated.output_sha256()), COLOR_PROBE_PDF_HASH);
+    assert_eq!(
+        hex(&sha256(&vec![255; rgba_len()]).unwrap()),
+        EXPECTED_WHITE_RGBA_HASH
+    );
+    assert_eq!(
+        hex(&sha256(&analytic_quadrants()).unwrap()),
+        COLOR_PROBE_RGBA_HASH
+    );
+}
 
 #[test]
 #[ignore = "requires PDF_RS_PDFIUM_ADAPTER pointing to the separately built PDFium helper"]
@@ -64,8 +52,9 @@ fn real_pdfium_adapter_matches_analytic_pixel_probes() {
     });
     assert_eq!(hex(&sha256(&pdf).unwrap()), FIXTURE_SOURCE_HASH);
 
-    let limits =
-        ProcessLimits::new(1024 * 1024, 1024 * 1024, 4096, Duration::from_secs(10)).unwrap();
+    assert_eq!(std::env::consts::OS, "macos");
+    assert_eq!(std::env::consts::ARCH, "aarch64");
+    let limits = ProcessLimits::new(4096, 176, 4096, Duration::from_secs(2)).unwrap();
     let process = ProcessSpec::new(
         &executable,
         Vec::new(),
@@ -74,29 +63,35 @@ fn real_pdfium_adapter_matches_analytic_pixel_probes() {
         "uncontained-local-pdfium-probe-v1",
     )
     .unwrap();
-    let helper_hash = sha256(&fs::read(&executable).unwrap()).unwrap();
+    let helper_bytes = fs::read(&executable).unwrap();
+    assert_eq!(helper_bytes.len(), EXPECTED_HELPER_BYTES);
+    let helper_hash = sha256(&helper_bytes).unwrap();
+    assert_eq!(hex(&helper_hash), EXPECTED_HELPER_SHA256);
     let invocation_hash = process.identity(limits).unwrap();
+    let build_flags_hash = digest(PDFIUM_ARGS_GN);
+    let environment_hash = digest(ENVIRONMENT_DECLARATION);
+    let license_manifest_hash = digest(LICENSE_DECLARATION);
+    let fonts_hash = digest(FONTS_DECLARATION);
+    let color_hash = digest(COLOR_DECLARATION);
     let descriptor = BaselineDescriptor {
         id: PDFIUM_PIXEL_ADAPTER_PROFILE.into(),
         engine: "pdfium".into(),
         upstream_revision: PDFIUM_REVISION.into(),
         build_hash: helper_hash,
-        build_flags_hash: digest(PDFIUM_ARGS_GN),
-        environment_hash: digest(
-            "env-clear direct-child local probe; runtime and platform closure incomplete",
-        ),
+        build_flags_hash,
+        environment_hash,
         invocation_hash,
-        license_manifest_hash: digest("license closure incomplete; root license checked only"),
-        fonts_hash: digest("empty user font paths requested; platform font closure unproven"),
-        color_hash: digest(
-            "agg rgba8 straight-alpha top-down; srgb target and color closure unproven",
-        ),
-        platform: format!("local-{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        license_manifest_hash,
+        fonts_hash,
+        color_hash,
+        platform: "macos-arm64".into(),
     };
+    let descriptor_hash = descriptor_identity(&descriptor).unwrap();
     let adapter = PdfiumPixelAdapter::new(descriptor, process, limits).unwrap();
 
-    let first = observe(&adapter, pdf.clone(), 0).unwrap();
-    let second = observe(&adapter, pdf.clone(), 0).unwrap();
+    let mut helper_process_runs = 0_u64;
+    let first = observe_counted(&adapter, pdf.clone(), 0, &mut helper_process_runs).unwrap();
+    let second = observe_counted(&adapter, pdf.clone(), 0, &mut helper_process_runs).unwrap();
     assert_eq!(first.authority(), OracleAuthority::O4Observation);
     assert_eq!(first.parse_json, BaselineChannel::Unsupported);
     assert_eq!(first.scene_json, BaselineChannel::Unsupported);
@@ -118,10 +113,21 @@ fn real_pdfium_adapter_matches_analytic_pixel_probes() {
     let color_probe = compile_dsl(COLOR_PROBE_DSL.as_bytes(), GenerateLimits::default()).unwrap();
     let color_source_hash = color_probe.source_sha256();
     let color_pdf_hash = color_probe.output_sha256();
-    let color_observation = observe(&adapter, color_probe.into_bytes(), 0).unwrap();
+    let color_pdf_bytes = color_probe.bytes().len();
+    assert_eq!(hex(&color_source_hash), COLOR_PROBE_SOURCE_HASH);
+    assert_eq!(hex(&color_pdf_hash), COLOR_PROBE_PDF_HASH);
+    assert_eq!(color_pdf_bytes, COLOR_PROBE_PDF_BYTES);
+    let color_observation = observe_counted(
+        &adapter,
+        color_probe.into_bytes(),
+        0,
+        &mut helper_process_runs,
+    )
+    .unwrap();
     let color_rgba = produced_rgba(&color_observation.rgba);
     let expected_color_rgba = analytic_quadrants();
     let expected_color_hash = sha256(&expected_color_rgba).unwrap();
+    assert_eq!(hex(&expected_color_hash), COLOR_PROBE_RGBA_HASH);
     let color_comparison = compare_pixels(
         &PixelArtifact::new(WIDTH, HEIGHT, expected_color_rgba).unwrap(),
         &PixelArtifact::new(WIDTH, HEIGHT, color_rgba.to_vec()).unwrap(),
@@ -133,23 +139,33 @@ fn real_pdfium_adapter_matches_analytic_pixel_probes() {
     assert_eq!(color_comparison.summary().max_channel_delta(), [0; 4]);
     assert_eq!(color_comparison.summary().total_absolute_delta(), 0);
 
-    let page_error = observe(&adapter, pdf, 1).err().unwrap();
+    let page_error = observe_counted(&adapter, pdf, 1, &mut helper_process_runs)
+        .err()
+        .unwrap();
     assert_eq!(page_error.code, BaselineErrorCode::RunnerFailed);
     assert_eq!(page_error.diagnostic_id, "RPE-BASELINE-0006");
 
     let malformed = b"%PDF-1.7\nnot-a-document\n".to_vec();
-    let malformed_error = observe(&adapter, malformed, 0).err().unwrap();
+    let malformed_error = observe_counted(&adapter, malformed, 0, &mut helper_process_runs)
+        .err()
+        .unwrap();
     assert_eq!(malformed_error.code, BaselineErrorCode::RunnerFailed);
     assert_eq!(malformed_error.diagnostic_id, "RPE-BASELINE-0006");
+    assert_eq!(helper_process_runs, HELPER_PROCESS_RUNS);
 
     println!("pdfium_revision={PDFIUM_REVISION}");
     println!("helper_sha256={}", hex(&helper_hash));
-    println!("build_flags_sha256={}", hex(&digest(PDFIUM_ARGS_GN)));
+    println!("build_flags_sha256={}", hex(&build_flags_hash));
     println!(
         "build_args_command_sha256={}",
         hex(&digest(PDFIUM_BUILD_ARGS))
     );
+    println!("environment_sha256={}", hex(&environment_hash));
     println!("invocation_sha256={}", hex(&invocation_hash));
+    println!("license_manifest_sha256={}", hex(&license_manifest_hash));
+    println!("fonts_sha256={}", hex(&fonts_hash));
+    println!("color_sha256={}", hex(&color_hash));
+    println!("descriptor_identity_sha256={}", hex(&descriptor_hash));
     println!("fixture_sha256={FIXTURE_SOURCE_HASH}");
     println!("rgba_sha256={EXPECTED_WHITE_RGBA_HASH}");
     println!("repeat_rgba_sha256={EXPECTED_WHITE_RGBA_HASH}");
@@ -160,7 +176,9 @@ fn real_pdfium_adapter_matches_analytic_pixel_probes() {
     println!("max_channel_delta=0,0,0,0");
     println!("total_absolute_delta=0");
     println!("color_probe_source_sha256={}", hex(&color_source_hash));
+    println!("color_probe_source_bytes={}", COLOR_PROBE_DSL.len());
     println!("color_probe_pdf_sha256={}", hex(&color_pdf_hash));
+    println!("color_probe_pdf_bytes={color_pdf_bytes}");
     println!("color_probe_rgba_sha256={}", hex(&expected_color_hash));
     println!("color_probe_different_pixels=0");
     println!("color_probe_different_channels=0");
@@ -168,6 +186,7 @@ fn real_pdfium_adapter_matches_analytic_pixel_probes() {
     println!("color_probe_total_absolute_delta=0");
     println!("page_out_of_range=RPE-BASELINE-0006");
     println!("malformed_pdf=RPE-BASELINE-0006");
+    println!("helper_process_runs={helper_process_runs}");
     println!("native_engine_exercised=false");
     println!("differential_eligible=false");
 }
@@ -180,6 +199,16 @@ fn observe(
     let source_hash = sha256(&pdf).unwrap();
     let request = BaselineRequest::new(source_hash, pdf, page, WIDTH, HEIGHT).unwrap();
     adapter.observe(&request)
+}
+
+fn observe_counted(
+    adapter: &PdfiumPixelAdapter,
+    pdf: Vec<u8>,
+    page: u32,
+    runs: &mut u64,
+) -> Result<pdf_rs_baseline::BaselineObservation, pdf_rs_baseline::BaselineError> {
+    *runs = runs.checked_add(1).unwrap();
+    observe(adapter, pdf, page)
 }
 
 fn produced_rgba(channel: &BaselineChannel<Vec<u8>>) -> &[u8] {
@@ -201,30 +230,6 @@ fn repository_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .unwrap()
-}
-
-fn rgba_len() -> usize {
-    usize::try_from(u64::from(WIDTH) * u64::from(HEIGHT) * 4).unwrap()
-}
-
-fn analytic_quadrants() -> Vec<u8> {
-    const BLUE: [u8; 4] = [0, 0, 255, 255];
-    const YELLOW: [u8; 4] = [255, 255, 0, 255];
-    const RED: [u8; 4] = [255, 0, 0, 255];
-    const GREEN: [u8; 4] = [0, 255, 0, 255];
-
-    let mut rgba = Vec::with_capacity(rgba_len());
-    for row in 0..HEIGHT {
-        let (left, right) = if row < HEIGHT / 2 {
-            (BLUE, YELLOW)
-        } else {
-            (RED, GREEN)
-        };
-        for column in 0..WIDTH {
-            rgba.extend_from_slice(if column < WIDTH / 2 { &left } else { &right });
-        }
-    }
-    rgba
 }
 
 fn digest(value: &str) -> [u8; 32] {

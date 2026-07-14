@@ -41,6 +41,22 @@ upstream fixtures, source, dependencies, and binaries are not committed. The
 baseline ledger therefore remains empty and every adapter fingerprint remains
 blocking.
 
+The public-C-API helper was then compiled from the committed source overlay and
+run through protocol schema 2. The canonical 4x4 `q Q` fixture produced the
+same 64-byte white RGBA output twice, and a generated four-quadrant diagnostic
+matched its analytic color/channel/row-order expectation exactly. Both checks
+reported zero different pixels and channels; one page-out-of-range request and
+one malformed-PDF request each mapped to terminal diagnostic
+`RPE-BASELINE-0006`. The exact hashes and zero-diff summaries are recorded in
+`evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml`.
+
+That second report is an O1 analytic check against PDFium O4 pixels, not a
+Native/PDFium comparison. It does not exercise the synthetic failure bundle's
+declared artifact oracle, establish the case's complete color/antialias render
+profile, measure performance, close fonts/runtime/licenses, establish a platform
+sandbox, or register a baseline. All correctness, differential, performance,
+registration, and release-gate eligibility fields remain false.
+
 Stock `pdfium_test` can produce raster images and plain text in separate
 invocations, but it does not provide this protocol's canonical
 Parse/Scene/positioned-Text artifacts. The direct helper therefore reports those
@@ -76,9 +92,14 @@ does not link PDFium, and no helper binary is copied back into this repository.
 ## Run the explicit real-engine probe
 
 The real-engine test is ignored by default, requires a separately built helper,
-and clears the helper's environment before launch:
+and clears the helper's environment before launch. A fresh checkout must first
+replay the ignored canonical fixture:
 
 ```sh
+cargo run --quiet --package pdf-rs-generate -- \
+  tests/cases/infrastructure/synthetic-failure-bundle-001/source.dsl \
+  tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf
+
 PDF_RS_PDFIUM_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_adapter" \
   cargo test --package pdf-rs-baseline --test pdfium_real_adapter -- \
   --ignored --exact real_pdfium_adapter_matches_analytic_pixel_probes --nocapture

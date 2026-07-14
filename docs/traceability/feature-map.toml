@@ -1,5 +1,5 @@
 schema = 1
-version = "0.7.0"
+version = "0.8.0"
 status = "active"
 
 [[feature]]
@@ -45,7 +45,7 @@ state = "PLANNED"
 profile = "baseline-protocol-v2"
 clauses = ["AD-007", "RPE-STD-003/14", "RPE-STD-004/9"]
 modules = ["tools/baseline"]
-tests = ["tools/baseline::tests", "tools/baseline::process_harness"]
+tests = ["tools/baseline::tests", "tools/baseline::process_harness", "tools/baseline::pdfium_adapter_contract", "tools/baseline::pdfium_real_adapter", "tools/baseline::repository_pdfium_probe"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

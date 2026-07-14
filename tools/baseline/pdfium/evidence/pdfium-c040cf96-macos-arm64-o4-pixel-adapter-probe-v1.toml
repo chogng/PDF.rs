@@ -1,0 +1,159 @@
+schema = 1
+id = "pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1"
+evidence_class = "external-o4-pixel-adapter-probe"
+recorded_at = "2026-07-14T00:27:19Z"
+engine = "pdfium"
+upstream_repository = "https://pdfium.googlesource.com/pdfium/"
+upstream_revision = "c040cf96106a87220b814a1a892649cf2d7f1934"
+upstream_build_readiness_evidence = "pdfium-c040cf96-macos-arm64-build-readiness-v1"
+source_checkout_mode = "isolated-temporary-synced-checkout-plus-project-helper-overlay"
+source_checkout_dirty_scope = "root target reachability line and project helper directory only"
+
+platform = "macos-arm64"
+os_version = "macOS 26.4.1 (25E253)"
+kernel_release = "25.4.0"
+xcode_version = "Xcode 26.6 (17F113)"
+gn_version = "2435 (1d86777e7f25)"
+ninja_version = "1.12.1"
+
+adapter_profile = "pdfium-public-c-api-pixel-only-v1"
+runner_schema = 2
+adapter_exercised = true
+public_pdfium_c_api_only = true
+protocol_identity_verified = true
+executable_hash_verified_before_runner_construction = true
+widget_overlay = "unsupported"
+
+helper_build_definition = "tools/baseline/pdfium/helper/BUILD.gn"
+helper_build_definition_sha256 = "sha256:a13755a8719b862069e27796b681aaafe1165d5bdf721ee73d39ca5e86c6ba0f"
+helper_source = "tools/baseline/pdfium/helper/pdf_rs_pdfium_adapter.cc"
+helper_source_sha256 = "sha256:c1778589c3d06413a28de28fdb08d8a2f3a651a26f80ac6a27dfdbda5c3c5608"
+helper_root_overlay = "tools/baseline/pdfium/helper/pdfium-root.patch"
+helper_root_overlay_sha256 = "sha256:b3547589bd1b48a634790abbde8e5cb9e884fb6f5f91b9d3a51caffeed703cfc"
+helper_executable_sha256 = "sha256:5d4f991ba39bfe635b59e869a14004a3377dbc16f414328a5d86d527079b9426"
+helper_executable_bytes = 4251312
+descriptor_build_hash_scope = "helper executable bytes only; runtime binary closure incomplete"
+
+build_args = "use_remoteexec=false is_debug=false symbol_level=0 target_cpu=\"arm64\" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false"
+build_flags_sha256 = "sha256:f88fb7eb62554e955bb8f7077c81be8f8f1f35de9aba7481b47c3b2dca8626dc"
+build_args_command_sha256 = "sha256:ff0e89ec7349734d4f81ca4aff573fe86b7c6db5eb4b3a4f2a1e28a6fed74240"
+gn_targets_generated = 598
+helper_build_steps = 1177
+helper_build_exit_code = 0
+helper_build_outcome = "pass"
+helper_build_reverification = "exact committed overlay regenerated 598 GN targets before the recorded probe"
+helper_build_reverification_exit_code = 0
+helper_build_reverification_ninja_state = "no-work-required"
+strict_warning_policy = "pdfium_strict_config-and-pdfium_noshorten_config"
+
+environment_policy = "env-clear-empty"
+argv = []
+working_directory = "$PDF_RS_ROOT"
+isolation_profile = "uncontained-local-pdfium-probe-v1"
+max_request_bytes = 4096
+max_stdout_bytes = 176
+max_stderr_bytes = 4096
+watchdog_ms = 2000
+stderr_policy = "bounded-discard-not-recorded"
+
+environment_declaration = "env-clear direct-child local probe; runtime and platform closure incomplete"
+environment_sha256 = "sha256:c82014cba68e38fd96699046e830547f69e42d4e1071e47d633da939289410d5"
+invocation_sha256 = "sha256:65b6677d59dc3f4aec896603d444ec989beabe44eb1417dfe4034e9ee36074c3"
+invocation_reproducibility = "host-canonical-path-bound"
+license_declaration = "license closure incomplete; root license checked only"
+license_manifest_sha256 = "sha256:a24b65450d72dbe77cefc83a18257a4ebf3152ec8dce78e5191308d7b1292cf1"
+fonts_declaration = "empty user font paths requested; platform font closure unproven"
+fonts_sha256 = "sha256:101435cb0a128348e9b8d00a0b1afae9466c00c4adc3b76375627caf02b77233"
+color_declaration = "agg rgba8 straight-alpha top-down; srgb target and color closure unproven"
+color_sha256 = "sha256:7eace2f18866668d2c4abc2a4e5e34635879d34fea5f6693e279e4de849ea60a"
+descriptor_identity_sha256 = "sha256:2d2e62c007baf5d17a9ed670e6f530684614d8860a188d0bb934d6e2dcf10abd"
+
+runtime_closure_status = "incomplete"
+license_manifest_status = "incomplete"
+font_fingerprint_status = "incomplete"
+color_fingerprint_status = "incomplete"
+sandbox_status = "direct-child-supervision-only"
+executable_replacement_protection_status = "not-established"
+
+manual_test = "tools/baseline/tests/pdfium_real_adapter.rs::real_pdfium_adapter_matches_analytic_pixel_probes"
+manual_test_count = 1
+manual_test_passed = 1
+helper_process_runs = 5
+
+fixture_id = "infrastructure/synthetic-failure-bundle-001"
+fixture = "tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf"
+fixture_sha256 = "sha256:9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db"
+fixture_bytes = 612
+fixture_hash_verified = true
+corpus_manifest_id = "t0-bootstrap-v1"
+corpus_manifest_sha256 = "sha256:4268cb945b6056d7732f22b0e90d9629f6d31ab2ba6f013e7011735989859d8e"
+corpus_manifest_exercised = false
+fixture_page = 0
+fixture_width = 4
+fixture_height = 4
+fixture_rgba_format = "rgba8-straight-alpha-top-down"
+fixture_rgba_bytes = 64
+fixture_case_render_geometry_exercised = true
+fixture_case_render_profile_exercised = false
+fixture_case_oracle_contract_exercised = false
+
+blank_probe_runs = 2
+blank_repeat_outputs_identical = true
+blank_observation_outcome = "pixel-produced"
+blank_parse_channel = "unsupported"
+blank_scene_channel = "unsupported"
+blank_text_channel = "unsupported"
+blank_pixel_channel = "produced"
+blank_observed_rgba_sha256 = "sha256:8667e718294e9e0df1d30600ba3eeb201f764aad2dad72748643e4a285e1d1f7"
+blank_analytic_check_kind = "O1-analytic-expectation-vs-O4-observation"
+blank_analytic_check_derivation = "self-authored q/Q-only page plus adapter opaque-page white-fill policy"
+blank_analytic_check_review_status = "probe-only-not-golden-reviewed"
+blank_analytic_expected_rgba_sha256 = "sha256:8667e718294e9e0df1d30600ba3eeb201f764aad2dad72748643e4a285e1d1f7"
+blank_comparison_exact = true
+blank_different_pixels = 0
+blank_different_channels = 0
+blank_max_channel_delta = [0, 0, 0, 0]
+blank_total_absolute_delta = 0
+
+color_probe_id = "inline-generated-four-quadrants-v1"
+color_probe_runs = 1
+color_probe_generator = "dsl-schema-1/generator-schema-2"
+color_probe_source_sha256 = "sha256:e31c82086b3b2bec886e651c9cd572901c65227e6c6db116955f2a65f8b3d515"
+color_probe_source_bytes = 374
+color_probe_pdf_sha256 = "sha256:c2499fee0c6a91312114351d82958a7b77900961ae82c6e15c2bca10c8e11629"
+color_probe_pdf_bytes = 726
+color_probe_width = 4
+color_probe_height = 4
+color_probe_rgba_bytes = 64
+color_probe_observed_rgba_sha256 = "sha256:3090d0b5c26c5cf3e83e705a0ed36dca3a65dbf0389e3554fcfa89a9f433575a"
+color_probe_analytic_check_kind = "O1-analytic-expectation-vs-O4-observation"
+color_probe_analytic_check_derivation = "four axis-aligned opaque quadrants verify top-down row order and BGR-to-RGBA channel conversion"
+color_probe_analytic_check_review_status = "probe-only-not-golden-reviewed"
+color_probe_analytic_expected_rgba_sha256 = "sha256:3090d0b5c26c5cf3e83e705a0ed36dca3a65dbf0389e3554fcfa89a9f433575a"
+color_probe_comparison_exact = true
+color_probe_different_pixels = 0
+color_probe_different_channels = 0
+color_probe_max_channel_delta = [0, 0, 0, 0]
+color_probe_total_absolute_delta = 0
+
+page_out_of_range_runs = 1
+page_out_of_range_outcome = "RPE-BASELINE-0006"
+malformed_pdf_runs = 1
+malformed_pdf_outcome = "RPE-BASELINE-0006"
+
+oracle_authority = "O4"
+native_engine_exercised = false
+native_vs_pdfium_differential = false
+product_correctness_eligible = false
+performance_eligible = false
+differential_eligible = false
+baseline_registration_eligible = false
+release_gate_eligible = false
+verdict = "not-evaluated"
+
+raw_logs_committed = false
+helper_binary_committed = false
+pdfium_source_committed = false
+fixture_pdf_committed = false
+rgba_bytes_committed = false
+upstream_data_committed = false

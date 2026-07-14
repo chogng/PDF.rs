@@ -1,5 +1,5 @@
 schema = 1
-version = "0.6.0"
+version = "0.7.0"
 status = "active"
 
 [[data]]
@@ -70,3 +70,20 @@ validated_by = "cargo test --package pdf-rs-baseline --test repository_readiness
 owner = "baseline-release"
 update_policy = "rerun the pinned upstream recipe; create a new evidence id when revision, platform, build arguments, fixture, or toolchain changes; update report and ledger hashes together"
 delete_policy = "retain while the pinned PDFium build-readiness investigation is referenced"
+
+[[data]]
+id = "baseline.evidence.pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1"
+kind = "project-authored-external-o4-adapter-probe-evidence"
+source = "tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml"
+acquired_at = 2026-07-13
+version = "pdfium-o4-pixel-adapter-probe-schema-1"
+source_hash = "sha256:0f098a7202958f8beb75f28c238afa530cf3aba244d07cb6f75fa2701a77ff7c"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository metadata and project-authored helper source only; no PDFium source, dependencies, helper binary, generated PDF bytes, RGBA bytes, or raw logs"
+contains_personal_data = false
+authored_by = "baseline-release"
+format_schema = 1
+validated_by = "cargo test --package pdf-rs-baseline --test repository_pdfium_probe"
+owner = "baseline-release"
+update_policy = "create a new evidence id when revision, platform, helper, build flags, fixture, geometry, process policy, or observed output changes"
+delete_policy = "retain while the PDFium O4 pixel-adapter probe is referenced"

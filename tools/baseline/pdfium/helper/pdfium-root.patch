@@ -1,8 +1,8 @@
 diff --git a/BUILD.gn b/BUILD.gn
-index ee1c865b7..610b51df0 100644
+index 453d09904..a592401d7 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -444,6 +444,7 @@ group("pdfium_all") {
+@@ -445,5 +445,6 @@ group("pdfium_all") {
      ":pdfium_embeddertests",
      ":pdfium_unittests",
      "testing:pdfium_test",

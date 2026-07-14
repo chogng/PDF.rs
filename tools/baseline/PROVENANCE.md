@@ -42,9 +42,8 @@ rather than making the API call wait indefinitely.
 
 # External observations
 
-No external executable was run through this API and no O4 output was recorded.
-Results eventually produced through this API have O4 authority only. The
-self-authored fixture proves transport behavior, not PDF correctness.
+External results produced through this API have O4 authority only. They cannot
+create or update a Native golden automatically.
 
 On 2026-07-13, build readiness and the advertised `pdfium_test` command surface
 were inspected at PDFium revision
@@ -66,10 +65,30 @@ manifest, produce an O4 comparison, measure performance, establish containment
 or runtime/license/font/color closure, register a baseline, or create release
 evidence.
 
+A separate probe on 2026-07-13 compiled the source-only public-C-API helper in
+that isolated checkout and ran it through protocol schema 2. The fixed 4x4
+`q Q` fixture produced two byte-identical white RGBA observations, and an inline
+generated four-quadrant PDF exactly matched a separately derived top-down RGBA
+expectation. One out-of-range page request and one malformed-PDF request each
+mapped to the terminal diagnostic `RPE-BASELINE-0006`. The redacted hashes and
+exact zero-diff summaries are in
+`pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml`;
+the helper binary, PDF bytes, RGBA bytes, and raw logs are not committed.
+
+These are O1 analytic checks against PDFium O4 pixels. No Native engine was run,
+so the report is not a Native/PDFium differential. The failure-bundle case's
+declared oracle concerns synthetic artifacts and was not used as a real raster
+golden. The probe did not consume the corpus manifest, establish the complete
+case color/antialias profile, measure performance, close runtime/license/font/
+color fingerprints, establish platform containment, register a baseline, or
+create release evidence.
+
 # Dependencies and generated data
 
-Rust standard library plus the local development-only `pdf-rs-digest` crate. No
-external engine is linked or vendored.
+Runtime code uses the Rust standard library plus the local development-only
+`pdf-rs-digest` crate. Real-adapter tests also use the local `pdf-rs-compare` and
+`pdf-rs-generate` crates. No external engine is linked or vendored into the
+workspace.
 
 # Tests and fuzz targets
 
@@ -82,8 +101,10 @@ environment removal, large concurrent stdin/stdout/stderr movement, exact output
 ceilings, request preflight before spawn, watchdog kill/reap, process/protocol
 failure classification, invocation mismatch rejection, inherited-pipe containment
 failure, stable error category/recovery policy, and redacted diagnostics. A
-streaming decoder fuzz target remains planned before this protocol handles a real
-baseline build.
+default-ignored real-engine test covers repeated blank-page pixels, generated
+color/channel/row-order pixels, out-of-range pages, and malformed documents. A
+streaming decoder fuzz target remains planned before baseline registration or
+untrusted corpus execution.
 
 # Known deviations and unsupported cases
 
@@ -103,13 +124,15 @@ request/response bytes, or external processes alive until the inherited handles
 close.
 The caller must therefore supply an approved platform sandbox/container, a
 private per-invocation filesystem policy, and process-tree teardown; the generic
-supervisor alone is not approved for hostile or real PDFium input.
+supervisor alone is not approved for untrusted, externally sourced, or
+non-fixed PDF input.
 
-The local PDFium source checkout is not built or distributed by this crate. A
-separately reviewed executable, platform containment wrapper, complete
-fingerprint, license material, and baseline-ledger entry are required before
-differential CI. Until then this is a tested partial process boundary, not the M0
-external baseline runner exit condition.
+The local PDFium source checkout is not built or distributed by this crate. The
+recorded helper executable was built only in a disposable checkout and remains
+probe-only. A platform containment wrapper, complete runtime and license
+fingerprints, replacement protection, and baseline-ledger entry are required
+before differential CI. Until then this is a tested partial process boundary,
+not the M0 external baseline runner exit condition.
 
 # History
 
@@ -117,3 +140,5 @@ external baseline runner exit condition.
 - 2026-07-13: Added schema version 2, explicit channel outcomes, invocation
   identity, and a deadline/byte-limited direct-child supervision harness.
 - 2026-07-13: Recorded a non-baseline PDFium upstream build-readiness exercise.
+- 2026-07-13: Added the source-only PDFium pixel adapter and recorded a
+  non-gating O4 pixel probe with separately computed, unreviewed analytic checks.
