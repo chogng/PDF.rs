@@ -8,6 +8,10 @@ publish = false
 [dependencies]
 pdf-rs-digest = { path = "../digest" }
 
+[dev-dependencies]
+pdf-rs-compare = { path = "../compare" }
+pdf-rs-generate = { path = "../generate" }
+
 [[bin]]
 name = "pdf-rs-baseline-fixture"
 path = "src/bin/baseline_fixture.rs"

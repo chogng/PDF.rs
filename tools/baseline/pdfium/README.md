@@ -4,11 +4,16 @@ This directory records configuration for a separately built, process-level PDFiu
 runner. The source checkout is available at `../pdfium` relative to the repository;
 it is not linked, vendored, downloaded, or included in any PDF.rs product artifact.
 
-The baseline crate now provides protocol schema 2 and a tested, deadline- and
-byte-limited direct-child supervisor. It is exercised only with a self-authored
-fixture; it is not a PDFium adapter or an approved sandbox. `runner_executable`,
-invocation and build fingerprints, and isolation metadata remain M0-blocking
-until a reviewed build and adapter are entered in
+The baseline crate provides protocol schema 2, a tested deadline- and
+byte-limited direct-child supervisor, and a source-only PDFium public-C-API
+pixel adapter. The adapter links only inside a separately synced PDFium checkout;
+it is never a PDF.rs product dependency. Its initial profile reports Parse,
+Scene, and positioned Text as explicitly unsupported and produces exact-size,
+top-down, straight-alpha RGBA8 pixels. It does not draw form/widget overlays.
+
+The helper is not an approved sandbox. `runner_executable`, invocation and
+complete build/runtime fingerprints, and isolation metadata remain M0-blocking
+until a reviewed build and adapter environment are entered in
 `docs/traceability/baseline-ledger.toml`. A real adapter must add platform
 enforcement for descendants, CPU, memory, private per-invocation filesystem and
 temporary storage, syscalls, and network access around the direct-child harness.
@@ -38,6 +43,47 @@ blocking.
 
 Stock `pdfium_test` can produce raster images and plain text in separate
 invocations, but it does not provide this protocol's canonical
-Parse/Scene/positioned-Text artifacts. A future adapter must report unsupported
-channels explicitly or use a separately reviewed C-API helper; it must never fill
-missing channels with synthetic or empty observations.
+Parse/Scene/positioned-Text artifacts. The direct helper therefore reports those
+channels as unsupported rather than filling them with synthetic or empty data.
+
+## Build the source-only helper
+
+Use a disposable, fully synced PDFium checkout at the pinned revision. Do not
+apply this overlay to the canonical `../pdfium` source checkout. From the PDF.rs
+repository root, with `PDFIUM_ROOT` naming that disposable checkout:
+
+```sh
+mkdir -p "$PDFIUM_ROOT/tools/pdf_rs_baseline_adapter"
+cp tools/baseline/pdfium/helper/BUILD.gn \
+  tools/baseline/pdfium/helper/pdf_rs_pdfium_adapter.cc \
+  "$PDFIUM_ROOT/tools/pdf_rs_baseline_adapter/"
+git -C "$PDFIUM_ROOT" apply \
+  "$PWD/tools/baseline/pdfium/helper/pdfium-root.patch"
+```
+
+Generate and build the fixed Agg/FreeType, V8/XFA/Skia/Fontations-disabled
+configuration:
+
+```sh
+cd "$PDFIUM_ROOT"
+buildtools/mac/gn gen out/Adapter --args='use_remoteexec=false is_debug=false symbol_level=0 target_cpu="arm64" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false'
+third_party/ninja/ninja -C out/Adapter pdf_rs_pdfium_adapter
+```
+
+The overlay only makes the helper target reachable by GN. The product workspace
+does not link PDFium, and no helper binary is copied back into this repository.
+
+## Run the explicit real-engine probe
+
+The real-engine test is ignored by default, requires a separately built helper,
+and clears the helper's environment before launch:
+
+```sh
+PDF_RS_PDFIUM_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_adapter" \
+  cargo test --package pdf-rs-baseline --test pdfium_real_adapter -- \
+  --ignored --exact real_pdfium_adapter_matches_analytic_pixel_probes --nocapture
+```
+
+This manual probe is not a Native/PDFium differential. Its analytic pixel checks
+only validate the transport and pixel adapter against self-authored, directly
+derivable inputs. Any recorded PDFium output remains O4 observation data.

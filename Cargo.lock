@@ -6,7 +6,9 @@ version = 4
 name = "pdf-rs-baseline"
 version = "0.1.0"
 dependencies = [
+ "pdf-rs-compare",
  "pdf-rs-digest",
+ "pdf-rs-generate",
 ]
 
 [[package]]
