@@ -56,3 +56,10 @@ dependencies = [
  "pdf-rs-digest",
  "pdf-rs-generate",
 ]
+
+[[package]]
+name = "pdf-rs-syntax"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+]

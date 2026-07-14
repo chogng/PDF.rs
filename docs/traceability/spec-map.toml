@@ -1,5 +1,5 @@
 schema = 1
-version = "0.9.0"
+version = "0.10.0"
 status = "active"
 
 [[requirement]]
@@ -11,6 +11,16 @@ implementation = ["core/bytes"]
 tests = ["core/bytes::range_store", "core/bytes::repository_policy"]
 status = "partial"
 notes = "The m1.range-store.v1 bootstrap provides checked ranges, source-bound stable slices, complete response metadata validation, metadata-only and response-bound EOF discovery, one-time unknown-length binding, allocator-capacity-aware shared backing, canonical missing ranges, resumable ticket subscriptions, partial-supply deduplication, source-change poisoning, and structured resource limits without filesystem, network, async-runtime, unsafe, third-party, or external-engine dependencies. Runtime/platform Range acquisition, request coalescing, cancellation/session arbitration, parser checkpoints, syntax/xref/object consumers, deterministic model/fuzz campaigns, and browser/desktop E2E remain open; this entry does not claim M1 exit or any Native rendering/differential maturity."
+
+[[requirement]]
+id = "RPE-ARCH-001/5.3"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Native syntax parsing preserves source locations and raw lexical distinctions while enforcing bounded work."
+features = ["core.pdf-syntax"]
+implementation = ["core/syntax"]
+tests = ["core/syntax::parser_behavior", "core/syntax::repository_policy"]
+status = "partial"
+notes = "The m1.syntax-core.v1 bootstrap strictly parses bounded contiguous windows for PDF headers and direct null, boolean, number, name, string, array, dictionary, and indirect-reference syntax; it retains source-bound byte spans and raw real notation, reports incomplete windows as control flow, and applies deterministic lexical, nesting, entry, token, and owned-memory limits with stable diagnostics. Indirect-object envelopes, stream bodies and length resolution, xref and revision chains, object streams, repair profiles, ByteSource acquisition jobs, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, or Native differential maturity."
 
 [[requirement]]
 id = "RPE-ARCH-001/15.3/M0"
