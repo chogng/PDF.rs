@@ -1,5 +1,5 @@
 schema = 1
-version = "0.11.0"
+version = "0.12.0"
 status = "active"
 
 [[feature]]
@@ -34,6 +34,18 @@ profile = "m1.traditional-xref.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
 modules = ["core/xref"]
 tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.indirect-object-framing"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.indirect-object-framing.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/object"]
+tests = ["core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

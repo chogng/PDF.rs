@@ -47,6 +47,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-object"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-syntax",
+]
+
+[[package]]
 name = "pdf-rs-quality"
 version = "0.1.0"
 dependencies = [

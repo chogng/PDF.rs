@@ -94,9 +94,10 @@ differential is claimed in this bootstrap slice.
 # Known deviations and unsupported cases
 
 - This is a strict direct-syntax bootstrap, not complete M1 object support. The separate
-  `core/xref` bootstrap supports one traditional table; xref streams, hybrid and incremental
-  revisions, indirect-object framing, stream-length resolution, object streams, R0/R1 repair,
-  document services, and rendering remain outside this crate.
+  `core/xref` bootstrap supports one traditional table, and `core/object` frames one indirect
+  object with a direct stream length. Xref streams, hybrid and incremental revisions, indirect
+  length resolution, object streams, R0/R1 repair, document services, and rendering remain outside
+  this crate.
 - Parsing operates on one contiguous window. ByteSource polling, bounded growth, retry scheduling,
   cumulative budgets across retries, and runtime cancellation delivery belong to composing
   xref/object jobs; this crate owns only the synchronous parser-side cancellation checks.

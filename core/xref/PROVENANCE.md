@@ -8,8 +8,9 @@ traditional xref table and trailer. It performs no file, network, callback, or a
 
 Parser/Security owns bounded xref discovery, table geometry, entry validation, source identity,
 and stable xref failures. `core/bytes` owns immutable source snapshots and byte delivery, while
-`core/syntax` owns direct-object syntax. Future object/document layers own indirect-object header
-validation, resolution, revision precedence, and document services.
+`core/syntax` owns direct-object syntax. The sibling `core/object` crate validates one supplied
+xref-derived target without introducing an `object -> xref` dependency; future document/revision
+layers own their composition, reference resolution, revision precedence, and document services.
 
 # Normative sources
 
@@ -104,8 +105,9 @@ slice.
 - This profile supports one strict traditional xref table only. Xref streams and `/XRefStm`,
   hybrid-reference files, `/Prev` revision traversal, object streams, multiple incremental
   updates, and revision precedence remain unimplemented.
-- Entry offsets are structurally bounded but are not yet validated against indirect-object headers;
-  that check belongs to future object/resolver composition.
+- Entry offsets are structurally bounded. The separate object framing job can validate a supplied
+  target against its exact indirect-object header, but end-to-end xref-to-object composition and
+  reference resolution remain future document/revision-layer work.
 - Only known-length immutable snapshots are accepted. Unknown-length discovery, platform Range
   scheduling, request coalescing, cancellation delivery and ticket unsubscription, terminal
   completion/cancel/close arbitration, and browser/desktop E2E remain future runtime/platform

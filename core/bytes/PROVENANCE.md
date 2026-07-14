@@ -88,9 +88,9 @@ fuzz target or platform Range E2E exists in this initial M1 bootstrap slice.
 
 # Known deviations and unsupported cases
 
-- This is byte infrastructure only. The separate syntax and traditional-xref bootstraps consume
-  it, while objects, repair, document services, and Native rendering remain unimplemented; no
-  Native/PDFium differential claim is made.
+- This is byte infrastructure only. The separate syntax, traditional-xref, and indirect-object
+  framing bootstraps consume it, while repair, document services, and Native rendering remain
+  unimplemented; no Native/PDFium differential claim is made.
 - Physical Range request merging, HTTP validation, local-file identity, retry policy, cancellation
   arbitration, and parser requeueing belong to future runtime/platform integration.
 - The store retains cached content until drop; it has no eviction policy. Cached and resident bytes

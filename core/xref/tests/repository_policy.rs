@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.11.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.11.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.12.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.12.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -95,8 +95,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
 
     let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
         .expect("the traditional-xref architecture requirement record must exist");
-    assert!(requirement.contains("features = [\"core.traditional-xref\"]"));
-    assert!(requirement.contains("implementation = [\"core/xref\"]"));
+    assert!(requirement.contains("\"core.traditional-xref\""));
+    assert!(requirement.contains("\"core/xref\""));
     assert!(requirement.contains("core/xref::traditional_xref"));
     assert!(requirement.contains("core/xref::limit_config"));
     assert!(requirement.contains("core/xref::source_error_policy"));
