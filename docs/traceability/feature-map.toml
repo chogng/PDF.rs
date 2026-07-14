@@ -1,5 +1,5 @@
 schema = 1
-version = "0.24.0"
+version = "0.25.0"
 status = "active"
 
 [[feature]]
@@ -106,6 +106,18 @@ profile = "m1.attested-resident-footprint.v1"
 clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-STD-005/5-9"]
 modules = ["core/syntax", "core/object", "core/document"]
 tests = ["core/syntax::parser_behavior", "core/object::object_behavior", "core/document::attested_object_access", "core/document::reference_chain_resolution", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.pdf-text-string"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.pdf-text-string.v1"
+clauses = ["ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::text_string", "core/document::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

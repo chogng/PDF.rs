@@ -14,7 +14,9 @@ graph traversal, or caching. Its first resolver slice follows only whole-object 
 the separate page-count slice interprets only Catalog and Page/Pages structural fields and does not
 publish page handles, inherited resources, or a reusable object graph. All source access is
 synchronous polling through an injected `ByteSource`; all long-running CPU work uses an injected
-cooperative cancellation probe.
+cooperative cancellation probe. A separate pure document-semantic helper decodes already lexical
+PDF strings under the bounded ISO 32000-1 text-string rules needed by future outline and metadata
+services.
 
 # Semantic owner
 
@@ -34,6 +36,11 @@ semantic responsibilities.
 - [RPE-ARCH-001, sections 5.8-5.9](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires a lazy document boundary and page-tree protection against cycles, duplicate children,
   false counts, excessive depth, and non-Page/Pages objects.
+- [ISO 32000-1:2008, 7.9.2.2 and Annex D.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines the `FE FF` UTF-16BE selection rule, supplementary-character requirement, and the
+  PDFDocEncoding-to-Unicode mapping used by human-readable text strings. The authorized Adobe
+  snapshot acquired on 2026-07-14 has SHA-256
+  `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
 - [RPE-STD-001, sections 3, 5-6, and 8-9](../../docs/standards/coding-standard.md) requires stable
   structured errors, checked arithmetic, fallible bounded allocation, and redacted diagnostics.
 - [RPE-STD-002, sections 6-7](../../docs/standards/lifecycle-and-concurrency.md) requires cooperative
@@ -199,6 +206,25 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   persistent Catalog cache, random-access PageIndex, page handle, inherited-resource result, or
   claim of general PDF page-tree compatibility.
 
+## Bounded PDF text strings
+
+- `decode_text_string` consumes only an already lexical-decoded `PdfString`; literal/hexadecimal
+  escaping remains owned by `core/syntax`. A leading `FE FF` selects UTF-16BE and every other byte
+  sequence selects PDFDocEncoding, including `FF FE`.
+- The PDFDocEncoding mapping is a manual transcription of ISO 32000-1:2008 Annex D.3, Table D.2,
+  rather than an external implementation table. Bytes marked undefined by that normative table
+  are rejected; defined TAB, LF, and CR controls remain valid.
+- UTF-16BE validation requires an even payload and exact high/low surrogate pairing, including
+  supplementary Unicode scalars. The BOM is consumed but not published. No lossy replacement or
+  Unicode normalization changes the decoded scalar sequence.
+- Decoding first measures exact logical UTF-8 length, then fallibly reserves the result and checks
+  actual allocator capacity against the same validated ceiling before materializing characters.
+  Input bytes and UTF-8 bytes are independently bounded, all arithmetic is checked, and both passes
+  probe cancellation after at most 256 input code units.
+- Successful values expose encoding and scalar/capacity sizes while redacting text from `Debug`;
+  errors expose only stable policy, a relative decoded-string byte offset, and bounded resource
+  context. The helper does not retain a source snapshot or grant object-resolution authority.
+
 # Resource accounting and resumability
 
 - Revision-attestation limits independently bound source length, object count, exact scan chunk,
@@ -264,13 +290,14 @@ framing only establish lexical extent.
 # External observations
 
 No PDFium, other PDF engine, third-party implementation source, or external output was used to
-derive the candidate index or attestation state machine.
+derive the candidate index, attestation state machine, or text-string mapping and decoder.
 
 # Dependencies and generated data
 
 The only dependencies are the in-repository `pdf-rs-bytes`, `pdf-rs-syntax`, `pdf-rs-xref`, and
-`pdf-rs-object` crates. There are no development dependencies, generated tables, platform I/O
-APIs, external PDF engines, or async runtimes.
+`pdf-rs-object` crates. The PDFDocEncoding match table is manually encoded from the hash-pinned
+normative snapshot; it is not generated data. There are no development dependencies, platform
+I/O APIs, external PDF engines, or async runtimes.
 
 # Tests
 
@@ -293,7 +320,10 @@ allowlist and absence of platform/external-engine APIs. Resident-footprint tests
 component and capacity overflow, portable runtime inline sizes, scalar and allocated syntax values,
 identical small/large stream-dictionary footprints, nonzero pre-reserved root-chain capacity,
 multi-hop terminal-only syntax ownership, and exact component totals without fixed
-platform-specific byte constants.
+platform-specific byte constants. Text-string tests construct every input through the public
+syntax parser and cover the complete non-identity PDFDocEncoding mapping, defined and undefined
+controls, undefined high bytes, UTF-16BE BMP and supplementary scalars, malformed surrogate
+structure, BOM selection, exact input/output capacity limits, cancellation, and redaction.
 
 # Known deviations and unsupported cases
 
@@ -308,6 +338,9 @@ platform-specific byte constants.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
   payloads, random-access page indexing, inherited resources, page handles, outline/name-tree
   services, writer behavior, and document actions remain unsupported.
+- Text-string decoding implements the ISO 32000-1:2008 PDFDocEncoding and UTF-16BE profile only. It
+  preserves rather than interprets embedded Unicode language escape sequences, does not normalize
+  Unicode, and does not implement the PDF 2.0 UTF-8 text-string extension.
 - The closed-world trivia-gap policy is intentionally stricter than general PDF compatibility and
   is not an ISO or R0 conformance claim.
 - Hard ceilings and defaults are bootstrap values, not a released `FuelSchedule` or
@@ -333,3 +366,5 @@ platform-specific byte constants.
 - 2026-07-14: Added strict Catalog validation and a resumable bounded page-count job with exact
   Parent and Count checks, deterministic cycle/duplicate detection, and precharged traversal
   storage released before terminal publication.
+- 2026-07-14: Added bounded cancellable ISO 32000-1 PDF text-string decoding for PDFDocEncoding and
+  BOM-selected UTF-16BE with supplementary scalar support and redacted diagnostics.

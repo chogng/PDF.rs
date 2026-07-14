@@ -89,8 +89,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.24.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.24.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.25.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.25.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -134,6 +134,73 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             requirement.contains(required),
             "requirement must contain {required:?}"
         );
+    }
+}
+
+#[test]
+fn traceability_registers_bounded_pdf_text_strings() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+
+    let feature = record_with_id(&feature_map, "feature", "core.pdf-text-string")
+        .expect("PDF text-string feature record must exist");
+    for required in [
+        "profile = \"m1.pdf-text-string.v1\"",
+        "ISO-32000-1:2008/7.9.2.2",
+        "ISO-32000-1:2008/D.3",
+        "RPE-ARCH-001/5.8-5.9",
+        "modules = [\"core/document\"]",
+        "core/document::text_string",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "feature must contain {required:?}"
+        );
+    }
+
+    for (requirement_id, required) in [
+        (
+            "ISO-32000-1:2008/7.9.2.2",
+            [
+                "core.pdf-text-string",
+                "core/document::text_string",
+                "FE FF selects UTF-16BE",
+                "supplementary scalars",
+                "does not implement the PDF 2.0 UTF-8 extension",
+                "status = \"partial\"",
+            ],
+        ),
+        (
+            "ISO-32000-1:2008/D.3",
+            [
+                "core.pdf-text-string",
+                "core/document::text_string",
+                "manually transcribed",
+                "Undefined codes are rejected",
+                "not font encoding",
+                "status = \"partial\"",
+            ],
+        ),
+    ] {
+        let requirement = record_with_id(&spec_map, "requirement", requirement_id)
+            .unwrap_or_else(|| panic!("requirement {requirement_id} must exist"));
+        for fragment in required {
+            assert!(
+                requirement.contains(fragment),
+                "requirement {requirement_id} must contain {fragment:?}"
+            );
+        }
     }
 }
 

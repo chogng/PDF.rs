@@ -8,11 +8,13 @@
 //! proof. A second bounded job can iteratively follow whole-object direct
 //! reference aliases. A separate strict-base job validates the trailer Catalog
 //! and complete Page/Pages tree to publish a scalar page count with exact
-//! Parent, Count, cycle, and duplicate-child checks. Other dictionary, array,
-//! stream, and nested-reference semantics remain outside a complete object-graph
-//! resolver. Successful proof-bearing values retain their resolution profile and
-//! expose checked value-owned footprint components as evidence for a future
-//! cache owner, but this crate does not cache them.
+//! Parent, Count, cycle, and duplicate-child checks. The crate also owns bounded
+//! ISO 32000-1 text-string decoding from lexical PDF strings into UTF-8 without
+//! exposing source content in diagnostics. Other dictionary, array, stream, and
+//! nested-reference semantics remain outside a complete object-graph resolver.
+//! Successful proof-bearing values retain their resolution profile and expose
+//! checked value-owned footprint components as evidence for a future cache owner,
+//! but this crate does not cache them.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -33,6 +35,7 @@ mod page_tree_limits;
 mod reference_chain;
 mod reference_chain_limits;
 mod residency;
+mod text_string;
 
 pub use access::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPhase, AttestedObjectPoll,
@@ -64,3 +67,8 @@ pub use reference_chain::{
 };
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
 pub use residency::DocumentResidentFootprint;
+pub use text_string::{
+    DecodedTextString, TextStringEncoding, TextStringError, TextStringErrorCategory,
+    TextStringErrorCode, TextStringLimit, TextStringLimitConfig, TextStringLimitKind,
+    TextStringLimits, TextStringRecoverability, decode_text_string,
+};
