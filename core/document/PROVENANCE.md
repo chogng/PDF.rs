@@ -146,6 +146,10 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   heap bytes + chain prefix capacity * size_of::<ObjectRef>()`. The top-level inline size already
   contains `AttestedObject`, `ReferenceChain`, vector headers, and stats, so none of those inline
   values are added again. Intermediate reference objects are dropped and do not contribute.
+- A successful `ResolvedReference` retains the complete validated `ReferenceChainLimits` profile
+  that produced it. A future warm lookup must include that profile in its key; otherwise a value
+  created under a larger object, edge, depth, retained-path, read, or parse budget could bypass the
+  colder request's stricter failure boundary.
 - Every `usize` conversion, capacity multiplication, and component sum is checked. Arithmetic
   failure maps to the existing internal/do-not-retry policy because this API measures a value; it
   does not decide a resource budget. The components include Rust inline storage and
@@ -267,3 +271,5 @@ syntax ownership, and exact component totals without fixed platform-specific byt
   fallibly retained paths, and job-wide object, edge, depth, read, and parse budgets.
 - 2026-07-13: Added checked value-owned resident footprints for proof-bearing objects and resolved
   references without introducing a cache, reservation ledger, or eviction policy.
+- 2026-07-14: Retained the complete successful reference-resolution limit profile as cache-key
+  evidence without adding warm lookup or persistent ownership.

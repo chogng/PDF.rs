@@ -8,8 +8,9 @@
 //! proof. A second bounded job can iteratively follow whole-object direct
 //! reference aliases, but dictionaries, arrays, streams, and nested references
 //! remain terminal; this is not a complete object-graph resolver. Successful
-//! proof-bearing values expose checked value-owned footprint components as
-//! evidence for a future cache owner, but this crate does not cache them.
+//! proof-bearing values retain their resolution profile and expose checked
+//! value-owned footprint components as evidence for a future cache owner, but
+//! this crate does not cache them.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

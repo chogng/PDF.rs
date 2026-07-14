@@ -351,15 +351,17 @@ fn terminal_root_and_three_object_chain_return_exact_paths_values_and_stats() {
     let terminal = terminal_fixture();
     let terminal_index = ready_index(&terminal);
     let terminal_store = supplied_store(&terminal);
+    let resolution_limits = ReferenceChainLimits::default();
     let (resolved, mut job) = poll_ready(
         &terminal_index,
         object_ref(1),
         &terminal_store,
-        ReferenceChainLimits::default(),
+        resolution_limits,
     );
     assert_chain(resolved.chain(), &[], object_ref(1));
     assert_eq!(resolved.root(), object_ref(1));
     assert_eq!(resolved.terminal_reference(), object_ref(1));
+    assert_eq!(resolved.limits(), resolution_limits);
     assert_eq!(job.phase(), ReferenceChainPhase::Ready);
     assert_eq!(job.stats().objects_started(), 1);
     assert_eq!(job.stats().reference_edges(), 0);

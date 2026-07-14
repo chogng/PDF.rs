@@ -202,6 +202,7 @@ impl fmt::Debug for ReferenceChain {
 pub struct ResolvedReference {
     chain: ReferenceChain,
     object: AttestedObject,
+    limits: ReferenceChainLimits,
     stats: ReferenceChainStats,
 }
 
@@ -235,6 +236,14 @@ impl ResolvedReference {
         &self.object
     }
 
+    /// Returns the complete validated resolution profile that produced this value.
+    ///
+    /// A future Ready store must include this profile in its key so a warm result cannot bypass a
+    /// stricter cold-path object, edge, depth, retained-path, read, or parse budget.
+    pub const fn limits(&self) -> ReferenceChainLimits {
+        self.limits
+    }
+
     /// Returns deterministic work and retained-path accounting for this resolution.
     pub const fn stats(&self) -> ReferenceChainStats {
         self.stats
@@ -263,6 +272,7 @@ impl fmt::Debug for ResolvedReference {
             .field("root", &self.root())
             .field("terminal_reference", &self.terminal_reference())
             .field("chain", &self.chain)
+            .field("limits", &self.limits)
             .field("stats", &self.stats)
             .field("object", &"[REDACTED]")
             .finish()
@@ -611,6 +621,7 @@ impl ResolveReferenceChainJob<'_> {
                     return ReferenceChainPoll::Ready(ResolvedReference {
                         chain,
                         object,
+                        limits: self.limits,
                         stats,
                     });
                 }
