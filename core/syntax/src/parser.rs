@@ -8,6 +8,26 @@ use crate::{
     SyntaxLimits, SyntaxObject,
 };
 
+const CANCELLATION_PROBE_INTERVAL: u16 = 256;
+
+/// Cooperative cancellation probe supplied by the owning runtime.
+pub trait SyntaxCancellation: Send + Sync {
+    /// Reports whether the current parser operation must stop.
+    fn is_cancelled(&self) -> bool;
+}
+
+/// Cancellation probe used by [`SyntaxParser::new`] that never stops parsing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NeverCancelled;
+
+impl SyntaxCancellation for NeverCancelled {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+static NEVER_CANCELLED: NeverCancelled = NeverCancelled;
+
 /// Whether a contiguous parser window can still be extended by its owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputExtent {
@@ -217,6 +237,8 @@ enum TokenKind<'a> {
 pub struct SyntaxParser<'a> {
     input: SyntaxInput<'a>,
     limits: SyntaxLimits,
+    cancellation: &'a dyn SyntaxCancellation,
+    cancellation_probe_countdown: u16,
     cursor: usize,
     stats: SyntaxStats,
 }
@@ -224,6 +246,15 @@ pub struct SyntaxParser<'a> {
 impl<'a> SyntaxParser<'a> {
     /// Creates a parser after enforcing the configured contiguous-input budget.
     pub fn new(input: SyntaxInput<'a>, limits: SyntaxLimits) -> Result<Self, SyntaxError> {
+        Self::new_with_cancellation(input, limits, &NEVER_CANCELLED)
+    }
+
+    /// Creates a parser with a cooperative runtime cancellation probe.
+    pub fn new_with_cancellation(
+        input: SyntaxInput<'a>,
+        limits: SyntaxLimits,
+        cancellation: &'a dyn SyntaxCancellation,
+    ) -> Result<Self, SyntaxError> {
         let input_len = u64::try_from(input.bytes.len()).map_err(|_| {
             SyntaxError::for_code(SyntaxErrorCode::InternalState, Some(input.base_offset))
         })?;
@@ -239,6 +270,8 @@ impl<'a> SyntaxParser<'a> {
         Ok(Self {
             input,
             limits,
+            cancellation,
+            cancellation_probe_countdown: CANCELLATION_PROBE_INTERVAL,
             cursor: 0,
             stats: SyntaxStats {
                 input_bytes: input_len,
@@ -249,7 +282,10 @@ impl<'a> SyntaxParser<'a> {
 
     /// Parses a supported `%PDF-x.y` header at the current position.
     pub fn parse_header(&mut self) -> SyntaxPoll<Located<PdfHeader>> {
-        match self.parse_header_inner() {
+        let result = self
+            .begin_operation()
+            .and_then(|()| self.parse_header_inner());
+        match result {
             Ok(value) => SyntaxPoll::Ready(value),
             Err(failure) => self.poll_failure(failure, false),
         }
@@ -257,7 +293,10 @@ impl<'a> SyntaxParser<'a> {
 
     /// Parses one strict direct object, preserving all nested raw spans.
     pub fn parse_object(&mut self) -> SyntaxPoll<Located<SyntaxObject>> {
-        match self.parse_object_at(0) {
+        let result = self
+            .begin_operation()
+            .and_then(|()| self.parse_object_at(0));
+        match result {
             Ok(value) => SyntaxPoll::Ready(value),
             Err(failure) => self.poll_failure(failure, true),
         }
@@ -266,6 +305,7 @@ impl<'a> SyntaxParser<'a> {
     /// Consumes one exact keyword after PDF whitespace and comments.
     pub fn expect_keyword(&mut self, expected: &[u8]) -> SyntaxPoll<ByteSpan> {
         let result = (|| {
+            self.begin_operation()?;
             let token = self.next_required_token(SyntaxErrorCode::UnexpectedEndOfInput)?;
             match token.kind {
                 TokenKind::Keyword(actual) if actual == expected => {
@@ -285,7 +325,9 @@ impl<'a> SyntaxParser<'a> {
 
     /// Consumes the strict line ending required immediately after `stream`.
     pub fn consume_stream_line_ending(&mut self) -> SyntaxPoll<ByteSpan> {
-        let result = self.consume_stream_line_ending_inner();
+        let result = self
+            .begin_operation()
+            .and_then(|()| self.consume_stream_line_ending_inner());
         match result {
             Ok(span) => SyntaxPoll::Ready(span),
             Err(failure) => self.poll_failure(failure, false),
@@ -294,6 +336,9 @@ impl<'a> SyntaxParser<'a> {
 
     /// Borrows an exact byte count without interpreting stream contents.
     pub fn take_raw_bytes(&mut self, len: u64) -> SyntaxPoll<RawBytes<'a>> {
+        if let Err(failure) = self.begin_operation() {
+            return self.poll_failure(failure, false);
+        }
         let start = self.cursor;
         let start_u64 = match u64::try_from(start) {
             Ok(value) => value,
@@ -382,6 +427,30 @@ impl<'a> SyntaxParser<'a> {
     /// Returns deterministic work charged by this parser attempt.
     pub const fn stats(&self) -> SyntaxStats {
         self.stats
+    }
+
+    fn begin_operation(&mut self) -> ParseResult<()> {
+        self.cancellation_probe_countdown = CANCELLATION_PROBE_INTERVAL;
+        self.check_cancelled(self.position())
+    }
+
+    fn probe_iteration(&mut self, offset: u64) -> ParseResult<()> {
+        if self.cancellation_probe_countdown > 1 {
+            self.cancellation_probe_countdown -= 1;
+            return Ok(());
+        }
+        self.cancellation_probe_countdown = CANCELLATION_PROBE_INTERVAL;
+        self.check_cancelled(offset)
+    }
+
+    fn check_cancelled(&self, offset: u64) -> ParseResult<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::Cancelled,
+                Some(offset),
+            )));
+        }
+        Ok(())
     }
 
     fn parse_header_inner(&mut self) -> ParseResult<Located<PdfHeader>> {
@@ -578,6 +647,7 @@ impl<'a> SyntaxParser<'a> {
         let depth = self.enter_container(parent_depth, open.start)?;
         let mut values = Vec::new();
         loop {
+            self.probe_iteration(self.position())?;
             self.skip_trivia()?;
             if self.cursor == self.input.bytes.len() {
                 return Err(ParseFailure::Incomplete {
@@ -611,6 +681,7 @@ impl<'a> SyntaxParser<'a> {
         let depth = self.enter_container(parent_depth, open.start)?;
         let mut entries = Vec::new();
         loop {
+            self.probe_iteration(self.position())?;
             self.skip_trivia()?;
             if self.cursor == self.input.bytes.len() {
                 return Err(ParseFailure::Incomplete {
@@ -756,6 +827,7 @@ impl<'a> SyntaxParser<'a> {
     fn scan_regular(&mut self, start: usize) -> ParseResult<Token<'a>> {
         let mut end = start;
         while end < self.input.bytes.len() && !is_delimiter(self.input.bytes[end]) {
+            self.probe_iteration(self.absolute(end))?;
             end += 1;
             self.check_token_len(start, end)?;
         }
@@ -821,6 +893,7 @@ impl<'a> SyntaxParser<'a> {
         let mut magnitude = 0_u64;
         let mut overflowed = false;
         while self.input.bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            self.probe_iteration(self.absolute(index))?;
             overflowed |= match magnitude
                 .checked_mul(10)
                 .and_then(|value| value.checked_add(u64::from(self.input.bytes[index] - b'0')))
@@ -882,6 +955,7 @@ impl<'a> SyntaxParser<'a> {
         };
         let integer_start = index;
         while raw.get(index).is_some_and(u8::is_ascii_digit) {
+            self.probe_iteration(offset)?;
             index += 1;
         }
         let integer_digits = index - integer_start;
@@ -892,6 +966,7 @@ impl<'a> SyntaxParser<'a> {
             index += 1;
             let fractional_start = index;
             while raw.get(index).is_some_and(u8::is_ascii_digit) {
+                self.probe_iteration(offset)?;
                 index += 1;
             }
             fractional_digits = index - fractional_start;
@@ -911,6 +986,7 @@ impl<'a> SyntaxParser<'a> {
             }
             let exponent_start = index;
             while raw.get(index).is_some_and(u8::is_ascii_digit) {
+                self.probe_iteration(offset)?;
                 index += 1;
             }
             if index == exponent_start {
@@ -941,6 +1017,7 @@ impl<'a> SyntaxParser<'a> {
         let digits = &raw[integer_start..];
         let mut magnitude: u64 = 0;
         for digit in digits {
+            self.probe_iteration(offset)?;
             magnitude = magnitude
                 .checked_mul(10)
                 .and_then(|value| value.checked_add(u64::from(*digit - b'0')))
@@ -978,6 +1055,7 @@ impl<'a> SyntaxParser<'a> {
         let mut index = start + 1;
         let mut decoded_len = 0_u64;
         while index < self.input.bytes.len() && !is_delimiter(self.input.bytes[index]) {
+            self.probe_iteration(self.absolute(index))?;
             if self.input.bytes[index] == b'#' {
                 if index + 2 >= self.input.bytes.len() {
                     if self.input.extent == InputExtent::MayContinue {
@@ -1022,6 +1100,7 @@ impl<'a> SyntaxParser<'a> {
         let mut decoded = self.allocate_owned(decoded_len, self.absolute(start))?;
         let mut source = start + 1;
         while source < index {
+            self.probe_iteration(self.absolute(source))?;
             if self.input.bytes[source] == b'#' {
                 let high = hex_value(self.input.bytes[source + 1]).expect("validated name escape");
                 let low = hex_value(self.input.bytes[source + 2]).expect("validated name escape");
@@ -1045,6 +1124,7 @@ impl<'a> SyntaxParser<'a> {
         let mut nesting = 1_u16;
         let mut decoded_len = 0_u64;
         let end = loop {
+            self.probe_iteration(self.absolute(index))?;
             if index == self.input.bytes.len() {
                 return Err(ParseFailure::Incomplete {
                     final_code: SyntaxErrorCode::UnterminatedLiteralString,
@@ -1152,6 +1232,7 @@ impl<'a> SyntaxParser<'a> {
         let mut source = start + 1;
         let mut depth = 1_u16;
         while source < end {
+            self.probe_iteration(self.absolute(source))?;
             match self.input.bytes[source] {
                 b'(' => {
                     depth += 1;
@@ -1247,6 +1328,7 @@ impl<'a> SyntaxParser<'a> {
         let mut index = start + 1;
         let mut nibbles = 0_u64;
         let end = loop {
+            self.probe_iteration(self.absolute(index))?;
             if index == self.input.bytes.len() {
                 return Err(ParseFailure::Incomplete {
                     final_code: SyntaxErrorCode::InvalidHexString,
@@ -1281,11 +1363,13 @@ impl<'a> SyntaxParser<'a> {
         )?;
         let mut decoded = self.allocate_owned(decoded_len, self.absolute(start))?;
         let mut high = None;
-        for byte in &self.input.bytes[start + 1..end - 1] {
-            if is_whitespace(*byte) {
+        for index in start + 1..end - 1 {
+            self.probe_iteration(self.absolute(index))?;
+            let byte = self.input.bytes[index];
+            if is_whitespace(byte) {
                 continue;
             }
-            let nibble = hex_value(*byte).expect("validated hex string");
+            let nibble = hex_value(byte).expect("validated hex string");
             if let Some(high_nibble) = high.take() {
                 decoded.push((high_nibble << 4) | nibble);
             } else {
@@ -1305,12 +1389,14 @@ impl<'a> SyntaxParser<'a> {
 
     fn skip_trivia(&mut self) -> ParseResult<()> {
         loop {
+            self.probe_iteration(self.position())?;
             while self
                 .input
                 .bytes
                 .get(self.cursor)
                 .is_some_and(|byte| is_whitespace(*byte))
             {
+                self.probe_iteration(self.position())?;
                 self.cursor += 1;
             }
             if self.input.bytes.get(self.cursor) != Some(&b'%') {
@@ -1322,6 +1408,7 @@ impl<'a> SyntaxParser<'a> {
                 self.input.bytes.get(self.cursor),
                 None | Some(b'\r' | b'\n')
             ) {
+                self.probe_iteration(self.position())?;
                 self.cursor += 1;
                 let comment_len = u64::try_from(self.cursor - start).map_err(|_| {
                     ParseFailure::Failed(SyntaxError::for_code(

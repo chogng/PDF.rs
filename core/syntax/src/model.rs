@@ -87,6 +87,12 @@ impl<T> Located<T> {
     pub fn into_value(self) -> T {
         self.value
     }
+
+    /// Transforms the value while preserving its immutable source and span.
+    pub fn try_map<U, E>(self, transform: impl FnOnce(T) -> Result<U, E>) -> Result<Located<U>, E> {
+        let value = transform(self.value)?;
+        Ok(Located::new(self.source, self.span, value))
+    }
 }
 
 /// Recognized PDF header version.

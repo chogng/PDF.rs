@@ -1,5 +1,5 @@
 schema = 1
-version = "0.10.0"
+version = "0.11.0"
 status = "active"
 
 [[requirement]]
@@ -10,7 +10,7 @@ features = ["core.snapshot-byte-source"]
 implementation = ["core/bytes"]
 tests = ["core/bytes::range_store", "core/bytes::repository_policy"]
 status = "partial"
-notes = "The m1.range-store.v1 bootstrap provides checked ranges, source-bound stable slices, complete response metadata validation, metadata-only and response-bound EOF discovery, one-time unknown-length binding, allocator-capacity-aware shared backing, canonical missing ranges, resumable ticket subscriptions, partial-supply deduplication, source-change poisoning, and structured resource limits without filesystem, network, async-runtime, unsafe, third-party, or external-engine dependencies. Runtime/platform Range acquisition, request coalescing, cancellation/session arbitration, parser checkpoints, syntax/xref/object consumers, deterministic model/fuzz campaigns, and browser/desktop E2E remain open; this entry does not claim M1 exit or any Native rendering/differential maturity."
+notes = "The m1.range-store.v1 bootstrap provides checked ranges, source-bound stable slices, complete response metadata validation, metadata-only and response-bound EOF discovery, one-time unknown-length binding, allocator-capacity-aware shared backing, canonical missing ranges, resumable ticket subscriptions, partial-supply deduplication, source-change poisoning, and structured resource limits without filesystem, network, async-runtime, unsafe, third-party, or external-engine dependencies. The bounded syntax parser and traditional-xref job consume this contract, and the xref job resumes from distinct explicit tail and section checkpoints. Runtime/platform Range acquisition, request coalescing, cancellation/session arbitration and requeueing, object consumers, deterministic model/fuzz campaigns, and browser/desktop E2E remain open; this entry does not claim M1 exit or any Native rendering/differential maturity."
 
 [[requirement]]
 id = "RPE-ARCH-001/5.3"
@@ -20,7 +20,17 @@ features = ["core.pdf-syntax"]
 implementation = ["core/syntax"]
 tests = ["core/syntax::parser_behavior", "core/syntax::repository_policy"]
 status = "partial"
-notes = "The m1.syntax-core.v1 bootstrap strictly parses bounded contiguous windows for PDF headers and direct null, boolean, number, name, string, array, dictionary, and indirect-reference syntax; it retains source-bound byte spans and raw real notation, reports incomplete windows as control flow, and applies deterministic lexical, nesting, entry, token, and owned-memory limits with stable diagnostics. Indirect-object envelopes, stream bodies and length resolution, xref and revision chains, object streams, repair profiles, ByteSource acquisition jobs, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, or Native differential maturity."
+notes = "The m1.syntax-core.v1 bootstrap strictly parses bounded contiguous windows for PDF headers and direct null, boolean, number, name, string, array, dictionary, and indirect-reference syntax; it retains source-bound byte spans and raw real notation, reports incomplete windows as control flow, applies deterministic lexical, nesting, entry, token, and owned-memory limits, and checks cooperative cancellation at fixed loop intervals with stable diagnostics. Its direct-object parser now serves the bounded traditional-xref trailer job over ByteSource windows with explicit resume checkpoints. Indirect-object envelopes, stream bodies and length resolution, xref streams and revision chains, object streams, repair profiles, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, or Native differential maturity."
+
+[[requirement]]
+id = "RPE-ARCH-001/5.4"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Native cross-reference parsing discovers the final startxref and validates bounded traditional xref tables."
+features = ["core.traditional-xref"]
+implementation = ["core/xref"]
+tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy"]
+status = "partial"
+notes = "The m1.traditional-xref.v1 bootstrap is limited to a known-length immutable source, bounded reverse discovery of the final line-delimited startxref marker, and strict resumable parsing of one complete traditional base xref table and trailer with checked offsets, generations, subsection geometry, entry coverage, retained full source snapshot, deterministic budgets, and cooperative cancellation. Xref streams, hybrid-reference files, Prev revision chains, object streams, object-header validation, repair, unknown-length sources, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, R0 conformance, or Native differential maturity."
 
 [[requirement]]
 id = "RPE-ARCH-001/15.3/M0"

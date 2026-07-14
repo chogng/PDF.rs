@@ -1,12 +1,14 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use pdf_rs_bytes::{
     ByteRange, ByteSource, JobId, RangeResponse, RangeStore, ReadPoll, ReadRequest,
     RequestPriority, ResumeCheckpoint, SourceIdentity, SourceRevision, SourceSnapshot,
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_syntax::{
-    InputExtent, Located, ObjectRef, PdfDictionary, RealNotation, StringKind, SyntaxError,
-    SyntaxErrorCode, SyntaxInput, SyntaxLimitConfig, SyntaxLimitKind, SyntaxLimits, SyntaxObject,
-    SyntaxParser, SyntaxPoll,
+    InputExtent, Located, ObjectRef, PdfDictionary, RealNotation, StringKind, SyntaxCancellation,
+    SyntaxError, SyntaxErrorCategory, SyntaxErrorCode, SyntaxInput, SyntaxLimitConfig,
+    SyntaxLimitKind, SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll, SyntaxRecoverability,
 };
 
 const BASE: u64 = 100;
@@ -69,6 +71,94 @@ fn dictionary(value: &Located<SyntaxObject>) -> &PdfDictionary {
         .value()
         .as_dictionary()
         .expect("test object is a dictionary")
+}
+
+struct CancelOnProbe {
+    probes: AtomicUsize,
+    cancel_at: usize,
+}
+
+impl CancelOnProbe {
+    const fn new(cancel_at: usize) -> Self {
+        Self {
+            probes: AtomicUsize::new(0),
+            cancel_at,
+        }
+    }
+
+    fn probes(&self) -> usize {
+        self.probes.load(Ordering::Acquire)
+    }
+}
+
+impl SyntaxCancellation for CancelOnProbe {
+    fn is_cancelled(&self) -> bool {
+        self.probes.fetch_add(1, Ordering::AcqRel) + 1 >= self.cancel_at
+    }
+}
+
+#[test]
+fn located_try_map_preserves_the_bound_source_and_span() {
+    let located = object(b"<< /Answer 42 >>");
+    let source = located.source();
+    let span = located.span();
+    let mapped = located
+        .try_map(|value| match value {
+            SyntaxObject::Dictionary(dictionary) => Ok::<_, ()>(dictionary),
+            _ => Err(()),
+        })
+        .expect("the parsed object is a dictionary");
+
+    assert_eq!(mapped.source(), source);
+    assert_eq!(mapped.span(), span);
+    assert_eq!(
+        mapped
+            .value()
+            .get(b"Answer")
+            .and_then(|value| value.value().as_integer()),
+        Some(42)
+    );
+}
+
+#[test]
+fn cancellation_has_stable_terminal_policy_metadata() {
+    let cancellation = CancelOnProbe::new(1);
+    let mut parser = SyntaxParser::new_with_cancellation(
+        input(b"null", BASE, true),
+        SyntaxLimits::default(),
+        &cancellation,
+    )
+    .expect("valid bounded input constructs a parser");
+
+    let error = failed(parser.parse_object());
+    assert_eq!(error.code(), SyntaxErrorCode::Cancelled);
+    assert_eq!(error.category(), SyntaxErrorCategory::Cancellation);
+    assert_eq!(
+        error.recoverability(),
+        SyntaxRecoverability::AbandonOperation
+    );
+    assert_eq!(error.diagnostic_id(), "RPE-SYNTAX-0017");
+    assert_eq!(error.offset(), Some(BASE));
+    assert_eq!(cancellation.probes(), 1);
+}
+
+#[test]
+fn long_scanners_probe_cancellation_at_a_fixed_interval() {
+    let mut source = vec![b'a'; 600];
+    source.push(b' ');
+    let cancellation = CancelOnProbe::new(2);
+    let mut parser = SyntaxParser::new_with_cancellation(
+        input(&source, BASE, true),
+        SyntaxLimits::default(),
+        &cancellation,
+    )
+    .expect("valid bounded input constructs a parser");
+
+    let error = failed(parser.parse_object());
+    assert_eq!(error.code(), SyntaxErrorCode::Cancelled);
+    assert_eq!(error.category(), SyntaxErrorCategory::Cancellation);
+    assert_eq!(cancellation.probes(), 2);
+    assert!(error.offset().is_some_and(|offset| offset > BASE));
 }
 
 fn configured(mut update: impl FnMut(&mut SyntaxLimitConfig)) -> SyntaxLimits {

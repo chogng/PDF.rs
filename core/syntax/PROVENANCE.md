@@ -8,10 +8,11 @@ final input. It performs no file, network, callback, or async-runtime I/O.
 # Semantic owner
 
 Parser/Security owns lexical recognition, direct-object grammar, exact source spans, strict
-stream-line boundary recognition, deterministic syntax limits, and stable syntax failures.
-`core/bytes` owns immutable source identity and byte delivery. Future xref/object jobs own bounded
-window acquisition, retry checkpoints, indirect-object framing, stream extents, revision chains,
-and repair policy.
+stream-line boundary recognition, deterministic syntax limits, cooperative cancellation probes,
+and stable syntax failures.
+`core/bytes` owns immutable source identity and byte delivery. `core/xref` owns bounded final-marker
+and traditional-table acquisition with retry checkpoints. Future object/revision jobs own
+indirect-object framing, stream extents, revision chains, and repair policy.
 
 # Normative sources
 
@@ -23,8 +24,9 @@ and repair policy.
   pre-allocation validation, and an async-runtime-free core parser.
 - [RPE-STD-004, sections 7-8](../../docs/standards/traceability-and-provenance.md) defines this
   module record and the independent-implementation boundary.
-- [RPE-STD-005, sections 4-6 and 9](../../docs/standards/security-and-resource-budget.md) requires
-  deterministic token, string, name, container, recursion, and allocation limits before work.
+- [RPE-STD-005, sections 4-7 and 9](../../docs/standards/security-and-resource-budget.md) requires
+  deterministic token, string, name, container, recursion, and allocation limits before work,
+  with cancellation checks at bounded intervals in potentially long loops.
 
 The repository does not yet bind this bootstrap syntax profile to a pinned ISO 32000 snapshot,
 errata set, or clause-level conformance cases. This module therefore makes no ISO/O0 semantic
@@ -53,6 +55,9 @@ coverage claim.
   hard ceilings. Arithmetic is checked and owned scalar allocation is fallible and charged before
   adoption. Container entry fuel is charged before child parsing or allocation, and each attempt
   exposes its complete window size so future ByteSource jobs can conservatively sum retry work.
+- Callers may bind a cooperative `SyntaxCancellation` probe. Every public parser operation checks
+  cancellation before work, and every unbounded scanner/container loop checks again after at most
+  256 iterations. Cancellation remains distinct from malformed input and resource exhaustion.
 
 # External observations
 
@@ -75,7 +80,8 @@ redistribution obligation beyond those already recorded for the repository.
 Syntax behavior tests exercise complete and truncated headers/tokens, absolute spans, numbers,
 name escapes, nested and escaped literal strings, odd-nibble hex strings, arrays, ordered
 dictionaries with duplicate keys, indirect references, strict stream boundaries, redacted
-diagnostics, and boundary/equality/excess cases for deterministic limits.
+diagnostics, stable cancellation policy and fixed-interval scanner probes, and
+boundary/equality/excess cases for deterministic limits.
 
 `core/syntax::repository_policy` scans product source for forbidden filesystem, network,
 async-runtime, and external-engine tokens and verifies that the crate depends only on
@@ -84,11 +90,13 @@ differential is claimed in this bootstrap slice.
 
 # Known deviations and unsupported cases
 
-- This is a strict direct-syntax bootstrap, not complete M1 object support. Traditional/xref
-  streams, hybrid and incremental revisions, indirect-object framing, stream-length resolution,
-  object streams, R0/R1 repair, document services, and rendering remain outside this crate.
+- This is a strict direct-syntax bootstrap, not complete M1 object support. The separate
+  `core/xref` bootstrap supports one traditional table; xref streams, hybrid and incremental
+  revisions, indirect-object framing, stream-length resolution, object streams, R0/R1 repair,
+  document services, and rendering remain outside this crate.
 - Parsing operates on one contiguous window. ByteSource polling, bounded growth, retry scheduling,
-  cancellation, and cumulative budgets across retries belong to future xref/object runtime jobs.
+  cumulative budgets across retries, and runtime cancellation delivery belong to composing
+  xref/object jobs; this crate owns only the synchronous parser-side cancellation checks.
 - The accepted grammar is not yet tied to a pinned ISO 32000 snapshot or errata collection, so the
   feature remains pre-conformance and must not be advertised as an R0 syntax capability.
 - The project bootstrap numeric grammar retains exponent notation as required by architecture
@@ -101,5 +109,5 @@ differential is claimed in this bootstrap slice.
 
 # History
 
-- 2026-07-13: Added the bounded, source-located strict syntax bootstrap and repository purity
-  guard.
+- 2026-07-13: Added the bounded, source-located strict syntax bootstrap, cooperative cancellation,
+  and repository purity guard.

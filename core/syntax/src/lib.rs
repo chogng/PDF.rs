@@ -22,4 +22,7 @@ pub use model::{
     ByteSpan, DictionaryEntry, Located, ObjectRef, PdfArray, PdfDictionary, PdfHeader, PdfName,
     PdfReal, PdfString, RealNotation, StringKind, SyntaxObject,
 };
-pub use parser::{InputExtent, RawBytes, SyntaxInput, SyntaxParser, SyntaxPoll, SyntaxStats};
+pub use parser::{
+    InputExtent, NeverCancelled, RawBytes, SyntaxCancellation, SyntaxInput, SyntaxParser,
+    SyntaxPoll, SyntaxStats,
+};

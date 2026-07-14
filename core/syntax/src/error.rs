@@ -106,6 +106,8 @@ pub enum SyntaxErrorCode {
     ResourceLimit,
     /// Input source identity does not match the parser's bound identity.
     SourceMismatch,
+    /// The owning runtime cancelled this parser operation.
+    Cancelled,
     /// Internal checked state could not be maintained safely.
     InternalState,
 }
@@ -121,6 +123,8 @@ pub enum SyntaxErrorCategory {
     Resource,
     /// Immutable source identity mismatch.
     Integrity,
+    /// Normal runtime cancellation.
+    Cancellation,
     /// Internal implementation invariant failure.
     Internal,
 }
@@ -136,6 +140,8 @@ pub enum SyntaxRecoverability {
     ReduceWorkload,
     /// Reopen against the correct immutable source snapshot.
     ReopenSource,
+    /// Treat cancellation as a completed abandoned operation.
+    AbandonOperation,
     /// Repeating the same operation is not an approved recovery action.
     DoNotRetry,
 }
@@ -228,6 +234,11 @@ impl SyntaxError {
                 SyntaxErrorCategory::Integrity,
                 SyntaxRecoverability::ReopenSource,
                 "RPE-SYNTAX-0015",
+            ),
+            SyntaxErrorCode::Cancelled => (
+                SyntaxErrorCategory::Cancellation,
+                SyntaxRecoverability::AbandonOperation,
+                "RPE-SYNTAX-0017",
             ),
             SyntaxErrorCode::InternalState => (
                 SyntaxErrorCategory::Internal,
