@@ -11,7 +11,9 @@ use pdf_rs_object::{
     ObjectErrorCategory, ObjectErrorCode, ObjectJobContext, ObjectLimitConfig, ObjectLimitKind,
     ObjectLimits, ObjectPhase, ObjectPoll, ObjectRecoverability, OpenObjectJob,
 };
-use pdf_rs_syntax::{ObjectRef, SyntaxLimits, SyntaxObject};
+use pdf_rs_syntax::{
+    InputExtent, ObjectRef, SyntaxInput, SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll,
+};
 
 const PDF_LEN: u64 = 612;
 const XREF_OFFSET: u64 = 449;
@@ -190,6 +192,17 @@ fn compact_limits(
     .expect("compact test limits are internally consistent")
 }
 
+fn syntax_retained_heap_bytes(bytes: &[u8]) -> u64 {
+    let input = SyntaxInput::new(identity(), 0, bytes, InputExtent::KnownSourceEnd).unwrap();
+    let mut parser = SyntaxParser::new(input, SyntaxLimits::default()).unwrap();
+    assert!(matches!(parser.parse_object(), SyntaxPoll::Ready(_)));
+    parser
+        .stats()
+        .owned_bytes()
+        .checked_add(parser.stats().container_bytes())
+        .expect("small test syntax footprint fits u64")
+}
+
 #[test]
 fn canonical_direct_objects_validate_their_exact_headers_and_spans() {
     let pdf = canonical_pdf();
@@ -304,6 +317,72 @@ fn canonical_stream_returns_exact_unread_payload_and_terminal_geometry() {
         ObjectErrorCode::JobAlreadyComplete
     );
     assert_eq!(open.phase(), ObjectPhase::Complete);
+}
+
+#[test]
+fn successful_envelopes_report_exact_retained_syntax_heap_without_payload_bytes() {
+    let (scalar, scalar_startxref) = standalone(b"1 0 obj\n42\nendobj\n");
+    let (scalar, scalar_job) = ready_at(&scalar, object_ref(1, 0), 0, scalar_startxref);
+    assert_eq!(scalar.retained_heap_bytes(), 0);
+    assert_eq!(scalar_job.stats().retained_heap_bytes(), 0);
+
+    let direct_syntax = b"<< /A (abc) /B [1 2 3] >>";
+    let direct_body = b"1 0 obj\n<< /A (abc) /B [1 2 3] >>\nendobj\n";
+    let (direct, direct_startxref) = standalone(direct_body);
+    let (direct, direct_job) = ready_at(&direct, object_ref(1, 0), 0, direct_startxref);
+    let direct_expected = syntax_retained_heap_bytes(direct_syntax);
+    assert!(direct_expected > 0);
+    assert_eq!(direct.retained_heap_bytes(), direct_expected);
+    assert_eq!(direct_job.stats().retained_heap_bytes(), direct_expected);
+
+    let payload = vec![b'x'; 4096];
+    let stream_syntax = b"<< /Length 4096 /Meta [1 2] >>";
+    let stream_body = stream_body(stream_syntax, &payload, b"\n");
+    let (stream, stream_startxref) = standalone(&stream_body);
+    let (stream, stream_job) = ready_at(&stream, object_ref(1, 0), 0, stream_startxref);
+    let stream_expected = syntax_retained_heap_bytes(stream_syntax);
+    assert!(stream_expected > 0);
+    assert!(stream_expected < u64::try_from(payload.len()).unwrap());
+    assert_eq!(stream.retained_heap_bytes(), stream_expected);
+    assert_eq!(stream_job.stats().retained_heap_bytes(), stream_expected);
+    assert_eq!(
+        stream_job.stats().declared_stream_bytes(),
+        u64::try_from(payload.len()).unwrap()
+    );
+}
+
+#[test]
+fn discarded_envelope_retries_do_not_accumulate_retained_heap_capacity() {
+    let syntax = b"<< /A (abc) /B [1 2 3] /C << /D /Name >> >>";
+    let body = b"1 0 obj\n<< /A (abc) /B [1 2 3] /C << /D /Name >> >>\nendobj\n";
+    let (bytes, startxref) = standalone(body);
+    let source = snapshot(u64::try_from(bytes.len()).unwrap());
+    let store = supplied_store(&bytes);
+    let max_envelope_bytes = startxref;
+    let limits = ObjectLimits::validate(ObjectLimitConfig {
+        max_source_bytes: source.len().unwrap(),
+        initial_envelope_bytes: 8,
+        max_envelope_bytes,
+        initial_boundary_bytes: 1,
+        max_boundary_bytes: 1,
+        max_stream_bytes: 1,
+        max_total_read_bytes: 1024,
+        max_total_parse_bytes: 1024,
+    })
+    .unwrap();
+    let mut open = job(
+        target(store.snapshot(), object_ref(1, 0), 0, startxref),
+        limits,
+    );
+    let object = match open.poll(&store, &NeverCancelled) {
+        ObjectPoll::Ready(object) => object,
+        ObjectPoll::Pending { .. } => panic!("fully supplied retry fixture must not suspend"),
+        ObjectPoll::Failed(error) => panic!("retry fixture must frame: {error}"),
+    };
+    assert!(open.stats().envelope_attempts() > 1);
+    let expected = syntax_retained_heap_bytes(syntax);
+    assert_eq!(object.retained_heap_bytes(), expected);
+    assert_eq!(open.stats().retained_heap_bytes(), expected);
 }
 
 #[test]
@@ -582,6 +661,7 @@ fn disconnected_envelope_and_boundary_reads_frame_a_large_missing_payload() {
         ByteRange::new(envelope_start, envelope_len).unwrap()
     );
     let stats = open.stats();
+    assert_eq!(stats.retained_heap_bytes(), 0);
     match open.poll(&recording, &NeverCancelled) {
         ObjectPoll::Pending {
             ticket, missing, ..
@@ -624,6 +704,9 @@ fn disconnected_envelope_and_boundary_reads_frame_a_large_missing_payload() {
     assert!(envelope_range.end_exclusive() <= data_start);
     assert!(boundary_range.start() >= data_end);
     let boundary_stats = open.stats();
+    let retained_heap_bytes = syntax_retained_heap_bytes(b"<< /Length 8192 >>");
+    assert!(retained_heap_bytes > 0);
+    assert_eq!(boundary_stats.retained_heap_bytes(), retained_heap_bytes);
     match open.poll(&recording, &NeverCancelled) {
         ObjectPoll::Pending {
             ticket,
@@ -659,6 +742,8 @@ fn disconnected_envelope_and_boundary_reads_frame_a_large_missing_payload() {
     };
     assert_eq!(stream.data_span().start(), data_start);
     assert_eq!(stream.data_span().len(), 8192);
+    assert_eq!(object.retained_heap_bytes(), retained_heap_bytes);
+    assert_eq!(open.stats().retained_heap_bytes(), retained_heap_bytes);
     assert_eq!(open.stats().envelope_attempts(), 1);
     assert_eq!(open.stats().boundary_attempts(), 1);
     assert_eq!(open.stats().read_bytes(), envelope_len + boundary_len);
@@ -707,6 +792,8 @@ fn cancellation_at_the_boundary_phase_is_terminal_and_repoll_is_stable() {
         } if checkpoint == ResumeCheckpoint::new(81)
     ));
     assert_eq!(open.phase(), ObjectPhase::StreamBoundary);
+    let retained_heap_bytes = syntax_retained_heap_bytes(b"<< /Length 16 >>");
+    assert_eq!(open.stats().retained_heap_bytes(), retained_heap_bytes);
 
     let flag = AtomicBool::new(true);
     let error = match open.poll(&store, &flag) {
@@ -715,6 +802,7 @@ fn cancellation_at_the_boundary_phase_is_terminal_and_repoll_is_stable() {
     };
     assert_eq!(error.code(), ObjectErrorCode::Cancelled);
     assert_eq!(open.phase(), ObjectPhase::Failed);
+    assert_eq!(open.stats().retained_heap_bytes(), retained_heap_bytes);
     assert_eq!(
         open.poll(&store, &NeverCancelled),
         ObjectPoll::Failed(error)

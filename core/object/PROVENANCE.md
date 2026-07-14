@@ -11,10 +11,10 @@ Parser/Security owns indirect-object header validation, direct `/Length` policy,
 framing, source identity, deterministic budgets, cancellation, and stable object failures.
 `core/bytes` owns immutable source snapshots and byte delivery, while `core/syntax` owns direct
 object and keyword syntax. `core/xref` is a sibling consumer of syntax rather than an object-crate
-dependency. `core/document` now composes one validated traditional base section into candidate
-physical intervals and supplies their bounds through `IndirectObjectTarget`; it does not yet
-attest top-level object placement. Future document/revision work owns trusted reference graphs,
-revision precedence, and caching.
+dependency. `core/document` composes one validated traditional base section into candidate
+physical intervals, attests top-level placement, and supplies proven bounds through
+`IndirectObjectTarget`. Future document/revision work owns complete reference graphs, revision
+precedence, and caching.
 
 # Normative sources
 
@@ -70,6 +70,14 @@ claim.
   new logical exact request and each complete parse window is charged cumulatively across
   geometric retries, including requests satisfied from an existing cache or ending in source
   failure.
+- A successful envelope combines the syntax parser's allocator-reported scalar and container
+  capacity with checked arithmetic. `ObjectStats::retained_heap_bytes` is a historical gauge for
+  the latest accepted envelope rather than cumulative parse work or proof that the completed job
+  still owns the allocation, and the same value travels with a returned `IndirectObject`.
+  Discarded geometric attempts are not accumulated. A stream retains only its parsed dictionary
+  capacity while the boundary phase runs; after a later boundary failure the stats preserve the
+  accepted-envelope measurement even though the state has released the dictionary. Its opaque
+  payload length is reported separately and never counted as retained heap bytes.
 - `ObjectWorkCaps` lets a parent composition job lend a nonzero cumulative read/parse slice that
   cannot exceed either the fixed object-work hard ceiling or the object's configured totals. The
   legacy constructor supplies the configured totals unchanged. A scoped read is charged before
@@ -117,8 +125,9 @@ Object behavior tests cover canonical objects 1-4, direct scalar/array/dictionar
 header and stream spans, xref-number/generation/token-boundary checks, two-phase Pending and stable
 tickets, disconnected envelope/boundary supply with a missing payload middle, request priority,
 direct `/Length` policies, strict LF/CRLF boundaries, incorrect lengths without repair scanning,
-cumulative read/parse budgets, cancellation, full snapshot mismatch, one-shot lifecycle, and
-redacted diagnostics. Scoped-work tests cover positive minima and hard ceilings, zero and
+cumulative read/parse budgets, exact retained scalar/container capacity for direct and stream
+objects, discarded-retry isolation, cancellation, full snapshot mismatch, one-shot lifecycle,
+and redacted diagnostics. Scoped-work tests cover positive minima and hard ceilings, zero and
 hard-ceiling-plus-one rejection, caps above configured totals, exact and one-less read/parse work
 for both direct and stream objects, getters, and equivalence of the legacy constructor with
 explicit configured-total caps. A framing matrix exhausts every initial envelope/boundary split and
@@ -160,6 +169,8 @@ Native/external-engine differential is claimed in this bootstrap slice.
   results are move-only, but callers can currently clone the borrowed lower model through its
   public API without object-budget charging; a later syntax API cleanup must remove or replace
   those clones with an explicitly fallible, budgeted operation.
+- No object cache, eviction policy, cross-job resident owner, or reservation is implemented here.
+  The successful-envelope heap gauge is only an admission-accounting input for a future owner.
 
 # History
 
@@ -172,3 +183,5 @@ Native/external-engine differential is claimed in this bootstrap slice.
   top-level attestation.
 - 2026-07-13: Added parent-lent cumulative object work caps with pre-poll/pre-parse charging and
   exact direct/stream boundary coverage.
+- 2026-07-13: Propagated successful syntax scalar/container heap capacity through object stats and
+  returned values without counting discarded retries or opaque stream payloads.

@@ -29,6 +29,7 @@ pub(crate) struct ParsedDirect {
     pub(crate) header_span: ByteSpan,
     pub(crate) value: Located<SyntaxObject>,
     pub(crate) endobj_span: ByteSpan,
+    pub(crate) retained_heap_bytes: u64,
 }
 
 pub(crate) struct ParsedStreamEnvelope {
@@ -38,6 +39,7 @@ pub(crate) struct ParsedStreamEnvelope {
     pub(crate) stream_keyword_span: ByteSpan,
     pub(crate) stream_line_ending_span: ByteSpan,
     pub(crate) data_span: ByteSpan,
+    pub(crate) retained_heap_bytes: u64,
 }
 
 pub(crate) enum BoundaryParse {
@@ -151,11 +153,15 @@ pub(crate) fn parse_envelope(
     };
 
     match terminal.bytes() {
-        b"endobj" => Ok(EnvelopeParse::Direct(ParsedDirect {
-            header_span,
-            value: body,
-            endobj_span: terminal.span(),
-        })),
+        b"endobj" => {
+            let retained_heap_bytes = retained_heap_bytes(&parser, reference, body.span().start())?;
+            Ok(EnvelopeParse::Direct(ParsedDirect {
+                header_span,
+                value: body,
+                endobj_span: terminal.span(),
+                retained_heap_bytes,
+            }))
+        }
         b"stream" => {
             let dictionary = body.try_map(|value| match value {
                 SyntaxObject::Dictionary(dictionary) => Ok(dictionary),
@@ -211,6 +217,8 @@ pub(crate) fn parse_envelope(
                     Some(data_start),
                 )
             })?;
+            let retained_heap_bytes =
+                retained_heap_bytes(&parser, reference, dictionary.span().start())?;
             Ok(EnvelopeParse::Stream(ParsedStreamEnvelope {
                 header_span,
                 dictionary,
@@ -218,6 +226,7 @@ pub(crate) fn parse_envelope(
                 stream_keyword_span: terminal.span(),
                 stream_line_ending_span,
                 data_span,
+                retained_heap_bytes,
             }))
         }
         _ => Err(ObjectError::for_code(
@@ -226,6 +235,24 @@ pub(crate) fn parse_envelope(
             Some(terminal.span().start()),
         )),
     }
+}
+
+fn retained_heap_bytes(
+    parser: &SyntaxParser<'_>,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<u64, ObjectError> {
+    let stats = parser.stats();
+    stats
+        .owned_bytes()
+        .checked_add(stats.container_bytes())
+        .ok_or_else(|| {
+            ObjectError::for_code(
+                ObjectErrorCode::InternalState,
+                Some(reference),
+                Some(offset),
+            )
+        })
 }
 
 pub(crate) fn parse_boundary(

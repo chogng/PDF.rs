@@ -3,6 +3,8 @@
 //! The bootstrap validates an xref-derived target against its exact indirect
 //! object header. Stream objects are framed with separate envelope and terminal
 //! boundary reads, so their opaque payload need not be resident or contiguous.
+//! Successful values also report the allocator-visible syntax heap capacity
+//! they retain, without treating discarded retries as resident state.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

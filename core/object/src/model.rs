@@ -107,6 +107,7 @@ pub struct IndirectObject {
     header_span: ByteSpan,
     object_span: ByteSpan,
     endobj_span: ByteSpan,
+    retained_heap_bytes: u64,
     value: IndirectObjectValue,
 }
 
@@ -116,6 +117,7 @@ impl IndirectObject {
         header_span: ByteSpan,
         object_span: ByteSpan,
         endobj_span: ByteSpan,
+        retained_heap_bytes: u64,
         value: IndirectObjectValue,
     ) -> Self {
         Self {
@@ -127,6 +129,7 @@ impl IndirectObject {
             header_span,
             object_span,
             endobj_span,
+            retained_heap_bytes,
             value,
         }
     }
@@ -171,6 +174,15 @@ impl IndirectObject {
         self.endobj_span
     }
 
+    /// Returns allocator-reported syntax heap capacity retained by this object.
+    ///
+    /// The count includes decoded scalar buffers plus array and dictionary
+    /// backing capacity. It excludes the inline object representation,
+    /// allocator metadata, and stream payload bytes, which are not retained.
+    pub const fn retained_heap_bytes(&self) -> u64 {
+        self.retained_heap_bytes
+    }
+
     /// Borrows the validated direct value or framed stream value.
     pub const fn value(&self) -> &IndirectObjectValue {
         &self.value
@@ -189,6 +201,7 @@ impl fmt::Debug for IndirectObject {
             .field("header_span", &self.header_span)
             .field("object_span", &self.object_span)
             .field("endobj_span", &self.endobj_span)
+            .field("retained_heap_bytes", &self.retained_heap_bytes)
             .field("value", &"[REDACTED]")
             .finish()
     }

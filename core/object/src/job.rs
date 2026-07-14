@@ -78,7 +78,7 @@ pub enum ObjectPhase {
     Failed,
 }
 
-/// Cumulative deterministic work charged by one open object job.
+/// Deterministic work and accepted-envelope accounting for one open object job.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ObjectStats {
     read_bytes: u64,
@@ -86,6 +86,7 @@ pub struct ObjectStats {
     envelope_attempts: u64,
     boundary_attempts: u64,
     declared_stream_bytes: u64,
+    retained_heap_bytes: u64,
 }
 
 impl ObjectStats {
@@ -112,6 +113,17 @@ impl ObjectStats {
     /// Returns the accepted direct stream length, or zero for direct objects.
     pub const fn declared_stream_bytes(self) -> u64 {
         self.declared_stream_bytes
+    }
+
+    /// Returns syntax heap capacity measured for the latest accepted object envelope.
+    ///
+    /// This is a historical gauge, not cumulative parser work or a statement
+    /// that the job still owns the allocation. It remains zero until an envelope
+    /// is accepted, excludes stream payload bytes, is replaced rather than
+    /// accumulated across geometric retries, and remains observable if a later
+    /// stream-boundary step fails.
+    pub const fn retained_heap_bytes(self) -> u64 {
+        self.retained_heap_bytes
     }
 }
 
@@ -311,7 +323,7 @@ impl OpenObjectJob {
         self.work_caps
     }
 
-    /// Returns cumulative work charged through the most recent poll.
+    /// Returns work and accepted-envelope accounting through the most recent poll.
     pub const fn stats(&self) -> ObjectStats {
         self.stats
     }
@@ -496,8 +508,10 @@ impl OpenObjectJob {
                             parsed.header_span,
                             object_span,
                             parsed.endobj_span,
+                            parsed.retained_heap_bytes,
                             IndirectObjectValue::Direct(parsed.value),
                         );
+                        self.stats.retained_heap_bytes = parsed.retained_heap_bytes;
                         self.state = JobState::Complete;
                         Some(ObjectPoll::Ready(object))
                     }
@@ -515,6 +529,7 @@ impl OpenObjectJob {
                             }
                         };
                         self.stats.declared_stream_bytes = envelope.data_span.len();
+                        self.stats.retained_heap_bytes = envelope.retained_heap_bytes;
                         self.state = JobState::StreamBoundary {
                             envelope,
                             window: self.limits.initial_boundary_bytes().min(remaining),
@@ -649,6 +664,7 @@ impl OpenObjectJob {
                             envelope.header_span,
                             object_span,
                             boundary.endobj_span,
+                            envelope.retained_heap_bytes,
                             IndirectObjectValue::Stream(stream),
                         );
                         Some(ObjectPoll::Ready(object))
