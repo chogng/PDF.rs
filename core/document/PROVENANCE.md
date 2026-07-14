@@ -348,13 +348,17 @@ framing only establish lexical extent.
 # External observations
 
 No PDFium, other PDF engine, third-party implementation source, or external output was used to
-derive the candidate index, attestation state machine, text-string mapping and decoder, or outline
-topology and count validation. After that implementation boundary was fixed, a separate
+derive the candidate index, attestation state machine, text-string mapping and decoder, page-tree
+traversal, or outline topology and count validation. After that implementation boundary was fixed, a separate
 `tools/baseline` O4 probe compared the public PDFium bookmark surface with Native on self-authored
 fixtures: the valid observable subset matched exactly, while a wrong `/Prev` produced the expected
-strictness difference because PDFium does not expose that backlink. The probe is non-gating and
-unregistered; there is no canonical corpus fixture, registered/contained PDFium baseline, broad
-Outline differential, or Outline-based M1 exit claim in this slice.
+strictness difference because PDFium does not expose that backlink. A separate public page-count
+probe matched Native exactly and repeatably on valid one-page and nested three-page fixtures. On an
+otherwise identical nested fixture whose positive root Count was 4 rather than the recomputed 3,
+Native returned `RPE-DOCUMENT-0033` while PDFium produced `page_count=4`, an expected strictness
+difference. Both probes are non-gating and unregistered; the relevant feature states remain
+`PLANNED`, and there is no canonical broad corpus, registered/contained PDFium baseline, or M1 exit
+claim in this slice.
 
 # Dependencies and generated data
 
@@ -410,6 +414,10 @@ document-architecture requirement links and explicit partial-scope boundaries.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
   payloads, random-access page indexing, inherited resources, page handles, name-tree services,
   writer behavior, and document actions remain unsupported.
+- The separate page-count O4 comparison covers only two fixed valid counts and one mismatched
+  positive root Count. It is exact and repeatable on the valid fixtures, but remains non-gating and
+  unregistered and cannot adjudicate the Native validator's Parent, cycle, duplicate, or recursive
+  Count evidence. It does not advance the feature from `PLANNED` or establish M1 exit.
 - Outline enumeration is limited to the direct-semantic-value `m1.strict-outline.v1` bootstrap.
   Indirect outline-root `Type`, indirect `Title`, `Count`, `Dest`, and `A` values, indirect root or
   item aliases, undefined-reference and reference-to-null omission semantics, styles, destination

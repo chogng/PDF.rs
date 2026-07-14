@@ -101,6 +101,22 @@ adjudicate outline-root Count, `/Last`, `/Parent`, `/Prev`, raw target shape, or
 missing-versus-invalid empty roots. No helper binary, PDF bytes, canonical JSON
 bytes, PDFium source, dependency payload, or raw log is committed.
 
+On 2026-07-14, a separate public-C-API page-count helper was built at the same pinned revision and
+run through protocol schema 2 beside the Native strict page-tree job. The valid one-page and nested
+three-page fixtures matched exactly, and each PDFium result repeated byte-for-byte. For the same
+nested structure with a deliberately mismatched positive root `/Count` of 4, Native recomputed
+three leaves and returned `RPE-DOCUMENT-0033` (`PageTreeCountMismatch`), while PDFium produced
+`page_count=4`. The disagreement is classified as an expected strictness difference.
+
+The hash-bound result is in
+`pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml`.
+
+This is a real but non-gating and unregistered Native/PDFium O4 comparison over the scalar page
+count of three fixed, self-authored inputs. It does not turn PDFium into a correctness oracle,
+weaken Native's Parent/Count/cycle/duplicate checks, advance `core.strict-page-count` beyond
+`PLANNED`, or establish M1 exit. No helper binary, PDF bytes, canonical JSON bytes, PDFium source,
+dependency payload, or raw log is committed.
+
 # Dependencies and generated data
 
 Runtime code uses the Rust standard library plus the local development-only
@@ -124,10 +140,11 @@ default-ignored pixel test covers repeated blank-page pixels, generated
 color/channel/row-order pixels, out-of-range pages, and malformed documents. A
 second default-ignored test compares the bounded PDFium bookmark observation
 with Native on valid topology and records the expected `/Prev` strictness
-difference. Contract tests require the Outline profile to produce UTF-8,
-newline-terminated parse output while every non-parse channel is unsupported. A
-streaming decoder fuzz target remains planned before baseline registration or
-untrusted corpus execution.
+difference. A third default-ignored test compares Native and PDFium page counts for valid one-page
+and nested three-page trees and records the expected mismatched-root-Count strictness difference.
+Contract tests require both semantic profiles to produce bounded UTF-8, newline-terminated parse
+output while every non-parse channel is unsupported. A streaming decoder fuzz target remains
+planned before baseline registration or untrusted corpus execution.
 
 # Known deviations and unsupported cases
 
@@ -164,6 +181,11 @@ collapses several missing, invalid, and empty-root states into a null first
 bookmark. The Outline probe therefore compares only its declared observable
 intersection and cannot weaken or replace Native's stricter structural checks.
 
+The public PDFium page-count surface returns one scalar and does not expose the traversal evidence
+needed to adjudicate Parent links, cycles, duplicate children, or recursively recomputed Counts.
+Its `page_count=4` observation on the mismatched positive root Count therefore remains an expected
+strictness difference and cannot replace the Native page-tree validator.
+
 # History
 
 - 2026-07-13: Introduced process-isolation protocol schema version 1.
@@ -175,3 +197,5 @@ intersection and cannot weaken or replace Native's stricter structural checks.
 - 2026-07-14: Added the source-only PDFium Outline adapter and recorded a
   non-gating Native/PDFium observable-subset differential with an expected
   `/Prev` strictness difference.
+- 2026-07-14: Added the source-only PDFium page-count adapter and a non-gating Native/PDFium
+  comparison with exact repeatable valid counts and an expected root-Count strictness difference.

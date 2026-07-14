@@ -1,5 +1,5 @@
 schema = 1
-version = "0.8.0"
+version = "0.9.0"
 status = "active"
 
 [[data]]
@@ -104,3 +104,20 @@ validated_by = "cargo test --package pdf-rs-baseline --test repository_pdfium_ou
 owner = "baseline-release"
 update_policy = "create a new evidence id when revision, platform, helper, build flags, fixtures, process policy, observable schema, or observed outputs change"
 delete_policy = "retain while the PDFium O4 Outline differential probe is referenced"
+
+[[data]]
+id = "baseline.evidence.pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1"
+kind = "project-authored-external-o4-page-count-differential-evidence"
+source = "tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml"
+acquired_at = 2026-07-14
+version = "pdfium-o4-page-count-differential-probe-schema-1"
+source_hash = "sha256:44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository metadata and project-authored helper/test source only; no PDFium source, dependencies, helper binary, generated PDF bytes, page-count JSON bytes, or raw logs"
+contains_personal_data = false
+authored_by = "baseline-release"
+format_schema = 1
+validated_by = "cargo test --package pdf-rs-baseline --test repository_pdfium_page_count_probe"
+owner = "baseline-release"
+update_policy = "create a new evidence id when revision, platform, helper, build flags, fixtures, process policy, observable schema, or observed outputs change"
+delete_policy = "retain while the PDFium O4 page-count differential probe is referenced"

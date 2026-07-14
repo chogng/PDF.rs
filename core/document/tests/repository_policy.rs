@@ -89,18 +89,21 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.27.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.27.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.28.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.28.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
     for required in [
+        "state = \"PLANNED\"",
         "profile = \"m1.strict-page-count.v1\"",
         "RPE-ARCH-001/5.8-5.9",
         "modules = [\"core/document\"]",
         "core/document::page_tree_count",
         "core/document::page_tree_limit_config",
         "core/document::repository_policy",
+        "tools/baseline::pdfium_page_count_real_adapter",
+        "tools/baseline::repository_pdfium_page_count_probe",
         "tools/quality::native_object_loop",
         "fuzz_targets = []",
         "benchmarks = []",
@@ -117,16 +120,23 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "core.strict-page-count",
         "core/document",
         "core/document::page_tree_count",
+        "tools/baseline::pdfium_page_count_real_adapter",
+        "tools/baseline::repository_pdfium_page_count_probe",
         "tools/quality::native_object_loop",
         "open-addressing table",
         "exact Parent back-links",
         "never uses untrusted Count or Kids data for allocation",
+        "valid one-page and nested three-page fixtures match exactly",
+        "RPE-DOCUMENT-0033",
+        "PDFium page_count=4",
+        "expected strictness difference",
         "revision-chain",
         "lazy PageIndex",
         "page_count=1",
         "pages_processed=1",
         "not a registered page-count differential",
         "not a registered baseline or correctness oracle",
+        "feature state remains PLANNED",
         "do not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {

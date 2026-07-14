@@ -6,12 +6,12 @@ it is not linked, vendored, downloaded, or included in any PDF.rs product artifa
 
 The baseline crate provides protocol schema 2, a tested deadline- and
 byte-limited direct-child supervisor, a source-only PDFium public-C-API pixel
-adapter, and a separate source-only Outline probe. The helpers link only inside
-a separately synced PDFium checkout; they are never PDF.rs product dependencies.
+adapter, and separate source-only Outline and page-count probes. The helpers link only inside a
+separately synced PDFium checkout; they are never PDF.rs product dependencies.
 The pixel profile reports Parse, Scene, and positioned Text as explicitly
 unsupported and produces exact-size, top-down, straight-alpha RGBA8 pixels. It
-does not draw form/widget overlays. The Outline profile produces one bounded
-canonical JSON parse artifact and reports Scene, Text, and Pixel as unsupported.
+does not draw form/widget overlays. The Outline and page-count profiles each produce one bounded
+canonical JSON parse artifact and report Scene, Text, and Pixel as unsupported.
 
 The helper is not an approved sandbox. `runner_executable`, invocation and
 complete build/runtime fingerprints, and isolation metadata remain M0-blocking
@@ -76,6 +76,22 @@ raw `/Dest` versus `/A` shape, or missing-versus-invalid empty roots, and it is
 not a registered baseline, a golden, product-correctness evidence, or a release
 gate. The baseline ledger remains empty until containment and complete runtime
 and license fingerprints are reviewed.
+
+A fourth identity-bound helper uses PDFium's public page-count API and the same schema-2 process
+boundary. Valid self-authored one-page and nested three-page fixtures matched Native exactly, and
+both PDFium outputs repeated byte-for-byte. For an otherwise identical nested fixture whose
+positive root `/Count` is 4 instead of the Native-recomputed 3, Native returned
+`RPE-DOCUMENT-0033` (`PageTreeCountMismatch`) while PDFium produced `page_count=4`. This is recorded
+as an expected strictness difference rather than allowing the external observation to weaken the
+Native structural rule.
+
+The hash-bound result is recorded in
+`evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml`.
+
+The page-count comparison is real but remains non-gating and unregistered. It is not a golden,
+product-correctness evidence, a release gate, or a claim that the `core.strict-page-count` feature
+has advanced beyond `PLANNED` or that M1 exit is complete. The older one-page
+`pdfium_test --show-pageinfo` execution remains a separate build-readiness smoke observation.
 
 Stock `pdfium_test` can produce raster images and plain text in separate
 invocations, but it does not provide this protocol's canonical
@@ -164,3 +180,34 @@ PDF_RS_PDFIUM_OUTLINE_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_outline_pr
 This comparison is suitable as non-gating development baseline evidence for the
 named observable subset. PDFium remains O4 authority and cannot override the
 strict Native topology rules or ISO-derived expectations.
+
+## Build and run the page-count differential probe
+
+Apply the page-count overlay after the pixel and Outline overlays above. Its root patch deliberately
+binds that prerequisite ordering so previously recorded helper inputs remain unchanged:
+
+```sh
+mkdir -p "$PDFIUM_ROOT/tools/pdf_rs_page_count_adapter"
+cp tools/baseline/pdfium/helper/page_count.BUILD.gn \
+  "$PDFIUM_ROOT/tools/pdf_rs_page_count_adapter/BUILD.gn"
+cp tools/baseline/pdfium/helper/pdf_rs_pdfium_page_count_probe.cc \
+  "$PDFIUM_ROOT/tools/pdf_rs_page_count_adapter/"
+git -C "$PDFIUM_ROOT" apply \
+  "$PWD/tools/baseline/pdfium/helper/pdfium-page-count-root.patch"
+
+cd "$PDFIUM_ROOT"
+buildtools/mac/gn gen out/Adapter --args='use_remoteexec=false is_debug=false symbol_level=0 target_cpu="arm64" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false'
+third_party/ninja/ninja -C out/Adapter pdf_rs_pdfium_page_count_probe
+```
+
+Run the explicit ignored comparison with:
+
+```sh
+PDF_RS_PDFIUM_PAGE_COUNT_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_page_count_probe" \
+  cargo test --package pdf-rs-baseline --test pdfium_page_count_real_adapter -- \
+  --ignored --exact real_pdfium_page_counts_match_native_and_record_strict_count_difference --nocapture
+```
+
+The valid results are exact and repeatable only for the two fixed fixtures. The mismatched positive
+root Count is an expected strictness difference, and the probe remains outside CI and every product
+or release path.

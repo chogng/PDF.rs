@@ -820,8 +820,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.27.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.27.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.28.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.28.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -917,6 +917,8 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(page_count_feature.contains("core/document::page_tree_count"));
     assert!(page_count_feature.contains("core/document::page_tree_limit_config"));
     assert!(page_count_feature.contains("core/document::repository_policy"));
+    assert!(page_count_feature.contains("tools/baseline::pdfium_page_count_real_adapter"));
+    assert!(page_count_feature.contains("tools/baseline::repository_pdfium_page_count_probe"));
     assert!(page_count_feature.contains("tools/quality::native_object_loop"));
     assert!(page_count_feature.contains("fuzz_targets = []"));
     assert!(page_count_feature.contains("benchmarks = []"));
@@ -972,6 +974,17 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(m0_requirement.contains("page_count=1"));
     assert!(m0_requirement.contains("pages_processed=1"));
     assert!(m0_requirement.contains("rather than a registered page-count differential"));
+    assert!(m0_requirement.contains("pdfium_page_count_real_adapter"));
+    assert!(m0_requirement.contains("repository_pdfium_page_count_probe"));
+    assert!(
+        m0_requirement
+            .contains("valid one-page and nested three-page fixtures are exact and repeatable")
+    );
+    assert!(m0_requirement.contains("RPE-DOCUMENT-0033"));
+    assert!(m0_requirement.contains("PDFium page_count=4"));
+    assert!(m0_requirement.contains("expected strictness difference"));
+    assert!(m0_requirement.contains("feature states remain PLANNED"));
+    assert!(m0_requirement.contains("M1 exit is not claimed complete"));
     assert!(m0_requirement.contains("synchronously close the store"));
     assert!(m0_requirement.contains("zero post-close resources"));
     assert!(m0_requirement.contains("broad corpus and pixel differential evidence"));
@@ -980,12 +993,22 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         .expect("the document-model and page-tree requirement must exist");
     assert!(page_tree_requirement.contains("\"core.strict-page-count\""));
     assert!(page_tree_requirement.contains("core/document::page_tree_count"));
+    assert!(page_tree_requirement.contains("tools/baseline::pdfium_page_count_real_adapter"));
+    assert!(page_tree_requirement.contains("tools/baseline::repository_pdfium_page_count_probe"));
     assert!(page_tree_requirement.contains("tools/quality::native_object_loop"));
     assert!(page_tree_requirement.contains("open-addressing table"));
+    assert!(
+        page_tree_requirement
+            .contains("valid one-page and nested three-page fixtures match exactly")
+    );
+    assert!(page_tree_requirement.contains("RPE-DOCUMENT-0033"));
+    assert!(page_tree_requirement.contains("PDFium page_count=4"));
+    assert!(page_tree_requirement.contains("expected strictness difference"));
     assert!(page_tree_requirement.contains("page_count=1"));
     assert!(page_tree_requirement.contains("pages_processed=1"));
     assert!(page_tree_requirement.contains("non-gating smoke observation"));
     assert!(page_tree_requirement.contains("not a registered page-count differential"));
+    assert!(page_tree_requirement.contains("feature state remains PLANNED"));
     assert!(page_tree_requirement.contains("do not claim M1 or M2 exit"));
 
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")

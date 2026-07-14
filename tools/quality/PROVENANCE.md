@@ -144,6 +144,14 @@ Outline fields and does not retroactively turn this Native object loop, the
 pixel probe, or the page-count smoke into registered differentials or release
 evidence.
 
+Another baseline-tool test now runs the Native strict page-tree job and a pinned PDFium public
+page-count helper on self-authored inputs. Its valid one-page and nested three-page results are
+exact and repeatable. With the nested root's positive Count changed from 3 to 4, Native returns
+`RPE-DOCUMENT-0033` while PDFium produces `page_count=4`; this is an expected strictness difference.
+That real O4 comparison is still non-gating and unregistered, does not change this Native object
+loop's older `pages_processed=1` smoke classification, leaves the page-count feature `PLANNED`, and
+does not establish M1 exit.
+
 # Dependencies and generated data
 
 - Rust standard library.
@@ -219,7 +227,9 @@ interrupted-write recovery remain planned before T1 inputs.
   rendering, persistent/cross-session caching, page-tree variation, or the
   registered Native/PDFium semantic or pixel differential required by later
   milestones. Equality with one non-eligible external pageinfo smoke does not
-  advance the feature to DIFFERENTIAL.
+  advance the feature to DIFFERENTIAL. The separate real page-count probe adds exact, repeatable
+  valid observations plus one expected strictness difference, but remains non-gating and
+  unregistered and likewise does not advance the feature or complete M1 exit.
 
 # History
 
@@ -243,3 +253,5 @@ interrupted-write recovery remain planned before T1 inputs.
 - 2026-07-14: Counted the canonical strict page tree through the product API and
   recorded equality with the linked same-input PDFium build-readiness pageinfo
   smoke while retaining the explicit non-differential boundary.
+- 2026-07-14: Recorded the separate real page-count probe's exact repeatable valid results and
+  expected mismatched-root-Count strictness difference without changing this loop or M1 maturity.

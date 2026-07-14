@@ -4,22 +4,29 @@ use std::fmt::Write as _;
 use pdf_rs_baseline::{BaselineDescriptor, descriptor_identity};
 use pdf_rs_digest::sha256;
 
-const REPORT_ID: &str = "pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1";
-const REPORT_HASH: &str = "fb7ca7057d4a522f1e1d36418a237d0268c25933989db1fc34a618bd4d827b71";
+const REPORT_ID: &str = "pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1";
+const REPORT_HASH: &str = "44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878";
+const DATA_LEDGER_VERSION: &str = "0.9.0";
+const DATA_LEDGER_SOURCE_HASH: &str =
+    "44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878";
 const REPORT: &[u8] = include_bytes!(
+    "../pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml"
+);
+const PREREQUISITE_OUTLINE_EVIDENCE: &[u8] = include_bytes!(
     "../pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1.toml"
 );
-const PREREQUISITE_PIXEL_EVIDENCE: &[u8] =
-    include_bytes!("../pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml");
-const PREREQUISITE_PIXEL_BUILD_DEFINITION: &[u8] = include_bytes!("../pdfium/helper/BUILD.gn");
-const PREREQUISITE_PIXEL_HELPER_SOURCE: &[u8] =
-    include_bytes!("../pdfium/helper/pdf_rs_pdfium_adapter.cc");
-const PREREQUISITE_PIXEL_ROOT_OVERLAY: &[u8] = include_bytes!("../pdfium/helper/pdfium-root.patch");
-const BUILD_DEFINITION: &[u8] = include_bytes!("../pdfium/helper/outline.BUILD.gn");
-const HELPER_SOURCE: &[u8] = include_bytes!("../pdfium/helper/pdf_rs_pdfium_outline_probe.cc");
-const ROOT_OVERLAY: &[u8] = include_bytes!("../pdfium/helper/pdfium-outline-root.patch");
-const HOST_ADAPTER: &[u8] = include_bytes!("../src/pdfium.rs");
-const COMPARISON_TEST: &[u8] = include_bytes!("pdfium_outline_real_adapter.rs");
+const PREREQUISITE_OUTLINE_BUILD_DEFINITION: &[u8] =
+    include_bytes!("../pdfium/helper/outline.BUILD.gn");
+const PREREQUISITE_OUTLINE_HELPER_SOURCE: &[u8] =
+    include_bytes!("../pdfium/helper/pdf_rs_pdfium_outline_probe.cc");
+const PREREQUISITE_OUTLINE_ROOT_OVERLAY: &[u8] =
+    include_bytes!("../pdfium/helper/pdfium-outline-root.patch");
+const BUILD_DEFINITION: &[u8] = include_bytes!("../pdfium/helper/page_count.BUILD.gn");
+const HELPER_SOURCE: &[u8] = include_bytes!("../pdfium/helper/pdf_rs_pdfium_page_count_probe.cc");
+const ROOT_OVERLAY: &[u8] = include_bytes!("../pdfium/helper/pdfium-page-count-root.patch");
+const ADAPTER_CONFIG: &[u8] = include_bytes!("../pdfium/page_count_adapter.toml");
+const HOST_ADAPTER: &[u8] = include_bytes!("../src/pdfium_page_count.rs");
+const COMPARISON_TEST: &[u8] = include_bytes!("pdfium_page_count_real_adapter.rs");
 const PDFIUM_ARGS_GN: &str = concat!(
     "use_remoteexec = false\n",
     "is_debug = false\n",
@@ -36,7 +43,7 @@ const PDFIUM_ARGS_GN: &str = concat!(
 type Record = BTreeMap<String, String>;
 
 #[test]
-fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
+fn page_count_differential_evidence_is_hash_bound_and_scope_limited() {
     assert_eq!(hex(&sha256(REPORT).unwrap()), REPORT_HASH);
     let text = std::str::from_utf8(REPORT).unwrap();
     assert!(text.ends_with('\n'));
@@ -50,7 +57,7 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
     assert_eq!(quoted(&report, "id"), REPORT_ID);
     assert_eq!(
         quoted(&report, "evidence_class"),
-        "external-o4-outline-differential-probe"
+        "external-o4-page-count-differential-probe"
     );
     assert_eq!(quoted(&report, "engine"), "pdfium");
     assert_eq!(
@@ -64,7 +71,7 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
     );
     assert_eq!(
         quoted(&report, "adapter_profile"),
-        "pdfium-public-c-api-outline-v1"
+        "pdfium-public-c-api-page-count-v1"
     );
     assert_eq!(integer(&report, "runner_schema"), 2);
 
@@ -73,11 +80,11 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
         "public_pdfium_c_api_only",
         "protocol_identity_verified",
         "executable_hash_verified_before_runner_construction",
-        "normalized_public_api_observation",
-        "valid_fixture_hash_verified",
+        "single_fixture_hash_verified",
+        "nested_fixture_hash_verified",
+        "mismatched_root_count_fixture_hash_verified",
         "valid_repeat_outputs_identical",
-        "valid_observable_subset_exact",
-        "invalid_prev_fixture_hash_verified",
+        "valid_page_count_subset_exact",
         "native_engine_exercised",
         "pdfium_engine_exercised",
         "comparison_executed",
@@ -86,9 +93,7 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
         assert!(boolean(&report, key), "{key} must be true");
     }
     for key in [
-        "outline_root_count_compared",
-        "last_parent_prev_compared",
-        "raw_destination_action_shape_compared",
+        "correctness_eligible",
         "product_correctness_eligible",
         "performance_eligible",
         "differential_eligible",
@@ -98,7 +103,7 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
         "helper_binary_committed",
         "pdfium_source_committed",
         "fixture_pdf_committed",
-        "outline_json_bytes_committed",
+        "page_count_json_bytes_committed",
         "upstream_data_committed",
     ] {
         assert!(!boolean(&report, key), "{key} must be false");
@@ -106,42 +111,48 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
     assert_eq!(quoted(&report, "oracle_authority"), "O4");
     assert_eq!(
         quoted(&report, "verdict"),
-        "observable-subset-exact-with-expected-strictness-difference"
+        "valid-page-counts-exact-with-expected-strictness-difference"
     );
     assert_eq!(
-        quoted(&report, "invalid_prev_native_diagnostic"),
-        "RPE-DOCUMENT-0041"
+        quoted(&report, "mismatched_root_count_native_diagnostic"),
+        "RPE-DOCUMENT-0033"
     );
     assert_eq!(
-        quoted(&report, "invalid_prev_classification"),
+        quoted(&report, "mismatched_root_count_classification"),
         "expected-strictness-difference"
     );
-    assert!(quoted(&report, "invalid_prev_reason").contains("do not expose or validate"));
-    assert!(quoted(&report, "public_api_blind_spots").contains("Prev"));
+    assert!(quoted(&report, "mismatched_root_count_reason").contains("Count"));
+    assert_eq!(integer(&report, "mismatched_root_count_declared_count"), 4);
+    assert_eq!(
+        integer(&report, "mismatched_root_count_actual_leaf_pages"),
+        3
+    );
+    assert_eq!(integer(&report, "mismatched_root_count_pdfium_count"), 4);
 
     assert_digest(
         &report,
-        "prerequisite_pixel_evidence_sha256",
-        PREREQUISITE_PIXEL_EVIDENCE,
+        "prerequisite_outline_evidence_sha256",
+        PREREQUISITE_OUTLINE_EVIDENCE,
     );
     assert_digest(
         &report,
-        "prerequisite_pixel_build_definition_sha256",
-        PREREQUISITE_PIXEL_BUILD_DEFINITION,
+        "prerequisite_outline_build_definition_sha256",
+        PREREQUISITE_OUTLINE_BUILD_DEFINITION,
     );
     assert_digest(
         &report,
-        "prerequisite_pixel_helper_source_sha256",
-        PREREQUISITE_PIXEL_HELPER_SOURCE,
+        "prerequisite_outline_helper_source_sha256",
+        PREREQUISITE_OUTLINE_HELPER_SOURCE,
     );
     assert_digest(
         &report,
-        "prerequisite_pixel_root_overlay_sha256",
-        PREREQUISITE_PIXEL_ROOT_OVERLAY,
+        "prerequisite_outline_root_overlay_sha256",
+        PREREQUISITE_OUTLINE_ROOT_OVERLAY,
     );
     assert_digest(&report, "helper_build_definition_sha256", BUILD_DEFINITION);
     assert_digest(&report, "helper_source_sha256", HELPER_SOURCE);
     assert_digest(&report, "helper_root_overlay_sha256", ROOT_OVERLAY);
+    assert_digest(&report, "adapter_config_sha256", ADAPTER_CONFIG);
     assert_digest(&report, "host_adapter_source_sha256", HOST_ADAPTER);
     assert_digest(&report, "comparison_test_sha256", COMPARISON_TEST);
     assert_digest(&report, "build_flags_sha256", PDFIUM_ARGS_GN.as_bytes());
@@ -177,8 +188,9 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
         decoded_digest(&report, "descriptor_identity_sha256")
     );
 
-    assert_eq!(integer(&report, "helper_executable_bytes"), 3_710_416);
-    assert_eq!(integer(&report, "gn_targets_generated"), 599);
+    assert_eq!(integer(&report, "helper_executable_bytes"), 3_683_040);
+    assert_eq!(integer(&report, "gn_targets_generated"), 600);
+    assert_eq!(integer(&report, "gn_files_read"), 175);
     assert_eq!(integer(&report, "helper_build_steps"), 2);
     assert_eq!(integer(&report, "helper_build_exit_code"), 0);
     assert_eq!(quoted(&report, "helper_build_outcome"), "pass");
@@ -188,64 +200,69 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
     );
     assert_eq!(integer(&report, "manual_test_count"), 1);
     assert_eq!(integer(&report, "manual_test_passed"), 1);
-    assert_eq!(integer(&report, "helper_process_runs"), 3);
-    assert_eq!(integer(&report, "valid_probe_runs"), 2);
-    assert_eq!(integer(&report, "invalid_prev_probe_runs"), 1);
-    assert_eq!(integer(&report, "valid_fixture_bytes"), 786);
-    assert_eq!(integer(&report, "invalid_prev_fixture_bytes"), 786);
-    assert_eq!(integer(&report, "valid_observable_items"), 3);
-    assert_eq!(integer(&report, "valid_outline_json_bytes"), 197);
-    assert_eq!(integer(&report, "valid_different_observable_records"), 0);
+    assert_eq!(integer(&report, "helper_process_runs"), 6);
+    assert_eq!(integer(&report, "single_probe_runs"), 2);
+    assert_eq!(integer(&report, "nested_probe_runs"), 2);
+    assert_eq!(integer(&report, "mismatched_root_count_probe_runs"), 2);
+    assert_eq!(integer(&report, "single_fixture_bytes"), 346);
+    assert_eq!(integer(&report, "nested_fixture_bytes"), 665);
+    assert_eq!(integer(&report, "mismatched_root_count_fixture_bytes"), 665);
+    assert_eq!(integer(&report, "single_native_count"), 1);
+    assert_eq!(integer(&report, "single_pdfium_count"), 1);
+    assert_eq!(integer(&report, "nested_native_count"), 3);
+    assert_eq!(integer(&report, "nested_pdfium_count"), 3);
+    assert_eq!(integer(&report, "different_valid_page_count_records"), 0);
     assert_eq!(
-        quoted(&report, "valid_native_json_sha256"),
-        quoted(&report, "valid_pdfium_json_sha256")
+        quoted(&report, "single_native_json_sha256"),
+        quoted(&report, "single_pdfium_json_sha256")
     );
     assert_eq!(
-        quoted(&report, "valid_pdfium_json_sha256"),
-        quoted(&report, "invalid_prev_pdfium_json_sha256")
+        quoted(&report, "nested_native_json_sha256"),
+        quoted(&report, "nested_pdfium_json_sha256")
     );
 }
 
 #[test]
-fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
+fn page_count_evidence_is_data_bound_but_not_a_registered_baseline() {
     let ledger = include_str!("../../../docs/traceability/data-ledger.toml");
-    assert_line(ledger, "version = \"0.9.0\"");
+    assert_line(ledger, &format!("version = \"{DATA_LEDGER_VERSION}\""));
     let record = array_record(
         ledger,
         "data",
-        "baseline.evidence.pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1",
+        "baseline.evidence.pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1",
     );
     for expected in [
-        "kind = \"project-authored-external-o4-outline-differential-evidence\"",
-        "source = \"tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1.toml\"",
-        "source_hash = \"sha256:fb7ca7057d4a522f1e1d36418a237d0268c25933989db1fc34a618bd4d827b71\"",
-        "contains_personal_data = false",
-        "validated_by = \"cargo test --package pdf-rs-baseline --test repository_pdfium_outline_probe\"",
-        "owner = \"baseline-release\"",
+        "kind = \"project-authored-external-o4-page-count-differential-evidence\"".to_owned(),
+        "source = \"tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml\"".to_owned(),
+        format!("source_hash = \"sha256:{DATA_LEDGER_SOURCE_HASH}\""),
+        "contains_personal_data = false".to_owned(),
+        "validated_by = \"cargo test --package pdf-rs-baseline --test repository_pdfium_page_count_probe\"".to_owned(),
+        "owner = \"baseline-release\"".to_owned(),
     ] {
-        assert_line(record, expected);
+        assert_line(record, &expected);
     }
 
     let baseline = include_str!("../../../docs/traceability/baseline-ledger.toml");
     assert_line(baseline, "status = \"initial\"");
     assert_line(baseline, "baseline = []");
     assert!(!baseline.contains("[[baseline]]"));
+    assert!(!baseline.contains(REPORT_ID));
+    assert!(!baseline.contains("pdfium-public-c-api-page-count-v1"));
 
-    let adapter = include_str!("../pdfium/outline_adapter.toml");
+    let adapter = std::str::from_utf8(ADAPTER_CONFIG).unwrap();
     assert_line(
         adapter,
-        "adapter_profile = \"pdfium-public-c-api-outline-v1\"",
+        "adapter_profile = \"pdfium-public-c-api-page-count-v1\"",
     );
     assert_line(
         adapter,
-        "probe_evidence = \"evidence/pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1.toml\"",
+        "probe_evidence = \"evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml\"",
     );
     assert_line(
         adapter,
         "registration_status = \"blocked-incomplete-closure-and-sandbox\"",
     );
     assert!(adapter.contains("REQUIRED_BEFORE_REGISTERED_BASELINE"));
-    assert!(adapter.contains("strict_topology_blind_spots"));
 
     let readme = include_str!("../pdfium/README.md");
     let provenance = include_str!("../PROVENANCE.md");
@@ -253,7 +270,8 @@ fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
         assert!(document.contains(REPORT_ID));
         assert!(document.contains("non-gating"));
         assert!(document.contains("not a registered baseline"));
-        assert!(document.contains("/Prev"));
+        assert!(document.contains("PageTreeCountMismatch"));
+        assert!(document.contains("/Count"));
     }
     assert!(
         readme.contains(
@@ -262,18 +280,22 @@ fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
     );
 
     let feature_map = include_str!("../../../docs/traceability/feature-map.toml");
+    let page_count_feature = array_record(feature_map, "feature", "core.strict-page-count");
+    assert_line(page_count_feature, "profile = \"m1.strict-page-count.v1\"");
+    assert_line(page_count_feature, "state = \"PLANNED\"");
+    assert!(page_count_feature.contains("tools/baseline::pdfium_page_count_real_adapter"));
+    assert!(page_count_feature.contains("tools/baseline::repository_pdfium_page_count_probe"));
+
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
-    for map in [feature_map, spec_map] {
-        assert_line(map, "version = \"0.28.0\"");
-        assert!(map.contains("tools/baseline::pdfium_outline_real_adapter"));
-        assert!(map.contains("tools/baseline::repository_pdfium_outline_probe"));
-    }
+    assert!(spec_map.contains("tools/baseline::pdfium_page_count_real_adapter"));
+    assert!(spec_map.contains("tools/baseline::repository_pdfium_page_count_probe"));
+    assert!(spec_map.contains("PageTreeCountMismatch"));
     assert!(spec_map.contains("expected strictness difference"));
     assert!(spec_map.contains("not a registered baseline"));
 
     let ci = include_str!("../../../scripts/ci.sh");
-    assert!(!ci.contains("PDF_RS_PDFIUM_OUTLINE_ADAPTER"));
-    assert!(!ci.contains("pdf_rs_pdfium_outline_probe"));
+    assert!(!ci.contains("PDF_RS_PDFIUM_PAGE_COUNT_ADAPTER"));
+    assert!(!ci.contains("pdf_rs_pdfium_page_count_probe"));
 }
 
 fn parse_report(input: &str) -> Record {
