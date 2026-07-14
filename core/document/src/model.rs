@@ -1,10 +1,10 @@
 use std::fmt;
 
 use pdf_rs_bytes::SourceSnapshot;
-use pdf_rs_object::IndirectObjectTarget;
-use pdf_rs_syntax::ObjectRef;
+use pdf_rs_object::{IndirectObject, IndirectObjectTarget, IndirectObjectValue};
+use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfHeader};
 
-use crate::{DocumentError, DocumentErrorCode};
+use crate::{DocumentError, DocumentErrorCode, RevisionAttestationStats};
 
 /// Stable caller-assigned identity of one candidate PDF revision.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -83,6 +83,124 @@ pub struct DocumentIndexStats {
     pub(crate) in_use_entries: u64,
     pub(crate) logical_index_bytes: u64,
     pub(crate) sort_steps: u64,
+}
+
+/// Fixed-size evidence describing the framed value kind of one attested object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectAttestationKind {
+    /// The object contains the direct `null` value.
+    Null,
+    /// The object contains one direct boolean value.
+    Boolean,
+    /// The object contains one direct integer value.
+    Integer,
+    /// The object contains one direct real-number value.
+    Real,
+    /// The object contains one direct name value.
+    Name,
+    /// The object contains one direct string value.
+    String,
+    /// The object contains one direct array value.
+    Array,
+    /// The object contains one direct dictionary value.
+    Dictionary,
+    /// The object contains one direct indirect-reference value.
+    Reference,
+    /// The object contains a directly sized opaque stream payload and strict terminal framing.
+    Stream {
+        /// Checked source span of the opaque, unretained stream payload.
+        data_span: ByteSpan,
+        /// Exact source span of the validated `endstream` keyword.
+        endstream_span: ByteSpan,
+    },
+}
+
+/// Fixed-size proof record retained after one physical object has been framed at top level.
+///
+/// The record is deliberately not `Copy` or `Clone` and is exposed only by reference from its
+/// snapshot-owning [`AttestedRevisionIndex`]. It is evidence, not a standalone resolver token.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ObjectAttestation {
+    pub(crate) revision_id: RevisionId,
+    pub(crate) reference: ObjectRef,
+    pub(crate) xref_offset: u64,
+    pub(crate) object_upper_bound: u64,
+    pub(crate) header_span: ByteSpan,
+    pub(crate) object_span: ByteSpan,
+    pub(crate) endobj_span: ByteSpan,
+    pub(crate) kind: ObjectAttestationKind,
+}
+
+impl ObjectAttestation {
+    pub(crate) fn from_object(revision_id: RevisionId, object: &IndirectObject) -> Self {
+        let kind = match object.value() {
+            IndirectObjectValue::Direct(value) => match value.value() {
+                pdf_rs_syntax::SyntaxObject::Null => ObjectAttestationKind::Null,
+                pdf_rs_syntax::SyntaxObject::Boolean(_) => ObjectAttestationKind::Boolean,
+                pdf_rs_syntax::SyntaxObject::Integer(_) => ObjectAttestationKind::Integer,
+                pdf_rs_syntax::SyntaxObject::Real(_) => ObjectAttestationKind::Real,
+                pdf_rs_syntax::SyntaxObject::Name(_) => ObjectAttestationKind::Name,
+                pdf_rs_syntax::SyntaxObject::String(_) => ObjectAttestationKind::String,
+                pdf_rs_syntax::SyntaxObject::Array(_) => ObjectAttestationKind::Array,
+                pdf_rs_syntax::SyntaxObject::Dictionary(_) => ObjectAttestationKind::Dictionary,
+                pdf_rs_syntax::SyntaxObject::Reference(_) => ObjectAttestationKind::Reference,
+            },
+            IndirectObjectValue::Stream(stream) => ObjectAttestationKind::Stream {
+                data_span: stream.data_span(),
+                endstream_span: stream.endstream_span(),
+            },
+        };
+        Self {
+            revision_id,
+            reference: object.reference(),
+            xref_offset: object.xref_offset(),
+            object_upper_bound: object.object_upper_bound(),
+            header_span: object.header_span(),
+            object_span: object.object_span(),
+            endobj_span: object.endobj_span(),
+            kind,
+        }
+    }
+
+    /// Returns the candidate revision whose complete physical ordering was attested.
+    pub const fn revision_id(&self) -> RevisionId {
+        self.revision_id
+    }
+
+    /// Returns the exact object number and generation proved by the object header.
+    pub const fn reference(&self) -> ObjectRef {
+        self.reference
+    }
+
+    /// Returns the exact attested object-header offset.
+    pub const fn xref_offset(&self) -> u64 {
+        self.xref_offset
+    }
+
+    /// Returns the exclusive next-object or `startxref` bound used for framing.
+    pub const fn object_upper_bound(&self) -> u64 {
+        self.object_upper_bound
+    }
+
+    /// Returns the exact number, generation, and `obj` header span.
+    pub const fn header_span(&self) -> ByteSpan {
+        self.header_span
+    }
+
+    /// Returns the exact span from the object header through `endobj`.
+    pub const fn object_span(&self) -> ByteSpan {
+        self.object_span
+    }
+
+    /// Returns the exact terminal `endobj` keyword span.
+    pub const fn endobj_span(&self) -> ByteSpan {
+        self.endobj_span
+    }
+
+    /// Returns fixed-size direct or stream framing evidence without retained object bytes.
+    pub const fn kind(&self) -> ObjectAttestationKind {
+        self.kind
+    }
 }
 
 impl DocumentIndexStats {
@@ -203,7 +321,7 @@ impl CandidateRevisionIndex {
     ///
     /// The target is suitable only for the next object-header attestation phase. It must not be
     /// interpreted as proof that the xref offset is a top-level indirect object.
-    pub fn unattested_target(
+    pub(crate) fn unattested_target(
         &self,
         reference: ObjectRef,
     ) -> Result<IndirectObjectTarget, DocumentError> {
@@ -216,6 +334,93 @@ impl CandidateRevisionIndex {
             self.startxref,
         )
         .map_err(|error| DocumentError::from_object(error, reference, interval.xref_offset))
+    }
+}
+
+/// Fully top-level-attested index for one strict traditional base revision.
+///
+/// Construction is private to [`crate::AttestRevisionJob`]. The type proves that every in-use
+/// candidate was framed in physical order and that the prefix and every inter-object gap contain
+/// only terminated PDF comments and PDF whitespace through the revision `startxref`. It is not an
+/// object resolver and exposes neither a raw target nor a child object job.
+pub struct AttestedRevisionIndex {
+    pub(crate) candidate: CandidateRevisionIndex,
+    pub(crate) header: Located<PdfHeader>,
+    pub(crate) attestations: Vec<ObjectAttestation>,
+    pub(crate) attestation_stats: RevisionAttestationStats,
+}
+
+impl AttestedRevisionIndex {
+    /// Returns the immutable source snapshot covered by the attestation proof.
+    pub const fn snapshot(&self) -> SourceSnapshot {
+        self.candidate.snapshot
+    }
+
+    /// Returns the caller-assigned revision identity.
+    pub const fn revision_id(&self) -> RevisionId {
+        self.candidate.revision_id
+    }
+
+    /// Returns the traditional xref-table offset ending the attested object area.
+    pub const fn startxref(&self) -> u64 {
+        self.candidate.startxref
+    }
+
+    /// Returns the exact-generation in-use trailer root covered by the proof.
+    pub const fn root(&self) -> ObjectRef {
+        self.candidate.root
+    }
+
+    /// Returns the source-located supported PDF header at source offset zero.
+    pub const fn header(&self) -> &Located<PdfHeader> {
+        &self.header
+    }
+
+    /// Returns candidate-index construction accounting retained by the attested index.
+    pub const fn index_stats(&self) -> DocumentIndexStats {
+        self.candidate.stats
+    }
+
+    /// Returns cumulative work and retained-evidence accounting for attestation.
+    pub const fn attestation_stats(&self) -> RevisionAttestationStats {
+        self.attestation_stats
+    }
+
+    /// Returns all fixed-size object proofs in strictly increasing physical-offset order.
+    pub fn object_attestations(&self) -> &[ObjectAttestation] {
+        &self.attestations
+    }
+
+    /// Looks up fixed-size proof for one exact in-use object identity.
+    pub fn attestation(&self, reference: ObjectRef) -> Result<&ObjectAttestation, DocumentError> {
+        let interval = self.candidate.interval(reference)?;
+        self.attestations
+            .binary_search_by_key(&interval.xref_offset, |evidence| evidence.xref_offset)
+            .ok()
+            .and_then(|index| self.attestations.get(index))
+            .filter(|evidence| evidence.reference == reference)
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(reference),
+                    Some(interval.xref_offset),
+                )
+            })
+    }
+}
+
+impl fmt::Debug for AttestedRevisionIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttestedRevisionIndex")
+            .field("snapshot", &self.candidate.snapshot)
+            .field("revision_id", &self.candidate.revision_id)
+            .field("startxref", &self.candidate.startxref)
+            .field("root", &self.candidate.root)
+            .field("header", &self.header)
+            .field("attestation_stats", &self.attestation_stats)
+            .field("object_attestations", &"[REDACTED]")
+            .finish()
     }
 }
 

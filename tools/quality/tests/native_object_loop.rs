@@ -5,13 +5,13 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_document::{
-    CandidateRevisionIndex, DocumentLimits, NeverCancelled as NeverCancelledDocument, RevisionId,
+    AttestRevisionJob, CandidateRevisionIndex, DocumentLimits,
+    NeverCancelled as NeverCancelledDocument, ObjectAttestationKind, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
 };
 use pdf_rs_generate::generate_one_page_pdf;
-use pdf_rs_object::{
-    IndirectObjectValue, ObjectJobContext, ObjectLimits, ObjectPoll, OpenObjectJob,
-};
-use pdf_rs_syntax::{ObjectRef, SyntaxLimits, SyntaxObject};
+use pdf_rs_object::ObjectLimits;
+use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 use pdf_rs_xref::{OpenXrefJob, XrefEntryKind, XrefJobContext, XrefLimits, XrefPoll, XrefSection};
 
 const PDF_BYTES: u64 = 612;
@@ -91,7 +91,7 @@ fn parse_xref(store: &RangeStore) -> XrefSection {
 }
 
 #[test]
-fn generated_pdf_completes_xref_to_indirect_object_loop() {
+fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     let pdf = generate_one_page_pdf().expect("canonical PDF generation succeeds");
     let output_sha256 = sha256(&pdf).expect("canonical PDF fits the SHA-256 framing limit");
     let output_sha256_hex = hex_digest(&output_sha256);
@@ -231,43 +231,58 @@ fn generated_pdf_completes_xref_to_indirect_object_loop() {
         );
     }
 
-    let mut objects = Vec::with_capacity(OBJECT_OFFSETS.len());
-    for interval in candidate_index.physical_intervals() {
-        let reference = interval.reference();
-        let target = candidate_index
-            .unattested_target(reference)
-            .expect("canonical candidate interval yields a bounded unattested target");
-        assert_eq!(target.xref_offset(), interval.xref_offset());
-        assert_eq!(target.object_upper_bound(), interval.object_upper_bound());
-        assert_eq!(target.revision_startxref(), STARTXREF);
-        let number = u64::from(reference.number());
-        let mut job = OpenObjectJob::new(
-            target,
-            ObjectJobContext::new(
-                JobId::new(100 + number),
-                ResumeCheckpoint::new(200 + number * 2),
-                ResumeCheckpoint::new(201 + number * 2),
-                RequestPriority::VisiblePage,
-            ),
-            ObjectLimits::default(),
-            SyntaxLimits::default(),
-        )
-        .expect("canonical object job configuration is valid");
-        let object = match job.poll(&store, &pdf_rs_object::NeverCancelled) {
-            ObjectPoll::Ready(object) => object,
-            ObjectPoll::Pending { .. } => {
-                panic!("a fully supplied canonical PDF must not suspend object framing")
-            }
-            ObjectPoll::Failed(error) => panic!("canonical object must frame: {error}"),
-        };
-        objects.push(object);
-    }
+    let mut attestation_job = AttestRevisionJob::new(
+        candidate_index,
+        RevisionAttestationJobContext::new(
+            JobId::new(90),
+            ResumeCheckpoint::new(91),
+            ResumeCheckpoint::new(92),
+            ResumeCheckpoint::new(93),
+            RequestPriority::VisiblePage,
+        ),
+        RevisionAttestationLimits::default(),
+        ObjectLimits::default(),
+        SyntaxLimits::default(),
+    )
+    .expect("canonical revision-attestation job configuration is valid");
+    let attested = match attestation_job.poll(&store, &NeverCancelledDocument) {
+        RevisionAttestationPoll::Ready(index) => index,
+        RevisionAttestationPoll::Pending { .. } => {
+            panic!("a fully supplied canonical PDF must not suspend revision attestation")
+        }
+        RevisionAttestationPoll::Failed(error) => {
+            panic!("canonical strict base revision must attest: {error}")
+        }
+    };
 
+    assert_eq!(attested.snapshot(), source);
+    assert_eq!(attested.revision_id(), RevisionId::new(1));
+    assert_eq!(attested.startxref(), STARTXREF);
+    assert_eq!(attested.root(), ObjectRef::new(1, 0).unwrap());
+    assert_eq!(attested.header().source(), source.identity());
+    assert_eq!(
+        (
+            attested.header().span().start(),
+            attested.header().span().end_exclusive(),
+            attested.header().value().major(),
+            attested.header().value().minor(),
+        ),
+        (0, 8, 1, 7)
+    );
+    assert_eq!(attested.index_stats().total_entries(), 5);
+    let stats = attested.attestation_stats();
+    assert_eq!(stats.objects_attested(), 4);
+    assert!(stats.trivia_read_bytes() > 0);
+    assert!(stats.trivia_scan_bytes() > 0);
+    assert!(stats.object_read_bytes() > 0);
+    assert!(stats.object_parse_bytes() > 0);
+    assert!(stats.retained_evidence_bytes() > 0);
+
+    let objects = attested.object_attestations();
     assert_eq!(objects.len(), 4);
     for (index, object) in objects.iter().enumerate() {
         let number = u32::try_from(index + 1).unwrap();
-        assert_eq!(object.snapshot(), source);
-        assert_eq!(object.revision_startxref(), STARTXREF);
+        assert_eq!(object.revision_id(), RevisionId::new(1));
         assert_eq!(object.reference(), ObjectRef::new(number, 0).unwrap());
         assert_eq!(object.xref_offset(), OBJECT_OFFSETS[index]);
         assert_eq!(object.object_upper_bound(), OBJECT_UPPER_BOUNDS[index]);
@@ -298,38 +313,38 @@ fn generated_pdf_completes_xref_to_indirect_object_loop() {
     }
     assert!(objects[3].object_span().end_exclusive() <= section.startxref());
 
-    for object in &objects[..3] {
-        assert!(matches!(
-            object.value(),
-            IndirectObjectValue::Direct(value)
-                if value.source() == source.identity()
-                    && matches!(value.value(), SyntaxObject::Dictionary(_))
-        ));
+    for (index, object) in objects[..3].iter().enumerate() {
+        assert_eq!(object.kind(), ObjectAttestationKind::Dictionary);
+        assert_eq!(
+            attested
+                .attestation(ObjectRef::new(u32::try_from(index + 1).unwrap(), 0).unwrap())
+                .expect("attested exact reference remains lookup-addressable"),
+            object
+        );
     }
-    let IndirectObjectValue::Stream(stream) = objects[3].value() else {
+    let ObjectAttestationKind::Stream { data_span, .. } = objects[3].kind() else {
         panic!("canonical object four must be a stream");
     };
-    assert_eq!(stream.dictionary().source(), source.identity());
+    assert_eq!((data_span.start(), data_span.end_exclusive()), (427, 431));
     assert_eq!(
-        (
-            stream.data_span().start(),
-            stream.data_span().end_exclusive()
-        ),
-        (427, 431)
+        attested
+            .attestation(ObjectRef::new(4, 0).unwrap())
+            .expect("stream evidence remains lookup-addressable"),
+        &objects[3]
     );
-    let payload_start = usize::try_from(stream.data_span().start()).unwrap();
-    let payload_end = usize::try_from(stream.data_span().end_exclusive()).unwrap();
+    let payload_start = usize::try_from(data_span.start()).unwrap();
+    let payload_end = usize::try_from(data_span.end_exclusive()).unwrap();
     assert_eq!(&pdf[payload_start..payload_end], b"q\nQ\n");
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.14.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.14.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.15.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.15.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -353,6 +368,22 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(candidate_feature.contains("tools/quality::native_object_loop"));
     assert!(candidate_feature.contains("fuzz_targets = []"));
     assert!(candidate_feature.contains("benchmarks = []"));
+
+    let attestation_feature = record_with_id(
+        FEATURE_MAP,
+        "feature",
+        "core.strict-base-revision-attestation",
+    )
+    .expect("the strict base-revision attestation feature record must exist");
+    assert!(attestation_feature.contains("owner = \"parser-security\""));
+    assert!(attestation_feature.contains("state = \"PLANNED\""));
+    assert!(attestation_feature.contains("profile = \"m1.strict-base-revision-attestation.v1\""));
+    assert!(attestation_feature.contains("modules = [\"core/document\"]"));
+    assert!(attestation_feature.contains("core/document::revision_attestation"));
+    assert!(attestation_feature.contains("core/document::revision_attestation_limit_config"));
+    assert!(attestation_feature.contains("tools/quality::native_object_loop"));
+    assert!(attestation_feature.contains("fuzz_targets = []"));
+    assert!(attestation_feature.contains("benchmarks = []"));
 
     for requirement_id in [
         "RPE-ARCH-001/5.3",
@@ -379,7 +410,11 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")
         .expect("the xref architecture requirement must exist");
     assert!(xref_requirement.contains("\"core.base-revision-candidate-index\""));
+    assert!(xref_requirement.contains("\"core.strict-base-revision-attestation\""));
     assert!(xref_requirement.contains("\"core/document\""));
-    assert!(xref_requirement.contains("top-level attestation"));
+    assert!(xref_requirement.contains("header-to-startxref"));
+    assert!(xref_requirement.contains("line-terminated comments"));
+    assert!(xref_requirement.contains("not an object/reference resolver"));
+    assert!(xref_requirement.contains("Native/PDFium semantic or pixel differential"));
     assert!(xref_requirement.contains("does not claim M1 exit"));
 }

@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.14.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.14.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.15.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.15.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -93,6 +93,18 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(feature.contains("core/xref::source_error_policy"));
     assert!(feature.contains("core/xref::repository_policy"));
 
+    let attestation = record_with_id(
+        &feature_map,
+        "feature",
+        "core.strict-base-revision-attestation",
+    )
+    .expect("the strict base-revision attestation feature record must exist");
+    assert!(attestation.contains("profile = \"m1.strict-base-revision-attestation.v1\""));
+    assert!(attestation.contains("modules = [\"core/document\"]"));
+    assert!(attestation.contains("core/document::revision_attestation"));
+    assert!(attestation.contains("core/document::revision_attestation_limit_config"));
+    assert!(attestation.contains("tools/quality::native_object_loop"));
+
     let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
         .expect("the traditional-xref architecture requirement record must exist");
     assert!(requirement.contains("\"core.traditional-xref\""));
@@ -101,7 +113,22 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("core/xref::limit_config"));
     assert!(requirement.contains("core/xref::source_error_policy"));
     assert!(requirement.contains("core/xref::repository_policy"));
+    assert!(requirement.contains("\"core.strict-base-revision-attestation\""));
+    assert!(requirement.contains("core/document::revision_attestation"));
+    assert!(requirement.contains("core/document::revision_attestation_limit_config"));
     assert!(requirement.contains("tools/quality::native_object_loop"));
+    assert!(requirement.contains("header-to-startxref"));
+    assert!(requirement.contains("line-terminated comments"));
+    assert!(requirement.contains("not an object/reference resolver"));
+    assert!(requirement.contains("Xref streams"));
+    assert!(requirement.contains("hybrid files"));
+    assert!(requirement.contains("Prev chains"));
+    assert!(requirement.contains("object streams"));
+    assert!(requirement.contains("repair"));
+    assert!(requirement.contains("does not claim M1 exit"));
+    assert!(requirement.contains("ISO clause coverage"));
+    assert!(requirement.contains("R0 conformance"));
+    assert!(requirement.contains("Native/PDFium semantic or pixel differential"));
 }
 
 fn top_level_version(document: &str) -> Option<&str> {

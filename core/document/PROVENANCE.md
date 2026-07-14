@@ -1,17 +1,22 @@
 # Scope
 
-`core/document` currently builds only a `CandidateRevisionIndex` from one already parsed
-traditional `XrefSection`. It derives a strict physical upper bound for every in-use candidate and
-offers an explicitly named `unattested_target` handoff to `core/object`. It performs no file,
-network, data callback, async-runtime, object-body, or reference-resolution work; its only injected
-call is a bounded cooperative cancellation probe.
+`core/document` composes one already parsed traditional `XrefSection` in two explicit trust
+states. `CandidateRevisionIndex` derives unauthenticated physical intervals. `AttestRevisionJob`
+then consumes that candidate, validates a supported PDF header at source offset zero, frames every
+in-use object in physical order, and scans the prefix and every gap through `startxref` for only
+PDF whitespace and terminated comments. Only complete success publishes `AttestedRevisionIndex`.
+
+The crate performs no file, network, data callback, async-runtime, stream decoding, or reference
+resolution work. All source access is synchronous polling through an injected `ByteSource`; all
+long-running CPU work uses an injected cooperative cancellation probe.
 
 # Semantic owner
 
-Parser/Security owns revision composition, physical object indexing, and future object-header
-attestation. `core/xref` owns traditional xref parsing; `core/object` owns bounded indirect-object
-framing. This crate is the product composition layer between those siblings and does not move
-either lower-level responsibility.
+Parser/Security owns revision composition, physical object indexing, and top-level attestation.
+`core/xref` owns traditional xref parsing, `core/syntax` owns the supported header and direct-object
+grammar, `core/object` owns bounded indirect-object framing, and `core/bytes` owns immutable
+snapshot-bound exact reads. This crate composes those sibling results without moving their lower
+semantic responsibilities.
 
 # Normative sources
 
@@ -21,78 +26,125 @@ either lower-level responsibility.
 - [RPE-STD-001, sections 3, 5-6, and 8-9](../../docs/standards/coding-standard.md) requires stable
   structured errors, checked arithmetic, fallible bounded allocation, and redacted diagnostics.
 - [RPE-STD-002, sections 6-7](../../docs/standards/lifecycle-and-concurrency.md) requires cooperative
-  cancellation in long-running core work.
+  cancellation and stable terminal state for resumable core jobs.
 - [RPE-STD-005, sections 4-9](../../docs/standards/security-and-resource-budget.md) requires
-  deterministic entry, memory, and work budgets before processing untrusted structure.
+  deterministic entry, memory, scan, and child-work budgets before processing untrusted structure.
 
-This first slice does not claim an ISO 32000 conformance profile or R0 resolver coverage.
+This slice does not claim an ISO 32000 conformance profile or R0 resolver coverage.
 
 # Algorithms and derivations
 
-- Construction validates total and in-use row ceilings before retaining records. A conservative
-  fixed charge covers each allocator-reported logical-row and physical-interval capacity slot;
-  compile-time-sized tests ensure each charge dominates its Rust entry type. Both vectors use
-  `try_reserve_exact`, then validate their actual reported capacity, so allocator over-reservation
-  and allocation failure become structured resource exhaustion rather than hidden retained bytes
-  or panic.
+## Candidate physical index
+
+- Construction validates total and in-use row ceilings before retaining records. Conservative
+  fixed charges cover allocator-reported logical-row and physical-interval capacity; both vectors
+  use `try_reserve_exact`, then validate actual capacity.
 - In-use candidates are sorted by absolute offset with an in-repository heapsort. Comparisons and
   swaps consume `max_sort_steps`; cancellation is probed initially, after at most 256 sort steps,
   at completion, and at equivalent intervals in all other long loops.
-- Every in-use offset must be below the revision `startxref`, and duplicate physical offsets are
-  rejected. The next larger in-use offset becomes the exclusive object bound; `startxref` bounds
-  the last candidate. This prevents a candidate object job from reading past the next claimed
-  in-use offset; it does not authenticate either claim as a top-level object.
-- The logical index retains free rows and exact generations. `interval` reports distinct missing,
-  free, and generation-mismatch failures. The trailer `/Root` is independently required to match
-  one exact-generation in-use row before the candidate index is returned.
-- `unattested_target` supplies all five `IndirectObjectTarget` fields: immutable snapshot, exact
-  reference, xref offset, derived physical upper bound, and revision `startxref`.
+- Every in-use offset must be below `startxref`, duplicate offsets are rejected, the next larger
+  in-use offset bounds each candidate, and `startxref` bounds the last. Exact logical lookup keeps
+  missing, free, and generation-mismatch outcomes distinct.
+
+## Top-level attestation
+
+- `AttestRevisionJob` consumes, rather than borrows, a candidate. Its scan, object-envelope, and
+  object-boundary checkpoints must be pairwise distinct. A known immutable source length, object
+  count, parser-profile consistency, and retained-evidence reservation are checked before polling.
+- The first exact prefix request validates the existing syntax crate's supported eight-byte
+  `%PDF-x.y` header at absolute offset zero and independently requires byte 8 to be CR or LF. The
+  eight header bytes count toward exact prefix-read work but are not classified as a comment and do
+  not count toward trivia-scan or comment work.
+- After the header, the scanner accepts only the six PDF whitespace bytes (`NUL`, HT, LF, FF, CR,
+  and space) or `%` comments. A comment ends only when an actual CR or LF is consumed. Comment
+  state, start offset, length, and first-request charging survive chunk and `Pending` boundaries.
+  Reaching an object offset or `startxref` while still inside a comment is a stable syntax failure.
+- Objects are authenticated only in increasing physical-offset order. Before object `i` begins,
+  the complete prefix through its xref offset has an accepted decomposition of supported header,
+  top-level trivia, and every earlier exact object frame plus top-level trivia. `OpenObjectJob`
+  validates the exact number, generation, `obj` header, direct value or directly sized stream, and
+  terminal `endobj` without crossing the next candidate or `startxref` bound.
+- After each object is ready, its source/ref/offset/bounds and terminal spans are defensively
+  rechecked. A fixed-size, non-cloneable `ObjectAttestation` records only spans and a scalar syntax
+  kind and is exposed only by reference from its snapshot-owning index. Stream evidence retains
+  only the opaque payload and `endstream` spans; no parsed value or source bytes remain. Gaps are
+  scanned from exact `object_span.end_exclusive()` to the next physical boundary.
+- The last gap is the tail through `startxref`. A final cancellation probe precedes the single
+  transition that moves the candidate, supported header, and complete evidence vector into
+  `AttestedRevisionIndex`. No partial attested type exists.
+
+# Resource accounting and resumability
+
+- Revision-attestation limits independently bound source length, object count, exact scan chunk,
+  cumulative prefix/gap reads, one comment, aggregate child reads, aggregate child parses, and
+  retained evidence. Evidence is prechecked, reserved fallibly, charged by actual allocator
+  capacity with a conservative per-record constant, and guarded against `size_of` growth.
+- Every child receives `ObjectWorkCaps` equal to the smaller of its configured per-object total and
+  the parent's remaining aggregate budget. Object stats deltas are accumulated once per poll.
+  When the scoped cap is strictly smaller than the per-object cap, exhaustion maps to the parent
+  aggregate limit while retaining the complete lower `ObjectError`; an equal cap remains a lower
+  per-object failure.
+- A scan request is charged before `ByteSource::poll`. `Pending` preserves its exact range,
+  checkpoint, lexical state, and charged flag, so re-polling does not charge again. Source snapshot
+  equality is checked before cancellation on every active loop. Scanning probes cancellation after
+  at most 256 bytes and publication probes once more.
+- Terminal failure stores and replays the same copyable, source-redacted error. Lower
+  `ObjectError`, `SourceError`, and `SyntaxError` values remain available without retaining source
+  content. A completed one-shot job returns a stable `JobAlreadyComplete` error if polled again.
 
 # Trust boundary
 
-This index is deliberately a candidate artifact. Sorting xref offsets and deriving non-overlapping
-physical bounds does **not** prove that an offset occurs at PDF top level: an attacker-controlled
-xref may still point after whitespace inside a comment, literal string, hex string, or stream
-payload. A later document-owned attestation phase must establish top-level object-header context
-and revision semantics. Until that phase exists, `CandidateRevisionIndex`, its intervals, and its
-unattested targets must not be supplied to a trusted resolver or described as authenticated
-objects.
+`CandidateRevisionIndex`, its intervals, and its crate-private raw targets remain untrusted.
+`AttestedRevisionIndex` is privately constructed and exposes neither the candidate, a raw
+`IndirectObjectTarget`, nor an `OpenObjectJob`. It proves only this strict top-level physical
+decomposition for the bound immutable snapshot and current parser profile.
+
+The proof is deliberately closed-world: bytes between indexed in-use objects must be trivia.
+Stale free-object bodies, unindexed top-level objects, or other top-level tokens are rejected even
+when another PDF implementation might tolerate them. Opaque stream payload bytes need not be
+resident and are not decoded or semantically validated; their checked direct length and terminal
+framing only establish lexical extent.
 
 # External observations
 
 No PDFium, other PDF engine, third-party implementation source, or external output was used to
-derive this index.
+derive the candidate index or attestation state machine.
 
 # Dependencies and generated data
 
 The only dependencies are the in-repository `pdf-rs-bytes`, `pdf-rs-syntax`, `pdf-rs-xref`, and
-`pdf-rs-object` crates. There are no development dependencies, generated tables, corpus objects,
-platform I/O APIs, or async runtimes.
+`pdf-rs-object` crates. There are no development dependencies, generated tables, platform I/O
+APIs, external PDF engines, or async runtimes.
 
 # Tests
 
-Unit tests cover physical heapsort ordering, exact sort-budget exhaustion, the 256-step
-cancellation ceiling, and checked conservative index accounting. Limit tests cover defaults,
-positive minima, equality at all hard ceilings, every zero field, inconsistent entry ceilings,
-and every hard-ceiling-plus-one case. Public-path revision tests parse project-authored xref bytes
-through `RangeStore` and `OpenXrefJob`, then cover canonical and out-of-object-number-order
-intervals, duplicate/out-of-revision offsets, missing/free/generation lookup, pre-cancellation,
-and every five-field unattested target value. The quality loop also composes the canonical
-generator, xref parser, candidate index, and bounded object jobs. Repository policy checks the
-dependency allowlist, absence of development dependencies and platform/external-engine APIs, and
-crate-level unsafe-code and missing-documentation policy.
+Candidate tests cover physical sort ordering, exact sort-budget exhaustion, the 256-step
+cancellation ceiling, checked conservative accounting, exact logical lookup outcomes, duplicate
+and out-of-revision offsets, and trailer-root policy. Attestation unit tests guard fixed evidence
+size accounting, the exact six-byte whitespace set, eight-byte header parser minima, and aggregate
+versus per-object cap ties. Public behavior tests cover successful direct/stream kind evidence,
+header and gap policy, comment state across chunks, embedded candidate offsets, tail closure,
+pending idempotence, cancellation, snapshot mismatch, stable failure replay, and limit boundaries.
+Repository policy checks the sibling dependency allowlist and absence of platform/external-engine
+APIs.
 
 # Known deviations and unsupported cases
 
-- Only one already parsed traditional candidate revision is indexed. Revision chains, `/Prev`,
-  xref streams, hybrid references, object streams, and revision precedence remain unsupported.
-- Top-level object-header attestation and a trusted resolver are intentionally absent.
-- Candidate index construction is synchronous CPU work. Runtime scheduling and cancellation race
-  arbitration remain platform/runtime responsibilities.
-- Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or
+- Only one strict traditional base revision is accepted. Revision chains, `/Prev`, xref streams,
+  hybrid references, object streams, and revision precedence remain unsupported.
+- Attestation eagerly frames every in-use object. It is not the lazy document model or a complete
+  resolver; it does not validate reference targets, detect reference cycles, or retain object
+  values for later semantic access.
+- Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
+  payloads, catalog/page services, writer behavior, and document actions remain unsupported.
+- The closed-world trivia-gap policy is intentionally stricter than general PDF compatibility and
+  is not an ISO or R0 conformance claim.
+- Hard ceilings and defaults are bootstrap values, not a released `FuelSchedule` or
   `ReleaseProfile` decision.
 
 # History
 
 - 2026-07-13: Added candidate-only single-revision physical indexing, bounded cancellable sort,
-  exact lookup errors, and unattested five-field object targets.
+  exact lookup errors, and crate-private five-field object-target construction.
+- 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,
+  aggregate child work caps, fixed-size retained evidence, and atomic attested typestate.

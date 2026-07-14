@@ -1,10 +1,11 @@
 use std::error::Error;
 use std::fmt;
 
-use pdf_rs_object::{ObjectError, ObjectErrorCode};
-use pdf_rs_syntax::ObjectRef;
+use pdf_rs_bytes::{SourceError, SourceErrorCategory, SourceRecoverability};
+use pdf_rs_object::{ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectRecoverability};
+use pdf_rs_syntax::{ObjectRef, SyntaxError, SyntaxErrorCategory, SyntaxRecoverability};
 
-/// Deterministic candidate-index budget that rejected work.
+/// Deterministic candidate-index or revision-attestation budget that rejected work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentLimitKind {
     /// Total xref rows in one candidate revision.
@@ -17,9 +18,23 @@ pub enum DocumentLimitKind {
     SortSteps,
     /// Fallible bounded index-capacity reservation using conservative byte accounting.
     Allocation,
+    /// Immutable source bytes addressable by the revision-attestation profile.
+    AttestationSourceBytes,
+    /// In-use objects framed by one revision-attestation job.
+    AttestationObjects,
+    /// Cumulative prefix and inter-object trivia bytes.
+    AttestationTriviaBytes,
+    /// Bytes in one top-level PDF comment.
+    AttestationCommentBytes,
+    /// Cumulative exact ranges requested by child object jobs.
+    AttestationObjectReadBytes,
+    /// Cumulative parser-window bytes charged by child object jobs.
+    AttestationObjectParseBytes,
+    /// Conservatively accounted allocator capacity for retained fixed-size evidence.
+    AttestationEvidenceBytes,
 }
 
-/// Structured candidate-index resource-limit context without document bytes.
+/// Structured document-composition resource-limit context without document bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DocumentLimit {
     kind: DocumentLimitKind,
@@ -64,7 +79,7 @@ impl DocumentLimit {
     }
 }
 
-/// Stable machine-readable candidate-revision index failure.
+/// Stable machine-readable candidate-index or revision-attestation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentErrorCode {
     /// Document limit configuration is zero, inconsistent, or above hard ceilings.
@@ -91,9 +106,29 @@ pub enum DocumentErrorCode {
     TargetConstructionFailure,
     /// A checked candidate-index invariant could not be maintained.
     InternalState,
+    /// Runtime identity or phase checkpoints for revision attestation are inconsistent.
+    InvalidAttestationJobContext,
+    /// The source does not begin with a supported header followed by a line ending.
+    InvalidDocumentHeader,
+    /// A non-trivia byte occurs between top-level object frames.
+    TopLevelData,
+    /// A top-level comment reaches an object or xref boundary without a line ending.
+    UnterminatedTopLevelComment,
+    /// One candidate object could not be strictly framed and authenticated.
+    ObjectAttestationFailure,
+    /// Valid object syntax requires a deliberately unsupported framing capability.
+    UnsupportedObjectFraming,
+    /// The byte source no longer matches the attestation job's immutable snapshot.
+    SourceSnapshotMismatch,
+    /// The injected byte source failed while scanning top-level trivia.
+    SourceFailure,
+    /// An exact request inside the known immutable source unexpectedly reached EOF.
+    UnexpectedEndOfSource,
+    /// A completed one-shot revision-attestation job was polled again.
+    JobAlreadyComplete,
 }
 
-/// Coarse candidate-revision index failure category.
+/// Coarse document-composition failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentErrorCategory {
     /// Invalid deterministic configuration.
@@ -104,13 +139,17 @@ pub enum DocumentErrorCategory {
     Lookup,
     /// Deterministic work or allocation exhaustion.
     Resource,
+    /// Immutable byte-source failure or snapshot-integrity change.
+    Source,
+    /// Valid syntax requiring a deliberately unsupported capability.
+    Unsupported,
     /// Normal runtime cancellation.
     Cancellation,
     /// Internal checked invariant failure.
     Internal,
 }
 
-/// Stable recovery policy for a candidate-revision index failure.
+/// Stable recovery policy for a document-composition failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentRecoverability {
     /// Correct the deterministic limit profile before retrying.
@@ -121,6 +160,12 @@ pub enum DocumentRecoverability {
     CorrectReference,
     /// Reduce work or select an approved larger deterministic budget.
     ReduceWorkload,
+    /// Reopen against a newly bound immutable source snapshot.
+    ReopenSource,
+    /// Retry the host source operation while preserving snapshot identity.
+    RetrySource,
+    /// Select an implementation profile supporting the required feature.
+    UseSupportedFeature,
     /// Treat cancellation as a completed abandoned operation.
     AbandonOperation,
     /// Repeating the same operation is not an approved recovery action.
@@ -131,10 +176,15 @@ pub enum DocumentRecoverability {
 enum DocumentErrorDetail {
     None,
     Limit(DocumentLimit),
-    Object(ObjectErrorCode),
+    Object {
+        error: ObjectError,
+        aggregate_limit: Option<DocumentLimit>,
+    },
+    Source(SourceError),
+    Syntax(SyntaxError),
 }
 
-/// Source-redacted candidate-revision index error with stable policy metadata.
+/// Source-redacted document-composition error with stable policy metadata.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct DocumentError {
     code: DocumentErrorCode,
@@ -213,6 +263,56 @@ impl DocumentError {
                 DocumentRecoverability::DoNotRetry,
                 "RPE-DOCUMENT-0012",
             ),
+            DocumentErrorCode::InvalidAttestationJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0013",
+            ),
+            DocumentErrorCode::InvalidDocumentHeader => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0014",
+            ),
+            DocumentErrorCode::TopLevelData => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0015",
+            ),
+            DocumentErrorCode::UnterminatedTopLevelComment => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0016",
+            ),
+            DocumentErrorCode::ObjectAttestationFailure => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0017",
+            ),
+            DocumentErrorCode::UnsupportedObjectFraming => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0018",
+            ),
+            DocumentErrorCode::SourceSnapshotMismatch => (
+                DocumentErrorCategory::Source,
+                DocumentRecoverability::ReopenSource,
+                "RPE-DOCUMENT-0019",
+            ),
+            DocumentErrorCode::SourceFailure => (
+                DocumentErrorCategory::Source,
+                DocumentRecoverability::RetrySource,
+                "RPE-DOCUMENT-0020",
+            ),
+            DocumentErrorCode::UnexpectedEndOfSource => (
+                DocumentErrorCategory::Source,
+                DocumentRecoverability::ReopenSource,
+                "RPE-DOCUMENT-0021",
+            ),
+            DocumentErrorCode::JobAlreadyComplete => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0022",
+            ),
         };
         Self {
             code,
@@ -257,11 +357,178 @@ impl DocumentError {
             diagnostic_id: "RPE-DOCUMENT-0011",
             reference: Some(reference),
             offset: Some(offset),
-            detail: DocumentErrorDetail::Object(error.code()),
+            detail: DocumentErrorDetail::Object {
+                error,
+                aggregate_limit: None,
+            },
         }
     }
 
-    /// Returns the machine-readable document-index failure code.
+    pub(crate) const fn from_attestation_object(
+        error: ObjectError,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Self {
+        let code = match error.category() {
+            ObjectErrorCategory::Resource => DocumentErrorCode::ResourceLimit,
+            _ => match error.code() {
+                ObjectErrorCode::Cancelled => DocumentErrorCode::Cancelled,
+                ObjectErrorCode::UnsupportedIndirectLength => {
+                    DocumentErrorCode::UnsupportedObjectFraming
+                }
+                ObjectErrorCode::SnapshotMismatch => DocumentErrorCode::SourceSnapshotMismatch,
+                ObjectErrorCode::SourceFailure => DocumentErrorCode::SourceFailure,
+                ObjectErrorCode::UnexpectedEndOfSource => DocumentErrorCode::UnexpectedEndOfSource,
+                ObjectErrorCode::InvalidTarget
+                | ObjectErrorCode::InternalState
+                | ObjectErrorCode::JobAlreadyComplete => DocumentErrorCode::InternalState,
+                _ => DocumentErrorCode::ObjectAttestationFailure,
+            },
+        };
+        let category = match error.category() {
+            ObjectErrorCategory::Configuration => DocumentErrorCategory::Configuration,
+            ObjectErrorCategory::Source => DocumentErrorCategory::Source,
+            ObjectErrorCategory::Syntax => DocumentErrorCategory::Syntax,
+            ObjectErrorCategory::Unsupported => DocumentErrorCategory::Unsupported,
+            ObjectErrorCategory::Resource => DocumentErrorCategory::Resource,
+            ObjectErrorCategory::Cancellation => DocumentErrorCategory::Cancellation,
+            ObjectErrorCategory::Internal => DocumentErrorCategory::Internal,
+        };
+        let recoverability = match error.recoverability() {
+            ObjectRecoverability::CorrectConfiguration => {
+                DocumentRecoverability::CorrectConfiguration
+            }
+            ObjectRecoverability::CorrectInput => DocumentRecoverability::CorrectInput,
+            ObjectRecoverability::ReopenSource => DocumentRecoverability::ReopenSource,
+            ObjectRecoverability::RetrySource => DocumentRecoverability::RetrySource,
+            ObjectRecoverability::ReduceWorkload => DocumentRecoverability::ReduceWorkload,
+            ObjectRecoverability::UseSupportedFeature => {
+                DocumentRecoverability::UseSupportedFeature
+            }
+            ObjectRecoverability::AbandonOperation => DocumentRecoverability::AbandonOperation,
+            ObjectRecoverability::DoNotRetry => DocumentRecoverability::DoNotRetry,
+        };
+        let base = Self::for_code(
+            code,
+            match error.reference() {
+                Some(lower_reference) => Some(lower_reference),
+                None => Some(reference),
+            },
+            match error.offset() {
+                Some(lower_offset) => Some(lower_offset),
+                None => Some(offset),
+            },
+        );
+        Self {
+            category,
+            recoverability,
+            detail: DocumentErrorDetail::Object {
+                error,
+                aggregate_limit: None,
+            },
+            ..base
+        }
+    }
+
+    pub(crate) const fn aggregate_object_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        error: ObjectError,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: match error.reference() {
+                Some(lower_reference) => Some(lower_reference),
+                None => Some(reference),
+            },
+            offset: match error.offset() {
+                Some(lower_offset) => Some(lower_offset),
+                None => Some(offset),
+            },
+            detail: DocumentErrorDetail::Object {
+                error,
+                aggregate_limit: Some(DocumentLimit::new(kind, limit, consumed, attempted)),
+            },
+        }
+    }
+
+    pub(crate) const fn from_source(error: SourceError, offset: u64) -> Self {
+        let code = match error.category() {
+            SourceErrorCategory::Integrity => DocumentErrorCode::SourceSnapshotMismatch,
+            SourceErrorCategory::Resource => DocumentErrorCode::ResourceLimit,
+            _ => DocumentErrorCode::SourceFailure,
+        };
+        let category = match error.category() {
+            SourceErrorCategory::Input | SourceErrorCategory::Lifecycle => {
+                DocumentErrorCategory::Configuration
+            }
+            SourceErrorCategory::Integrity | SourceErrorCategory::Availability => {
+                DocumentErrorCategory::Source
+            }
+            SourceErrorCategory::Resource => DocumentErrorCategory::Resource,
+            SourceErrorCategory::Internal => DocumentErrorCategory::Internal,
+        };
+        let recoverability = match error.recoverability() {
+            SourceRecoverability::CorrectInput => DocumentRecoverability::CorrectConfiguration,
+            SourceRecoverability::ReopenSource => DocumentRecoverability::ReopenSource,
+            SourceRecoverability::ReduceWorkload => DocumentRecoverability::ReduceWorkload,
+            SourceRecoverability::RetrySource => DocumentRecoverability::RetrySource,
+            SourceRecoverability::DoNotRetry => DocumentRecoverability::DoNotRetry,
+        };
+        let base = Self::for_code(code, None, Some(offset));
+        Self {
+            category,
+            recoverability,
+            detail: DocumentErrorDetail::Source(error),
+            ..base
+        }
+    }
+
+    pub(crate) const fn from_header_syntax(error: SyntaxError) -> Self {
+        let code = match error.category() {
+            SyntaxErrorCategory::Resource => DocumentErrorCode::ResourceLimit,
+            SyntaxErrorCategory::Integrity => DocumentErrorCode::SourceSnapshotMismatch,
+            SyntaxErrorCategory::Cancellation => DocumentErrorCode::Cancelled,
+            SyntaxErrorCategory::Internal => DocumentErrorCode::InternalState,
+            SyntaxErrorCategory::Configuration | SyntaxErrorCategory::Syntax => {
+                DocumentErrorCode::InvalidDocumentHeader
+            }
+        };
+        let category = match error.category() {
+            SyntaxErrorCategory::Configuration => DocumentErrorCategory::Configuration,
+            SyntaxErrorCategory::Syntax => DocumentErrorCategory::Syntax,
+            SyntaxErrorCategory::Resource => DocumentErrorCategory::Resource,
+            SyntaxErrorCategory::Integrity => DocumentErrorCategory::Source,
+            SyntaxErrorCategory::Cancellation => DocumentErrorCategory::Cancellation,
+            SyntaxErrorCategory::Internal => DocumentErrorCategory::Internal,
+        };
+        let recoverability = match error.recoverability() {
+            SyntaxRecoverability::CorrectConfiguration => {
+                DocumentRecoverability::CorrectConfiguration
+            }
+            SyntaxRecoverability::CorrectInput => DocumentRecoverability::CorrectInput,
+            SyntaxRecoverability::ReduceWorkload => DocumentRecoverability::ReduceWorkload,
+            SyntaxRecoverability::ReopenSource => DocumentRecoverability::ReopenSource,
+            SyntaxRecoverability::AbandonOperation => DocumentRecoverability::AbandonOperation,
+            SyntaxRecoverability::DoNotRetry => DocumentRecoverability::DoNotRetry,
+        };
+        let base = Self::for_code(code, None, error.offset());
+        Self {
+            category,
+            recoverability,
+            detail: DocumentErrorDetail::Syntax(error),
+            ..base
+        }
+    }
+
+    /// Returns the machine-readable document-composition failure code.
     pub const fn code(self) -> DocumentErrorCode {
         self.code
     }
@@ -295,18 +562,56 @@ impl DocumentError {
     pub const fn limit(self) -> Option<DocumentLimit> {
         match self.detail {
             DocumentErrorDetail::Limit(limit) => Some(limit),
-            DocumentErrorDetail::None | DocumentErrorDetail::Object(_) => None,
+            DocumentErrorDetail::Object {
+                aggregate_limit, ..
+            } => aggregate_limit,
+            DocumentErrorDetail::None
+            | DocumentErrorDetail::Source(_)
+            | DocumentErrorDetail::Syntax(_) => None,
         }
     }
 
-    /// Returns the retained lower object-target error code, when applicable.
-    ///
-    /// Only the stable code is retained so reporting malformed input never requires a secondary
-    /// allocation and the document error remains cheap to return by value.
+    /// Returns the code of the complete retained lower object error, when applicable.
     pub const fn object_error_code(self) -> Option<ObjectErrorCode> {
         match self.detail {
-            DocumentErrorDetail::Object(code) => Some(code),
-            DocumentErrorDetail::None | DocumentErrorDetail::Limit(_) => None,
+            DocumentErrorDetail::Object { error, .. } => Some(error.code()),
+            DocumentErrorDetail::None
+            | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Source(_)
+            | DocumentErrorDetail::Syntax(_) => None,
+        }
+    }
+
+    /// Returns the complete retained lower object error, when applicable.
+    pub const fn object_error(self) -> Option<ObjectError> {
+        match self.detail {
+            DocumentErrorDetail::Object { error, .. } => Some(error),
+            DocumentErrorDetail::None
+            | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Source(_)
+            | DocumentErrorDetail::Syntax(_) => None,
+        }
+    }
+
+    /// Returns the retained lower byte-source error, directly or through an object job.
+    pub const fn source_error(self) -> Option<SourceError> {
+        match self.detail {
+            DocumentErrorDetail::Source(error) => Some(error),
+            DocumentErrorDetail::Object { error, .. } => error.source_error(),
+            DocumentErrorDetail::None
+            | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Syntax(_) => None,
+        }
+    }
+
+    /// Returns the retained lower syntax error, directly or through an object job.
+    pub const fn syntax_error(self) -> Option<SyntaxError> {
+        match self.detail {
+            DocumentErrorDetail::Syntax(error) => Some(error),
+            DocumentErrorDetail::Object { error, .. } => error.syntax_error(),
+            DocumentErrorDetail::None
+            | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Source(_) => None,
         }
     }
 }
@@ -340,7 +645,7 @@ impl fmt::Display for DocumentError {
         if let Some(offset) = self.offset {
             write!(formatter, " at byte {offset}")?;
         }
-        if let DocumentErrorDetail::Limit(limit) = self.detail {
+        if let Some(limit) = self.limit() {
             write!(
                 formatter,
                 " limit_kind={:?} limit={} consumed={} attempted={}",

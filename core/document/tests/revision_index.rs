@@ -129,7 +129,7 @@ fn canonical_rows() -> [Row; 5] {
 }
 
 #[test]
-fn canonical_revision_yields_exact_intervals_and_five_field_unattested_targets() {
+fn canonical_revision_yields_exact_unattested_physical_intervals() {
     let bytes = build_pdf(CANONICAL_STARTXREF, &canonical_rows(), (1, 0));
     let candidate = index(&bytes);
     let source = snapshot(u64::try_from(bytes.len()).unwrap());
@@ -160,13 +160,6 @@ fn canonical_revision_yields_exact_intervals_and_five_field_unattested_targets()
         assert_eq!(interval.len(), upper_bound - offset);
         assert!(!interval.is_empty());
         assert_eq!(candidate.interval(reference).unwrap(), interval);
-
-        let target = candidate.unattested_target(reference).unwrap();
-        assert_eq!(target.snapshot(), source);
-        assert_eq!(target.reference(), reference);
-        assert_eq!(target.xref_offset(), offset);
-        assert_eq!(target.object_upper_bound(), upper_bound);
-        assert_eq!(target.revision_startxref(), CANONICAL_STARTXREF);
     }
 }
 
