@@ -73,7 +73,7 @@ fn product_source_remains_exclusive_runtime_owner_code_without_io_or_async() {
 }
 
 #[test]
-fn product_dependencies_are_only_cache_and_direct_signature_document_types() {
+fn product_dependencies_are_only_bytes_cache_and_direct_signature_document_types() {
     let manifest = fs::read_to_string(crate_root().join("Cargo.toml"))
         .expect("session manifest must be readable");
     let dependency_block = manifest
@@ -86,7 +86,10 @@ fn product_dependencies_are_only_cache_and_direct_signature_document_types() {
         .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
         .filter(|name| !name.is_empty())
         .collect();
-    assert_eq!(names, BTreeSet::from(["pdf-rs-cache", "pdf-rs-document"]));
+    assert_eq!(
+        names,
+        BTreeSet::from(["pdf-rs-bytes", "pdf-rs-cache", "pdf-rs-document"])
+    );
     assert!(!manifest.contains("tools/"));
     assert!(!manifest.contains("[build-dependencies]"));
     assert!(!manifest.contains("[target."));

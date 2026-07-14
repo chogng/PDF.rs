@@ -1,11 +1,10 @@
-//! Ready-state session ownership for one bounded session-only cache.
+//! Bounded Range-resume arbitration and Ready-state session ownership.
 //!
-//! This crate owns the lifetime of exactly one [`pdf_rs_cache::ReadyStore`]
-//! after a document has reached Ready. It rejects cache operations after close,
-//! preserves move-only successful values on admission failure, and synchronously
-//! drops all store values and fixed metadata before close returns. It does not
-//! implement document opening, request draining, event publication, scheduling,
-//! surface reclamation, or the complete protocol-visible Session state machine.
+//! This crate owns two deliberately small runtime slices: snapshot-bound Range
+//! subscriptions between resumable core jobs and an external scheduler, plus the
+//! lifetime of exactly one [`pdf_rs_cache::ReadyStore`] after a document has
+//! reached Ready. Neither slice performs file, network, platform, or async I/O.
+//! They do not implement the complete protocol-visible Session state machine.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -17,6 +16,8 @@
 
 mod error;
 mod owner;
+mod range_resume;
+mod range_resume_error;
 
 pub use error::{
     ReadySessionAdmissionError, ReadySessionError, ReadySessionErrorCategory,
@@ -24,4 +25,13 @@ pub use error::{
 };
 pub use owner::{
     ReadySessionCloseReport, ReadySessionOwner, ReadySessionPhase, ReadySessionResources,
+};
+pub use range_resume::{
+    RangeResumeArbiter, RangeResumeCancelOutcome, RangeResumeDispatch, RangeResumeGeneration,
+    RangeResumePhase, RangeResumeRegistrationOutcome, RangeResumeReleaseReport,
+    RangeResumeResources, RangeResumeSupplyOutcome, RangeResumeTarget,
+};
+pub use range_resume_error::{
+    RangeResumeError, RangeResumeErrorCategory, RangeResumeErrorCode, RangeResumeLimit,
+    RangeResumeRecoverability,
 };
