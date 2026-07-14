@@ -10,7 +10,9 @@ strict base-revision index, then back through its proof-preserving object-access
 capability into all four parsed values and through its bounded top-level
 reference-chain capability into the catalog root. The loop also checks the
 portable component relationships of the value-owned resident-footprint evidence
-published by those successful document results.
+published by those successful document results, then passes the resolved catalog
+through the product Ready-session owner for admission, borrowed lookup, and
+synchronous idempotent close with explicit released-resource evidence.
 
 # Semantic owner
 
@@ -19,6 +21,8 @@ Quality/Corpus workstream.
 # Normative sources
 
 - RPE-ARCH-001 decisions AD-004, AD-012 and sections 12.3-12.6, 12.18, 15.3.
+- RPE-ARCH-001 section 9.1 and RPE-STD-002 sections 5 and 10 define the
+  single-owner Ready-cache and session-close integration exercised by the loop.
 - RPE-STD-001 sections 2, 5, 6, and 9.
 - RPE-STD-003 sections 4-8, 19, and 20.
 - RPE-STD-004 sections 4, 11, 12, and 15.
@@ -55,8 +59,8 @@ object/syntax profile and explicit work caps. Each job must reproduce its fixed
 evidence before the test can inspect the three dictionary values and one framed
 stream value. No raw object target, lower object job, or unwrapped object crosses
 the document capability boundary. This test-only composition preserves the
-product dependency direction and does not stand in for a reference resolver or
-broader document service.
+product dependency direction and does not stand in for a complete reference
+resolver or broader document service.
 
 Every reopened object is also required to publish a checked footprint whose
 inline component equals that result's runtime Rust size, whose syntax component
@@ -76,6 +80,17 @@ multi-hop alias; those cases belong to the document component tests.
 The resolved result's checked footprint must likewise match its runtime inline
 size, the terminal object's syntax heap capacity, and the already-accounted
 reference-chain backing capacity exactly once.
+
+The loop constructs the complete session binding and gives a
+`ReadySessionOwner` exclusive ownership of the bounded store. It admits the
+resolved catalog, validates one exact-key borrowed hit and the same Catalog/Pages
+semantics, then releases that borrow before close. The close report must match the
+one admitted entry, precharged metadata, retained value heap, total resident
+bytes, and peak. After close every current resource counter is zero, and repeated
+close must return the exact same report. This proves executable ownership for the
+isolated Ready store; it is not a complete protocol Session, event publisher,
+request drain, allocator/RSS measurement, persistent cache, or cross-session
+cache.
 
 Bundle addresses hash a domain separator followed by lexically sorted artifact
 names and length-prefixed bytes, including the validated source `case.toml` and
@@ -106,8 +121,8 @@ used to exercise the artifact channel; they are not PDFium output.
 - Rust standard library.
 - Local tooling crates `pdf-rs-generate`, `pdf-rs-compare`, `pdf-rs-digest`,
   plus test-only `pdf-rs-corpus`, `pdf-rs-benchmark`, `pdf-rs-bytes`,
-  `pdf-rs-syntax`, `pdf-rs-xref`, `pdf-rs-object`, and `pdf-rs-document`
-  dependencies.
+  `pdf-rs-syntax`, `pdf-rs-xref`, `pdf-rs-object`, `pdf-rs-document`,
+  `pdf-rs-cache`, and `pdf-rs-session` dependencies.
 - No external packages, engines, fonts, color data, or user documents.
 
 # Tests and fuzz targets
@@ -129,7 +144,9 @@ non-gating PDFium O4 record. It also covers terminal catalog resolution through
 the single-job reference-chain API and its aggregate accounting. For all four
 reopened objects and the resolved catalog it additionally covers checked
 resident-footprint component relationships and totals without hardcoding
-platform-dependent sizes.
+platform-dependent sizes. The same loop covers owner admission, the borrowed
+warm hit, report-accounted full-store close, zero post-close resources, and
+idempotent repeated close.
 
 This is not a registered fuzz target. It has no coverage guidance, randomness,
 dictionary, corpus growth, sanitizer, watchdog, minimizer, nightly campaign, or
@@ -159,14 +176,17 @@ interrupted-write recovery remain planned before T1 inputs.
   crosses the current xref/candidate/strict-attestation/object-access API
   boundary and one terminal root crosses the bounded reference-chain API. Access
   caps and chain aggregates are per job; they do not provide persistent resolver-
-  or session-wide accounting. The resident-footprint values do not create a
-  cache, reserve or evict memory, include allocator metadata, source storage, or
-  stream payloads, or establish a cross-job resident owner. This test does not
-  provide nested reference-graph
-  traversal, multi-hop/cycle coverage, a Ready cache, concurrent coalescing,
-  xref-stream, hybrid, `/Prev` or object-stream support, repair, R0 or ISO
-  conformance, filter decoding, content interpretation, rendering, or the
-  Native/PDFium semantic or pixel differential required by later milestones.
+  or session-wide work accounting. Resident-footprint values remain admission
+  evidence rather than reservations, but the resolved catalog is now separately
+  admitted to one real bounded session-only Ready store and that store is closed
+  through its product owner. Its accounting excludes allocator metadata, source
+  storage, stream payloads, and RSS. This test does not provide nested
+  reference-graph traversal, multi-hop/cycle coverage, multi-entry eviction,
+  concurrent coalescing, failure caching, a complete Session actor or
+  `SessionClosed` event, xref-stream, hybrid, `/Prev` or object-stream support,
+  repair, R0 or ISO conformance, filter decoding, content interpretation,
+  rendering, persistent/cross-session caching, or the Native/PDFium semantic or
+  pixel differential required by later milestones.
 
 # History
 
@@ -184,3 +204,6 @@ interrupted-write recovery remain planned before T1 inputs.
 - 2026-07-13: Checked runtime resident-footprint relationships for every reopened
   object and the resolved catalog without changing the non-differential PDFium
   boundary.
+- 2026-07-14: Routed the resolved catalog through the Ready-session owner and
+  verified admission, borrowed semantics, full-store close accounting, zero
+  post-close resources, and idempotent repeated close.

@@ -17,5 +17,6 @@ pdf-rs-cache = { path = "../../runtime/cache" }
 pdf-rs-corpus = { path = "../corpus" }
 pdf-rs-document = { path = "../../core/document" }
 pdf-rs-object = { path = "../../core/object" }
+pdf-rs-session = { path = "../../runtime/session" }
 pdf-rs-syntax = { path = "../../core/syntax" }
 pdf-rs-xref = { path = "../../core/xref" }

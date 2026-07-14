@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.21.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.21.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.22.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.22.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -191,13 +191,19 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let ready_store_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/9.1")
         .expect("the session Ready-store architecture requirement record must exist");
     assert!(ready_store_requirement.contains("\"runtime.session-ready-store\""));
+    assert!(ready_store_requirement.contains("\"runtime.ready-session-owner\""));
     assert!(ready_store_requirement.contains("\"runtime/cache\""));
+    assert!(ready_store_requirement.contains("\"runtime/session\""));
     assert!(ready_store_requirement.contains("runtime/cache::ready_store"));
     assert!(ready_store_requirement.contains("runtime/cache::repository_policy"));
     assert!(ready_store_requirement.contains("tools/quality::native_object_loop"));
     assert!(ready_store_requirement.contains("session binding"));
     assert!(ready_store_requirement.contains("exact-key borrowed warm hit"));
-    assert!(ready_store_requirement.contains("metadata-only ownership"));
+    assert!(ready_store_requirement.contains("post-close resources are zero"));
+    assert!(
+        ready_store_requirement
+            .contains("close report exactly matches the admitted resident total")
+    );
     assert!(ready_store_requirement.contains("Persistent caching"));
     assert!(ready_store_requirement.contains("cross-session reuse"));
     assert!(ready_store_requirement.contains("runtime close ownership"));
@@ -206,12 +212,13 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let quality_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M0")
         .expect("the M0 quality architecture requirement record must exist");
     assert!(quality_requirement.contains("tools/quality::native_object_loop"));
-    assert!(quality_requirement.contains("session Ready-store admission"));
+    assert!(quality_requirement.contains("ReadySessionOwner"));
     assert!(quality_requirement.contains("exact-key borrowed warm hit"));
-    assert!(quality_requirement.contains("metadata-only ownership"));
+    assert!(quality_requirement.contains("admitted released-resource total"));
+    assert!(quality_requirement.contains("zero post-close resources"));
     assert!(quality_requirement.contains("persistent caching"));
     assert!(quality_requirement.contains("cross-session reuse"));
-    assert!(quality_requirement.contains("runtime session-close ownership"));
+    assert!(quality_requirement.contains("complete Session actor"));
     assert!(quality_requirement.contains("Native/PDFium differential evidence"));
 }
 

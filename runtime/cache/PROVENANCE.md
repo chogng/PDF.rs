@@ -7,12 +7,13 @@ work coalescing, persistence, or cross-session sharing.
 
 # Semantic owner
 
-`runtime/cache` owns cache-key, admission, accounting, and eviction semantics. A future runtime
-session/Document actor owns each store instance and must drop it during session close; platform
-code may supply validated configuration but does not own cache semantics. `core/document` owns
-proof-bearing values, immutable revision identity, parser profiles, resolution profiles, and
-value-owned footprint evidence. Complete keys and deterministic eviction remain cache-owned; the
-cache does not weaken or reconstruct document proof.
+`runtime/cache` owns cache-key, admission, accounting, and eviction semantics. The
+`ReadySessionOwner` in `runtime/session` owns each Ready-store instance and drops it during its
+synchronous close boundary; a future complete session actor must compose that owner with every
+other session resource. Platform code may supply validated configuration but does not own cache
+semantics. `core/document` owns proof-bearing values, immutable revision identity, parser profiles,
+resolution profiles, and value-owned footprint evidence. Complete keys and deterministic eviction
+remain cache-owned; the cache does not weaken or reconstruct document proof.
 
 # Normative sources
 
@@ -33,7 +34,8 @@ cache does not weaken or reconstruct document proof.
   caller-supplied cache-policy/schema epoch. Entry keys add the requested root and exact
   `ReferenceChainLimits`, preventing a warm value produced under a larger cold-path budget from
   bypassing a stricter request. The epoch names the cache namespace; it is not resolver-production
-  proof. The future session owner remains responsible for issuing and not reusing session handles.
+  proof. The future Worker/session registry remains responsible for issuing and not reusing session
+  handles; the current Ready-session owner only retains the already-issued identity.
 - Construction checks `max_entries * size_of::<Entry>()` against the owner ceiling before calling
   `try_reserve_exact(max_entries)` once. Actual allocator-reported entry-vector capacity is then
   multiplied with checked arithmetic and charged as metadata before the store is published.
@@ -56,8 +58,10 @@ cache does not weaken or reconstruct document proof.
 - Lookup and admission scan at most the validated entry ceiling and probe cancellation at fixed
   intervals. Lookup returns only a shared borrow; it does not clone, detach, or transfer the
   proof-bearing value. `clear` releases every session value while retaining the already charged
-  fixed metadata allocation for reuse. Dropping the store releases both values and metadata; a
-  future session owner must perform that drop before publishing `SessionClosed`.
+  fixed metadata allocation for reuse. Dropping the store releases both values and metadata;
+  `runtime/session::ReadySessionOwner` now performs that drop before its close returns. A future
+  complete session may publish `SessionClosed` only after this owner and all other session resources
+  have completed close.
 
 # External observations and dependencies
 
@@ -74,7 +78,7 @@ test-only dependency used to assemble project-authored structural fixtures.
   tiles, or GPU objects.
 - It does not coalesce `Resolving` work, retain subscribers, arbitrate completion/cancel/close races,
   own a parent Worker/Session budget hierarchy, or provide concurrent shards. Those belong to later
-  runtime/session, schedule, and budget slices.
+  complete session/request, scheduler, and budget slices.
 - Its current eviction policy is strict LRU. The section 9.4 small-object retention preference and
   segmented policies require corpus evidence and remain a later multi-level-cache decision.
 - Hard ceilings and defaults are bootstrap values, not a released `FuelSchedule` or
@@ -85,3 +89,5 @@ test-only dependency used to assemble project-authored structural fixtures.
 - 2026-07-14: Added complete session binding and keys, fixed metadata preallocation, borrowed Ready
   hits, move-preserving admission rejection, scoped budget evidence, checked resident accounting,
   cancellation-aware linear LRU planning, and explicit clear/drop ownership boundaries.
+- 2026-07-14: Bound the drop boundary to `runtime/session::ReadySessionOwner` and exercised it in
+  the canonical Native quality loop without changing cache-owned admission or eviction semantics.

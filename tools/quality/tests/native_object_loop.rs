@@ -4,7 +4,7 @@ use pdf_rs_bytes::{
     SourceValidatorKind,
 };
 use pdf_rs_cache::{
-    ReadyAdmission, ReadyLookup, ReadyStore, ReadyStoreBinding, ReadyStoreEpoch, ReadyStoreKey,
+    ReadyAdmission, ReadyLookup, ReadyStoreBinding, ReadyStoreEpoch, ReadyStoreKey,
     ReadyStoreLimits, ReadyStoreSessionId,
 };
 use pdf_rs_digest::{hex_digest, sha256};
@@ -16,6 +16,7 @@ use pdf_rs_document::{
 };
 use pdf_rs_generate::generate_one_page_pdf;
 use pdf_rs_object::{IndirectObjectValue, ObjectLimits, ObjectWorkCaps};
+use pdf_rs_session::{ReadySessionOwner, ReadySessionPhase};
 use pdf_rs_syntax::{ObjectRef, PdfDictionary, SyntaxLimits, SyntaxObject};
 use pdf_rs_xref::{OpenXrefJob, XrefEntryKind, XrefJobContext, XrefLimits, XrefPoll, XrefSection};
 
@@ -432,19 +433,23 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     let ready_binding =
         ReadyStoreBinding::for_index(&attested, READY_STORE_SESSION_ID, READY_STORE_EPOCH);
     let ready_key = ReadyStoreKey::new(ready_binding, root_reference, chain_limits);
-    let mut ready_store = ReadyStore::new(ready_binding, ReadyStoreLimits::default())
+    let mut ready_owner = ReadySessionOwner::new(ready_binding, ReadyStoreLimits::default())
         .expect("canonical session Ready-store metadata fits its owner budget");
-    let metadata_baseline = ready_store.stats().metadata_bytes();
+    assert_eq!(ready_owner.session_id(), READY_STORE_SESSION_ID);
+    assert_eq!(ready_owner.binding().unwrap(), ready_binding);
+    assert_eq!(ready_owner.phase(), ReadySessionPhase::Ready);
+    let initial_stats = ready_owner.stats().unwrap();
+    let metadata_baseline = initial_stats.metadata_bytes();
     assert!(metadata_baseline > 0);
-    assert_eq!(ready_store.stats().entries(), 0);
-    assert_eq!(ready_store.stats().value_heap_bytes(), 0);
-    assert_eq!(ready_store.stats().resident_bytes(), metadata_baseline);
+    assert_eq!(initial_stats.entries(), 0);
+    assert_eq!(initial_stats.value_heap_bytes(), 0);
+    assert_eq!(initial_stats.resident_bytes(), metadata_baseline);
 
     let expected_ready_heap = resolved_footprint
         .syntax_heap_bytes()
         .checked_add(resolved_footprint.chain_capacity_bytes())
         .unwrap();
-    let admitted = match ready_store
+    let admitted = match ready_owner
         .try_admit(ready_key, resolved_root, &NeverCancelledDocument)
         .expect("canonical Ready admission must not fail")
     {
@@ -458,7 +463,7 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     };
     assert!(!admitted.replaced());
     assert_eq!(admitted.evicted(), 0);
-    let admitted_stats = ready_store.stats();
+    let admitted_stats = ready_owner.stats().unwrap();
     assert_eq!(admitted_stats.entries(), 1);
     assert_eq!(admitted_stats.admissions(), 1);
     assert_eq!(admitted_stats.replacements(), 0);
@@ -475,7 +480,7 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     let ready_store_admitted_resident_bytes = admitted_stats.resident_bytes();
 
     {
-        let cached_root = match ready_store
+        let cached_root = match ready_owner
             .lookup(ready_key, &NeverCancelledDocument)
             .expect("canonical exact Ready lookup must not fail")
         {
@@ -498,23 +503,37 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
             Some(ObjectRef::new(2, 0).unwrap())
         );
     }
-    let hit_stats = ready_store.stats();
+    let hit_stats = ready_owner.stats().unwrap();
     assert_eq!(hit_stats.hits(), 1);
     assert_eq!(hit_stats.misses(), 0);
     assert_eq!(
         hit_stats.resident_bytes(),
         ready_store_admitted_resident_bytes
     );
-    assert_eq!(ready_store.clear(), 1);
-    let cleared_stats = ready_store.stats();
-    assert_eq!(cleared_stats.entries(), 0);
-    assert_eq!(cleared_stats.value_heap_bytes(), 0);
-    assert_eq!(cleared_stats.metadata_bytes(), metadata_baseline);
-    assert_eq!(cleared_stats.resident_bytes(), metadata_baseline);
+    let close_report = ready_owner.close();
+    assert_eq!(close_report.session_id(), READY_STORE_SESSION_ID);
+    assert_eq!(close_report.released_entries(), 1);
+    assert_eq!(close_report.released_metadata_bytes(), metadata_baseline);
     assert_eq!(
-        cleared_stats.peak_resident_bytes(),
+        close_report.released_value_heap_bytes(),
+        expected_ready_heap
+    );
+    assert_eq!(
+        close_report.released_resident_bytes(),
         ready_store_admitted_resident_bytes
     );
+    assert_eq!(
+        close_report.peak_resident_bytes(),
+        ready_store_admitted_resident_bytes
+    );
+    assert_eq!(ready_owner.phase(), ReadySessionPhase::Closed);
+    assert_eq!(ready_owner.close_report(), Some(close_report));
+    assert_eq!(ready_owner.resources().entries(), 0);
+    assert_eq!(ready_owner.resources().metadata_bytes(), 0);
+    assert_eq!(ready_owner.resources().value_heap_bytes(), 0);
+    assert_eq!(ready_owner.resources().resident_bytes(), 0);
+    assert_eq!(ready_owner.close(), close_report);
+    let ready_store_released_resident_bytes = close_report.released_resident_bytes();
 
     let access_caps = ObjectWorkCaps::new(
         attested.object_limits().max_total_read_bytes(),
@@ -645,14 +664,14 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     );
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_store_clear_baseline=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_owner_closed=true session_ready_owner_resources_zero=true session_ready_owner_close_idempotent=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} ready_store_released_resident_bytes={ready_store_released_resident_bytes} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.21.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.21.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.22.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.22.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -750,10 +769,23 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(ready_store_feature.contains("fuzz_targets = []"));
     assert!(ready_store_feature.contains("benchmarks = []"));
 
+    let ready_owner_feature = record_with_id(FEATURE_MAP, "feature", "runtime.ready-session-owner")
+        .expect("the Ready-session owner feature record must exist");
+    assert!(ready_owner_feature.contains("owner = \"runtime-platform\""));
+    assert!(ready_owner_feature.contains("state = \"PLANNED\""));
+    assert!(ready_owner_feature.contains("profile = \"m1.ready-session-owner.v1\""));
+    assert!(ready_owner_feature.contains("modules = [\"runtime/session\"]"));
+    assert!(ready_owner_feature.contains("runtime/session::ready_owner"));
+    assert!(ready_owner_feature.contains("runtime/session::repository_policy"));
+    assert!(ready_owner_feature.contains("tools/quality::native_object_loop"));
+    assert!(ready_owner_feature.contains("fuzz_targets = []"));
+    assert!(ready_owner_feature.contains("benchmarks = []"));
+
     for requirement_id in [
         "RPE-ARCH-001/5.3",
         "RPE-ARCH-001/5.4",
         "RPE-ARCH-001/9.1",
+        "RPE-ARCH-001/14.2",
         "RPE-ARCH-001/12.6",
         "RPE-ARCH-001/15.3/M0",
     ] {
@@ -771,6 +803,9 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     let m0_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/15.3/M0")
         .expect("the M0 quality-infrastructure requirement must exist");
     assert!(m0_requirement.contains("\"quality.native-object-loop\""));
+    assert!(m0_requirement.contains("ReadySessionOwner"));
+    assert!(m0_requirement.contains("synchronously close the store"));
+    assert!(m0_requirement.contains("zero post-close resources"));
     assert!(m0_requirement.contains("Native/PDFium differential evidence"));
 
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")

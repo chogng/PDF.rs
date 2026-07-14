@@ -1,5 +1,5 @@
 schema = 1
-version = "0.21.0"
+version = "0.22.0"
 status = "active"
 
 [[feature]]
@@ -129,7 +129,7 @@ state = "PLANNED"
 profile = "m1.ready-session-owner.v1"
 clauses = ["RPE-ARCH-001/9.1", "RPE-ARCH-001/14.2", "RPE-STD-002/2", "RPE-STD-002/5", "RPE-STD-002/10", "RPE-STD-005/5", "RPE-STD-005/7"]
 modules = ["runtime/session"]
-tests = ["runtime/session::ready_owner", "runtime/session::repository_policy"]
+tests = ["runtime/session::ready_owner", "runtime/session::repository_policy", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
