@@ -24,6 +24,17 @@ name = "pdf-rs-bytes"
 version = "0.1.0"
 
 [[package]]
+name = "pdf-rs-cache"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-document",
+ "pdf-rs-object",
+ "pdf-rs-syntax",
+ "pdf-rs-xref",
+]
+
+[[package]]
 name = "pdf-rs-compare"
 version = "0.1.0"
 

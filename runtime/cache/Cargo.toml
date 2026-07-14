@@ -1,0 +1,15 @@
+[package]
+name = "pdf-rs-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-document = { path = "../../core/document" }
+pdf-rs-object = { path = "../../core/object" }
+pdf-rs-syntax = { path = "../../core/syntax" }
+
+[dev-dependencies]
+pdf-rs-xref = { path = "../../core/xref" }
