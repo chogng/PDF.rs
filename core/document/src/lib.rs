@@ -15,6 +15,9 @@
 //! decoding from lexical PDF strings into UTF-8 without exposing source content
 //! in diagnostics. Other dictionary, array, stream, and nested-reference
 //! semantics remain outside a complete object-graph resolver.
+//! A strict base-open composition job connects traditional xref parsing,
+//! candidate indexing, and top-level attestation without exposing an
+//! unauthenticated intermediate typestate.
 //! Successful proof-bearing values retain their resolution profile and expose
 //! checked value-owned footprint components as evidence for a future cache owner,
 //! but this crate does not cache them.
@@ -42,6 +45,7 @@ mod page_tree_limits;
 mod reference_chain;
 mod reference_chain_limits;
 mod residency;
+mod strict_base_open;
 mod text_string;
 
 pub use access::{
@@ -79,6 +83,10 @@ pub use reference_chain::{
 };
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
 pub use residency::DocumentResidentFootprint;
+pub use strict_base_open::{
+    OpenStrictBaseRevisionJob, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
+    StrictBaseOpenPhase, StrictBaseOpenPoll, StrictBaseOpenStats,
+};
 pub use text_string::{
     DecodedTextString, TextStringEncoding, TextStringError, TextStringErrorCategory,
     TextStringErrorCode, TextStringLimit, TextStringLimitConfig, TextStringLimitKind,

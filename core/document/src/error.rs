@@ -223,6 +223,8 @@ pub enum DocumentErrorCode {
     OutlineCountMismatch,
     /// An outline item has mutually exclusive or malformed activation targets.
     InvalidOutlineTarget,
+    /// Runtime identity or checkpoints across xref and attestation phases are inconsistent.
+    InvalidStrictBaseOpenContext,
 }
 
 /// Coarse document-composition failure category.
@@ -528,6 +530,11 @@ impl DocumentError {
                 DocumentErrorCategory::Syntax,
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0045",
+            ),
+            DocumentErrorCode::InvalidStrictBaseOpenContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0046",
             ),
         };
         Self {
