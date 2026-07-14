@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.16.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.16.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.17.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.17.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -112,6 +112,18 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(access.contains("core/document::attested_object_access"));
     assert!(access.contains("tools/quality::native_object_loop"));
 
+    let reference_chain = record_with_id(
+        &feature_map,
+        "feature",
+        "core.attested-reference-chain-resolution",
+    )
+    .expect("the attested reference-chain feature record must exist");
+    assert!(reference_chain.contains("profile = \"m1.attested-reference-chain.v1\""));
+    assert!(reference_chain.contains("modules = [\"core/document\"]"));
+    assert!(reference_chain.contains("core/document::reference_chain_resolution"));
+    assert!(reference_chain.contains("core/document::reference_chain_limit_config"));
+    assert!(reference_chain.contains("tools/quality::native_object_loop"));
+
     let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
         .expect("the traditional-xref architecture requirement record must exist");
     assert!(requirement.contains("\"core.traditional-xref\""));
@@ -122,16 +134,24 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("core/xref::repository_policy"));
     assert!(requirement.contains("\"core.strict-base-revision-attestation\""));
     assert!(requirement.contains("\"core.attested-object-access\""));
+    assert!(requirement.contains("\"core.attested-reference-chain-resolution\""));
     assert!(requirement.contains("core/document::revision_attestation"));
     assert!(requirement.contains("core/document::revision_attestation_limit_config"));
     assert!(requirement.contains("core/document::attested_object_access"));
+    assert!(requirement.contains("core/document::reference_chain_resolution"));
+    assert!(requirement.contains("core/document::reference_chain_limit_config"));
     assert!(requirement.contains("tools/quality::native_object_loop"));
     assert!(requirement.contains("header-to-startxref"));
     assert!(requirement.contains("line-terminated comments"));
-    assert!(requirement.contains("not an object/reference resolver"));
     assert!(requirement.contains("explicit caller-lent work cap"));
     assert!(requirement.contains("never a raw target"));
-    assert!(requirement.contains("resolver-wide aggregate work"));
+    assert!(requirement.contains("top-level direct indirect-reference value"));
+    assert!(requirement.contains("full closing chain"));
+    assert!(requirement.contains("job-wide object, edge, depth, path-capacity, read, and parse"));
+    assert!(requirement.contains("not a complete object-graph resolver"));
+    assert!(requirement.contains("nested semantic graph traversal"));
+    assert!(requirement.contains("persistent Ready caching"));
+    assert!(requirement.contains("cross-job/session aggregate work"));
     assert!(requirement.contains("Xref streams"));
     assert!(requirement.contains("hybrid files"));
     assert!(requirement.contains("Prev chains"));

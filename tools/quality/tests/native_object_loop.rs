@@ -7,8 +7,8 @@ use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_document::{
     AttestRevisionJob, AttestedObject, AttestedObjectJobContext, AttestedObjectPoll,
     CandidateRevisionIndex, DocumentLimits, NeverCancelled as NeverCancelledDocument,
-    ObjectAttestationKind, RevisionAttestationJobContext, RevisionAttestationLimits,
-    RevisionAttestationPoll, RevisionId,
+    ObjectAttestationKind, ReferenceChainJobContext, ReferenceChainLimits, ReferenceChainPoll,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
 };
 use pdf_rs_generate::generate_one_page_pdf;
 use pdf_rs_object::{IndirectObjectValue, ObjectLimits, ObjectWorkCaps};
@@ -358,6 +358,56 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     let payload_end = usize::try_from(data_span.end_exclusive()).unwrap();
     assert_eq!(&pdf[payload_start..payload_end], b"q\nQ\n");
 
+    let root_reference = ObjectRef::new(1, 0).unwrap();
+    let chain_limits = ReferenceChainLimits::default();
+    let mut chain_job = attested
+        .resolve_reference_chain(
+            root_reference,
+            ReferenceChainJobContext::new(
+                JobId::new(290),
+                ResumeCheckpoint::new(291),
+                ResumeCheckpoint::new(292),
+                RequestPriority::VisiblePage,
+            ),
+            chain_limits,
+        )
+        .expect("the attested index mints the bounded canonical root-chain job");
+    let resolved_root = match chain_job.poll(&store, &NeverCancelledDocument) {
+        ReferenceChainPoll::Ready(resolved) => resolved,
+        ReferenceChainPoll::Pending { .. } => {
+            panic!("a fully supplied canonical PDF must not suspend root-chain resolution")
+        }
+        ReferenceChainPoll::Failed(error) => {
+            panic!("canonical attested root chain must resolve: {error}")
+        }
+    };
+    assert_eq!(resolved_root.root(), root_reference);
+    assert_eq!(resolved_root.terminal(), root_reference);
+    assert_eq!(resolved_root.chain().root(), root_reference);
+    assert_eq!(resolved_root.chain().terminal(), root_reference);
+    assert_eq!(resolved_root.chain().len(), 1);
+    assert!(resolved_root.chain().prefix().is_empty());
+    assert_eq!(resolved_root.object().attestation(), &objects[0]);
+    assert_eq!(resolved_root.object().snapshot(), source);
+    let chain_stats = chain_job.stats();
+    assert_eq!(resolved_root.stats(), chain_stats);
+    assert_eq!(chain_stats.objects_started(), 1);
+    assert_eq!(chain_stats.reference_edges(), 0);
+    assert_eq!(chain_stats.max_depth(), 1);
+    assert!(chain_stats.object_read_bytes() > 0);
+    assert!(chain_stats.object_parse_bytes() > 0);
+    assert!(chain_stats.retained_path_bytes() > 0);
+    assert!(chain_stats.retained_path_bytes() <= chain_limits.max_retained_path_bytes());
+    let resolved_catalog = direct_dictionary(resolved_root.object(), source);
+    assert!(matches!(
+        dictionary_value(resolved_catalog, b"Type"),
+        SyntaxObject::Name(name) if name.bytes() == b"Catalog"
+    ));
+    assert_eq!(
+        dictionary_value(resolved_catalog, b"Pages").as_reference(),
+        Some(ObjectRef::new(2, 0).unwrap())
+    );
+
     let access_caps = ObjectWorkCaps::new(
         attested.object_limits().max_total_read_bytes(),
         attested.object_limits().max_total_parse_bytes(),
@@ -470,14 +520,14 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     );
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.16.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.16.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.17.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.17.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -529,6 +579,22 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(access_feature.contains("fuzz_targets = []"));
     assert!(access_feature.contains("benchmarks = []"));
 
+    let chain_feature = record_with_id(
+        FEATURE_MAP,
+        "feature",
+        "core.attested-reference-chain-resolution",
+    )
+    .expect("the bounded attested reference-chain feature record must exist");
+    assert!(chain_feature.contains("owner = \"parser-security\""));
+    assert!(chain_feature.contains("state = \"PLANNED\""));
+    assert!(chain_feature.contains("profile = \"m1.attested-reference-chain.v1\""));
+    assert!(chain_feature.contains("modules = [\"core/document\"]"));
+    assert!(chain_feature.contains("core/document::reference_chain_resolution"));
+    assert!(chain_feature.contains("core/document::reference_chain_limit_config"));
+    assert!(chain_feature.contains("tools/quality::native_object_loop"));
+    assert!(chain_feature.contains("fuzz_targets = []"));
+    assert!(chain_feature.contains("benchmarks = []"));
+
     for requirement_id in [
         "RPE-ARCH-001/5.3",
         "RPE-ARCH-001/5.4",
@@ -556,13 +622,22 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("\"core.base-revision-candidate-index\""));
     assert!(xref_requirement.contains("\"core.strict-base-revision-attestation\""));
     assert!(xref_requirement.contains("\"core.attested-object-access\""));
+    assert!(xref_requirement.contains("\"core.attested-reference-chain-resolution\""));
     assert!(xref_requirement.contains("\"core/document\""));
     assert!(xref_requirement.contains("header-to-startxref"));
     assert!(xref_requirement.contains("line-terminated comments"));
-    assert!(xref_requirement.contains("not an object/reference resolver"));
     assert!(xref_requirement.contains("explicit caller-lent work cap"));
     assert!(xref_requirement.contains("never a raw target"));
-    assert!(xref_requirement.contains("resolver-wide aggregate work"));
+    assert!(xref_requirement.contains("top-level direct indirect-reference value"));
+    assert!(xref_requirement.contains("full closing chain"));
+    assert!(
+        xref_requirement
+            .contains("job-wide object, edge, depth, path-capacity, read, and parse limits")
+    );
+    assert!(xref_requirement.contains("not a complete object-graph resolver"));
+    assert!(xref_requirement.contains("nested semantic graph traversal"));
+    assert!(xref_requirement.contains("persistent Ready caching"));
+    assert!(xref_requirement.contains("cross-job/session aggregate work"));
     assert!(xref_requirement.contains("Native/PDFium semantic or pixel differential"));
     assert!(xref_requirement.contains("does not claim M1 exit"));
 }

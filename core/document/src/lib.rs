@@ -5,7 +5,9 @@
 //! object in physical order and proves trivia closure through `startxref`
 //! before publishing an attested typestate. Only that typestate can mint a
 //! bounded job that reopens one parsed object into a wrapper retaining its
-//! proof. This remains a leaf access primitive, not an object resolver.
+//! proof. A second bounded job can iteratively follow whole-object direct
+//! reference aliases, but dictionaries, arrays, streams, and nested references
+//! remain terminal; this is not a complete object-graph resolver.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -21,6 +23,8 @@ mod error;
 mod index;
 mod limits;
 mod model;
+mod reference_chain;
+mod reference_chain_limits;
 
 pub use access::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPhase, AttestedObjectPoll,
@@ -41,3 +45,8 @@ pub use model::{
     AttestedRevisionIndex, CandidateRevisionIndex, DocumentIndexStats, ObjectAttestation,
     ObjectAttestationKind, PhysicalObjectInterval, RevisionId,
 };
+pub use reference_chain::{
+    ReferenceChain, ReferenceChainError, ReferenceChainJobContext, ReferenceChainPhase,
+    ReferenceChainPoll, ReferenceChainStats, ResolveReferenceChainJob, ResolvedReference,
+};
+pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};

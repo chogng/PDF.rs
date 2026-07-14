@@ -1,5 +1,5 @@
 schema = 1
-version = "0.16.0"
+version = "0.17.0"
 status = "active"
 
 [[feature]]
@@ -82,6 +82,18 @@ profile = "m1.attested-object-access.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
 modules = ["core/document"]
 tests = ["core/document::attested_object_access", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.attested-reference-chain-resolution"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.attested-reference-chain.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::reference_chain_resolution", "core/document::reference_chain_limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

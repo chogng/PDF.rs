@@ -5,13 +5,14 @@ states. `CandidateRevisionIndex` derives unauthenticated physical intervals. `At
 then consumes that candidate, validates a supported PDF header at source offset zero, frames every
 in-use object in physical order, and scans the prefix and every gap through `startxref` for only
 PDF whitespace and terminated comments. Only complete success publishes `AttestedRevisionIndex`.
-That sealed typestate is the only public factory for a bounded job that reparses one exact object
-and returns a wrapper that owns the parsed object beside reproduced top-level evidence.
+That sealed typestate is the only public factory for bounded jobs that reparse one exact object or
+iteratively follow a top-level direct-reference chain while preserving reproduced evidence.
 
 The crate performs no file, network, data callback, async-runtime, stream decoding, or reference
-resolution work. Its object access is a leaf primitive without reference traversal or caching. All
-source access is synchronous polling through an injected `ByteSource`; all long-running CPU work
-uses an injected cooperative cancellation probe.
+graph traversal or caching. Its first resolver slice follows only whole-object reference aliases;
+array, dictionary, and stream semantics remain leaf values. All source access is synchronous
+polling through an injected `ByteSource`; all long-running CPU work uses an injected cooperative
+cancellation probe.
 
 # Semantic owner
 
@@ -111,6 +112,29 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   that fabricates different bytes while claiming the same identity, revision, validator, and
   length. Such behavior is a host capability violation, not accepted alternate document input.
 
+## Bounded top-level reference chains
+
+- `AttestedRevisionIndex::resolve_reference_chain` is the only public factory for the one-shot
+  chain job. The job borrows its attested index, starts in `Unresolved`, and uses only the index's
+  proof-preserving object-access factory. It never constructs or exposes a raw target or lower
+  object job.
+- Resolution is deliberately narrow and iterative. When an opened object's entire direct value is
+  one `SyntaxObject::Reference`, the job drops that intermediate parsed object and follows the
+  exact next reference. Every other direct value and every stream is terminal. References nested
+  in arrays, dictionaries, or stream dictionaries are not visited by this profile.
+- The active unique prefix is reserved fallibly before the job is published. Actual allocator
+  capacity is charged against an explicit retained-path byte limit. The terminal reference remains
+  scalar, so a cycle-closing or rejected reference can be retained without allocating on the
+  failure path.
+- Each traversed edge is charged before continuation. Exact `ObjectRef` membership in the bounded
+  active prefix detects self and multi-object cycles; `ReferenceCycle` retains the complete prefix
+  and repeated closing reference. Missing, free, and generation-mismatch targets retain the full
+  attempted chain together with the original document lookup failure.
+- The job exposes `Unresolved`, `Resolving`, `Ready`, and `Failed` phases. A successful result moves
+  the retained chain and terminal `AttestedObject` out together. A failure owns its move-only chain
+  inside the terminal job state and is returned by shared borrow, so repeated polls replay the same
+  error without `Arc`, `Box`, clone, or another allocation.
+
 # Resource accounting and resumability
 
 - Revision-attestation limits independently bound source length, object count, exact scan chunk,
@@ -122,14 +146,23 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   When the scoped cap is strictly smaller than the per-object cap, exhaustion maps to the parent
   aggregate limit while retaining the complete lower `ObjectError`; an equal cap remains a lower
   per-object failure.
+- A reference-chain job independently bounds object starts, reference edges, unique depth,
+  allocator-reported retained path capacity, and aggregate child reads and parses. Each child cap
+  is the smaller of the retained per-object profile and the job's remaining aggregate allowance.
+  Child stats deltas are charged exactly once across `Pending` polls; scoped cap exhaustion maps to
+  the job-wide limit while retaining the complete lower `ObjectError`.
+- Reference-chain limits apply to one job only. Repeated jobs do not share a budget owner, resident
+  cache, or reservation ledger. A future persistent resolver must add complete retained-object
+  accounting plus cross-job/session ownership before it can cache `Ready` values or coalesce work.
 - A scan request is charged before `ByteSource::poll`. `Pending` preserves its exact range,
   checkpoint, lexical state, and charged flag, so re-polling does not charge again. Source snapshot
   equality is checked before cancellation on every active loop. Scanning probes cancellation after
   at most 256 bytes and publication probes once more.
-- Terminal failure stores and replays the same copyable, source-redacted error. Lower
-  `ObjectError`, `SourceError`, and `SyntaxError` values remain available without retaining source
-  content. Completed one-shot attestation and access jobs return a stable `JobAlreadyComplete`
-  error if polled again.
+- Attestation and access terminal failures store and replay the same copyable, source-redacted
+  error. Reference-chain failure stores one move-only error and lends the same stable reference on
+  every poll. Lower `ObjectError`, `SourceError`, and `SyntaxError` values remain available without
+  retaining source content. Completed one-shot jobs return a stable `JobAlreadyComplete` error if
+  polled again.
 
 # Trust boundary
 
@@ -140,6 +173,11 @@ is the private attested-index-to-access-job-to-`AttestedObject` chain. Borrowing
 semantic subvalue is not equivalent to obtaining that proof or a resolver capability. The index
 proves only this strict top-level physical decomposition for the bound immutable snapshot and
 retained parser profile.
+
+The bounded chain job is a consumer of that proof, not an authority expansion. Its returned
+terminal object was reopened through the same retained profile, and its chain records identities
+only. It does not publish a mutable object graph, cache entry, raw byte capability, or reusable
+child-job constructor.
 
 The proof is deliberately closed-world: bytes between indexed in-use objects must be trivia.
 Stale free-object bodies, unindexed top-level objects, or other top-level tokens are rejected even
@@ -168,16 +206,21 @@ versus per-object cap ties. Public behavior tests cover successful direct/stream
 header and gap policy, comment state across chunks, embedded candidate offsets, tail closure,
 pending idempotence, cancellation, snapshot mismatch, stable failure replay, and limit boundaries.
 Access geometry unit tests reject individual index/evidence field mismatches, invalid object span
-containment, and invalid stream span order. Repository policy checks the sibling dependency
-allowlist and absence of platform/external-engine APIs.
+containment, and invalid stream span order. Reference-chain tests cover terminal roots, multi-hop
+aliases, nested-reference non-traversal, self and multi-object cycles, lookup failures, exact and
+one-less limits, pending idempotence, source and cancellation priority, stable terminal replay, and
+redacted diagnostics. Repository policy checks the sibling dependency allowlist and absence of
+platform/external-engine APIs.
 
 # Known deviations and unsupported cases
 
 - Only one strict traditional base revision is accepted. Revision chains, `/Prev`, xref streams,
   hybrid references, object streams, and revision precedence remain unsupported.
-- Attestation eagerly frames every in-use object. The new leaf access job can reparse one proven
-  value but is not a lazy document model or complete resolver: it does not validate or traverse
-  reference targets, detect cycles, maintain dependency states, or cache values.
+- Attestation eagerly frames every in-use object. The access job can reparse one proven value, and
+  the chain job can follow top-level whole-object aliases with cycle detection. They are not a lazy
+  document model or complete resolver: nested semantic references, persistent dependency states,
+  concurrent work coalescing, retained-value caching, and cross-job aggregate ownership remain
+  unsupported.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
   payloads, catalog/page services, writer behavior, and document actions remain unsupported.
 - The closed-world trivia-gap policy is intentionally stricter than general PDF compatibility and
@@ -194,3 +237,5 @@ allowlist and absence of platform/external-engine APIs.
 - 2026-07-13: Added proof-preserving object access minted only by the attested index, retained
   parser profiles, explicit per-access work caps, exact evidence reproduction, and redacted
   move-only value wrappers without exposing raw targets or lower jobs.
+- 2026-07-13: Added an iterative attested top-level reference-chain job with exact cycle chains,
+  fallibly retained paths, and job-wide object, edge, depth, read, and parse budgets.

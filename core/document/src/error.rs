@@ -5,7 +5,7 @@ use pdf_rs_bytes::{SourceError, SourceErrorCategory, SourceRecoverability};
 use pdf_rs_object::{ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectRecoverability};
 use pdf_rs_syntax::{ObjectRef, SyntaxError, SyntaxErrorCategory, SyntaxRecoverability};
 
-/// Deterministic candidate-index or revision-attestation budget that rejected work.
+/// Deterministic document-composition budget that rejected work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentLimitKind {
     /// Total xref rows in one candidate revision.
@@ -32,6 +32,18 @@ pub enum DocumentLimitKind {
     AttestationObjectParseBytes,
     /// Conservatively accounted allocator capacity for retained fixed-size evidence.
     AttestationEvidenceBytes,
+    /// Indirect objects started by one bounded reference-chain job.
+    ReferenceChainObjects,
+    /// Top-level indirect-reference edges followed by one bounded reference-chain job.
+    ReferenceChainEdges,
+    /// Distinct exact references retained in one active reference chain.
+    ReferenceChainDepth,
+    /// Cumulative exact object-read bytes across one reference-chain job.
+    ReferenceChainObjectReadBytes,
+    /// Cumulative object-parser window bytes across one reference-chain job.
+    ReferenceChainObjectParseBytes,
+    /// Allocator-reported capacity retained for one reference-chain path.
+    ReferenceChainPathBytes,
 }
 
 /// Structured document-composition resource-limit context without document bytes.
@@ -79,14 +91,14 @@ impl DocumentLimit {
     }
 }
 
-/// Stable machine-readable candidate-index or revision-attestation failure.
+/// Stable machine-readable document-composition failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentErrorCode {
     /// Document limit configuration is zero, inconsistent, or above hard ceilings.
     InvalidLimits,
     /// A deterministic index or allocation budget was exhausted.
     ResourceLimit,
-    /// The owning runtime cancelled candidate-index construction.
+    /// The owning runtime cancelled one document-composition job.
     Cancelled,
     /// An in-use row has an offset outside the candidate revision object area.
     InvalidPhysicalOffset,
@@ -130,6 +142,10 @@ pub enum DocumentErrorCode {
     JobAlreadyComplete,
     /// Reopening an attested object did not reproduce its retained framing evidence.
     AttestedObjectEvidenceMismatch,
+    /// Runtime identity or phase checkpoints for reference-chain resolution are inconsistent.
+    InvalidReferenceChainJobContext,
+    /// Following top-level indirect-reference values revisited one exact object identity.
+    ReferenceCycle,
 }
 
 /// Coarse document-composition failure category.
@@ -327,6 +343,16 @@ impl DocumentError {
                 DocumentRecoverability::DoNotRetry,
                 "RPE-DOCUMENT-0024",
             ),
+            DocumentErrorCode::InvalidReferenceChainJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0025",
+            ),
+            DocumentErrorCode::ReferenceCycle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0026",
+            ),
         };
         Self {
             code,
@@ -352,6 +378,27 @@ impl DocumentError {
             recoverability: DocumentRecoverability::ReduceWorkload,
             diagnostic_id: "RPE-DOCUMENT-0002",
             reference: None,
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn reference_chain_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
             offset,
             detail: DocumentErrorDetail::Limit(DocumentLimit::new(
                 kind, limit, consumed, attempted,
