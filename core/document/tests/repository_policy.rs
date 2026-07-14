@@ -89,8 +89,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.26.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.26.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.27.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.27.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -125,8 +125,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "lazy PageIndex",
         "page_count=1",
         "pages_processed=1",
-        "not a registered semantic differential",
-        "any PDFium differential remain open",
+        "not a registered page-count differential",
+        "not a registered baseline or correctness oracle",
         "do not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {
@@ -237,6 +237,8 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "core/document::outline",
         "core/document::outline_limit_config",
         "core/document::repository_policy",
+        "tools/baseline::pdfium_outline_real_adapter",
+        "tools/baseline::repository_pdfium_outline_probe",
         "fuzz_targets = []",
         "benchmarks = []",
     ] {
@@ -328,7 +330,11 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "permits indirect outline-root Type and indirect Title, Count, Dest, and A forms",
         "does not judge the referenced target valid",
         "destination resolution",
-        "Native/PDFium differential evidence remain open",
+        "non-gating O4 PDFium public-bookmark comparison matches Native exactly",
+        "wrong-Prev fixture yields Native RPE-DOCUMENT-0041",
+        "public API does not expose Prev",
+        "contained baseline registration",
+        "broad corpus differential evidence remain open",
         "does not claim ISO conformance or M1 exit",
     ] {
         assert!(
@@ -343,11 +349,14 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "core.strict-outline",
         "core/document::outline",
         "core/document::outline_limit_config",
+        "tools/baseline::pdfium_outline_real_adapter",
+        "tools/baseline::repository_pdfium_outline_probe",
         "m1.strict-outline.v1",
         "recursively recomputed item/root Count semantics",
         "indirect-null equivalence",
-        "canonical quality fixture",
-        "any PDFium differential remain open",
+        "pinned, non-gating O4 PDFium public-bookmark comparison matches Native exactly",
+        "expected wrong-Prev strictness difference",
+        "not a registered baseline or correctness oracle",
         "do not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {

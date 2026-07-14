@@ -539,7 +539,8 @@ fn o4_probe_is_data_bound_but_not_registered_or_required_by_ci() {
         assert!(feature_map.contains(test));
         assert!(spec_map.contains(test));
     }
-    assert!(spec_map.contains("Native/PDFium differential evidence"));
+    assert!(spec_map.contains("without Native pixels"));
+    assert!(spec_map.contains("one real, non-gating Native/PDFium O4 comparison"));
 
     let ci = include_str!("../../../scripts/ci.sh");
     assert!(!ci.contains("PDF_RS_PDFIUM_ADAPTER"));

@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.26.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.26.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.27.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.27.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -219,7 +219,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(quality_requirement.contains("persistent caching"));
     assert!(quality_requirement.contains("cross-session reuse"));
     assert!(quality_requirement.contains("complete Session actor"));
-    assert!(quality_requirement.contains("Native/PDFium differential evidence"));
+    assert!(quality_requirement.contains("broad corpus and pixel differential evidence"));
 }
 
 fn top_level_version(document: &str) -> Option<&str> {

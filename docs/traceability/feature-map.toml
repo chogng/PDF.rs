@@ -1,5 +1,5 @@
 schema = 1
-version = "0.26.0"
+version = "0.27.0"
 status = "active"
 
 [[feature]]
@@ -129,7 +129,7 @@ state = "PLANNED"
 profile = "m1.strict-outline.v1"
 clauses = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::repository_policy"]
+tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::repository_policy", "tools/baseline::pdfium_outline_real_adapter", "tools/baseline::repository_pdfium_outline_probe"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -225,7 +225,7 @@ state = "PLANNED"
 profile = "baseline-protocol-v2"
 clauses = ["AD-007", "RPE-STD-003/14", "RPE-STD-004/9"]
 modules = ["tools/baseline"]
-tests = ["tools/baseline::tests", "tools/baseline::process_harness", "tools/baseline::pdfium_adapter_contract", "tools/baseline::pdfium_real_adapter", "tools/baseline::repository_pdfium_probe"]
+tests = ["tools/baseline::tests", "tools/baseline::process_harness", "tools/baseline::pdfium_adapter_contract", "tools/baseline::pdfium_real_adapter", "tools/baseline::pdfium_outline_real_adapter", "tools/baseline::repository_pdfium_probe", "tools/baseline::repository_pdfium_outline_probe"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

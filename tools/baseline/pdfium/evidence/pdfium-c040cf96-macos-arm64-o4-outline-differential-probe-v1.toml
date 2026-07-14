@@ -1,0 +1,150 @@
+schema = 1
+id = "pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1"
+evidence_class = "external-o4-outline-differential-probe"
+recorded_at = "2026-07-14T12:22:35Z"
+engine = "pdfium"
+upstream_repository = "https://pdfium.googlesource.com/pdfium/"
+upstream_revision = "c040cf96106a87220b814a1a892649cf2d7f1934"
+upstream_build_readiness_evidence = "pdfium-c040cf96-macos-arm64-build-readiness-v1"
+source_checkout_mode = "isolated-temporary-synced-checkout-plus-bound-pixel-and-outline-helper-overlays"
+source_checkout_dirty_scope = "pixel and outline root target reachability lines plus their project helper directories only"
+
+platform = "macos-arm64"
+os_version = "macOS 26.4.1 (25E253)"
+kernel_release = "25.4.0"
+xcode_version = "Xcode 26.6 (17F113)"
+macos_sdks_observed = "MacOSX.sdk, MacOSX26.sdk, MacOSX26.5.sdk"
+chromium_mac_build_instructions = "https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md"
+gn_version = "2435 (1d86777e7f25)"
+ninja_version = "1.12.1"
+
+adapter_profile = "pdfium-public-c-api-outline-v1"
+runner_schema = 2
+adapter_exercised = true
+public_pdfium_c_api_only = true
+protocol_identity_verified = true
+executable_hash_verified_before_runner_construction = true
+normalized_public_api_observation = true
+
+prerequisite_pixel_evidence = "tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml"
+prerequisite_pixel_evidence_sha256 = "sha256:0f098a7202958f8beb75f28c238afa530cf3aba244d07cb6f75fa2701a77ff7c"
+prerequisite_pixel_build_definition = "tools/baseline/pdfium/helper/BUILD.gn"
+prerequisite_pixel_build_definition_sha256 = "sha256:a13755a8719b862069e27796b681aaafe1165d5bdf721ee73d39ca5e86c6ba0f"
+prerequisite_pixel_helper_source = "tools/baseline/pdfium/helper/pdf_rs_pdfium_adapter.cc"
+prerequisite_pixel_helper_source_sha256 = "sha256:c1778589c3d06413a28de28fdb08d8a2f3a651a26f80ac6a27dfdbda5c3c5608"
+prerequisite_pixel_root_overlay = "tools/baseline/pdfium/helper/pdfium-root.patch"
+prerequisite_pixel_root_overlay_sha256 = "sha256:b3547589bd1b48a634790abbde8e5cb9e884fb6f5f91b9d3a51caffeed703cfc"
+helper_build_definition = "tools/baseline/pdfium/helper/outline.BUILD.gn"
+helper_build_definition_sha256 = "sha256:c24e33468051d3082f327ad72a2b3e69329ac5277fdc5ecef4d9ba0dabe8a5bf"
+helper_source = "tools/baseline/pdfium/helper/pdf_rs_pdfium_outline_probe.cc"
+helper_source_sha256 = "sha256:1d571d05c1b7598580911968e314b99ac5fe884cad9644775ef5feff03e781ae"
+helper_root_overlay = "tools/baseline/pdfium/helper/pdfium-outline-root.patch"
+helper_root_overlay_sha256 = "sha256:dd053cd2e6bb0cac14af80729dffa58bedad682cf10a2f725fb988f8ec557e79"
+host_adapter_source = "tools/baseline/src/pdfium.rs"
+host_adapter_source_sha256 = "sha256:ee052d373241bdd1e59471302782414e59eaf0dcbdee9608366cbe86e4eee125"
+comparison_test = "tools/baseline/tests/pdfium_outline_real_adapter.rs"
+comparison_test_sha256 = "sha256:7ea29ffba461b2f6b2cdd1a0fa6e7ff07149105fbdf9ccadf02b9672b95915f9"
+helper_executable_sha256 = "sha256:093929a6ea1c8682089bf7a87e139147b0759e497084899a9b3f16e3bafb3e4b"
+helper_executable_bytes = 3710416
+descriptor_build_hash_scope = "helper executable bytes only; runtime binary closure incomplete"
+
+build_args = "use_remoteexec=false is_debug=false symbol_level=0 target_cpu=\"arm64\" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false"
+build_flags_sha256 = "sha256:f88fb7eb62554e955bb8f7077c81be8f8f1f35de9aba7481b47c3b2dca8626dc"
+build_args_command_sha256 = "sha256:ff0e89ec7349734d4f81ca4aff573fe86b7c6db5eb4b3a4f2a1e28a6fed74240"
+gn_targets_generated = 599
+helper_build_steps = 2
+helper_build_exit_code = 0
+helper_build_outcome = "pass"
+helper_build_reverification = "exact committed outline overlay rebuilt at its separate GN label after the hash-bound pixel overlay"
+helper_build_reverification_exit_code = 0
+helper_build_reverification_ninja_state = "no-work-required"
+strict_warning_policy = "pdfium_strict_config-and-pdfium_noshorten_config"
+
+environment_policy = "env-clear-empty"
+argv = []
+working_directory = "$PDF_RS_ROOT"
+isolation_profile = "uncontained-local-pdfium-outline-probe-v1"
+max_request_bytes = 4096
+max_stdout_bytes = 65536
+max_stderr_bytes = 4096
+watchdog_ms = 2000
+stderr_policy = "bounded-discard-not-recorded"
+
+environment_declaration = "env-clear direct-child local outline probe; runtime and platform closure incomplete"
+environment_sha256 = "sha256:eacdf5e0890815f181163368775530816bdb891ff46972a7be8080aa24dffa6c"
+invocation_sha256 = "sha256:9365a41b10b787e83aabc71632bdedecebd0bdefef2e5006cbb50e5a3cb9b42b"
+invocation_reproducibility = "host-canonical-path-bound"
+license_declaration = "license closure incomplete; root license checked only"
+license_manifest_sha256 = "sha256:a24b65450d72dbe77cefc83a18257a4ebf3152ec8dce78e5191308d7b1292cf1"
+fonts_declaration = "not-applicable-no-font-rendering; runtime font closure not evaluated"
+fonts_sha256 = "sha256:37aa8cdbe4b642bba1cc18ad8efe95bc2a06391063fe90f3752d5059fc6c8b94"
+color_declaration = "not-applicable-no-pixel-output"
+color_sha256 = "sha256:9c6299c45ed23a027752789a0bec67986037e0ef5740c74dda3112cf5d02e0f6"
+descriptor_identity_sha256 = "sha256:32068474a9846ca5c6f4b069c891dd3de6beb58f9b53e5b08d41ed5521c01e83"
+
+runtime_closure_status = "incomplete"
+license_manifest_status = "incomplete"
+font_fingerprint_status = "not-evaluated-no-font-rendering"
+color_fingerprint_status = "not-applicable-no-pixel-output"
+sandbox_status = "direct-child-supervision-only"
+executable_replacement_protection_status = "not-established"
+
+manual_test = "tools/baseline/tests/pdfium_outline_real_adapter.rs::real_pdfium_outline_observable_subset_matches_native"
+manual_test_count = 1
+manual_test_passed = 1
+helper_process_runs = 3
+
+valid_fixture_id = "inline-strict-outline-valid-nested-v1"
+valid_fixture_generator = "self-authored-traditional-xref-test-builder"
+valid_fixture_sha256 = "sha256:cc2b2ea9b613a5e9fa32d661237d8e7f412ef90c5c8be80352e3562bf945338e"
+valid_fixture_bytes = 786
+valid_fixture_hash_verified = true
+valid_probe_runs = 2
+valid_repeat_outputs_identical = true
+valid_native_outcome = "outline-produced"
+valid_pdfium_outcome = "outline-produced"
+valid_observable_items = 3
+valid_native_json_sha256 = "sha256:19df44cc1ce2fce612d77c0d682f37870a5637e3dc656019ed3863090f77880a"
+valid_pdfium_json_sha256 = "sha256:19df44cc1ce2fce612d77c0d682f37870a5637e3dc656019ed3863090f77880a"
+valid_outline_json_bytes = 197
+valid_observable_subset_exact = true
+valid_different_observable_records = 0
+
+invalid_prev_fixture_id = "inline-strict-outline-invalid-prev-v1"
+invalid_prev_fixture_generator = "self-authored-traditional-xref-test-builder"
+invalid_prev_fixture_sha256 = "sha256:91692664d219178fdb1cdf20746812a486b2e4f728b197e8832d3f97f5b71490"
+invalid_prev_fixture_bytes = 786
+invalid_prev_fixture_hash_verified = true
+invalid_prev_probe_runs = 1
+invalid_prev_native_outcome = "OutlineSiblingMismatch"
+invalid_prev_native_diagnostic = "RPE-DOCUMENT-0041"
+invalid_prev_pdfium_outcome = "outline-produced"
+invalid_prev_pdfium_json_sha256 = "sha256:19df44cc1ce2fce612d77c0d682f37870a5637e3dc656019ed3863090f77880a"
+invalid_prev_classification = "expected-strictness-difference"
+invalid_prev_reason = "PDFium public bookmark APIs do not expose or validate the Prev backlink"
+
+observable_schema = 1
+observable_fields = "preorder depth, normalized UTF-8 title, signed item Count, and action-before-effective-destination target kind"
+outline_root_count_compared = false
+last_parent_prev_compared = false
+raw_destination_action_shape_compared = false
+public_api_blind_spots = "missing versus invalid empty roots, root Count, Last, Parent, Prev, raw target shape, and some normalized title distinctions"
+
+oracle_authority = "O4"
+native_engine_exercised = true
+pdfium_engine_exercised = true
+comparison_executed = true
+native_vs_pdfium_differential = true
+product_correctness_eligible = false
+performance_eligible = false
+differential_eligible = false
+baseline_registration_eligible = false
+release_gate_eligible = false
+verdict = "observable-subset-exact-with-expected-strictness-difference"
+
+raw_logs_committed = false
+helper_binary_committed = false
+pdfium_source_committed = false
+fixture_pdf_committed = false
+outline_json_bytes_committed = false
+upstream_data_committed = false

@@ -79,8 +79,9 @@ dependencies used to assemble project-authored structural fixtures.
   section 9.4 small-object/multi-level policy remain open.
 - Resource reports exclude source storage, stream payloads, allocator metadata,
   and RSS. Registered lifecycle model tests, deterministic scheduler tests, fuzz
-  targets, browser/desktop E2E, and Native/PDFium differential evidence remain
-  open before a complete session implementation can claim milestone exit.
+  targets, browser/desktop E2E, and registered broad Native/PDFium differential
+  evidence remain open before a complete session implementation can claim
+  milestone exit.
 
 # History
 

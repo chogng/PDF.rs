@@ -135,6 +135,15 @@ product verdict. The test neither starts PDFium nor consumes its pixels. The M0
 bundle's `baseline` files remain deliberately synthetic O1 analytic counterparts
 used to exercise the artifact channel; they are not PDFium output.
 
+A separate baseline-tool test now runs both Native strict Outline and a pinned
+PDFium public-bookmark helper on self-authored fixtures. Its valid observable
+subset matches exactly, while a wrong `/Prev` yields Native
+`RPE-DOCUMENT-0041` and an unchanged PDFium outline because the public API does
+not expose `/Prev`. That non-gating O4 differential is scoped to the recorded
+Outline fields and does not retroactively turn this Native object loop, the
+pixel probe, or the page-count smoke into registered differentials or release
+evidence.
+
 # Dependencies and generated data
 
 - Rust standard library.

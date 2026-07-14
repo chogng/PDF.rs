@@ -83,12 +83,31 @@ case color/antialias profile, measure performance, close runtime/license/font/
 color fingerprints, establish platform containment, register a baseline, or
 create release evidence.
 
+On 2026-07-14, a separate public-C-API Outline helper was incrementally built at
+the same pinned revision and run through protocol schema 2 beside the Native
+strict Outline job. For a valid three-item nested outline, both sides produced
+the same 197-byte canonical observable summary, and PDFium repeated the result
+byte-for-byte. For an otherwise identical fixture with a deliberately wrong
+`/Prev`, Native returned `RPE-DOCUMENT-0041` while PDFium produced the same
+summary. This is classified as an expected strictness difference because the
+public bookmark API neither exposes nor validates `/Prev`.
+
+The hash-bound result is in
+`pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1.toml`.
+It is a real, non-gating Native/PDFium O4 comparison only over preorder depth,
+normalized title, signed item Count, and action-before-effective-destination
+target kind. It is not a registered baseline or correctness oracle and cannot
+adjudicate outline-root Count, `/Last`, `/Parent`, `/Prev`, raw target shape, or
+missing-versus-invalid empty roots. No helper binary, PDF bytes, canonical JSON
+bytes, PDFium source, dependency payload, or raw log is committed.
+
 # Dependencies and generated data
 
 Runtime code uses the Rust standard library plus the local development-only
-`pdf-rs-digest` crate. Real-adapter tests also use the local `pdf-rs-compare` and
-`pdf-rs-generate` crates. No external engine is linked or vendored into the
-workspace.
+`pdf-rs-digest` crate. Real-adapter tests also use local comparison, generator,
+byte-source, syntax, xref, object, and document crates to exercise the Native
+side of explicitly ignored comparisons. No external engine is linked or
+vendored into the workspace.
 
 # Tests and fuzz targets
 
@@ -101,8 +120,12 @@ environment removal, large concurrent stdin/stdout/stderr movement, exact output
 ceilings, request preflight before spawn, watchdog kill/reap, process/protocol
 failure classification, invocation mismatch rejection, inherited-pipe containment
 failure, stable error category/recovery policy, and redacted diagnostics. A
-default-ignored real-engine test covers repeated blank-page pixels, generated
+default-ignored pixel test covers repeated blank-page pixels, generated
 color/channel/row-order pixels, out-of-range pages, and malformed documents. A
+second default-ignored test compares the bounded PDFium bookmark observation
+with Native on valid topology and records the expected `/Prev` strictness
+difference. Contract tests require the Outline profile to produce UTF-8,
+newline-terminated parse output while every non-parse channel is unsupported. A
 streaming decoder fuzz target remains planned before baseline registration or
 untrusted corpus execution.
 
@@ -134,6 +157,13 @@ fingerprints, replacement protection, and baseline-ledger entry are required
 before differential CI. Until then this is a tested partial process boundary,
 not the M0 external baseline runner exit condition.
 
+PDFium's public bookmark API normalizes titles, returns the raw item Count, may
+resolve destination names or GoTo actions into an effective destination, and
+does not expose outline-root Count, `/Last`, `/Parent`, or `/Prev`. It also
+collapses several missing, invalid, and empty-root states into a null first
+bookmark. The Outline probe therefore compares only its declared observable
+intersection and cannot weaken or replace Native's stricter structural checks.
+
 # History
 
 - 2026-07-13: Introduced process-isolation protocol schema version 1.
@@ -142,3 +172,6 @@ not the M0 external baseline runner exit condition.
 - 2026-07-13: Recorded a non-baseline PDFium upstream build-readiness exercise.
 - 2026-07-13: Added the source-only PDFium pixel adapter and recorded a
   non-gating O4 pixel probe with separately computed, unreviewed analytic checks.
+- 2026-07-14: Added the source-only PDFium Outline adapter and recorded a
+  non-gating Native/PDFium observable-subset differential with an expected
+  `/Prev` strictness difference.

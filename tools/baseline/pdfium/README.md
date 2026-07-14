@@ -5,11 +5,13 @@ runner. The source checkout is available at `../pdfium` relative to the reposito
 it is not linked, vendored, downloaded, or included in any PDF.rs product artifact.
 
 The baseline crate provides protocol schema 2, a tested deadline- and
-byte-limited direct-child supervisor, and a source-only PDFium public-C-API
-pixel adapter. The adapter links only inside a separately synced PDFium checkout;
-it is never a PDF.rs product dependency. Its initial profile reports Parse,
-Scene, and positioned Text as explicitly unsupported and produces exact-size,
-top-down, straight-alpha RGBA8 pixels. It does not draw form/widget overlays.
+byte-limited direct-child supervisor, a source-only PDFium public-C-API pixel
+adapter, and a separate source-only Outline probe. The helpers link only inside
+a separately synced PDFium checkout; they are never PDF.rs product dependencies.
+The pixel profile reports Parse, Scene, and positioned Text as explicitly
+unsupported and produces exact-size, top-down, straight-alpha RGBA8 pixels. It
+does not draw form/widget overlays. The Outline profile produces one bounded
+canonical JSON parse artifact and reports Scene, Text, and Pixel as unsupported.
 
 The helper is not an approved sandbox. `runner_executable`, invocation and
 complete build/runtime fingerprints, and isolation metadata remain M0-blocking
@@ -56,6 +58,24 @@ declared artifact oracle, establish the case's complete color/antialias render
 profile, measure performance, close fonts/runtime/licenses, establish a platform
 sandbox, or register a baseline. All correctness, differential, performance,
 registration, and release-gate eligibility fields remain false.
+
+A third, separately identity-bound helper uses only PDFium's public bookmark APIs to observe a
+bounded preorder of depth, normalized title, signed item Count, and target kind.
+On 2026-07-14, the valid three-item nested fixture matched Native byte-for-byte
+on that observable intersection, and the PDFium output repeated identically.
+For a second fixture with a deliberately wrong `/Prev`, Native returned
+`RPE-DOCUMENT-0041` (`OutlineSiblingMismatch`) while PDFium produced the same
+observable outline. That difference is expected: the public bookmark API does
+not expose or validate `/Prev`.
+
+The hash-bound result is recorded in
+`evidence/pdfium-c040cf96-macos-arm64-o4-outline-differential-probe-v1.toml`.
+It is a real, non-gating Native/PDFium O4 comparison over the explicitly named
+observable subset. It cannot adjudicate root Count, `/Last`, `/Parent`, `/Prev`,
+raw `/Dest` versus `/A` shape, or missing-versus-invalid empty roots, and it is
+not a registered baseline, a golden, product-correctness evidence, or a release
+gate. The baseline ledger remains empty until containment and complete runtime
+and license fingerprints are reviewed.
 
 Stock `pdfium_test` can produce raster images and plain text in separate
 invocations, but it does not provide this protocol's canonical
@@ -108,3 +128,39 @@ PDF_RS_PDFIUM_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_adapter" \
 This manual probe is not a Native/PDFium differential. Its analytic pixel checks
 only validate the transport and pixel adapter against self-authored, directly
 derivable inputs. Any recorded PDFium output remains O4 observation data.
+
+## Build and run the Outline differential probe
+
+Apply this overlay after the pixel overlay above so the previously evidence-bound
+pixel `BUILD.gn` and root patch remain byte-for-byte unchanged. The Outline
+evidence binds the prerequisite pixel evidence, build definition, helper source,
+and root patch by SHA-256; the two-step overlay is therefore explicit rather than
+an unrecorded checkout precondition:
+
+```sh
+mkdir -p "$PDFIUM_ROOT/tools/pdf_rs_outline_adapter"
+cp tools/baseline/pdfium/helper/outline.BUILD.gn \
+  "$PDFIUM_ROOT/tools/pdf_rs_outline_adapter/BUILD.gn"
+cp tools/baseline/pdfium/helper/pdf_rs_pdfium_outline_probe.cc \
+  "$PDFIUM_ROOT/tools/pdf_rs_outline_adapter/"
+git -C "$PDFIUM_ROOT" apply \
+  "$PWD/tools/baseline/pdfium/helper/pdfium-outline-root.patch"
+
+cd "$PDFIUM_ROOT"
+buildtools/mac/gn gen out/Adapter --args='use_remoteexec=false is_debug=false symbol_level=0 target_cpu="arm64" pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_enable_fontations=false is_component_build=false'
+third_party/ninja/ninja -C out/Adapter pdf_rs_pdfium_outline_probe
+```
+
+The host and SDK prerequisites follow Chromium's official
+[macOS build instructions](https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md).
+Run the explicit ignored comparison with:
+
+```sh
+PDF_RS_PDFIUM_OUTLINE_ADAPTER="$PDFIUM_ROOT/out/Adapter/pdf_rs_pdfium_outline_probe" \
+  cargo test --package pdf-rs-baseline --test pdfium_outline_real_adapter -- \
+  --ignored --exact real_pdfium_outline_observable_subset_matches_native --nocapture
+```
+
+This comparison is suitable as non-gating development baseline evidence for the
+named observable subset. PDFium remains O4 authority and cannot override the
+strict Native topology rules or ISO-derived expectations.

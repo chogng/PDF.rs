@@ -349,8 +349,12 @@ framing only establish lexical extent.
 
 No PDFium, other PDF engine, third-party implementation source, or external output was used to
 derive the candidate index, attestation state machine, text-string mapping and decoder, or outline
-topology and count validation. There is no canonical Outline quality fixture, registered
-Native/PDFium Outline differential, or Outline-based M1 exit claim in this slice.
+topology and count validation. After that implementation boundary was fixed, a separate
+`tools/baseline` O4 probe compared the public PDFium bookmark surface with Native on self-authored
+fixtures: the valid observable subset matched exactly, while a wrong `/Prev` produced the expected
+strictness difference because PDFium does not expose that backlink. The probe is non-gating and
+unregistered; there is no canonical corpus fixture, registered/contained PDFium baseline, broad
+Outline differential, or Outline-based M1 exit claim in this slice.
 
 # Dependencies and generated data
 
@@ -409,8 +413,10 @@ document-architecture requirement links and explicit partial-scope boundaries.
 - Outline enumeration is limited to the direct-semantic-value `m1.strict-outline.v1` bootstrap.
   Indirect outline-root `Type`, indirect `Title`, `Count`, `Dest`, and `A` values, indirect root or
   item aliases, undefined-reference and reference-to-null omission semantics, styles, destination
-  resolution, action inspection or execution, persistent outline ownership, canonical quality
-  fixtures, and registered Native/PDFium Outline differential evidence remain unsupported.
+  resolution, action inspection or execution, persistent outline ownership, canonical corpus
+  fixtures, registered/contained PDFium baseline execution, and broad Native/PDFium Outline
+  differential evidence remain unsupported. The separate non-gating O4 probe covers only the
+  normalized public-bookmark intersection and one expected `/Prev` strictness difference.
 - Text-string decoding implements the ISO 32000-1:2008 PDFDocEncoding and UTF-16BE profile only. It
   preserves rather than interprets embedded Unicode language escape sequences, does not normalize
   Unicode, and does not implement the PDF 2.0 UTF-8 text-string extension.
