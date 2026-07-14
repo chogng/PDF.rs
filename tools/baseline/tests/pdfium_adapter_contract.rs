@@ -239,7 +239,15 @@ fn fixture_executable(mode: &str, directory: &TestDirectory) -> PathBuf {
     let destination = directory
         .path()
         .join(format!("pdf-rs-baseline-fixture-{mode}"));
-    fs::copy(source, &destination).unwrap();
+    // Reuse the built inode when possible so platform executable validation is
+    // not repeated for every mode. Remove a prior same-mode link before the
+    // copy fallback so source and destination can never be the same inode.
+    if destination.exists() {
+        fs::remove_file(&destination).unwrap();
+    }
+    if fs::hard_link(&source, &destination).is_err() {
+        fs::copy(source, &destination).unwrap();
+    }
     destination
 }
 
