@@ -6,12 +6,15 @@
 //! before publishing an attested typestate. Only that typestate can mint a
 //! bounded job that reopens one parsed object into a wrapper retaining its
 //! proof. A second bounded job can iteratively follow whole-object direct
-//! reference aliases. A separate strict-base job validates the trailer Catalog
-//! and complete Page/Pages tree to publish a scalar page count with exact
-//! Parent, Count, cycle, and duplicate-child checks. The crate also owns bounded
-//! ISO 32000-1 text-string decoding from lexical PDF strings into UTF-8 without
-//! exposing source content in diagnostics. Other dictionary, array, stream, and
-//! nested-reference semantics remain outside a complete object-graph resolver.
+//! reference aliases. Separate strict-base jobs validate the trailer Catalog
+//! and either enumerate its bounded document outline or traverse the complete
+//! Page/Pages tree. The outline job checks linked-list topology, signed
+//! visible-item counts, decoded titles, and direct target shape; the page job
+//! publishes a scalar page count with exact Parent, Count, cycle, and
+//! duplicate-child checks. The crate also owns bounded ISO 32000-1 text-string
+//! decoding from lexical PDF strings into UTF-8 without exposing source content
+//! in diagnostics. Other dictionary, array, stream, and nested-reference
+//! semantics remain outside a complete object-graph resolver.
 //! Successful proof-bearing values retain their resolution profile and expose
 //! checked value-owned footprint components as evidence for a future cache owner,
 //! but this crate does not cache them.
@@ -32,6 +35,8 @@ mod error;
 mod index;
 mod limits;
 mod model;
+mod outline;
+mod outline_limits;
 mod page_tree;
 mod page_tree_limits;
 mod reference_chain;
@@ -59,6 +64,11 @@ pub use model::{
     AttestedRevisionIndex, CandidateRevisionIndex, DocumentIndexStats, ObjectAttestation,
     ObjectAttestationKind, PhysicalObjectInterval, RevisionId,
 };
+pub use outline::{
+    Outline, OutlineItem, OutlineJobContext, OutlinePhase, OutlinePoll, OutlineStats,
+    OutlineTargetKind, ReadOutlineJob,
+};
+pub use outline_limits::{OutlineLimitConfig, OutlineLimits};
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
 };

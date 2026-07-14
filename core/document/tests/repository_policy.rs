@@ -89,8 +89,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.25.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.25.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.26.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.26.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -121,13 +121,13 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "open-addressing table",
         "exact Parent back-links",
         "never uses untrusted Count or Kids data for allocation",
-        "does not implement revision chains",
-        "reusable lazy PageIndex",
+        "revision-chain",
+        "lazy PageIndex",
         "page_count=1",
         "pages_processed=1",
         "not a registered semantic differential",
-        "Native/PDFium differential evidence",
-        "does not claim M1 or M2 exit",
+        "any PDFium differential remain open",
+        "do not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {
         assert!(
@@ -174,7 +174,9 @@ fn traceability_registers_bounded_pdf_text_strings() {
             "ISO-32000-1:2008/7.9.2.2",
             [
                 "core.pdf-text-string",
+                "core.strict-outline",
                 "core/document::text_string",
+                "core/document::outline",
                 "FE FF selects UTF-16BE",
                 "supplementary scalars",
                 "does not implement the PDF 2.0 UTF-8 extension",
@@ -185,7 +187,9 @@ fn traceability_registers_bounded_pdf_text_strings() {
             "ISO-32000-1:2008/D.3",
             [
                 "core.pdf-text-string",
+                "core.strict-outline",
                 "core/document::text_string",
+                "core/document::outline",
                 "manually transcribed",
                 "Undefined codes are rejected",
                 "not font encoding",
@@ -201,6 +205,156 @@ fn traceability_registers_bounded_pdf_text_strings() {
                 "requirement {requirement_id} must contain {fragment:?}"
             );
         }
+    }
+}
+
+#[test]
+fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+
+    let feature = record_with_id(&feature_map, "feature", "core.strict-outline")
+        .expect("strict outline feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.strict-outline.v1\"",
+        "ISO-32000-1:2008/7.3.9",
+        "ISO-32000-1:2008/7.3.10",
+        "ISO-32000-1:2008/7.7.2",
+        "ISO-32000-1:2008/12.3.3",
+        "ISO-32000-1:2008/7.9.2.2",
+        "ISO-32000-1:2008/D.3",
+        "RPE-ARCH-001/5.8-5.9",
+        "modules = [\"core/document\"]",
+        "core/document::outline",
+        "core/document::outline_limit_config",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "strict outline feature must contain {required:?}"
+        );
+    }
+
+    let null_requirement = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.3.9")
+        .expect("null-object requirement must exist");
+    for required in [
+        "sha256:9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff",
+        "features = [\"core.strict-outline\"]",
+        "implementation = [\"core/document\"]",
+        "core/document::outline",
+        "core/document::repository_policy",
+        "status = \"partial\"",
+        "direct null values as omitted",
+        "undefined indirect reference",
+        "reference resolving to null",
+        "strict root/item dictionary shape failures",
+        "does not claim general dictionary",
+    ] {
+        assert!(
+            null_requirement.contains(required),
+            "null-object requirement must contain {required:?}"
+        );
+    }
+
+    let indirect_requirement = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.3.10")
+        .expect("indirect-object equivalence requirement must exist");
+    for required in [
+        "sha256:9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff",
+        "features = [\"core.strict-outline\"]",
+        "implementation = [\"core/document\"]",
+        "core/document::outline",
+        "core/document::repository_policy",
+        "status = \"partial\"",
+        "structural First, Last, Parent, Prev, and Next references",
+        "indirect form of any of those semantic fields",
+        "before dereferencing",
+        "makes no claim that the referenced target",
+    ] {
+        assert!(
+            indirect_requirement.contains(required),
+            "indirect-object equivalence requirement must contain {required:?}"
+        );
+    }
+
+    let catalog_requirement = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.7.2")
+        .expect("Catalog Outlines requirement must exist");
+    for required in [
+        "sha256:9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff",
+        "features = [\"core.strict-outline\"]",
+        "implementation = [\"core/document\"]",
+        "core/document::outline",
+        "core/document::repository_policy",
+        "status = \"partial\"",
+        "missing or null field returns an empty outline",
+        "exact indirect reference",
+        "Page counting deliberately does not inspect",
+        "Catalog aliases",
+        "persistent Catalog cache remain unsupported",
+    ] {
+        assert!(
+            catalog_requirement.contains(required),
+            "Catalog Outlines requirement must contain {required:?}"
+        );
+    }
+
+    let outline_requirement = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/12.3.3")
+        .expect("outline dictionary requirement must exist");
+    for required in [
+        "sha256:9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff",
+        "features = [\"core.strict-outline\"]",
+        "implementation = [\"core/document\"]",
+        "core/document::outline",
+        "core/document::outline_limit_config",
+        "core/document::repository_policy",
+        "status = \"partial\"",
+        "paired First and Last boundaries",
+        "exact Parent and Prev links",
+        "initial Prev and terminal Next shape",
+        "nonempty root requires Count",
+        "empty root requires Count omission",
+        "decoded direct text-string titles",
+        "never executes an action",
+        "permits indirect outline-root Type and indirect Title, Count, Dest, and A forms",
+        "does not judge the referenced target valid",
+        "destination resolution",
+        "Native/PDFium differential evidence remain open",
+        "does not claim ISO conformance or M1 exit",
+    ] {
+        assert!(
+            outline_requirement.contains(required),
+            "outline dictionary requirement must contain {required:?}"
+        );
+    }
+
+    let architecture_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.8-5.9")
+        .expect("document-model architecture requirement must exist");
+    for required in [
+        "core.strict-outline",
+        "core/document::outline",
+        "core/document::outline_limit_config",
+        "m1.strict-outline.v1",
+        "recursively recomputed item/root Count semantics",
+        "indirect-null equivalence",
+        "canonical quality fixture",
+        "any PDFium differential remain open",
+        "do not claim M1 or M2 exit",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            architecture_requirement.contains(required),
+            "document-model architecture requirement must contain {required:?}"
+        );
     }
 }
 

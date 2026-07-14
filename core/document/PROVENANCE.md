@@ -7,22 +7,26 @@ in-use object in physical order, and scans the prefix and every gap through `sta
 PDF whitespace and terminated comments. Only complete success publishes `AttestedRevisionIndex`.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
-complete page tree while preserving the attested-object access boundary.
+complete page tree or enumerate its bounded strict outline while preserving the attested-object
+access boundary.
 
 The crate performs no file, network, data callback, async-runtime, stream decoding, general object
 graph traversal, or caching. Its first resolver slice follows only whole-object reference aliases;
-the separate page-count slice interprets only Catalog and Page/Pages structural fields and does not
-publish page handles, inherited resources, or a reusable object graph. All source access is
+the separate page-count slice interprets only Catalog and Page/Pages structural fields, while the
+outline slice interprets only the optional Catalog `Outlines` reference and strict linked outline
+dictionaries reachable from it. Neither publishes page handles, inherited resources, a reusable
+object graph, resolved destinations, or executable actions. All source access is
 synchronous polling through an injected `ByteSource`; all long-running CPU work uses an injected
 cooperative cancellation probe. A separate pure document-semantic helper decodes already lexical
-PDF strings under the bounded ISO 32000-1 text-string rules needed by future outline and metadata
-services.
+PDF strings under the bounded ISO 32000-1 text-string rules used by the outline slice and available
+to future metadata services.
 
 # Semantic owner
 
 Parser/Security owns revision composition, physical object indexing, and top-level attestation.
-It also owns this strict-base Catalog and page-count validation slice; broader page indexing,
-resource inheritance, and page services remain future document-model work.
+It also owns this strict-base Catalog, outline-enumeration, and page-count validation slice;
+broader page indexing, resource inheritance, destination resolution, action interpretation, and
+page services remain future document-model work.
 `core/xref` owns traditional xref parsing, `core/syntax` owns the supported header and direct-object
 grammar, `core/object` owns bounded indirect-object framing, and `core/bytes` owns immutable
 snapshot-bound exact reads. This crate composes those sibling results without moving their lower
@@ -40,6 +44,16 @@ semantic responsibilities.
   defines the `FE FF` UTF-16BE selection rule, supplementary-character requirement, and the
   PDFDocEncoding-to-Unicode mapping used by human-readable text strings. The authorized Adobe
   snapshot acquired on 2026-07-14 has SHA-256
+  `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
+- [ISO 32000-1:2008, 7.3.9 and 7.3.10](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines null-as-omission and the default semantic equivalence of permitted direct and indirect
+  object values. The outline bootstrap implements direct null omission but deliberately stops at
+  indirect semantic values and does not implement undefined-reference or reference-to-null
+  equivalence. The same authorized snapshot and SHA-256 above apply.
+- [ISO 32000-1:2008, 7.7.2 and 12.3.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines the Catalog's optional indirect `Outlines` entry and the outline root/item dictionaries,
+  linked-list topology, text titles, targets, and signed visible-item counts used by the strict
+  outline bootstrap. The same authorized Adobe snapshot acquired on 2026-07-14 has SHA-256
   `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
 - [RPE-STD-001, sections 3, 5-6, and 8-9](../../docs/standards/coding-standard.md) requires stable
   structured errors, checked arithmetic, fallible bounded allocation, and redacted diagnostics.
@@ -209,6 +223,34 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   persistent Catalog cache, random-access PageIndex, page handle, inherited-resource result, or
   claim of general PDF page-tree compatibility.
 
+## Strict Catalog and bounded outline enumeration
+
+- Outline enumeration lazily interprets the shared strict Catalog parser's optional `Outlines`
+  service field. A missing or null field yields an empty outline. A present field must be unique
+  and contain an exact indirect reference; page counting never inspects or validates it.
+- The outline root and every item are reopened through the proof-preserving attested-object API and
+  must be direct dictionaries rather than streams or whole-object aliases. The root and each item
+  require paired `First` and `Last` child boundaries when either is present. Each sibling chain is
+  traversed from `First` through `Next` to the exact `Last`, with exact `Parent` and `Prev` links,
+  missing initial `Prev`, missing terminal `Next`, and global identity tracking that rejects cycles
+  and duplicate items. Optional direct null values are treated as omitted before these rules.
+- Every item requires a direct text-string `Title`, decoded through the bounded ISO 32000-1 text
+  helper. `Count` is recomputed from validated descendants and checked with its sign: an item's
+  absolute value reflects its direct children plus the positive visible contributions of open
+  children. A nonempty root requires a nonnegative `Count` equal to every visible item, including a
+  closed item itself but excluding that item's hidden descendants; an empty root requires `Count`
+  omission. Declared counts are never used for allocation, skipping, or traversal.
+- `Dest` and `A` are optional direct semantic values and are mutually exclusive. The result records
+  only their target kind; it does not resolve a destination or inspect, interpret, or execute an
+  action. Section 7.3.10 permits an indirect outline-root `Type` and indirect `Title`, `Count`,
+  `Dest`, and `A` forms, but this profile returns `UnsupportedOutlineRepresentation` before
+  dereferencing and therefore does not judge whether the referenced target has a valid type or
+  value.
+- Success publishes only a bounded owned preorder with decoded titles, declared count evidence,
+  target kind, and work statistics; title-bearing values redact content from `Debug`. It is not a
+  mutable outline graph, persistent outline cache, navigation service, destination index, or ISO
+  conformance result.
+
 ## Bounded PDF text strings
 
 - `decode_text_string` consumes only an already lexical-decoded `PdfString`; literal/hexadecimal
@@ -249,6 +291,14 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   aggregate object work but is not counted as a Page/Pages node. Child caps use the smaller of the
   retained object profile and remaining aggregate allowance; repeated Pending polls charge only
   new lower deltas, and scoped exhaustion retains the complete lower object error.
+- An outline job independently bounds item count, depth, siblings per level, title input and UTF-8
+  bytes, cumulative child reads and parses, and allocator-reported traversal/result retention.
+  Root and item dictionaries participate in aggregate object work. Child caps are lent from the
+  remaining aggregate allowance, `Pending` polls charge only newly observed lower deltas, and no
+  untrusted `Count` or linked-list value determines a reservation size. Title decoding first
+  measures input and logical UTF-8 work without allocating output, checks aggregate logical and
+  requested retained capacity, and only then materializes the string; actual allocator capacity is
+  rechecked before publication.
 - Reference-chain limits apply to one job only. Repeated jobs do not share a budget owner, resident
   cache, or reservation ledger. A future persistent resolver must add complete retained-object
   ownership, admission/reservation, and eviction before it can cache `Ready` values or coalesce
@@ -284,6 +334,11 @@ revision, Catalog, page-tree-root, scalar count, and work evidence. It exposes n
 dictionaries nor a constructor capable of reopening arbitrary objects after the borrowed attested
 index is gone.
 
+The outline job is likewise only a proof consumer. Its owned preorder copies decoded titles and
+scalar/link-derived evidence after all traversed dictionaries have been reopened and validated.
+It exposes neither parsed target objects nor byte, resolution, navigation, or action-execution
+authority after the borrowed attested index is gone.
+
 The proof is deliberately closed-world: bytes between indexed in-use objects must be trivia.
 Stale free-object bodies, unindexed top-level objects, or other top-level tokens are rejected even
 when another PDF implementation might tolerate them. Opaque stream payload bytes need not be
@@ -293,7 +348,9 @@ framing only establish lexical extent.
 # External observations
 
 No PDFium, other PDF engine, third-party implementation source, or external output was used to
-derive the candidate index, attestation state machine, or text-string mapping and decoder.
+derive the candidate index, attestation state machine, text-string mapping and decoder, or outline
+topology and count validation. There is no canonical Outline quality fixture, registered
+Native/PDFium Outline differential, or Outline-based M1 exit claim in this slice.
 
 # Dependencies and generated data
 
@@ -327,6 +384,14 @@ platform-specific byte constants. Text-string tests construct every input throug
 syntax parser and cover the complete non-identity PDFDocEncoding mapping, defined and undefined
 controls, undefined high bytes, UTF-16BE BMP and supplementary scalars, malformed surrogate
 structure, BOM selection, exact input/output capacity limits, cancellation, and redaction.
+Outline behavior tests cover absent and empty outlines, valid nested linked lists, structural
+topology/count/title/target failures, root Count presence and omission, indirect semantic-value
+boundaries, representative traversal limits, pre-allocation aggregate title checks, and redacted
+diagnostics.
+Outline limit-configuration tests cover defaults, valid boundaries, zero and hard-ceiling
+rejection, and independent aggregate resource dimensions. Repository policy also verifies the
+strict-outline feature plus its ISO text, null, indirect-object, Catalog, outline-dictionary, and
+document-architecture requirement links and explicit partial-scope boundaries.
 
 # Known deviations and unsupported cases
 
@@ -339,8 +404,13 @@ structure, BOM selection, exact input/output capacity limits, cancellation, and 
   retained-value caching, negative caching, admission/reservation, eviction, and cross-job/session
   resident ownership remain unsupported. Successful footprints are measurement evidence only.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
-  payloads, random-access page indexing, inherited resources, page handles, outline/name-tree
-  services, writer behavior, and document actions remain unsupported.
+  payloads, random-access page indexing, inherited resources, page handles, name-tree services,
+  writer behavior, and document actions remain unsupported.
+- Outline enumeration is limited to the direct-semantic-value `m1.strict-outline.v1` bootstrap.
+  Indirect outline-root `Type`, indirect `Title`, `Count`, `Dest`, and `A` values, indirect root or
+  item aliases, undefined-reference and reference-to-null omission semantics, styles, destination
+  resolution, action inspection or execution, persistent outline ownership, canonical quality
+  fixtures, and registered Native/PDFium Outline differential evidence remain unsupported.
 - Text-string decoding implements the ISO 32000-1:2008 PDFDocEncoding and UTF-16BE profile only. It
   preserves rather than interprets embedded Unicode language escape sequences, does not normalize
   Unicode, and does not implement the PDF 2.0 UTF-8 text-string extension.
@@ -371,3 +441,6 @@ structure, BOM selection, exact input/output capacity limits, cancellation, and 
   storage released before terminal publication.
 - 2026-07-14: Added bounded cancellable ISO 32000-1 PDF text-string decoding for PDFDocEncoding and
   BOM-selected UTF-16BE with supplementary scalar support and redacted diagnostics.
+- 2026-07-14: Added strict bounded outline enumeration with exact linked-list topology, recursively
+  validated signed counts, direct decoded titles and target kinds, aggregate work and retained-byte
+  limits, and explicit no-action/no-destination-resolution boundaries.

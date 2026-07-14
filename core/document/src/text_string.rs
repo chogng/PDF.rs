@@ -352,6 +352,23 @@ impl fmt::Debug for DecodedTextString {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct TextStringMeasurement {
+    encoding: TextStringEncoding,
+    input_bytes: u64,
+    utf8_bytes: u64,
+}
+
+impl TextStringMeasurement {
+    pub(crate) const fn input_bytes(self) -> u64 {
+        self.input_bytes
+    }
+
+    pub(crate) const fn utf8_bytes(self) -> u64 {
+        self.utf8_bytes
+    }
+}
+
 /// Decodes one lexical PDF string under the ISO 32000-1 text-string convention.
 ///
 /// A leading `FE FF` selects UTF-16BE and is not retained in the result. Every
@@ -363,6 +380,15 @@ pub fn decode_text_string(
     limits: TextStringLimits,
     cancellation: &(dyn DocumentCancellation + '_),
 ) -> Result<DecodedTextString, TextStringError> {
+    let measurement = measure_text_string(value, limits, cancellation)?;
+    decode_measured_text_string(value, limits, measurement, cancellation)
+}
+
+pub(crate) fn measure_text_string(
+    value: &PdfString,
+    limits: TextStringLimits,
+    cancellation: &(dyn DocumentCancellation + '_),
+) -> Result<TextStringMeasurement, TextStringError> {
     check_cancelled(cancellation, None)?;
     let bytes = value.bytes();
     let input_bytes = u64::try_from(bytes.len()).map_err(|_| {
@@ -415,12 +441,34 @@ pub fn decode_text_string(
         Ok(())
     })?;
 
-    let capacity = usize::try_from(utf8_bytes).map_err(|_| {
+    Ok(TextStringMeasurement {
+        encoding,
+        input_bytes,
+        utf8_bytes,
+    })
+}
+
+pub(crate) fn decode_measured_text_string(
+    value: &PdfString,
+    limits: TextStringLimits,
+    measurement: TextStringMeasurement,
+    cancellation: &(dyn DocumentCancellation + '_),
+) -> Result<DecodedTextString, TextStringError> {
+    check_cancelled(cancellation, None)?;
+    let bytes = value.bytes();
+    let encoded = match measurement.encoding {
+        TextStringEncoding::PdfDocEncoding => bytes,
+        TextStringEncoding::Utf16Be => bytes
+            .strip_prefix(&[0xfe, 0xff])
+            .ok_or_else(|| TextStringError::for_code(TextStringErrorCode::InvalidUtf16, Some(0)))?,
+    };
+
+    let capacity = usize::try_from(measurement.utf8_bytes).map_err(|_| {
         TextStringError::resource(
             TextStringLimitKind::Utf8Bytes,
             limits.max_utf8_bytes(),
             0,
-            utf8_bytes,
+            measurement.utf8_bytes,
             None,
         )
     })?;
@@ -430,7 +478,7 @@ pub fn decode_text_string(
             TextStringLimitKind::Utf8Bytes,
             limits.max_utf8_bytes(),
             0,
-            utf8_bytes,
+            measurement.utf8_bytes,
             None,
         )
     })?;
@@ -438,7 +486,7 @@ pub fn decode_text_string(
         TextStringError::resource(
             TextStringLimitKind::Utf8Bytes,
             limits.max_utf8_bytes(),
-            utf8_bytes,
+            measurement.utf8_bytes,
             u64::MAX,
             None,
         )
@@ -447,32 +495,37 @@ pub fn decode_text_string(
         return Err(TextStringError::resource(
             TextStringLimitKind::Utf8Bytes,
             limits.max_utf8_bytes(),
-            utf8_bytes,
+            measurement.utf8_bytes,
             reserved_utf8_bytes,
             None,
         ));
     }
 
-    scan_text(encoding, encoded, cancellation, |character, _| {
-        output.push(character);
-        Ok(())
-    })?;
+    scan_text(
+        measurement.encoding,
+        encoded,
+        cancellation,
+        |character, _| {
+            output.push(character);
+            Ok(())
+        },
+    )?;
     if output.len() != capacity {
         return Err(TextStringError::resource(
             TextStringLimitKind::Utf8Bytes,
             limits.max_utf8_bytes(),
-            utf8_bytes,
+            measurement.utf8_bytes,
             u64::MAX,
             None,
         ));
     }
-    check_cancelled(cancellation, Some(input_bytes))?;
+    check_cancelled(cancellation, Some(measurement.input_bytes))?;
 
     Ok(DecodedTextString {
-        encoding,
+        encoding: measurement.encoding,
         value: output,
-        input_bytes,
-        utf8_bytes,
+        input_bytes: measurement.input_bytes,
+        utf8_bytes: measurement.utf8_bytes,
         reserved_utf8_bytes,
     })
 }

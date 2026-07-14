@@ -1,5 +1,5 @@
 schema = 1
-version = "0.25.0"
+version = "0.26.0"
 status = "active"
 
 [[feature]]
@@ -118,6 +118,18 @@ profile = "m1.pdf-text-string.v1"
 clauses = ["ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
 tests = ["core/document::text_string", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-outline"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.strict-outline.v1"
+clauses = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

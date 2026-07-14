@@ -1,8 +1,9 @@
 use pdf_rs_bytes::SourceSnapshot;
-use pdf_rs_syntax::{ObjectRef, SyntaxObject};
+use pdf_rs_syntax::{ObjectRef, PdfDictionary, SyntaxObject};
 
 use crate::dictionary::{
-    collect_structural_fields, direct_dictionary, reject_duplicate_field, required_field,
+    collect_structural_fields, direct_dictionary, optional_non_null_field, reject_duplicate_field,
+    required_field,
 };
 use crate::{
     AttestedObject, AttestedRevisionIndex, DocumentCancellation, DocumentError, DocumentErrorCode,
@@ -62,12 +63,13 @@ impl LocatedObjectRef {
     }
 }
 
-pub(crate) struct ParsedCatalog {
+pub(crate) struct ParsedCatalog<'object> {
     summary: StrictCatalog,
     pages: LocatedObjectRef,
+    dictionary: &'object PdfDictionary,
 }
 
-impl ParsedCatalog {
+impl ParsedCatalog<'_> {
     pub(crate) const fn summary(&self) -> StrictCatalog {
         self.summary
     }
@@ -75,13 +77,40 @@ impl ParsedCatalog {
     pub(crate) const fn pages_entry(&self) -> LocatedObjectRef {
         self.pages
     }
+
+    pub(crate) fn outlines_entry(
+        &self,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Option<LocatedObjectRef>, DocumentError> {
+        let fields = collect_structural_fields(
+            self.dictionary,
+            [b"Outlines".as_slice()],
+            self.summary.root,
+            cancellation,
+        )?;
+        reject_duplicate_field(&fields, 0, self.summary.root)?;
+        let Some(value) = optional_non_null_field(&fields, 0) else {
+            return Ok(None);
+        };
+        let Some(reference) = value.value().as_reference() else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidOutlineDictionary,
+                Some(self.summary.root),
+                Some(value.span().start()),
+            ));
+        };
+        Ok(Some(LocatedObjectRef {
+            reference,
+            value_offset: value.span().start(),
+        }))
+    }
 }
 
-pub(crate) fn parse_strict_catalog(
+pub(crate) fn parse_strict_catalog<'object>(
     index: &AttestedRevisionIndex,
-    object: &AttestedObject,
+    object: &'object AttestedObject,
     cancellation: &dyn DocumentCancellation,
-) -> Result<ParsedCatalog, DocumentError> {
+) -> Result<ParsedCatalog<'object>, DocumentError> {
     let reference = object.reference();
     let offset = object.attestation().xref_offset();
     if reference != index.root() {
@@ -159,5 +188,6 @@ pub(crate) fn parse_strict_catalog(
             reference: pages,
             value_offset: pages_value.span().start(),
         },
+        dictionary,
     })
 }

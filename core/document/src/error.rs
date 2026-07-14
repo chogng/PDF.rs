@@ -5,6 +5,11 @@ use pdf_rs_bytes::{SourceError, SourceErrorCategory, SourceRecoverability};
 use pdf_rs_object::{ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectRecoverability};
 use pdf_rs_syntax::{ObjectRef, SyntaxError, SyntaxErrorCategory, SyntaxRecoverability};
 
+use crate::text_string::{
+    TextStringError, TextStringErrorCategory, TextStringErrorCode, TextStringLimitKind,
+    TextStringRecoverability,
+};
+
 /// Deterministic document-composition budget that rejected work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentLimitKind {
@@ -58,6 +63,26 @@ pub enum DocumentLimitKind {
     PageTreeObjectParseBytes,
     /// Allocator-reported work-stack and visited-reference capacity.
     PageTreeTraversalBytes,
+    /// Distinct outline item identities scheduled by one bounded outline job.
+    OutlineItems,
+    /// Greatest root-relative outline item depth accepted by one outline job.
+    OutlineDepth,
+    /// Items traversed in one sibling list.
+    OutlineSiblings,
+    /// Decoded bytes in one outline title string.
+    OutlineTitleInputBytes,
+    /// Logical or allocator-retained UTF-8 bytes in one outline title.
+    OutlineTitleUtf8Bytes,
+    /// Cumulative decoded title bytes across one outline job.
+    OutlineTotalTitleInputBytes,
+    /// Cumulative logical or allocator-retained UTF-8 title bytes across one outline job.
+    OutlineTotalTitleUtf8Bytes,
+    /// Cumulative exact object-read bytes across one outline job.
+    OutlineObjectReadBytes,
+    /// Cumulative object-parser window bytes across one outline job.
+    OutlineObjectParseBytes,
+    /// Allocator-reported outline result and traversal capacity.
+    OutlineRetainedBytes,
 }
 
 /// Structured document-composition resource-limit context without document bytes.
@@ -176,6 +201,28 @@ pub enum DocumentErrorCode {
     PageTreeCountMismatch,
     /// A strict Catalog or page-tree dictionary repeats a structural key.
     DuplicateStructuralKey,
+    /// Runtime identity or child checkpoints for outline traversal are inconsistent.
+    InvalidOutlineJobContext,
+    /// The Catalog outline entry or outline root dictionary has the wrong shape.
+    InvalidOutlineDictionary,
+    /// An outline item or one of its required structural fields has the wrong shape.
+    InvalidOutlineItem,
+    /// An outline semantic field uses an indirect form outside this bootstrap profile.
+    UnsupportedOutlineRepresentation,
+    /// An outline title is not a valid supported PDF text string.
+    InvalidOutlineTitle,
+    /// An outline item does not point back to its exact traversed parent.
+    OutlineParentMismatch,
+    /// Prev, Next, First, or Last does not describe one closed sibling list.
+    OutlineSiblingMismatch,
+    /// An outline structural edge points to an active or prior item in the same chain.
+    OutlineCycle,
+    /// One exact outline item is reachable from more than one structural position.
+    DuplicateOutlineItem,
+    /// An item or root Count differs from the recursively validated visibility formula.
+    OutlineCountMismatch,
+    /// An outline item has mutually exclusive or malformed activation targets.
+    InvalidOutlineTarget,
 }
 
 /// Coarse document-composition failure category.
@@ -228,6 +275,10 @@ enum DocumentErrorDetail {
     Limit(DocumentLimit),
     Object {
         error: ObjectError,
+        aggregate_limit: Option<DocumentLimit>,
+    },
+    Text {
+        error: TextStringError,
         aggregate_limit: Option<DocumentLimit>,
     },
     Source(SourceError),
@@ -423,6 +474,61 @@ impl DocumentError {
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0034",
             ),
+            DocumentErrorCode::InvalidOutlineJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0035",
+            ),
+            DocumentErrorCode::InvalidOutlineDictionary => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0036",
+            ),
+            DocumentErrorCode::InvalidOutlineItem => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0037",
+            ),
+            DocumentErrorCode::UnsupportedOutlineRepresentation => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0038",
+            ),
+            DocumentErrorCode::InvalidOutlineTitle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0039",
+            ),
+            DocumentErrorCode::OutlineParentMismatch => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0040",
+            ),
+            DocumentErrorCode::OutlineSiblingMismatch => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0041",
+            ),
+            DocumentErrorCode::OutlineCycle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0042",
+            ),
+            DocumentErrorCode::DuplicateOutlineItem => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0043",
+            ),
+            DocumentErrorCode::OutlineCountMismatch => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0044",
+            ),
+            DocumentErrorCode::InvalidOutlineTarget => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0045",
+            ),
         };
         Self {
             code,
@@ -494,6 +600,78 @@ impl DocumentError {
             detail: DocumentErrorDetail::Limit(DocumentLimit::new(
                 kind, limit, consumed, attempted,
             )),
+        }
+    }
+
+    pub(crate) const fn outline_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn from_outline_text(
+        error: TextStringError,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Self {
+        let code = match error.code() {
+            TextStringErrorCode::InvalidLimits => DocumentErrorCode::InvalidLimits,
+            TextStringErrorCode::ResourceLimit => DocumentErrorCode::ResourceLimit,
+            TextStringErrorCode::Cancelled => DocumentErrorCode::Cancelled,
+            TextStringErrorCode::UndefinedPdfDocEncoding | TextStringErrorCode::InvalidUtf16 => {
+                DocumentErrorCode::InvalidOutlineTitle
+            }
+        };
+        let category = match error.category() {
+            TextStringErrorCategory::Configuration => DocumentErrorCategory::Configuration,
+            TextStringErrorCategory::Resource => DocumentErrorCategory::Resource,
+            TextStringErrorCategory::Syntax => DocumentErrorCategory::Syntax,
+            TextStringErrorCategory::Cancellation => DocumentErrorCategory::Cancellation,
+        };
+        let recoverability = match error.recoverability() {
+            TextStringRecoverability::CorrectConfiguration => {
+                DocumentRecoverability::CorrectConfiguration
+            }
+            TextStringRecoverability::ReduceWorkload => DocumentRecoverability::ReduceWorkload,
+            TextStringRecoverability::CorrectInput => DocumentRecoverability::CorrectInput,
+            TextStringRecoverability::AbandonOperation => DocumentRecoverability::AbandonOperation,
+        };
+        let aggregate_limit = match error.limit() {
+            Some(limit) => Some(DocumentLimit::new(
+                match limit.kind() {
+                    TextStringLimitKind::InputBytes => DocumentLimitKind::OutlineTitleInputBytes,
+                    TextStringLimitKind::Utf8Bytes => DocumentLimitKind::OutlineTitleUtf8Bytes,
+                },
+                limit.limit(),
+                limit.consumed(),
+                limit.attempted(),
+            )),
+            None => None,
+        };
+        let base = Self::for_code(code, Some(reference), Some(offset));
+        Self {
+            category,
+            recoverability,
+            detail: DocumentErrorDetail::Text {
+                error,
+                aggregate_limit,
+            },
+            ..base
         }
     }
 
@@ -833,6 +1011,9 @@ impl DocumentError {
             DocumentErrorDetail::Object {
                 aggregate_limit, ..
             } => aggregate_limit,
+            DocumentErrorDetail::Text {
+                aggregate_limit, ..
+            } => aggregate_limit,
             DocumentErrorDetail::None
             | DocumentErrorDetail::Source(_)
             | DocumentErrorDetail::Syntax(_) => None,
@@ -845,6 +1026,7 @@ impl DocumentError {
             DocumentErrorDetail::Object { error, .. } => Some(error.code()),
             DocumentErrorDetail::None
             | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Text { .. }
             | DocumentErrorDetail::Source(_)
             | DocumentErrorDetail::Syntax(_) => None,
         }
@@ -856,6 +1038,7 @@ impl DocumentError {
             DocumentErrorDetail::Object { error, .. } => Some(error),
             DocumentErrorDetail::None
             | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Text { .. }
             | DocumentErrorDetail::Source(_)
             | DocumentErrorDetail::Syntax(_) => None,
         }
@@ -868,6 +1051,7 @@ impl DocumentError {
             DocumentErrorDetail::Object { error, .. } => error.source_error(),
             DocumentErrorDetail::None
             | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Text { .. }
             | DocumentErrorDetail::Syntax(_) => None,
         }
     }
@@ -879,7 +1063,20 @@ impl DocumentError {
             DocumentErrorDetail::Object { error, .. } => error.syntax_error(),
             DocumentErrorDetail::None
             | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Text { .. }
             | DocumentErrorDetail::Source(_) => None,
+        }
+    }
+
+    /// Returns the retained lower PDF text-string error for an outline title.
+    pub const fn text_string_error(self) -> Option<TextStringError> {
+        match self.detail {
+            DocumentErrorDetail::Text { error, .. } => Some(error),
+            DocumentErrorDetail::None
+            | DocumentErrorDetail::Limit(_)
+            | DocumentErrorDetail::Object { .. }
+            | DocumentErrorDetail::Source(_)
+            | DocumentErrorDetail::Syntax(_) => None,
         }
     }
 }

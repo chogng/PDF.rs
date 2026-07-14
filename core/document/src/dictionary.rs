@@ -91,6 +91,13 @@ pub(crate) fn optional_field<'dictionary, const N: usize>(
     fields.values.get(index).copied().flatten()
 }
 
+pub(crate) fn optional_non_null_field<'dictionary, const N: usize>(
+    fields: &StructuralFields<'dictionary, N>,
+    index: usize,
+) -> Option<&'dictionary Located<SyntaxObject>> {
+    optional_field(fields, index).filter(|value| !matches!(value.value(), SyntaxObject::Null))
+}
+
 pub(crate) fn required_field<'dictionary, const N: usize>(
     fields: &StructuralFields<'dictionary, N>,
     index: usize,

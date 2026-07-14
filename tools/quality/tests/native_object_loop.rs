@@ -820,8 +820,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.25.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.25.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.26.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.26.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -986,7 +986,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(page_tree_requirement.contains("pages_processed=1"));
     assert!(page_tree_requirement.contains("non-gating smoke observation"));
     assert!(page_tree_requirement.contains("not a registered semantic differential"));
-    assert!(page_tree_requirement.contains("does not claim M1 or M2 exit"));
+    assert!(page_tree_requirement.contains("do not claim M1 or M2 exit"));
 
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")
         .expect("the xref architecture requirement must exist");
