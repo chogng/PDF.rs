@@ -26,6 +26,8 @@
 mod access;
 mod attestation;
 mod attestation_limits;
+mod catalog;
+mod dictionary;
 mod error;
 mod index;
 mod limits;
@@ -46,6 +48,7 @@ pub use attestation::{
     RevisionAttestationPoll, RevisionAttestationStats,
 };
 pub use attestation_limits::{RevisionAttestationLimitConfig, RevisionAttestationLimits};
+pub use catalog::StrictCatalog;
 pub use error::{
     DocumentError, DocumentErrorCategory, DocumentErrorCode, DocumentLimit, DocumentLimitKind,
     DocumentRecoverability,
@@ -58,7 +61,6 @@ pub use model::{
 };
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
-    StrictCatalog,
 };
 pub use page_tree_limits::{PageTreeLimitConfig, PageTreeLimits};
 pub use reference_chain::{

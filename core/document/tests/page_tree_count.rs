@@ -336,6 +336,32 @@ fn valid_single_and_nested_trees_return_bound_catalog_counts_stats_and_stable_te
 }
 
 #[test]
+fn page_count_defers_unrequested_outline_fields() {
+    for catalog in [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Outlines 7 >>\nendobj\n".as_slice(),
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R /Outlines 8 0 R >>\nendobj\n"
+            .as_slice(),
+    ] {
+        let fixture = fixture(
+            &[
+                (1, catalog),
+                (
+                    2,
+                    b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+                ),
+                (3, b"3 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n"),
+            ],
+            4,
+        );
+        let index = ready_index(&fixture);
+        let store = supplied_store(&fixture);
+        let mut job = index.count_pages(context(), compact_limits()).unwrap();
+
+        assert_eq!(poll_ready(&mut job, &store).page_count(), 1);
+    }
+}
+
+#[test]
 fn duplicate_structural_keys_and_root_parent_have_distinct_strict_failures() {
     let duplicate_keys = [
         fixture(

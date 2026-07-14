@@ -4,13 +4,18 @@ use std::mem;
 use pdf_rs_bytes::{
     ByteSource, DataTicket, JobId, RequestPriority, ResumeCheckpoint, SmallRanges, SourceSnapshot,
 };
-use pdf_rs_object::{IndirectObjectValue, ObjectLimitKind, ObjectStats, ObjectWorkCaps};
-use pdf_rs_syntax::{Located, ObjectRef, PdfDictionary, SyntaxObject};
+use pdf_rs_object::{ObjectLimitKind, ObjectStats, ObjectWorkCaps};
+use pdf_rs_syntax::{Located, ObjectRef, SyntaxObject};
 
+use crate::catalog::parse_strict_catalog;
+use crate::dictionary::{
+    StructuralFields, collect_structural_fields, direct_dictionary, optional_field,
+    reject_duplicate_field, required_field,
+};
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    OpenAttestedObjectJob, PageTreeLimits, RevisionId,
+    OpenAttestedObjectJob, PageTreeLimits, StrictCatalog,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -72,43 +77,6 @@ pub enum PageTreePhase {
     Ready,
     /// The job reached a stable terminal failure.
     Failed,
-}
-
-/// Source- and revision-bound summary of one validated strict Catalog.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StrictCatalog {
-    snapshot: SourceSnapshot,
-    revision_id: RevisionId,
-    revision_startxref: u64,
-    root: ObjectRef,
-    pages: ObjectRef,
-}
-
-impl StrictCatalog {
-    /// Returns the immutable source snapshot containing the Catalog.
-    pub const fn snapshot(self) -> SourceSnapshot {
-        self.snapshot
-    }
-
-    /// Returns the attested strict-base revision identity.
-    pub const fn revision_id(self) -> RevisionId {
-        self.revision_id
-    }
-
-    /// Returns the `startxref` anchor of the attested strict-base revision.
-    pub const fn revision_startxref(self) -> u64 {
-        self.revision_startxref
-    }
-
-    /// Returns the trailer's exact Catalog object identity.
-    pub const fn root(self) -> ObjectRef {
-        self.root
-    }
-
-    /// Returns the exact page-tree root referenced by the Catalog.
-    pub const fn pages(self) -> ObjectRef {
-        self.pages
-    }
 }
 
 /// Deterministic traversal work and active-capacity accounting.
@@ -673,79 +641,23 @@ impl CountPagesJob<'_> {
         object: AttestedObject,
         cancellation: &dyn DocumentCancellation,
     ) -> Result<(), DocumentError> {
-        let reference = object.reference();
-        let offset = object.attestation().xref_offset();
-        if reference != self.index.root() {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(reference),
-                Some(offset),
-            ));
-        }
-        let dictionary = direct_dictionary(
-            &object,
-            self.index.snapshot(),
-            DocumentErrorCode::InvalidCatalog,
-        )?;
-        let fields = collect_structural_fields(
-            dictionary,
-            [b"Type".as_slice(), b"Pages".as_slice()],
-            reference,
-            cancellation,
-        )?;
-        reject_duplicate_field(&fields, 0, reference)?;
-        reject_duplicate_field(&fields, 1, reference)?;
-        let type_value = required_field(
-            &fields,
-            0,
-            reference,
-            offset,
-            DocumentErrorCode::InvalidCatalog,
-        )?;
-        if !matches!(
-            type_value.value(),
-            SyntaxObject::Name(name) if name.bytes() == b"Catalog"
-        ) {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::InvalidCatalog,
-                Some(reference),
-                Some(type_value.span().start()),
-            ));
-        }
-        let pages_value = required_field(
-            &fields,
-            1,
-            reference,
-            offset,
-            DocumentErrorCode::InvalidCatalog,
-        )?;
-        let Some(pages) = pages_value.value().as_reference() else {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::InvalidCatalog,
-                Some(reference),
-                Some(pages_value.span().start()),
-            ));
-        };
-
-        self.catalog = Some(StrictCatalog {
-            snapshot: self.index.snapshot(),
-            revision_id: self.index.revision_id(),
-            revision_startxref: self.index.startxref(),
-            root: reference,
-            pages,
-        });
+        let parsed = parse_strict_catalog(self.index, &object, cancellation)?;
+        let catalog = parsed.summary();
+        let pages_entry = parsed.pages_entry();
+        let pages = pages_entry.reference();
+        self.catalog = Some(catalog);
         if !self.insert_seen(pages, cancellation)? {
             return Err(DocumentError::for_code(
                 DocumentErrorCode::InternalState,
                 Some(pages),
-                Some(pages_value.span().start()),
+                Some(pages_entry.value_offset()),
             ));
         }
         self.push_work(WorkItem::Visit(VisitNode {
             reference: pages,
             parent: None,
             depth: 1,
-            edge_offset: pages_value.span().start(),
+            edge_offset: pages_entry.value_offset(),
         }))?;
         Ok(())
     }
@@ -801,7 +713,7 @@ impl CountPagesJob<'_> {
             }
         };
         reject_duplicate_field(&fields, 1, reference)?;
-        let parent_value = fields.values[1];
+        let parent_value = optional_field(&fields, 1);
         validate_parent(visit, parent_value, offset)?;
 
         if is_page {
@@ -1387,99 +1299,6 @@ fn mix_reference(mut value: u64) -> u64 {
     value ^= value >> 27;
     value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
-}
-
-fn direct_dictionary(
-    object: &AttestedObject,
-    snapshot: SourceSnapshot,
-    invalid_code: DocumentErrorCode,
-) -> Result<&PdfDictionary, DocumentError> {
-    let reference = object.reference();
-    let offset = object.attestation().xref_offset();
-    match object.value() {
-        IndirectObjectValue::Direct(value) if value.source() == snapshot.identity() => value
-            .value()
-            .as_dictionary()
-            .ok_or_else(|| DocumentError::for_code(invalid_code, Some(reference), Some(offset))),
-        IndirectObjectValue::Direct(_) => Err(DocumentError::for_code(
-            DocumentErrorCode::AttestedObjectEvidenceMismatch,
-            Some(reference),
-            Some(offset),
-        )),
-        IndirectObjectValue::Stream(_) => Err(DocumentError::for_code(
-            invalid_code,
-            Some(reference),
-            Some(offset),
-        )),
-    }
-}
-
-struct StructuralFields<'dictionary, const N: usize> {
-    values: [Option<&'dictionary Located<SyntaxObject>>; N],
-    duplicate_offsets: [Option<u64>; N],
-}
-
-fn collect_structural_fields<'dictionary, const N: usize>(
-    dictionary: &'dictionary PdfDictionary,
-    keys: [&[u8]; N],
-    reference: ObjectRef,
-    cancellation: &dyn DocumentCancellation,
-) -> Result<StructuralFields<'dictionary, N>, DocumentError> {
-    let mut fields = StructuralFields {
-        values: [None; N],
-        duplicate_offsets: [None; N],
-    };
-    for (entry_index, entry) in dictionary.entries().iter().enumerate() {
-        if entry_index % CANCELLATION_PROBE_INTERVAL == 0 && cancellation.is_cancelled() {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::Cancelled,
-                Some(reference),
-                Some(entry.key().span().start()),
-            ));
-        }
-        for (field_index, key) in keys.iter().enumerate() {
-            if entry.key().value().bytes() != *key {
-                continue;
-            }
-            if fields.values[field_index].is_some() {
-                fields.duplicate_offsets[field_index].get_or_insert(entry.key().span().start());
-            } else {
-                fields.values[field_index] = Some(entry.value());
-            }
-            break;
-        }
-    }
-    Ok(fields)
-}
-
-fn reject_duplicate_field<const N: usize>(
-    fields: &StructuralFields<'_, N>,
-    index: usize,
-    reference: ObjectRef,
-) -> Result<(), DocumentError> {
-    if let Some(offset) = fields.duplicate_offsets.get(index).copied().flatten() {
-        return Err(DocumentError::for_code(
-            DocumentErrorCode::DuplicateStructuralKey,
-            Some(reference),
-            Some(offset),
-        ));
-    }
-    Ok(())
-}
-
-fn required_field<'dictionary, const N: usize>(
-    fields: &StructuralFields<'dictionary, N>,
-    index: usize,
-    reference: ObjectRef,
-    object_offset: u64,
-    missing_code: DocumentErrorCode,
-) -> Result<&'dictionary Located<SyntaxObject>, DocumentError> {
-    fields
-        .values
-        .get(index)
-        .copied()
-        .flatten()
-        .ok_or_else(|| DocumentError::for_code(missing_code, Some(reference), Some(object_offset)))
 }
 
 fn validate_parent(

@@ -182,7 +182,10 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
 - `AttestedRevisionIndex::count_pages` is the only factory for the one-shot page-count job. The
   job first reopens the trailer root through the proof-preserving object-access API and accepts
   only a direct dictionary with one structural `/Type /Catalog` and one exact `/Pages` reference.
-  It neither follows a whole-object Catalog alias nor accepts a stream as the Catalog.
+  It neither follows a whole-object Catalog alias nor accepts a stream as the Catalog. The pure
+  Catalog parser is shared within `core/document`, but optional service fields remain lazily owned:
+  malformed or duplicate `/Outlines` data does not affect a page-count request that never asks for
+  an outline.
 - Page-tree traversal is iterative depth-first work over exact Page/Pages references. Every node
   is reopened through the same attested index. `/Type` is mandatory and explicit; the job never
   infers node kind from `/Kids`. Root Pages must omit `/Parent`; every Page and non-root Pages node
