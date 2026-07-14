@@ -6,9 +6,10 @@ use pdf_rs_bytes::{
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_syntax::{
-    InputExtent, Located, ObjectRef, PdfDictionary, RealNotation, StringKind, SyntaxCancellation,
-    SyntaxError, SyntaxErrorCategory, SyntaxErrorCode, SyntaxInput, SyntaxLimitConfig,
-    SyntaxLimitKind, SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll, SyntaxRecoverability,
+    DictionaryEntry, InputExtent, Located, ObjectRef, PdfDictionary, RealNotation, StringKind,
+    SyntaxCancellation, SyntaxError, SyntaxErrorCategory, SyntaxErrorCode, SyntaxInput,
+    SyntaxLimitConfig, SyntaxLimitKind, SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll,
+    SyntaxRecoverability,
 };
 
 const BASE: u64 = 100;
@@ -71,6 +72,30 @@ fn dictionary(value: &Located<SyntaxObject>) -> &PdfDictionary {
         .value()
         .as_dictionary()
         .expect("test object is a dictionary")
+}
+
+fn allocator_capacity_bytes<T: Clone>(template: &T, len: usize) -> u64 {
+    let mut probe = Vec::<T>::new();
+    for _ in 0..len {
+        probe
+            .try_reserve(1)
+            .expect("small test vector allocation succeeds");
+        probe.push(template.clone());
+    }
+    u64::try_from(probe.capacity())
+        .expect("test vector capacity fits u64")
+        .checked_mul(u64::try_from(std::mem::size_of::<T>()).expect("element size fits u64"))
+        .expect("small test vector capacity bytes fit u64")
+}
+
+fn array_capacity_bytes(len: usize) -> u64 {
+    allocator_capacity_bytes(&object(b"null"), len)
+}
+
+fn dictionary_capacity_bytes(len: usize) -> u64 {
+    let parsed = object(b"<< /Template null >>");
+    let template: &DictionaryEntry = &dictionary(&parsed).entries()[0];
+    allocator_capacity_bytes(template, len)
 }
 
 struct CancelOnProbe {
@@ -797,6 +822,102 @@ fn token_entry_and_depth_budgets_are_cumulative() {
 }
 
 #[test]
+fn container_bytes_match_allocator_reported_array_and_dictionary_capacity() {
+    let mut empty_array = parser(b"[]", true);
+    ready(empty_array.parse_object());
+    assert_eq!(empty_array.stats().container_bytes(), 0);
+
+    let mut empty_dictionary = parser(b"<<>>", true);
+    ready(empty_dictionary.parse_object());
+    assert_eq!(empty_dictionary.stats().container_bytes(), 0);
+
+    let mut array = parser(b"[null null null null null]", true);
+    ready(array.parse_object());
+    assert_eq!(array.stats().container_bytes(), array_capacity_bytes(5));
+
+    let mut dictionary = parser(b"<< /A null /B null /C null /D null /E null >>", true);
+    ready(dictionary.parse_object());
+    assert_eq!(
+        dictionary.stats().container_bytes(),
+        dictionary_capacity_bytes(5)
+    );
+    assert!(dictionary.stats().owned_bytes() > 0);
+}
+
+#[test]
+fn container_capacity_does_not_consume_the_scalar_owned_byte_budget() {
+    let limits = configured(|config| {
+        config.max_name_bytes = 1;
+        config.max_string_decoded_bytes = 1;
+        config.max_owned_bytes = 1;
+    });
+    let mut syntax_parser = parser_at(b"[null null null null null]", 0, true, limits);
+    ready(syntax_parser.parse_object());
+
+    assert_eq!(syntax_parser.stats().owned_bytes(), 0);
+    assert_eq!(
+        syntax_parser.stats().container_bytes(),
+        array_capacity_bytes(5)
+    );
+    assert!(syntax_parser.stats().container_bytes() > limits.max_owned_bytes());
+}
+
+#[test]
+fn nested_container_bytes_sum_each_retained_vector_capacity_once() {
+    let mut syntax_parser = parser(
+        b"[ [null null] << /A null /B null >> [<< /C null >>] ]",
+        true,
+    );
+    ready(syntax_parser.parse_object());
+
+    let expected = array_capacity_bytes(3)
+        .checked_add(array_capacity_bytes(2))
+        .and_then(|value| value.checked_add(dictionary_capacity_bytes(2)))
+        .and_then(|value| value.checked_add(array_capacity_bytes(1)))
+        .and_then(|value| value.checked_add(dictionary_capacity_bytes(1)))
+        .expect("small nested capacity sum fits u64");
+    assert_eq!(syntax_parser.stats().container_bytes(), expected);
+    assert_eq!(syntax_parser.stats().container_entries(), 9);
+    assert_eq!(syntax_parser.stats().max_depth(), 3);
+}
+
+#[test]
+fn container_capacity_accounting_preserves_entry_limits_and_retry_scope() {
+    let exact_limits = configured(|config| config.max_container_entries = 2);
+    let mut exact = parser_at(b"[null null]", 0, true, exact_limits);
+    ready(exact.parse_object());
+    assert_eq!(exact.stats().container_bytes(), array_capacity_bytes(2));
+
+    let one_less_limits = configured(|config| config.max_container_entries = 1);
+    let mut one_less = parser_at(b"[null null]", 0, true, one_less_limits);
+    let limit = failed(one_less.parse_object())
+        .limit()
+        .expect("entry-limit failure carries context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::ContainerEntries);
+    assert_eq!(limit.consumed(), 1);
+    assert_eq!(limit.attempted(), 1);
+    assert_eq!(one_less.stats().container_bytes(), array_capacity_bytes(1));
+
+    let mut incomplete = parser(b"[null", false);
+    assert!(matches!(
+        incomplete.parse_object(),
+        SyntaxPoll::NeedMore { .. }
+    ));
+    assert_eq!(
+        incomplete.stats().container_bytes(),
+        array_capacity_bytes(1)
+    );
+
+    let mut retried = parser(b"[null null]", true);
+    ready(retried.parse_object());
+    assert_eq!(
+        retried.stats().container_bytes(),
+        array_capacity_bytes(2),
+        "the successful retry reports only the vector retained by that parser"
+    );
+}
+
+#[test]
 fn statistics_report_bounded_work_without_exposing_content() {
     let source = b"<< /Secret (classified) /Items [1 2] >>";
     let mut syntax_parser = parser(source, true);
@@ -805,6 +926,10 @@ fn statistics_report_bounded_work_without_exposing_content() {
     assert_eq!(stats.input_bytes(), source.len() as u64);
     assert!(stats.tokens() >= 9);
     assert!(stats.owned_bytes() >= b"SecretclassifiedItems".len() as u64);
+    assert_eq!(
+        stats.container_bytes(),
+        dictionary_capacity_bytes(2) + array_capacity_bytes(2)
+    );
     assert_eq!(stats.container_entries(), 4);
     assert_eq!(stats.max_depth(), 2);
 
@@ -812,6 +937,10 @@ fn statistics_report_bounded_work_without_exposing_content() {
     assert!(debug.contains("[REDACTED]"));
     assert!(!debug.contains("Secret"));
     assert!(!debug.contains("classified"));
+
+    let stats_debug = format!("{stats:?}");
+    assert!(!stats_debug.contains("Secret"));
+    assert!(!stats_debug.contains("classified"));
 
     let mut raw_parser = parser(b"classified", true);
     let raw = ready(raw_parser.take_raw_bytes(10));

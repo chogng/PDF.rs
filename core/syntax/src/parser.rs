@@ -134,6 +134,7 @@ pub struct SyntaxStats {
     input_bytes: u64,
     tokens: u64,
     owned_bytes: u64,
+    container_bytes: u64,
     container_entries: u64,
     max_depth: u16,
 }
@@ -155,6 +156,16 @@ impl SyntaxStats {
     /// Returns allocator-reported scalar storage capacity retained by parsed values.
     pub const fn owned_bytes(self) -> u64 {
         self.owned_bytes
+    }
+
+    /// Returns allocator-reported array and dictionary vector capacity bytes.
+    ///
+    /// For a successful parse, this is the exact sum of `Vec::capacity()`
+    /// multiplied by element size for every container retained by values this
+    /// parser has returned. An unsuccessful operation can include container
+    /// capacity allocated during that attempt and released when parsing stops.
+    pub const fn container_bytes(self) -> u64 {
+        self.container_bytes
     }
 
     /// Returns array items and dictionary entries charged by this attempt.
@@ -718,9 +729,7 @@ impl<'a> SyntaxParser<'a> {
             }
             let item_offset = self.absolute(self.cursor);
             self.charge_container_entry(item_offset)?;
-            values
-                .try_reserve(1)
-                .map_err(|_| self.allocation_failure(item_offset, 1))?;
+            self.reserve_container_entry(&mut values, item_offset)?;
             let value = self.parse_required_object_at(depth)?;
             values.push(value);
         }
@@ -761,9 +770,7 @@ impl<'a> SyntaxParser<'a> {
             }
             let entry_offset = self.absolute(self.cursor);
             self.charge_container_entry(entry_offset)?;
-            entries
-                .try_reserve(1)
-                .map_err(|_| self.allocation_failure(entry_offset, 1))?;
+            self.reserve_container_entry(&mut entries, entry_offset)?;
             let key_token = self.next_required_token(SyntaxErrorCode::UnexpectedEndOfInput)?;
             let (key_start, key_end, key) = match key_token.kind {
                 TokenKind::ArrayClose => {
@@ -1570,6 +1577,53 @@ impl<'a> SyntaxParser<'a> {
             offset,
         )?;
         self.stats.container_entries += 1;
+        Ok(())
+    }
+
+    fn reserve_container_entry<T>(
+        &mut self,
+        container: &mut Vec<T>,
+        offset: u64,
+    ) -> ParseResult<()> {
+        let capacity_before = container.capacity();
+        container
+            .try_reserve(1)
+            .map_err(|_| self.allocation_failure(offset, 1))?;
+        let capacity_after = container.capacity();
+        let added_capacity = capacity_after.checked_sub(capacity_before).ok_or_else(|| {
+            ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::InternalState,
+                Some(offset),
+            ))
+        })?;
+        let added_capacity = u64::try_from(added_capacity).map_err(|_| {
+            ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::InternalState,
+                Some(offset),
+            ))
+        })?;
+        let element_size = u64::try_from(std::mem::size_of::<T>()).map_err(|_| {
+            ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::InternalState,
+                Some(offset),
+            ))
+        })?;
+        let added_bytes = added_capacity.checked_mul(element_size).ok_or_else(|| {
+            ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::InternalState,
+                Some(offset),
+            ))
+        })?;
+        self.stats.container_bytes = self
+            .stats
+            .container_bytes
+            .checked_add(added_bytes)
+            .ok_or_else(|| {
+                ParseFailure::Failed(SyntaxError::for_code(
+                    SyntaxErrorCode::InternalState,
+                    Some(offset),
+                ))
+            })?;
         Ok(())
     }
 
