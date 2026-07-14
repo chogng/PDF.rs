@@ -7,8 +7,9 @@ use std::time::Duration;
 use pdf_rs_baseline::{
     BaselineChannel, BaselineDescriptor, BaselineErrorCode, BaselineRequest, BaselineRunner,
     OracleAuthority, PDFIUM_OUTLINE_ADAPTER_MAX_PARSE_BYTES, PDFIUM_OUTLINE_ADAPTER_PROFILE,
+    PDFIUM_PAGE_COUNT_ADAPTER_MAX_PARSE_BYTES, PDFIUM_PAGE_COUNT_ADAPTER_PROFILE,
     PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumOutlineAdapter,
-    PdfiumPixelAdapter, ProcessLimits, ProcessSpec,
+    PdfiumPageCountAdapter, PdfiumPixelAdapter, ProcessLimits, ProcessSpec,
 };
 use pdf_rs_digest::sha256;
 
@@ -182,6 +183,174 @@ fn pixel_geometry_is_rejected_before_the_helper_is_spawned() {
 }
 
 #[test]
+fn page_count_profile_accepts_only_canonical_parse_output() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("page-count-outcome");
+    let adapter = page_count_runner("page-count-only", &directory);
+    assert_eq!(
+        adapter.describe().unwrap().id,
+        PDFIUM_PAGE_COUNT_ADAPTER_PROFILE
+    );
+    let observation = adapter.observe(&request()).unwrap();
+    assert_eq!(observation.authority(), OracleAuthority::O4Observation);
+    assert_eq!(
+        observation.parse_json,
+        BaselineChannel::Produced(b"{\"schema\":1,\"page_count\":1}\n".to_vec())
+    );
+    assert_eq!(observation.scene_json, BaselineChannel::Unsupported);
+    assert_eq!(observation.text_json, BaselineChannel::Unsupported);
+    assert_eq!(observation.rgba, BaselineChannel::Unsupported);
+}
+
+#[test]
+fn page_count_profile_rejects_missing_malformed_or_extra_channels() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("page-count-violation");
+    for mode in [
+        "page-count-parse-unsupported",
+        "page-count-parse-failed",
+        "page-count-scene-produced",
+        "page-count-text-produced",
+        "page-count-pixel-produced",
+        "page-count-invalid-utf8",
+        "page-count-no-newline",
+    ] {
+        let error = page_count_runner(mode, &directory)
+            .observe(&request())
+            .err()
+            .unwrap();
+        assert_eq!(error.code, BaselineErrorCode::MalformedResponse, "{mode}");
+        assert_eq!(error.diagnostic_id, "RPE-BASELINE-0005", "{mode}");
+    }
+}
+
+#[test]
+fn page_count_profile_rejects_wrong_identity_and_process_configuration() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("page-count-identity");
+
+    let (mut descriptor, process, limits) = page_count_parts(
+        "page-count-only",
+        &directory,
+        Vec::new(),
+        Vec::new(),
+        page_count_limits(),
+    );
+    descriptor.engine = "not-pdfium".into();
+    assert_eq!(
+        PdfiumPageCountAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+
+    let (mut descriptor, process, limits) = page_count_parts(
+        "page-count-only",
+        &directory,
+        Vec::new(),
+        Vec::new(),
+        page_count_limits(),
+    );
+    descriptor.id = "different-profile".into();
+    assert_eq!(
+        PdfiumPageCountAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+
+    let (mut descriptor, process, limits) = page_count_parts(
+        "page-count-only",
+        &directory,
+        Vec::new(),
+        Vec::new(),
+        page_count_limits(),
+    );
+    descriptor.build_hash[0] ^= 1;
+    assert_eq!(
+        PdfiumPageCountAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+
+    for (arguments, environment) in [
+        (vec!["unexpected".into()], Vec::new()),
+        (
+            Vec::new(),
+            vec![("UNREVIEWED_BEHAVIOR".into(), "enabled".into())],
+        ),
+    ] {
+        let (descriptor, process, limits) = page_count_parts(
+            "page-count-only",
+            &directory,
+            arguments,
+            environment,
+            page_count_limits(),
+        );
+        assert_eq!(
+            PdfiumPageCountAdapter::new(descriptor, process, limits)
+                .err()
+                .unwrap()
+                .code,
+            BaselineErrorCode::InvalidProcessConfig
+        );
+    }
+}
+
+#[test]
+fn page_count_profile_rejects_noncanonical_requests_and_output_ceilings() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("page-count-config");
+    let adapter = page_count_runner("page-count-only", &directory);
+    let pdf = b"%PDF-1.7".to_vec();
+    let nonzero_page = BaselineRequest::new(sha256(&pdf).unwrap(), pdf, 1, 1, 1).unwrap();
+    assert_eq!(
+        adapter.observe(&nonzero_page).err().unwrap().code,
+        BaselineErrorCode::InvalidRequest
+    );
+    assert_eq!(
+        adapter
+            .observe(&request_with_geometry(2, 1))
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidRequest
+    );
+
+    let limits = ProcessLimits::new(
+        1024,
+        PDFIUM_PAGE_COUNT_ADAPTER_MAX_PARSE_BYTES + 113,
+        1024,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let (descriptor, process, limits) = page_count_parts(
+        "page-count-only",
+        &directory,
+        Vec::new(),
+        Vec::new(),
+        limits,
+    );
+    assert_eq!(
+        PdfiumPageCountAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+
+    let oversized = page_count_runner("page-count-too-large", &directory)
+        .observe(&request())
+        .err()
+        .unwrap();
+    assert_eq!(oversized.code, BaselineErrorCode::OutputLimit);
+}
+
+#[test]
 fn outline_profile_accepts_only_canonical_parse_output() {
     let _fixture_serial = fixture_serial_guard();
     let directory = TestDirectory::new("outline-outcome");
@@ -272,6 +441,25 @@ fn outline_runner(mode: &str, directory: &TestDirectory) -> PdfiumOutlineAdapter
     PdfiumOutlineAdapter::new(descriptor, process, limits).unwrap()
 }
 
+fn page_count_runner(mode: &str, directory: &TestDirectory) -> PdfiumPageCountAdapter {
+    let (descriptor, process, limits) =
+        page_count_parts(mode, directory, Vec::new(), Vec::new(), page_count_limits());
+    PdfiumPageCountAdapter::new(descriptor, process, limits).unwrap()
+}
+
+fn page_count_parts(
+    mode: &str,
+    directory: &TestDirectory,
+    arguments: Vec<String>,
+    environment: Vec<(String, String)>,
+    limits: ProcessLimits,
+) -> (BaselineDescriptor, ProcessSpec, ProcessLimits) {
+    let (mut descriptor, process, limits) =
+        parts_with_limits(mode, directory, arguments, environment, limits);
+    descriptor.id = PDFIUM_PAGE_COUNT_ADAPTER_PROFILE.into();
+    (descriptor, process, limits)
+}
+
 fn parts(
     mode: &str,
     directory: &TestDirectory,
@@ -325,6 +513,16 @@ fn request_with_geometry(width: u32, height: u32) -> BaselineRequest {
 
 fn ordinary_limits() -> ProcessLimits {
     ProcessLimits::new(1024, 1024, 1024, Duration::from_secs(2)).unwrap()
+}
+
+fn page_count_limits() -> ProcessLimits {
+    ProcessLimits::new(
+        1024,
+        PDFIUM_PAGE_COUNT_ADAPTER_MAX_PARSE_BYTES + 112,
+        1024,
+        Duration::from_secs(2),
+    )
+    .unwrap()
 }
 
 fn fixture_executable(mode: &str, directory: &TestDirectory) -> PathBuf {

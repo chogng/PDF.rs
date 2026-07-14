@@ -1,0 +1,11 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index d9321ca41..000000000 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -449,5 +449,6 @@ group("pdfium_all") {
+     "testing:pdfium_test",
+     "tools/pdf_rs_baseline_adapter:pdf_rs_pdfium_adapter",
+     "tools/pdf_rs_outline_adapter:pdf_rs_pdfium_outline_probe",
++    "tools/pdf_rs_page_count_adapter:pdf_rs_pdfium_page_count_probe",
+     "testing/fuzzers",
+   ]

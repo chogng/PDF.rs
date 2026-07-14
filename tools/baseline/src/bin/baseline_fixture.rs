@@ -116,6 +116,75 @@ fn run() -> Result<(), ()> {
                 ),
             )
         }
+        "page-count-only" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"page_count\":1}\n"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-parse-unsupported" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-parse-failed" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Failed,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-scene-produced" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"page_count\":1}\n"),
+            BaselineChannel::Produced(b"{}"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-text-produced" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"page_count\":1}\n"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Produced(b"{}"),
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-pixel-produced" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"page_count\":1}\n"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Produced(&[0; 4]),
+        ),
+        "page-count-invalid-utf8" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Produced(&[0xff, b'\n']),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-no-newline" => write_page_count_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"page_count\":1}"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "page-count-too-large" => {
+            let mut parse = filled(65, b'0')?;
+            parse[0] = b'"';
+            parse[63] = b'"';
+            parse[64] = b'\n';
+            write_page_count_response(
+                read_request()?,
+                BaselineChannel::Produced(&parse),
+                BaselineChannel::Unsupported,
+                BaselineChannel::Unsupported,
+                BaselineChannel::Unsupported,
+            )
+        }
         "outline-only" => write_outline_response(
             read_request()?,
             BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}\n"),
@@ -320,6 +389,19 @@ fn write_pixel_profile_violation(request: AdapterRequest, failed_channel: usize)
 }
 
 fn write_outline_response(
+    request: AdapterRequest,
+    parse: BaselineChannel<&[u8]>,
+    scene: BaselineChannel<&[u8]>,
+    text: BaselineChannel<&[u8]>,
+    rgba: BaselineChannel<&[u8]>,
+) -> Result<(), ()> {
+    write_channels(
+        &request,
+        AdapterResponseChannels::new(parse, scene, text, rgba),
+    )
+}
+
+fn write_page_count_response(
     request: AdapterRequest,
     parse: BaselineChannel<&[u8]>,
     scene: BaselineChannel<&[u8]>,

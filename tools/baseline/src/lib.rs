@@ -9,6 +9,7 @@
 //! before using it with a real external engine.
 
 mod pdfium;
+mod pdfium_page_count;
 mod process;
 
 use std::fmt;
@@ -19,6 +20,10 @@ pub use pdfium::{
     PDFIUM_OUTLINE_ADAPTER_MAX_PARSE_BYTES, PDFIUM_OUTLINE_ADAPTER_PROFILE,
     PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumOutlineAdapter,
     PdfiumPixelAdapter,
+};
+pub use pdfium_page_count::{
+    PDFIUM_PAGE_COUNT_ADAPTER_MAX_PARSE_BYTES, PDFIUM_PAGE_COUNT_ADAPTER_PROFILE,
+    PdfiumPageCountAdapter,
 };
 pub use process::{ProcessBaselineRunner, ProcessLimits, ProcessSpec};
 
