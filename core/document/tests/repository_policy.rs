@@ -1,6 +1,21 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn top_level_version(document: &str) -> Option<&str> {
+    document
+        .lines()
+        .take_while(|line| !line.starts_with("[["))
+        .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+}
+
+fn record_with_id<'a>(document: &'a str, kind: &str, id: &str) -> Option<&'a str> {
+    let header = format!("{kind}]]");
+    let id_line = format!("id = \"{id}\"");
+    document
+        .split("\n[[")
+        .find(|record| record.starts_with(&header) && record.lines().any(|line| line == id_line))
+}
+
 #[test]
 fn product_document_core_has_only_approved_sibling_dependencies_and_no_platform_io() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -60,6 +75,61 @@ fn product_document_core_has_only_approved_sibling_dependencies_and_no_platform_
     }
     assert!(joined.contains("#![forbid(unsafe_code)]"));
     assert!(joined.contains("#![deny(missing_docs)]"));
+}
+
+#[test]
+fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+    assert_eq!(top_level_version(&feature_map), Some("0.23.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.23.0"));
+
+    let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
+        .expect("strict page-count feature record must exist");
+    for required in [
+        "profile = \"m1.strict-page-count.v1\"",
+        "RPE-ARCH-001/5.8-5.9",
+        "modules = [\"core/document\"]",
+        "core/document::page_tree_count",
+        "core/document::page_tree_limit_config",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "feature must contain {required:?}"
+        );
+    }
+
+    let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.8-5.9")
+        .expect("document-model and page-tree requirement must exist");
+    for required in [
+        "core.strict-page-count",
+        "core/document",
+        "core/document::page_tree_count",
+        "open-addressing table",
+        "exact Parent back-links",
+        "never uses untrusted Count or Kids data for allocation",
+        "does not implement revision chains",
+        "reusable lazy PageIndex",
+        "Native/PDFium semantic differential evidence",
+        "does not claim M1 or M2 exit",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            requirement.contains(required),
+            "requirement must contain {required:?}"
+        );
+    }
 }
 
 fn collect_rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {

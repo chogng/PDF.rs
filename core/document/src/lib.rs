@@ -6,11 +6,13 @@
 //! before publishing an attested typestate. Only that typestate can mint a
 //! bounded job that reopens one parsed object into a wrapper retaining its
 //! proof. A second bounded job can iteratively follow whole-object direct
-//! reference aliases, but dictionaries, arrays, streams, and nested references
-//! remain terminal; this is not a complete object-graph resolver. Successful
-//! proof-bearing values retain their resolution profile and expose checked
-//! value-owned footprint components as evidence for a future cache owner, but
-//! this crate does not cache them.
+//! reference aliases. A separate strict-base job validates the trailer Catalog
+//! and complete Page/Pages tree to publish a scalar page count with exact
+//! Parent, Count, cycle, and duplicate-child checks. Other dictionary, array,
+//! stream, and nested-reference semantics remain outside a complete object-graph
+//! resolver. Successful proof-bearing values retain their resolution profile and
+//! expose checked value-owned footprint components as evidence for a future
+//! cache owner, but this crate does not cache them.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -26,6 +28,8 @@ mod error;
 mod index;
 mod limits;
 mod model;
+mod page_tree;
+mod page_tree_limits;
 mod reference_chain;
 mod reference_chain_limits;
 mod residency;
@@ -49,6 +53,11 @@ pub use model::{
     AttestedRevisionIndex, CandidateRevisionIndex, DocumentIndexStats, ObjectAttestation,
     ObjectAttestationKind, PhysicalObjectInterval, RevisionId,
 };
+pub use page_tree::{
+    CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
+    StrictCatalog,
+};
+pub use page_tree_limits::{PageTreeLimitConfig, PageTreeLimits};
 pub use reference_chain::{
     ReferenceChain, ReferenceChainError, ReferenceChainJobContext, ReferenceChainPhase,
     ReferenceChainPoll, ReferenceChainStats, ResolveReferenceChainJob, ResolvedReference,

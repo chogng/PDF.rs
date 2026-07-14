@@ -5,18 +5,22 @@ states. `CandidateRevisionIndex` derives unauthenticated physical intervals. `At
 then consumes that candidate, validates a supported PDF header at source offset zero, frames every
 in-use object in physical order, and scans the prefix and every gap through `startxref` for only
 PDF whitespace and terminated comments. Only complete success publishes `AttestedRevisionIndex`.
-That sealed typestate is the only public factory for bounded jobs that reparse one exact object or
-iteratively follow a top-level direct-reference chain while preserving reproduced evidence.
+That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
+iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
+complete page tree while preserving the attested-object access boundary.
 
-The crate performs no file, network, data callback, async-runtime, stream decoding, or reference
-graph traversal or caching. Its first resolver slice follows only whole-object reference aliases;
-array, dictionary, and stream semantics remain leaf values. All source access is synchronous
-polling through an injected `ByteSource`; all long-running CPU work uses an injected cooperative
-cancellation probe.
+The crate performs no file, network, data callback, async-runtime, stream decoding, general object
+graph traversal, or caching. Its first resolver slice follows only whole-object reference aliases;
+the separate page-count slice interprets only Catalog and Page/Pages structural fields and does not
+publish page handles, inherited resources, or a reusable object graph. All source access is
+synchronous polling through an injected `ByteSource`; all long-running CPU work uses an injected
+cooperative cancellation probe.
 
 # Semantic owner
 
 Parser/Security owns revision composition, physical object indexing, and top-level attestation.
+It also owns this strict-base Catalog and page-count validation slice; broader page indexing,
+resource inheritance, and page services remain future document-model work.
 `core/xref` owns traditional xref parsing, `core/syntax` owns the supported header and direct-object
 grammar, `core/object` owns bounded indirect-object framing, and `core/bytes` owns immutable
 snapshot-bound exact reads. This crate composes those sibling results without moving their lower
@@ -27,6 +31,9 @@ semantic responsibilities.
 - [RPE-ARCH-001, sections 4.3-4.5 and 5.4](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires one-way core dependencies, revision identity, reverse xref composition, and validation
   of offset, generation, object number, and object header before use.
+- [RPE-ARCH-001, sections 5.8-5.9](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
+  requires a lazy document boundary and page-tree protection against cycles, duplicate children,
+  false counts, excessive depth, and non-Page/Pages objects.
 - [RPE-STD-001, sections 3, 5-6, and 8-9](../../docs/standards/coding-standard.md) requires stable
   structured errors, checked arithmetic, fallible bounded allocation, and redacted diagnostics.
 - [RPE-STD-002, sections 6-7](../../docs/standards/lifecycle-and-concurrency.md) requires cooperative
@@ -163,6 +170,35 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   publish an eviction policy, cache failures, coalesce work, or make active-job historical stats
   equivalent to current ownership.
 
+## Strict Catalog and bounded page count
+
+- `AttestedRevisionIndex::count_pages` is the only factory for the one-shot page-count job. The
+  job first reopens the trailer root through the proof-preserving object-access API and accepts
+  only a direct dictionary with one structural `/Type /Catalog` and one exact `/Pages` reference.
+  It neither follows a whole-object Catalog alias nor accepts a stream as the Catalog.
+- Page-tree traversal is iterative depth-first work over exact Page/Pages references. Every node
+  is reopened through the same attested index. `/Type` is mandatory and explicit; the job never
+  infers node kind from `/Kids`. Root Pages must omit `/Parent`; every Page and non-root Pages node
+  must name its exact traversed parent.
+- Every interpreted structural key is unique under this strict profile. Catalog checks `Type` and
+  `Pages`; Pages checks `Type`, `Parent`, `Kids`, and `Count`; Page checks `Type` and `Parent`.
+  Duplicate unrelated extension keys remain outside this slice.
+- A deterministic preallocated open-addressing table records every discovered node identity while
+  a separate bounded vector retains active Pages ancestors. A child already on the active path is
+  `PageTreeCycle`; any other repeated child is `DuplicatePageTreeNode`, including a repeated entry
+  in one Kids array or a shared DAG node reached from two parents.
+- `/Count` is never trusted for allocation, skipping, or the result. A postorder finish record
+  compares each declared nonnegative integer against the number of validated leaf Page objects
+  actually reached in that exact subtree. Empty trees with a declared count of zero are valid;
+  every mismatch is terminal and no partial count is published.
+- Work-stack, seen-table, and active-path capacities are derived only from validated limits,
+  computed with checked arithmetic, fallibly reserved before the job is returned, and rechecked
+  against actual allocator capacity. The allocations are released before either successful or
+  failed terminal publication; stats retain their historical reservation size for evidence.
+- This result is a source- and revision-bound Catalog summary plus a scalar count. It is not a
+  persistent Catalog cache, random-access PageIndex, page handle, inherited-resource result, or
+  claim of general PDF page-tree compatibility.
+
 # Resource accounting and resumability
 
 - Revision-attestation limits independently bound source length, object count, exact scan chunk,
@@ -179,6 +215,11 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   is the smaller of the retained per-object profile and the job's remaining aggregate allowance.
   Child stats deltas are charged exactly once across `Pending` polls; scoped cap exhaustion maps to
   the job-wide limit while retaining the complete lower `ObjectError`.
+- A page-count job independently bounds Page/Pages nodes, depth, leaf pages, per-node Kids,
+  traversal capacity, and aggregate child reads and parses. The Catalog child participates in
+  aggregate object work but is not counted as a Page/Pages node. Child caps use the smaller of the
+  retained object profile and remaining aggregate allowance; repeated Pending polls charge only
+  new lower deltas, and scoped exhaustion retains the complete lower object error.
 - Reference-chain limits apply to one job only. Repeated jobs do not share a budget owner, resident
   cache, or reservation ledger. A future persistent resolver must add complete retained-object
   ownership, admission/reservation, and eviction before it can cache `Ready` values or coalesce
@@ -208,6 +249,11 @@ The bounded chain job is a consumer of that proof, not an authority expansion. I
 terminal object was reopened through the same retained profile, and its chain records identities
 only. It does not publish a mutable object graph, cache entry, raw byte capability, or reusable
 child-job constructor.
+
+The page-count job is another consumer of the same proof. Its summary copies only immutable source,
+revision, Catalog, page-tree-root, scalar count, and work evidence. It exposes neither parsed
+dictionaries nor a constructor capable of reopening arbitrary objects after the borrowed attested
+index is gone.
 
 The proof is deliberately closed-world: bytes between indexed in-use objects must be trivia.
 Stale free-object bodies, unindexed top-level objects, or other top-level tokens are rejected even
@@ -239,24 +285,29 @@ Access geometry unit tests reject individual index/evidence field mismatches, in
 containment, and invalid stream span order. Reference-chain tests cover terminal roots, multi-hop
 aliases, nested-reference non-traversal, self and multi-object cycles, lookup failures, exact and
 one-less limits, pending idempotence, source and cancellation priority, stable terminal replay, and
-redacted diagnostics. Repository policy checks the sibling dependency allowlist and absence of
-platform/external-engine APIs. Resident-footprint tests cover checked component and capacity
-overflow, portable runtime inline sizes, scalar and allocated syntax values, identical small/large
-stream-dictionary footprints, nonzero pre-reserved root-chain capacity, multi-hop terminal-only
-syntax ownership, and exact component totals without fixed platform-specific byte constants.
+redacted diagnostics. Page-count tests cover strict Catalog shape, valid flat and nested trees,
+zero pages, structural duplicate keys, wrong node shapes, exact parent links, self and multi-level
+cycles, duplicate children, per-node Count agreement, Pending idempotence, cancellation, terminal
+replay, and every traversal limit boundary. Repository policy checks the sibling dependency
+allowlist and absence of platform/external-engine APIs. Resident-footprint tests cover checked
+component and capacity overflow, portable runtime inline sizes, scalar and allocated syntax values,
+identical small/large stream-dictionary footprints, nonzero pre-reserved root-chain capacity,
+multi-hop terminal-only syntax ownership, and exact component totals without fixed
+platform-specific byte constants.
 
 # Known deviations and unsupported cases
 
 - Only one strict traditional base revision is accepted. Revision chains, `/Prev`, xref streams,
   hybrid references, object streams, and revision precedence remain unsupported.
-- Attestation eagerly frames every in-use object. The access job can reparse one proven value, and
-  the chain job can follow top-level whole-object aliases with cycle detection. They are not a lazy
-  document model or complete resolver: nested semantic references, persistent dependency states,
-  concurrent work coalescing, retained-value caching, negative caching, admission/reservation,
-  eviction, and cross-job/session resident ownership remain unsupported. Successful footprints
-  are measurement evidence only.
+- Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
+  chain job can follow top-level whole-object aliases, and the count job can traverse strict
+  Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
+  general nested semantic references, persistent dependency states, concurrent work coalescing,
+  retained-value caching, negative caching, admission/reservation, eviction, and cross-job/session
+  resident ownership remain unsupported. Successful footprints are measurement evidence only.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
-  payloads, catalog/page services, writer behavior, and document actions remain unsupported.
+  payloads, random-access page indexing, inherited resources, page handles, outline/name-tree
+  services, writer behavior, and document actions remain unsupported.
 - The closed-world trivia-gap policy is intentionally stricter than general PDF compatibility and
   is not an ISO or R0 conformance claim.
 - Hard ceilings and defaults are bootstrap values, not a released `FuelSchedule` or
@@ -279,3 +330,6 @@ syntax ownership, and exact component totals without fixed platform-specific byt
   evidence without adding warm lookup or persistent ownership.
 - 2026-07-14: Retained successful object and syntax profiles on proof-bearing values so a future
   session owner can validate parser-profile-equivalent admission.
+- 2026-07-14: Added strict Catalog validation and a resumable bounded page-count job with exact
+  Parent and Count checks, deterministic cycle/duplicate detection, and precharged traversal
+  storage released before terminal publication.

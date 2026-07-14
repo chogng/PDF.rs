@@ -44,6 +44,20 @@ pub enum DocumentLimitKind {
     ReferenceChainObjectParseBytes,
     /// Allocator-reported capacity retained for one reference-chain path.
     ReferenceChainPathBytes,
+    /// Page or Pages nodes started by one bounded page-count job.
+    PageTreeNodes,
+    /// Greatest root-relative Page/Pages depth accepted by one page-count job.
+    PageTreeDepth,
+    /// Leaf Page objects accepted by one page-count job.
+    PageTreePages,
+    /// Direct children declared by one Pages node.
+    PageTreeKids,
+    /// Cumulative exact object-read bytes across one page-count job.
+    PageTreeObjectReadBytes,
+    /// Cumulative object-parser window bytes across one page-count job.
+    PageTreeObjectParseBytes,
+    /// Allocator-reported work-stack and visited-reference capacity.
+    PageTreeTraversalBytes,
 }
 
 /// Structured document-composition resource-limit context without document bytes.
@@ -146,6 +160,22 @@ pub enum DocumentErrorCode {
     InvalidReferenceChainJobContext,
     /// Following top-level indirect-reference values revisited one exact object identity.
     ReferenceCycle,
+    /// Runtime identity or child checkpoints for page-tree traversal are inconsistent.
+    InvalidPageTreeJobContext,
+    /// The trailer root is not a strict direct Catalog with one valid Pages reference.
+    InvalidCatalog,
+    /// A page-tree object or one of its required structural fields has the wrong shape.
+    InvalidPageTreeNode,
+    /// A page-tree child points to one of its active ancestors.
+    PageTreeCycle,
+    /// One exact Page/Pages object is reachable from more than one Kids position.
+    DuplicatePageTreeNode,
+    /// A Page or non-root Pages node does not point back to its exact parent.
+    PageTreeParentMismatch,
+    /// A Pages node's declared Count differs from its validated leaf subtree.
+    PageTreeCountMismatch,
+    /// A strict Catalog or page-tree dictionary repeats a structural key.
+    DuplicateStructuralKey,
 }
 
 /// Coarse document-composition failure category.
@@ -353,6 +383,46 @@ impl DocumentError {
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0026",
             ),
+            DocumentErrorCode::InvalidPageTreeJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0027",
+            ),
+            DocumentErrorCode::InvalidCatalog => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0028",
+            ),
+            DocumentErrorCode::InvalidPageTreeNode => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0029",
+            ),
+            DocumentErrorCode::PageTreeCycle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0030",
+            ),
+            DocumentErrorCode::DuplicatePageTreeNode => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0031",
+            ),
+            DocumentErrorCode::PageTreeParentMismatch => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0032",
+            ),
+            DocumentErrorCode::PageTreeCountMismatch => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0033",
+            ),
+            DocumentErrorCode::DuplicateStructuralKey => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0034",
+            ),
         };
         Self {
             code,
@@ -386,6 +456,27 @@ impl DocumentError {
     }
 
     pub(crate) const fn reference_chain_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn page_tree_resource(
         kind: DocumentLimitKind,
         limit: u64,
         consumed: u64,
