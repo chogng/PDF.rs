@@ -3,7 +3,9 @@
 //! This crate first derives explicitly unauthenticated physical intervals from
 //! one traditional xref section. A separate consuming job frames every in-use
 //! object in physical order and proves trivia closure through `startxref`
-//! before publishing an attested typestate. It is not an object resolver.
+//! before publishing an attested typestate. Only that typestate can mint a
+//! bounded job that reopens one parsed object into a wrapper retaining its
+//! proof. This remains a leaf access primitive, not an object resolver.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -12,6 +14,7 @@
     reason = "document errors retain complete copyable lower-layer errors without fallback allocation"
 )]
 
+mod access;
 mod attestation;
 mod attestation_limits;
 mod error;
@@ -19,6 +22,10 @@ mod index;
 mod limits;
 mod model;
 
+pub use access::{
+    AttestedObject, AttestedObjectJobContext, AttestedObjectPhase, AttestedObjectPoll,
+    OpenAttestedObjectJob,
+};
 pub use attestation::{
     AttestRevisionJob, RevisionAttestationJobContext, RevisionAttestationPhase,
     RevisionAttestationPoll, RevisionAttestationStats,

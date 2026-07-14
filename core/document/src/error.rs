@@ -108,6 +108,8 @@ pub enum DocumentErrorCode {
     InternalState,
     /// Runtime identity or phase checkpoints for revision attestation are inconsistent.
     InvalidAttestationJobContext,
+    /// Runtime identity or phase checkpoints for proof-preserving object access are inconsistent.
+    InvalidObjectAccessJobContext,
     /// The source does not begin with a supported header followed by a line ending.
     InvalidDocumentHeader,
     /// A non-trivia byte occurs between top-level object frames.
@@ -124,8 +126,10 @@ pub enum DocumentErrorCode {
     SourceFailure,
     /// An exact request inside the known immutable source unexpectedly reached EOF.
     UnexpectedEndOfSource,
-    /// A completed one-shot revision-attestation job was polled again.
+    /// A completed one-shot document job was polled again.
     JobAlreadyComplete,
+    /// Reopening an attested object did not reproduce its retained framing evidence.
+    AttestedObjectEvidenceMismatch,
 }
 
 /// Coarse document-composition failure category.
@@ -313,6 +317,16 @@ impl DocumentError {
                 DocumentRecoverability::CorrectConfiguration,
                 "RPE-DOCUMENT-0022",
             ),
+            DocumentErrorCode::InvalidObjectAccessJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0023",
+            ),
+            DocumentErrorCode::AttestedObjectEvidenceMismatch => (
+                DocumentErrorCategory::Internal,
+                DocumentRecoverability::DoNotRetry,
+                "RPE-DOCUMENT-0024",
+            ),
         };
         Self {
             code,
@@ -419,6 +433,122 @@ impl DocumentError {
                 None => Some(offset),
             },
         );
+        Self {
+            category,
+            recoverability,
+            detail: DocumentErrorDetail::Object {
+                error,
+                aggregate_limit: None,
+            },
+            ..base
+        }
+    }
+
+    pub(crate) const fn from_object_access_constructor(
+        error: ObjectError,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Self {
+        let code = match error.code() {
+            ObjectErrorCode::InvalidLimits => DocumentErrorCode::InvalidLimits,
+            ObjectErrorCode::InvalidJobContext => DocumentErrorCode::InvalidObjectAccessJobContext,
+            _ => DocumentErrorCode::AttestedObjectEvidenceMismatch,
+        };
+        Self::with_object_error(code, error, reference, offset, false)
+    }
+
+    pub(crate) const fn from_object_access_poll(
+        error: ObjectError,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Self {
+        let (code, preserve_lower_policy) = match error.source_error() {
+            Some(source) => (
+                match source.category() {
+                    SourceErrorCategory::Integrity => DocumentErrorCode::SourceSnapshotMismatch,
+                    SourceErrorCategory::Resource => DocumentErrorCode::ResourceLimit,
+                    SourceErrorCategory::Input
+                    | SourceErrorCategory::Lifecycle
+                    | SourceErrorCategory::Availability
+                    | SourceErrorCategory::Internal => DocumentErrorCode::SourceFailure,
+                },
+                true,
+            ),
+            None => match error.category() {
+                ObjectErrorCategory::Resource => (DocumentErrorCode::ResourceLimit, true),
+                ObjectErrorCategory::Cancellation => (DocumentErrorCode::Cancelled, true),
+                ObjectErrorCategory::Source => (
+                    match error.code() {
+                        ObjectErrorCode::SnapshotMismatch => {
+                            DocumentErrorCode::SourceSnapshotMismatch
+                        }
+                        ObjectErrorCode::UnexpectedEndOfSource => {
+                            DocumentErrorCode::UnexpectedEndOfSource
+                        }
+                        _ => DocumentErrorCode::SourceFailure,
+                    },
+                    true,
+                ),
+                ObjectErrorCategory::Configuration
+                | ObjectErrorCategory::Syntax
+                | ObjectErrorCategory::Unsupported
+                | ObjectErrorCategory::Internal => {
+                    (DocumentErrorCode::AttestedObjectEvidenceMismatch, false)
+                }
+            },
+        };
+        Self::with_object_error(code, error, reference, offset, preserve_lower_policy)
+    }
+
+    const fn with_object_error(
+        code: DocumentErrorCode,
+        error: ObjectError,
+        reference: ObjectRef,
+        offset: u64,
+        preserve_lower_policy: bool,
+    ) -> Self {
+        let base = Self::for_code(
+            code,
+            match error.reference() {
+                Some(lower_reference) => Some(lower_reference),
+                None => Some(reference),
+            },
+            match error.offset() {
+                Some(lower_offset) => Some(lower_offset),
+                None => Some(offset),
+            },
+        );
+        let (category, recoverability) = if preserve_lower_policy {
+            (
+                match error.category() {
+                    ObjectErrorCategory::Configuration => DocumentErrorCategory::Configuration,
+                    ObjectErrorCategory::Source => DocumentErrorCategory::Source,
+                    ObjectErrorCategory::Syntax => DocumentErrorCategory::Syntax,
+                    ObjectErrorCategory::Unsupported => DocumentErrorCategory::Unsupported,
+                    ObjectErrorCategory::Resource => DocumentErrorCategory::Resource,
+                    ObjectErrorCategory::Cancellation => DocumentErrorCategory::Cancellation,
+                    ObjectErrorCategory::Internal => DocumentErrorCategory::Internal,
+                },
+                match error.recoverability() {
+                    ObjectRecoverability::CorrectConfiguration => {
+                        DocumentRecoverability::CorrectConfiguration
+                    }
+                    ObjectRecoverability::CorrectInput => DocumentRecoverability::CorrectInput,
+                    ObjectRecoverability::ReopenSource => DocumentRecoverability::ReopenSource,
+                    ObjectRecoverability::RetrySource => DocumentRecoverability::RetrySource,
+                    ObjectRecoverability::ReduceWorkload => DocumentRecoverability::ReduceWorkload,
+                    ObjectRecoverability::UseSupportedFeature => {
+                        DocumentRecoverability::UseSupportedFeature
+                    }
+                    ObjectRecoverability::AbandonOperation => {
+                        DocumentRecoverability::AbandonOperation
+                    }
+                    ObjectRecoverability::DoNotRetry => DocumentRecoverability::DoNotRetry,
+                },
+            )
+        } else {
+            (base.category, base.recoverability)
+        };
         Self {
             category,
             recoverability,

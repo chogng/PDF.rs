@@ -1,8 +1,8 @@
 use std::fmt;
 
 use pdf_rs_bytes::SourceSnapshot;
-use pdf_rs_object::{IndirectObject, IndirectObjectTarget, IndirectObjectValue};
-use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfHeader};
+use pdf_rs_object::{IndirectObject, IndirectObjectTarget, IndirectObjectValue, ObjectLimits};
+use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfHeader, SyntaxLimits};
 
 use crate::{DocumentError, DocumentErrorCode, RevisionAttestationStats};
 
@@ -159,6 +159,19 @@ impl ObjectAttestation {
             object_span: object.object_span(),
             endobj_span: object.endobj_span(),
             kind,
+        }
+    }
+
+    pub(crate) const fn duplicate(&self) -> Self {
+        Self {
+            revision_id: self.revision_id,
+            reference: self.reference,
+            xref_offset: self.xref_offset,
+            object_upper_bound: self.object_upper_bound,
+            header_span: self.header_span,
+            object_span: self.object_span,
+            endobj_span: self.endobj_span,
+            kind: self.kind,
         }
     }
 
@@ -348,6 +361,8 @@ pub struct AttestedRevisionIndex {
     pub(crate) header: Located<PdfHeader>,
     pub(crate) attestations: Vec<ObjectAttestation>,
     pub(crate) attestation_stats: RevisionAttestationStats,
+    pub(crate) object_limits: ObjectLimits,
+    pub(crate) syntax_limits: SyntaxLimits,
 }
 
 impl AttestedRevisionIndex {
@@ -386,6 +401,16 @@ impl AttestedRevisionIndex {
         self.attestation_stats
     }
 
+    /// Returns the validated object-framing profile used to establish and reopen this proof.
+    pub const fn object_limits(&self) -> ObjectLimits {
+        self.object_limits
+    }
+
+    /// Returns the validated syntax profile used to establish and reopen this proof.
+    pub const fn syntax_limits(&self) -> SyntaxLimits {
+        self.syntax_limits
+    }
+
     /// Returns all fixed-size object proofs in strictly increasing physical-offset order.
     pub fn object_attestations(&self) -> &[ObjectAttestation] {
         &self.attestations
@@ -419,6 +444,8 @@ impl fmt::Debug for AttestedRevisionIndex {
             .field("root", &self.candidate.root)
             .field("header", &self.header)
             .field("attestation_stats", &self.attestation_stats)
+            .field("object_limits", &self.object_limits)
+            .field("syntax_limits", &self.syntax_limits)
             .field("object_attestations", &"[REDACTED]")
             .finish()
     }

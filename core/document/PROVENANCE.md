@@ -5,10 +5,13 @@ states. `CandidateRevisionIndex` derives unauthenticated physical intervals. `At
 then consumes that candidate, validates a supported PDF header at source offset zero, frames every
 in-use object in physical order, and scans the prefix and every gap through `startxref` for only
 PDF whitespace and terminated comments. Only complete success publishes `AttestedRevisionIndex`.
+That sealed typestate is the only public factory for a bounded job that reparses one exact object
+and returns a wrapper that owns the parsed object beside reproduced top-level evidence.
 
 The crate performs no file, network, data callback, async-runtime, stream decoding, or reference
-resolution work. All source access is synchronous polling through an injected `ByteSource`; all
-long-running CPU work uses an injected cooperative cancellation probe.
+resolution work. Its object access is a leaf primitive without reference traversal or caching. All
+source access is synchronous polling through an injected `ByteSource`; all long-running CPU work
+uses an injected cooperative cancellation probe.
 
 # Semantic owner
 
@@ -71,7 +74,42 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   scanned from exact `object_span.end_exclusive()` to the next physical boundary.
 - The last gap is the tail through `startxref`. A final cancellation probe precedes the single
   transition that moves the candidate, supported header, and complete evidence vector into
-  `AttestedRevisionIndex`. No partial attested type exists.
+  `AttestedRevisionIndex`. The index also retains the exact validated object and syntax profiles
+  used for initial framing. No partial attested type exists.
+
+## Proof-preserving object access
+
+- `AttestedRevisionIndex::open_object` is the only public factory for
+  `OpenAttestedObjectJob`. Exact missing, free, and generation-mismatch lookup runs before job
+  configuration checks. The job copies one non-cloneable evidence record through a crate-private
+  operation and privately constructs the raw target and lower object job; none are exposed.
+- Before minting the child, the factory rechecks index and evidence revision, reference, xref
+  offset, upper bound, source length, `startxref`, object/header/endobj containment, and stream
+  data/endstream ordering. It then reuses the object and syntax profiles retained at initial
+  attestation and applies the caller's explicit validated `ObjectWorkCaps`.
+- Those caps bound one access job only. They are not a resolver-, document-, cache-, or session-wide
+  aggregate and do not authorize unbounded repeated reopening; the future resolver and host
+  scheduler must lend and account their own cumulative budgets across jobs.
+- `Pending` forwards only the exact checkpoint corresponding to the lower child's current envelope
+  or stream-boundary phase. Lower first-request charging and stats remain authoritative, so repeated
+  polls of one pending range do not charge twice.
+- Before `Ready`, the wrapper probes the full source snapshot and then cancellation, reconstructs
+  evidence with the owning index's revision identity, and requires exact equality with the retained
+  record plus the same snapshot and `startxref`. Only then does it publish `AttestedObject`, which
+  owns the parsed lower object and exposes its value only by shared borrow while keeping evidence
+  in the wrapper. There is no API that consumes the wrapper to return an owned
+  `IndirectObjectValue` or lower `IndirectObject`, and there is no raw-target, lower-job, deref, or
+  into-inner path. Callers can still copy or clone semantic subvalues where lower public types
+  explicitly allow it; those values do not mint raw-target, object-job, or resolver authority.
+- Source, resource, and cancellation failures retain the complete lower `ObjectError` and its
+  stable policy. Any syntax, unsupported, configuration, or internal failure while reopening bytes
+  already proven under the retained profile is an `AttestedObjectEvidenceMismatch` and also retains
+  the lower error. Terminal failure is replayed exactly; completed jobs reject another poll.
+- Proof preservation depends on the injected `ByteSource` honoring its immutable-snapshot contract.
+  The job checks the complete `SourceSnapshot` before and after lower framing and lower slices check
+  source identity, but Core does not cryptographically detect a deliberately non-conforming source
+  that fabricates different bytes while claiming the same identity, revision, validator, and
+  length. Such behavior is a host capability violation, not accepted alternate document input.
 
 # Resource accounting and resumability
 
@@ -90,14 +128,18 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   at most 256 bytes and publication probes once more.
 - Terminal failure stores and replays the same copyable, source-redacted error. Lower
   `ObjectError`, `SourceError`, and `SyntaxError` values remain available without retaining source
-  content. A completed one-shot job returns a stable `JobAlreadyComplete` error if polled again.
+  content. Completed one-shot attestation and access jobs return a stable `JobAlreadyComplete`
+  error if polled again.
 
 # Trust boundary
 
 `CandidateRevisionIndex`, its intervals, and its crate-private raw targets remain untrusted.
 `AttestedRevisionIndex` is privately constructed and exposes neither the candidate, a raw
-`IndirectObjectTarget`, nor an `OpenObjectJob`. It proves only this strict top-level physical
-decomposition for the bound immutable snapshot and current parser profile.
+`IndirectObjectTarget`, nor an `OpenObjectJob`. The only document-layer proof-bearing access path
+is the private attested-index-to-access-job-to-`AttestedObject` chain. Borrowing or cloning a lower
+semantic subvalue is not equivalent to obtaining that proof or a resolver capability. The index
+proves only this strict top-level physical decomposition for the bound immutable snapshot and
+retained parser profile.
 
 The proof is deliberately closed-world: bytes between indexed in-use objects must be trivia.
 Stale free-object bodies, unindexed top-level objects, or other top-level tokens are rejected even
@@ -125,16 +167,17 @@ size accounting, the exact six-byte whitespace set, eight-byte header parser min
 versus per-object cap ties. Public behavior tests cover successful direct/stream kind evidence,
 header and gap policy, comment state across chunks, embedded candidate offsets, tail closure,
 pending idempotence, cancellation, snapshot mismatch, stable failure replay, and limit boundaries.
-Repository policy checks the sibling dependency allowlist and absence of platform/external-engine
-APIs.
+Access geometry unit tests reject individual index/evidence field mismatches, invalid object span
+containment, and invalid stream span order. Repository policy checks the sibling dependency
+allowlist and absence of platform/external-engine APIs.
 
 # Known deviations and unsupported cases
 
 - Only one strict traditional base revision is accepted. Revision chains, `/Prev`, xref streams,
   hybrid references, object streams, and revision precedence remain unsupported.
-- Attestation eagerly frames every in-use object. It is not the lazy document model or a complete
-  resolver; it does not validate reference targets, detect reference cycles, or retain object
-  values for later semantic access.
+- Attestation eagerly frames every in-use object. The new leaf access job can reparse one proven
+  value but is not a lazy document model or complete resolver: it does not validate or traverse
+  reference targets, detect cycles, maintain dependency states, or cache values.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
   payloads, catalog/page services, writer behavior, and document actions remain unsupported.
 - The closed-world trivia-gap policy is intentionally stricter than general PDF compatibility and
@@ -148,3 +191,6 @@ APIs.
   exact lookup errors, and crate-private five-field object-target construction.
 - 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,
   aggregate child work caps, fixed-size retained evidence, and atomic attested typestate.
+- 2026-07-13: Added proof-preserving object access minted only by the attested index, retained
+  parser profiles, explicit per-access work caps, exact evidence reproduction, and redacted
+  move-only value wrappers without exposing raw targets or lower jobs.

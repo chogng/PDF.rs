@@ -881,6 +881,8 @@ impl AttestRevisionJob {
             header,
             attestations,
             attestation_stats: self.stats,
+            object_limits: self.object_limits,
+            syntax_limits: self.syntax_limits,
         })
     }
 
