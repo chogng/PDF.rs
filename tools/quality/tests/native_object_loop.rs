@@ -398,6 +398,31 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     assert!(chain_stats.object_parse_bytes() > 0);
     assert!(chain_stats.retained_path_bytes() > 0);
     assert!(chain_stats.retained_path_bytes() <= chain_limits.max_retained_path_bytes());
+    let resolved_footprint = resolved_root
+        .try_resident_footprint()
+        .expect("canonical resolved-root footprint fits u64");
+    assert_eq!(
+        resolved_footprint.inline_bytes(),
+        u64::try_from(std::mem::size_of_val(&resolved_root)).unwrap()
+    );
+    assert_eq!(
+        resolved_footprint.syntax_heap_bytes(),
+        resolved_root.object().syntax_heap_bytes()
+    );
+    assert!(resolved_footprint.syntax_heap_bytes() > 0);
+    assert_eq!(
+        resolved_footprint.chain_capacity_bytes(),
+        chain_stats.retained_path_bytes()
+    );
+    assert!(resolved_footprint.chain_capacity_bytes() > 0);
+    assert_eq!(
+        resolved_footprint.total_bytes(),
+        resolved_footprint
+            .inline_bytes()
+            .checked_add(resolved_footprint.syntax_heap_bytes())
+            .and_then(|value| value.checked_add(resolved_footprint.chain_capacity_bytes()))
+            .unwrap()
+    );
     let resolved_catalog = direct_dictionary(resolved_root.object(), source);
     assert!(matches!(
         dictionary_value(resolved_catalog, b"Type"),
@@ -446,6 +471,23 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
         assert_eq!(object.revision_id(), RevisionId::new(1));
         assert_eq!(object.revision_startxref(), STARTXREF);
         assert_eq!(object.reference(), reference);
+        let footprint = object
+            .try_resident_footprint()
+            .expect("canonical reopened-object footprint fits u64");
+        assert_eq!(
+            footprint.inline_bytes(),
+            u64::try_from(std::mem::size_of_val(&object)).unwrap()
+        );
+        assert_eq!(footprint.syntax_heap_bytes(), object.syntax_heap_bytes());
+        assert!(footprint.syntax_heap_bytes() > 0);
+        assert_eq!(footprint.chain_capacity_bytes(), 0);
+        assert_eq!(
+            footprint.total_bytes(),
+            footprint
+                .inline_bytes()
+                .checked_add(footprint.syntax_heap_bytes())
+                .unwrap()
+        );
         reopened.push(object);
     }
     let catalog = direct_dictionary(&reopened[0], source);
@@ -520,14 +562,14 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     );
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true resident_footprint_accounted=true pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.17.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.17.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.18.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.18.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -595,6 +637,24 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(chain_feature.contains("fuzz_targets = []"));
     assert!(chain_feature.contains("benchmarks = []"));
 
+    let resident_feature =
+        record_with_id(FEATURE_MAP, "feature", "core.attested-resident-footprint")
+            .expect("the attested resident-footprint feature record must exist");
+    assert!(resident_feature.contains("owner = \"parser-security\""));
+    assert!(resident_feature.contains("state = \"PLANNED\""));
+    assert!(resident_feature.contains("profile = \"m1.attested-resident-footprint.v1\""));
+    assert!(
+        resident_feature
+            .contains("modules = [\"core/syntax\", \"core/object\", \"core/document\"]")
+    );
+    assert!(resident_feature.contains("core/syntax::parser_behavior"));
+    assert!(resident_feature.contains("core/object::object_behavior"));
+    assert!(resident_feature.contains("core/document::attested_object_access"));
+    assert!(resident_feature.contains("core/document::reference_chain_resolution"));
+    assert!(resident_feature.contains("tools/quality::native_object_loop"));
+    assert!(resident_feature.contains("fuzz_targets = []"));
+    assert!(resident_feature.contains("benchmarks = []"));
+
     for requirement_id in [
         "RPE-ARCH-001/5.3",
         "RPE-ARCH-001/5.4",
@@ -623,6 +683,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("\"core.strict-base-revision-attestation\""));
     assert!(xref_requirement.contains("\"core.attested-object-access\""));
     assert!(xref_requirement.contains("\"core.attested-reference-chain-resolution\""));
+    assert!(xref_requirement.contains("\"core.attested-resident-footprint\""));
     assert!(xref_requirement.contains("\"core/document\""));
     assert!(xref_requirement.contains("header-to-startxref"));
     assert!(xref_requirement.contains("line-terminated comments"));
@@ -635,6 +696,9 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
             .contains("job-wide object, edge, depth, path-capacity, read, and parse limits")
     );
     assert!(xref_requirement.contains("not a complete object-graph resolver"));
+    assert!(xref_requirement.contains("runtime inline Rust representation"));
+    assert!(xref_requirement.contains("cache-admission evidence only"));
+    assert!(xref_requirement.contains("stream payloads"));
     assert!(xref_requirement.contains("nested semantic graph traversal"));
     assert!(xref_requirement.contains("persistent Ready caching"));
     assert!(xref_requirement.contains("cross-job/session aggregate work"));

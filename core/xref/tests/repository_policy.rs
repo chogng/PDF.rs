@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.17.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.17.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.18.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.18.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -124,6 +124,20 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(reference_chain.contains("core/document::reference_chain_limit_config"));
     assert!(reference_chain.contains("tools/quality::native_object_loop"));
 
+    let resident_footprint =
+        record_with_id(&feature_map, "feature", "core.attested-resident-footprint")
+            .expect("the attested resident-footprint feature record must exist");
+    assert!(resident_footprint.contains("profile = \"m1.attested-resident-footprint.v1\""));
+    assert!(
+        resident_footprint
+            .contains("modules = [\"core/syntax\", \"core/object\", \"core/document\"]")
+    );
+    assert!(resident_footprint.contains("core/syntax::parser_behavior"));
+    assert!(resident_footprint.contains("core/object::object_behavior"));
+    assert!(resident_footprint.contains("core/document::attested_object_access"));
+    assert!(resident_footprint.contains("core/document::reference_chain_resolution"));
+    assert!(resident_footprint.contains("tools/quality::native_object_loop"));
+
     let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
         .expect("the traditional-xref architecture requirement record must exist");
     assert!(requirement.contains("\"core.traditional-xref\""));
@@ -135,6 +149,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("\"core.strict-base-revision-attestation\""));
     assert!(requirement.contains("\"core.attested-object-access\""));
     assert!(requirement.contains("\"core.attested-reference-chain-resolution\""));
+    assert!(requirement.contains("\"core.attested-resident-footprint\""));
     assert!(requirement.contains("core/document::revision_attestation"));
     assert!(requirement.contains("core/document::revision_attestation_limit_config"));
     assert!(requirement.contains("core/document::attested_object_access"));
@@ -148,6 +163,9 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("top-level direct indirect-reference value"));
     assert!(requirement.contains("full closing chain"));
     assert!(requirement.contains("job-wide object, edge, depth, path-capacity, read, and parse"));
+    assert!(requirement.contains("runtime inline Rust representation"));
+    assert!(requirement.contains("cache-admission evidence only"));
+    assert!(requirement.contains("stream payloads"));
     assert!(requirement.contains("not a complete object-graph resolver"));
     assert!(requirement.contains("nested semantic graph traversal"));
     assert!(requirement.contains("persistent Ready caching"));
