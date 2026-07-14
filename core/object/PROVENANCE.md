@@ -105,7 +105,9 @@ cumulative read/parse budgets, cancellation, full snapshot mismatch, one-shot li
 redacted diagnostics. A framing matrix exhausts every initial envelope/boundary split and logical
 truncation point for the bootstrap fixtures, plus exact and one-less runtime resource boundaries.
 Separate tests cover all limit-profile relationships and hard ceilings, lower source-error policy
-mapping, and repository dependency/purity rules.
+mapping, and repository dependency/purity rules. A `tools/quality` integration test generates the
+canonical PDF, parses its traditional xref section, and frames every in-use target while checking
+the expected physical ordering and stream payload span.
 
 No registered coverage-guided fuzz target, pinned conformance corpus, Range platform E2E, or
 Native/external-engine differential is claimed in this bootstrap slice.
@@ -119,7 +121,8 @@ Native/external-engine differential is claimed in this bootstrap slice.
 - `IndirectObjectTarget` carries xref-derived geometry but is publicly constructible so the object
   crate remains independent of its xref sibling. The object job therefore treats every target as
   untrusted and revalidates source geometry, the preceding token boundary, and the full object
-  header. End-to-end xref-to-object composition remains a future document/revision-layer test.
+  header. A test-only quality loop now composes the canonical xref and object jobs; a reusable
+  product document/revision compositor remains future work.
 - The one-byte predecessor check proves only an obvious local token boundary. It cannot prove that
   a syntactically matching header is top-level rather than embedded after whitespace in a comment,
   string, or stream. Rejecting overlapping/embedded targets requires the future physical object
@@ -142,3 +145,5 @@ Native/external-engine differential is claimed in this bootstrap slice.
 
 - 2026-07-13: Added bounded indirect-object and direct-length stream framing, resumable two-range
   ByteSource state, deterministic limits, behavior tests, and repository purity governance.
+- 2026-07-13: Added canonical generated-PDF composition coverage through the external
+  `tools/quality` test boundary without changing the product dependency graph.

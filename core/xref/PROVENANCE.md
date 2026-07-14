@@ -92,7 +92,9 @@ one-less source/entry/cumulative-work limits, complete limit-profile validation,
 invalid subsection layouts, malformed and truncated fixed-width rows, common row endings, exact
 tail line boundaries, complete base-table `/Size`, precise xref-stream classification, `/Prev` and
 `/XRefStm` policy, lifecycle/context/source-error classification, cancellation, snapshot mismatch,
-and redacted section diagnostics.
+and redacted section diagnostics. A `tools/quality` integration test runs this job over the
+canonical generated PDF and feeds every in-use entry into the sibling object-framing job without
+adding a product dependency between the two crates.
 
 `core/xref::repository_policy` scans product source for forbidden filesystem, network,
 async-runtime, and external-engine tokens and verifies that the crate depends only on
@@ -105,9 +107,10 @@ slice.
 - This profile supports one strict traditional xref table only. Xref streams and `/XRefStm`,
   hybrid-reference files, `/Prev` revision traversal, object streams, multiple incremental
   updates, and revision precedence remain unimplemented.
-- Entry offsets are structurally bounded. The separate object framing job can validate a supplied
-  target against its exact indirect-object header, but end-to-end xref-to-object composition and
-  reference resolution remain future document/revision-layer work.
+- Entry offsets are structurally bounded. The separate object framing job validates all four
+  supplied canonical targets in a test-only quality composition loop, but a product-owned physical
+  interval index, revision composition, reference resolution, and caching remain future
+  document/revision-layer work.
 - Only known-length immutable snapshots are accepted. Unknown-length discovery, platform Range
   scheduling, request coalescing, cancellation delivery and ticket unsubscription, terminal
   completion/cancel/close arbitration, and browser/desktop E2E remain future runtime/platform
@@ -123,3 +126,5 @@ slice.
 
 - 2026-07-13: Added the bounded traditional-xref bootstrap, resumable ByteSource job, behavior
   suite, governance record, and repository purity contract.
+- 2026-07-13: Bound the canonical generated section to the sibling object job in a test-only
+  quality integration loop.

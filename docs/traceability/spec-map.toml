@@ -1,5 +1,5 @@
 schema = 1
-version = "0.12.0"
+version = "0.13.0"
 status = "active"
 
 [[requirement]]
@@ -18,7 +18,7 @@ snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d828698752839
 summary = "Native syntax parsing preserves source locations and raw lexical distinctions while enforcing bounded work."
 features = ["core.pdf-syntax", "core.indirect-object-framing"]
 implementation = ["core/syntax", "core/object"]
-tests = ["core/syntax::parser_behavior", "core/syntax::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::repository_policy"]
+tests = ["core/syntax::parser_behavior", "core/syntax::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::repository_policy", "tools/quality::native_object_loop"]
 status = "partial"
 notes = "The m1.syntax-core.v1 bootstrap strictly parses bounded contiguous windows for PDF headers and direct null, boolean, number, name, string, array, dictionary, indirect-reference, borrowed keyword, and strict stream-line-boundary syntax; it retains source-bound spans and raw real notation, reports incomplete windows as control flow, applies deterministic lexical and owned-memory limits, and checks cancellation at fixed loop intervals. The m1.indirect-object-framing.v1 bootstrap composes those primitives into an exact header-validated indirect object and directly sized stream framing job whose payload remains unread. Indirect stream lengths, reference resolution, xref/document composition, object streams, repair profiles, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, or Native differential maturity."
 
@@ -28,9 +28,9 @@ snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d828698752839
 summary = "Native cross-reference parsing discovers the final startxref and validates bounded traditional xref tables."
 features = ["core.traditional-xref", "core.indirect-object-framing"]
 implementation = ["core/xref", "core/object"]
-tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy"]
+tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "tools/quality::native_object_loop"]
 status = "partial"
-notes = "The m1.traditional-xref.v1 bootstrap is limited to a known-length immutable source, bounded reverse discovery of the final line-delimited startxref marker, and strict resumable parsing of one complete traditional base xref table and trailer with checked geometry and a retained full snapshot. The sibling m1.indirect-object-framing.v1 job accepts untrusted xref-derived geometry, validates the preceding token boundary plus exact number/generation/obj header, and frames a direct value or directly sized stream with separate envelope and data-end reads. Document-level xref-to-object composition, xref streams, hybrid files, Prev chains, indirect Length, object streams, repair, unknown-length sources, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, R0 conformance, or Native differential maturity."
+notes = "The m1.traditional-xref.v1 bootstrap is limited to a known-length immutable source, bounded reverse discovery of the final line-delimited startxref marker, and strict resumable parsing of one complete traditional base xref table and trailer with checked geometry and a retained full snapshot. The sibling m1.indirect-object-framing.v1 job accepts untrusted xref-derived geometry, validates the preceding token boundary plus exact number/generation/obj header, and frames a direct value or directly sized stream with separate envelope and data-end reads. A test-only quality loop generates the canonical 612-byte input, parses its xref section, and frames all four in-use targets without introducing a sibling product dependency. A product document/revision compositor with physical object bounds, plus xref streams, hybrid files, Prev chains, indirect Length, object streams, repair, unknown-length sources, registered fuzzing, and document services remain open. This project-architecture mapping does not claim M1 exit, ISO clause coverage, R0 conformance, or Native differential maturity."
 
 [[requirement]]
 id = "RPE-ARCH-001/15.3/M0"
@@ -38,6 +38,7 @@ snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d828698752839
 summary = "M0 quality infrastructure produces deterministic synthetic artifacts and isolates external baselines."
 features = [
   "quality.minimal-pdf-generator",
+  "quality.native-object-loop",
   "quality.canonical-diff",
   "quality.failure-bundle",
   "quality.baseline-protocol-boundary",
@@ -66,19 +67,20 @@ tests = [
   "tools/benchmark/tests/cli.rs",
   "tools/benchmark/tests/repository_report.rs",
   "tools/quality/tests/parser_mutation_smoke.rs",
+  "tools/quality::native_object_loop",
 ]
 status = "partial"
-notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a source-only PDFium public-C-API pixel adapter with one non-gating O4 probe, a bounded replayable one-page/table-xref DSL profile, a canonical content-verified T0 corpus manifest, a canonical non-verdict synthetic benchmark report, and a fixed 103-case-per-parser deterministic mutation smoke are implemented. Platform-enforced isolation, complete runtime/license/font/color closure and baseline-ledger registration, Native/PDFium differential evidence, broader DSL variants, registered coverage-guided and continuous fuzzing, automated minimization/failure bundles, measured benchmark evidence, and T1+ corpus scale gates remain open."
+notes = "Synthetic parse/Scene/Text/Pixel bundles, baseline protocol v2, a deadline/byte-limited generic direct-child supervisor, a source-only PDFium public-C-API pixel adapter with one non-gating O4 probe, a bounded replayable one-page/table-xref DSL profile, a canonical content-verified T0 corpus manifest, a canonical non-verdict synthetic benchmark report, a fixed 103-case-per-parser deterministic mutation smoke, and a test-only Native xref-to-object composition loop are implemented. The Native loop binds its generated input identity to the existing PDFium O4 record but does not compare semantic or pixel outputs. Platform-enforced isolation, complete runtime/license/font/color closure and baseline-ledger registration, Native/PDFium differential evidence, broader DSL variants, registered coverage-guided and continuous fuzzing, automated minimization/failure bundles, measured benchmark evidence, and T1+ corpus scale gates remain open."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.6"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
 summary = "Project-authored fixture DSL generation is deterministic, readable, replayable, and extensible across structural PDF variants."
-features = ["quality.minimal-pdf-generator"]
-implementation = ["tools/generate"]
-tests = ["tools/generate::tests", "tools/quality/tests/parser_mutation_smoke.rs", "infrastructure/synthetic-failure-bundle-001"]
+features = ["quality.minimal-pdf-generator", "quality.native-object-loop"]
+implementation = ["tools/generate", "tools/quality"]
+tests = ["tools/generate::tests", "tools/quality/tests/parser_mutation_smoke.rs", "tools/quality::native_object_loop", "infrastructure/synthetic-failure-bundle-001"]
 status = "partial"
-notes = "The bounded m0.one-page-table.v1 profile compiles one PDF 1.7 page with configurable MediaBox/content and a traditional xref table; a fixed anchor-based mutation smoke checks repeatable bounded parser outcomes. The wider xref, object-stream, filter, revision, encryption, corruption, registered fuzz target, coverage gate, and automatic minimizer dimensions remain open."
+notes = "The bounded m0.one-page-table.v1 profile compiles one PDF 1.7 page with configurable MediaBox/content and a traditional xref table; a fixed anchor-based mutation smoke checks repeatable bounded parser outcomes, and the canonical generated output drives a test-only Native xref-to-object composition loop. The wider xref, object-stream, filter, revision, encryption, corruption, registered fuzz target, coverage gate, and automatic minimizer dimensions remain open."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.19"

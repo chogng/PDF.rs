@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.12.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.12.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.13.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.13.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -101,6 +101,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("core/xref::limit_config"));
     assert!(requirement.contains("core/xref::source_error_policy"));
     assert!(requirement.contains("core/xref::repository_policy"));
+    assert!(requirement.contains("tools/quality::native_object_loop"));
 }
 
 fn top_level_version(document: &str) -> Option<&str> {

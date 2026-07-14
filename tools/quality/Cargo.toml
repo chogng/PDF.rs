@@ -12,4 +12,8 @@ pdf-rs-generate = { path = "../generate" }
 
 [dev-dependencies]
 pdf-rs-benchmark = { path = "../benchmark" }
+pdf-rs-bytes = { path = "../../core/bytes" }
 pdf-rs-corpus = { path = "../corpus" }
+pdf-rs-object = { path = "../../core/object" }
+pdf-rs-syntax = { path = "../../core/syntax" }
+pdf-rs-xref = { path = "../../core/xref" }
