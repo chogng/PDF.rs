@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use pdf_rs_baseline::{
@@ -11,6 +12,7 @@ use pdf_rs_baseline::{
 use pdf_rs_digest::sha256;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+static FIXTURE_SERIAL: Mutex<()> = Mutex::new(());
 
 struct TestDirectory(PathBuf);
 
@@ -39,6 +41,7 @@ impl Drop for TestDirectory {
 
 #[test]
 fn pixel_profile_accepts_only_explicit_pixel_outcomes() {
+    let _fixture_serial = fixture_serial_guard();
     let directory = TestDirectory::new("outcomes");
     let produced = runner("pixel-only", &directory);
     assert_eq!(
@@ -63,6 +66,7 @@ fn pixel_profile_accepts_only_explicit_pixel_outcomes() {
 
 #[test]
 fn pixel_profile_rejects_a_helper_that_fabricates_semantic_channels() {
+    let _fixture_serial = fixture_serial_guard();
     let directory = TestDirectory::new("violation");
     for mode in [
         "profile-violation",
@@ -79,6 +83,7 @@ fn pixel_profile_rejects_a_helper_that_fabricates_semantic_channels() {
 
 #[test]
 fn pixel_profile_rejects_wrong_identity_and_helper_arguments() {
+    let _fixture_serial = fixture_serial_guard();
     let directory = TestDirectory::new("config");
 
     let (mut descriptor, process, limits) = parts("pixel-only", &directory, Vec::new());
@@ -139,6 +144,7 @@ fn pixel_profile_rejects_wrong_identity_and_helper_arguments() {
 
 #[test]
 fn pixel_geometry_is_rejected_before_the_helper_is_spawned() {
+    let _fixture_serial = fixture_serial_guard();
     let directory = TestDirectory::new("preflight-pipe");
     let limits = ProcessLimits::new(1024, 115, 1024, Duration::from_secs(2)).unwrap();
     let (descriptor, process, limits) = parts_with_limits(
@@ -239,16 +245,34 @@ fn fixture_executable(mode: &str, directory: &TestDirectory) -> PathBuf {
     let destination = directory
         .path()
         .join(format!("pdf-rs-baseline-fixture-{mode}"));
-    // Reuse the built inode when possible so platform executable validation is
-    // not repeated for every mode. Remove a prior same-mode link before the
-    // copy fallback so source and destination can never be the same inode.
-    if destination.exists() {
-        fs::remove_file(&destination).unwrap();
-    }
-    if fs::hard_link(&source, &destination).is_err() {
-        fs::copy(source, &destination).unwrap();
+
+    // Keep one copied inode under exactly one mode-bearing path. Multiple hard
+    // links to the built inode make macOS `current_exe()` path selection
+    // ambiguous when these tests run concurrently. Renaming the per-test copy
+    // preserves executable validation while making the selected mode stable.
+    let existing = fs::read_dir(directory.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("pdf-rs-baseline-fixture-"))
+        });
+    match existing {
+        Some(path) if path != destination => fs::rename(path, &destination).unwrap(),
+        Some(_) => {}
+        None => {
+            fs::copy(source, &destination).unwrap();
+        }
     }
     destination
+}
+
+fn fixture_serial_guard() -> MutexGuard<'static, ()> {
+    FIXTURE_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn digest(value: &[u8]) -> [u8; 32] {
