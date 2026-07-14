@@ -103,6 +103,7 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
         "core/document::repository_policy",
         "tools/quality::native_object_loop",
         "tools/quality::native_range_resume_loop",
+        "tools/quality::native_strict_open_runtime_loop",
         "fuzz_targets = []",
         "benchmarks = []",
     ] {
@@ -119,6 +120,9 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
         "core/document::strict_base_open",
         "core/document::repository_policy",
         "tools/quality::native_range_resume_loop",
+        "tools/quality::native_strict_open_runtime_loop",
+        "runtime.strict-base-open-job-owner",
+        "runtime/session::strict_base_open_owner",
         "status = \"partial\"",
         "product entry that composes xref discovery, candidate construction, and attestation under one JobId and five distinct checkpoints",
         "preserves complete lower xref or document errors and cumulative phase accounting",
@@ -129,8 +133,8 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
         "reverse physical delivery",
         "upper-half-before-lower delivery",
         "cancellation in both child layers",
-        "successful direct handoff into document services",
-        "complete Session lifecycle and scheduler execution",
+        "owner-mediated generation validation",
+        "generic multi-job scheduler and complete Session lifecycle",
         "does not claim M1 exit",
     ] {
         assert!(
@@ -152,8 +156,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.29.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.29.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.30.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.30.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.29.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.29.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.30.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.30.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -114,6 +114,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(strict_open.contains("core/document::repository_policy"));
     assert!(strict_open.contains("tools/quality::native_object_loop"));
     assert!(strict_open.contains("tools/quality::native_range_resume_loop"));
+    assert!(strict_open.contains("tools/quality::native_strict_open_runtime_loop"));
 
     let access = record_with_id(&feature_map, "feature", "core.attested-object-access")
         .expect("the proof-preserving object-access feature record must exist");
@@ -177,6 +178,9 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("core/document::reference_chain_limit_config"));
     assert!(requirement.contains("tools/quality::native_object_loop"));
     assert!(requirement.contains("tools/quality::native_range_resume_loop"));
+    assert!(requirement.contains("tools/quality::native_strict_open_runtime_loop"));
+    assert!(requirement.contains("runtime.strict-base-open-job-owner"));
+    assert!(requirement.contains("runtime/session::strict_base_open_owner"));
     assert!(requirement.contains("header-to-startxref"));
     assert!(requirement.contains("line-terminated comments"));
     assert!(requirement.contains("product entry that composes xref discovery, candidate construction, and attestation under one JobId and five distinct checkpoints"));
@@ -186,7 +190,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
             .contains("neither the xref section nor candidate index crosses the entry boundary")
     );
     assert!(requirement.contains("all five checkpoints"));
-    assert!(requirement.contains("successful direct handoff into document services"));
+    assert!(requirement.contains("owner-mediated generation validation"));
     assert!(requirement.contains("explicit caller-lent work cap"));
     assert!(requirement.contains("never a raw target"));
     assert!(requirement.contains("top-level direct indirect-reference value"));

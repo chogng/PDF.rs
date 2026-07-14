@@ -62,14 +62,76 @@ fn product_source_remains_exclusive_runtime_owner_code_without_io_or_async() {
             "session product source contains forbidden token {forbidden:?}"
         );
     }
-    for forbidden_escape in ["pub fn store(", "pub fn store_mut(", "pub fn into_store("] {
+    for forbidden_escape in ["store(", "store_mut(", "into_store("] {
         assert!(
-            !joined.contains(forbidden_escape),
-            "ReadySessionOwner must not expose {forbidden_escape:?}"
+            !joined.lines().any(|line| {
+                let line = line.trim_start();
+                line.strip_prefix("pub fn ")
+                    .or_else(|| line.strip_prefix("pub const fn "))
+                    .is_some_and(|signature| signature.starts_with(forbidden_escape))
+            }),
+            "runtime owner must not expose {forbidden_escape:?}"
+        );
+    }
+    let strict_open_owner = fs::read_to_string(crate_root().join("src/strict_base_open_owner.rs"))
+        .expect("strict-open owner source must be UTF-8");
+    for forbidden_escape in [
+        "job(",
+        "job_mut(",
+        "into_job(",
+        "arbiter(",
+        "arbiter_mut(",
+        "into_arbiter(",
+    ] {
+        assert!(
+            !strict_open_owner.lines().any(|line| {
+                let line = line.trim_start();
+                line.strip_prefix("pub fn ")
+                    .or_else(|| line.strip_prefix("pub const fn "))
+                    .is_some_and(|signature| signature.starts_with(forbidden_escape))
+            }),
+            "StrictBaseOpenJobOwner must not expose {forbidden_escape:?}"
         );
     }
     assert!(joined.contains("#![forbid(unsafe_code)]"));
     assert!(joined.contains("#![deny(missing_docs)]"));
+}
+
+#[test]
+fn range_resume_permit_remains_opaque_and_move_only() {
+    let source = fs::read_to_string(crate_root().join("src/range_resume.rs"))
+        .expect("Range-resume source must be readable");
+    let struct_start = source
+        .find("pub struct RangeResumePermit {")
+        .expect("permit declaration must remain present");
+    let declaration_start = source[..struct_start]
+        .rfind("#[derive(")
+        .expect("permit declaration must retain an explicit derive policy");
+    let declaration_end = source[struct_start..]
+        .find("impl RangeResumePermit")
+        .map(|offset| struct_start + offset)
+        .expect("permit implementation must follow its declaration");
+    let declaration = &source[declaration_start..declaration_end];
+    let fields = declaration
+        .split("pub struct RangeResumePermit {")
+        .nth(1)
+        .and_then(|body| body.split('}').next())
+        .expect("permit fields must remain directly inspectable by repository policy");
+
+    assert!(declaration.contains("#[derive(Debug, Eq, PartialEq)]"));
+    assert!(!declaration.contains("Clone"));
+    assert!(!declaration.contains("Copy"));
+    for private_field in [
+        "arbiter_id: RangeResumeArbiterId,",
+        "ticket: DataTicket,",
+        "target: RangeResumeTarget,",
+    ] {
+        assert!(fields.lines().any(|line| line.trim() == private_field));
+    }
+    assert!(!fields.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("pub ") || line.starts_with("pub(")
+    }));
 }
 
 #[test]
@@ -102,8 +164,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.29.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.29.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.30.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.30.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -163,7 +225,7 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
 }
 
 #[test]
-fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
+fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
     let root = repository_root();
     let feature_map = fs::read_to_string(root.join("docs/traceability/feature-map.toml"))
         .expect("feature map must be readable");
@@ -182,6 +244,7 @@ fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
         "runtime/session::range_resume",
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
+        "tools/quality::native_strict_open_runtime_loop",
         "fuzz_targets = []",
         "benchmarks = []",
     ] {
@@ -191,21 +254,75 @@ fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
         );
     }
 
+    let owner = record_with_id(
+        &feature_map,
+        "feature",
+        "runtime.strict-base-open-job-owner",
+    )
+    .expect("strict-base open job-owner feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.strict-base-open-job-owner.v1\"",
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"runtime/session\"]",
+        "runtime/session::strict_base_open_owner",
+        "runtime/session::repository_policy",
+        "tools/quality::native_strict_open_runtime_loop",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            owner.contains(required),
+            "strict-base open owner feature must contain {required:?}"
+        );
+    }
+
+    let quality = record_with_id(
+        &feature_map,
+        "feature",
+        "quality.native-strict-open-runtime-loop",
+    )
+    .expect("Native strict-open runtime-loop feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.native-strict-open-runtime-loop.v1\"",
+        "RPE-ARCH-001/12.6",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"tools/quality\"]",
+        "tests = [\"tools/quality::native_strict_open_runtime_loop\"]",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            quality.contains(required),
+            "Native strict-open runtime-loop feature must contain {required:?}"
+        );
+    }
+
     let byte_access = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.1-5.2")
         .expect("Native byte-access requirement must exist");
     for required in [
         "runtime.range-resume-arbiter",
+        "runtime.strict-base-open-job-owner",
+        "quality.native-strict-open-runtime-loop",
         "runtime/session::range_resume",
+        "runtime/session::strict_base_open_owner",
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
+        "tools/quality::native_strict_open_runtime_loop",
         "status = \"partial\"",
         "runtime caller registers each returned Pending ticket with its job, checkpoint, and generation",
-        "converts terminal tickets into one-shot scheduler records only after the store call returns",
+        "converts terminal tickets into arbiter-bound move-only permits only after the store call returns",
         "releasing exact subscriptions on cancellation without disturbing shared waiters",
-        "scheduler must still compare the generation carried by a taken record before executing it",
+        "validating the issuing arbiter, ticket, job, checkpoint, and current owner generation",
+        "consumed without polling parser code or changing its parser phase and cumulative stats",
         "tail, xref-section, prefix-scan, object-envelope, and stream-boundary checkpoints",
         "upper-half-before-lower out-of-order delivery",
-        "exact one-shot requeue",
+        "stale-generation rejection",
+        "generic multi-job scheduler with priority, fairness, backpressure, and generation registry",
         "all features stay PLANNED",
         "does not claim M1 exit",
     ] {
@@ -219,15 +336,20 @@ fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
         .expect("handle lifecycle requirement must exist");
     for required in [
         "runtime.range-resume-arbiter",
+        "runtime.strict-base-open-job-owner",
         "runtime/session::range_resume",
+        "runtime/session::strict_base_open_owner",
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
+        "tools/quality::native_strict_open_runtime_loop",
         "status = \"partial\"",
         "exact job/checkpoint/generation registrations",
-        "completed scheduler records",
-        "Data arrival only queues a record; it does not run parser code",
-        "external scheduler remains responsible for rejecting a taken record whose captured generation is stale",
-        "two isolated synchronous owners, not one complete Session",
+        "arbiter-bound move-only completion permits",
+        "Data arrival only queues a permit; it does not run parser code",
+        "validates every resume permit's issuer, ticket, job, checkpoint, and generation before polling",
+        "late permits are consumed without parser work",
+        "three isolated synchronous owners, not one complete Session",
+        "generic job queue and scheduler",
     ] {
         assert!(
             lifecycle.contains(required),
@@ -239,14 +361,20 @@ fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
         .expect("M1 byte-and-object milestone requirement must exist");
     for required in [
         "runtime.range-resume-arbiter",
+        "runtime.strict-base-open-job-owner",
         "quality.native-range-resume-loop",
+        "quality.native-strict-open-runtime-loop",
         "runtime/session::range_resume",
+        "runtime/session::strict_base_open_owner",
         "tools/quality::native_range_resume_loop",
+        "tools/quality::native_strict_open_runtime_loop",
         "status = \"partial\"",
         "all five parser checkpoints",
         "upper-half-before-lower out-of-order supply",
-        "exact one-shot dispatch",
-        "an executing scheduler that validates current generations",
+        "arbiter-bound move-only dispatch",
+        "stale-generation rejection without parser work",
+        "generic multi-job scheduler with queue priority, fairness, backpressure, and a job registry",
+        "viewport generations",
         "R0/R1 repair profiles are also absent",
         "not registered DIFFERENTIAL evidence",
         "does not claim M1 exit",
@@ -259,12 +387,20 @@ fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
 }
 
 #[test]
-fn provenance_bounds_close_to_the_ready_store_only() {
+fn provenance_bounds_each_runtime_owner_without_a_complete_session_claim() {
     let provenance = fs::read_to_string(crate_root().join("PROVENANCE.md"))
         .expect("session provenance must be readable");
     for required in [
         "unique store owner",
         "idempotent close report",
+        "arbiter-bound move-only",
+        "StrictBaseOpenJobOwner",
+        "matching its issuing arbiter",
+        "completed ticket, job, checkpoint",
+        "A stale or mismatched permit is discarded",
+        "without polling parser code or changing the saved parser phase and cumulative stats",
+        "generic job",
+        "queue, priority, fairness, backpressure, cross-job arbitration",
         "does not claim the complete protocol-visible Session state machine",
         "session ID allocation",
         "does not publish `SessionClosed`",

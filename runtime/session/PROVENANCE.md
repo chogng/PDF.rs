@@ -1,8 +1,10 @@
 # Scope
 
-`runtime/session` owns two bounded actor-style product slices. `RangeResumeArbiter` privately owns
-one snapshot-bound `RangeStore` and turns registered terminal tickets into one-shot scheduler
-targets without running parser code inline. `ReadySessionOwner` separately owns the Ready-state
+`runtime/session` owns three bounded actor-style product slices. `RangeResumeArbiter` privately owns
+one snapshot-bound `RangeStore` and turns registered terminal tickets into arbiter-bound move-only
+permits without running parser code inline. `StrictBaseOpenJobOwner` privately owns one generation-
+bound strict-base opening job and consumes a permit only after its issuer, ticket, job, checkpoint,
+and generation match the current suspension. `ReadySessionOwner` separately owns the Ready-state
 lifetime of one bounded, session-only `ReadyStore` as its unique store owner, lends immutable warm
 values through an exclusive borrow, and synchronously drops retained values plus fixed metadata
 before returning an idempotent close report.
@@ -14,10 +16,11 @@ This crate does not claim the complete protocol-visible Session state machine.
 
 # Semantic owner
 
-`runtime/session` owns the Range ticket-to-requeue ownership boundary plus one Ready-store instance
-and its Ready-to-Closed boundary. The external scheduler still owns current job generations and the
-decision to execute or discard a returned resume target; the platform still owns physical source
-transport.
+`runtime/session` owns the Range ticket-to-permit ownership boundary, one strict-open job execution
+boundary, plus one Ready-store instance and its Ready-to-Closed boundary. The strict-open owner
+retains its current generation and decides whether one consumed permit may execute that job; a
+future generic scheduler and registry must own generations and arbitration across all other jobs.
+The platform still owns physical source transport.
 
 `runtime/cache` continues to own complete keys, admission, byte accounting,
 cancellation probes, borrowed hits, and deterministic eviction. A later complete
@@ -57,9 +60,9 @@ completed close.
 - Host `supply` and snapshot observation first let the store settle its tickets, then take their
   complete subscriptions and mark matching registrations ready in deterministic completion order.
   They report queued target counts but never invoke a parser, callback, or scheduler inline.
-  `take_requeue` removes the earliest ready target exactly once. The target carries its captured
-  generation, but the actual scheduler must still compare that value with current job state before
-  executing any parser work.
+  `take_requeue` removes the earliest ready registration exactly once and returns an opaque,
+  arbiter-bound move-only permit carrying the issuing arbiter identity, completed ticket, job,
+  checkpoint, and captured generation. Taking a permit never executes parser work.
 - Cancellation matches one exact job and generation. It removes a completed-but-undispatched target
   or unsubscribes only that job from a pending ticket; other subscribers sharing the same ticket
   remain live, while cancelling the sole subscriber abandons and releases the ticket. Repeated
@@ -72,6 +75,23 @@ completed close.
   backing and in-flight/coalescing capacity come separately from the store; current and release
   reports expose both components and their checked sum. RangeStore allocator metadata outside
   backing buffers remains indirectly bounded by store count ceilings rather than measured directly.
+
+## Strict-base open job owner
+
+- Construction takes exclusive ownership of one `OpenStrictBaseRevisionJob`, its fixed runtime
+  generation, and the only `RangeResumeArbiter` identity allowed to issue resume permits. The job is
+  never exposed or extracted.
+- Exactly one initial `start` poll is permitted from Queued. Every later poll requires consuming a
+  move-only permit and matching its issuing arbiter, completed ticket, job, checkpoint, and
+  generation against the current WaitingForData state. A stale or mismatched permit is discarded
+  without polling parser code or changing the saved parser phase and cumulative stats.
+- A permitted Pending poll retains the exact ticket and target beside the job. A permitted Ready,
+  Failed, or cancellation result drops the job and waiting metadata before publication. This owner
+  has no internal queue, priority policy, transport, callbacks, or host I/O.
+- Cancellation and source change between actor turns synchronously drop the queued or waiting job
+  and return any target the caller must remove from the Range arbiter. Explicit close does the same,
+  records exact released job/target counts, exposes zero current resources, and returns the saved
+  report idempotently. Late permits after every terminal phase are consumed without parser work.
 
 ## Ready-store owner
 
@@ -103,11 +123,13 @@ completed close.
 # Tests
 
 Range-resume component tests cover reverse response and ticket completion order, exact idempotent
-registration, one-shot dispatch, explicit scheduler-generation evidence, cancellation before and
-after ticket completion, shared-ticket cancellation, bounded registration rollback, source-change
-and close terminal stability, lower source-error preservation, zero post-terminal resources, and
-fail-closed subscription mismatch. Ready-owner tests cover admission, borrowed lookup, close-first
-lifecycle rejection, resource release, and idempotent close.
+registration, move-only one-shot permits, issuer and captured-generation evidence, cancellation
+before and after ticket completion, shared-ticket cancellation, bounded registration rollback,
+source-change and close terminal stability, lower source-error preservation, zero post-terminal
+resources, and fail-closed subscription mismatch. Strict-open-owner tests cover the five parser
+checkpoints, exact permit execution, foreign-arbiter, stale-generation, job, checkpoint, and ticket
+mismatches, no-poll rejection, and cancel/source-change/close release. Ready-owner tests cover
+admission, borrowed lookup, close-first lifecycle rejection, resource release, and idempotent close.
 
 # External observations and dependencies
 
@@ -118,27 +140,32 @@ project-authored structural fixtures.
 
 # Known deviations
 
-- Session identity and session ID allocation, generation validation, and the no-reuse invariant
-  within a Worker epoch remain the responsibility of a future Worker/session
-  registry and scheduler; the Range arbiter only retains a captured generation in each target.
-- The Range and Ready owners are not yet joined by a complete Session actor. This slice does not
-  store or poll parser jobs, validate scheduler generations, perform transport I/O, merge physical
-  requests, drain general requests, reclaim surfaces, close platform queues, publish events, or
-  enforce a close deadline.
+- Session identity, session ID allocation, generations for jobs other than this one strict-open
+  owner, viewport generations, and the no-reuse invariant within a Worker epoch remain the
+  responsibility of a future Worker/session registry and generic scheduler.
+- The Range, strict-open, and Ready owners are not yet joined by a complete Session actor. The
+  strict-open slice stores and polls exactly one parser job, but does not implement a generic job
+  queue, priority, fairness, backpressure, cross-job arbitration, transport I/O, merged physical
+  requests, general request drain, surface reclamation, platform queue close, event publication, or
+  a close deadline.
 - Parent Worker-to-Session budget reservation, cross-session aggregation,
   persistent or cross-session caches, decrypted-value security domains, stable
   failure caching, in-flight resolution coalescing, concurrent shards, and the
   section 9.4 small-object/multi-level policy remain open.
 - Ready-store reports exclude source storage, stream payloads, allocator metadata, and RSS. Range
   reports include source backing capacity and actual registration-vector capacity but exclude the
-  RangeStore's internal allocator metadata and RSS. Registered lifecycle model tests, a real
-  generation-validating scheduler, fuzz targets, browser/desktop E2E, and
+  RangeStore's internal allocator metadata and RSS. Registered lifecycle model tests, a generic
+  multi-job generation registry and scheduler, fuzz targets, browser/desktop E2E, and
   registered broad Native/PDFium differential
   evidence remain open before a complete session implementation can claim
   milestone exit.
 
 # History
 
+- 2026-07-14: Bound Range completion to arbiter-issued move-only permits and added the single-job
+  strict-base opening owner with exact issuer/ticket/job/checkpoint/generation validation,
+  stale-permit discard, and cancel/source-change/close release without claiming a generic scheduler
+  or complete Session.
 - 2026-07-14: Added the unique Ready-store owner, close-first lifecycle errors,
   move-preserving admission, zeroed post-close resource snapshots, and synchronous
   idempotent close that drops the complete store before returning.

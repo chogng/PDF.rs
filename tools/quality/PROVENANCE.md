@@ -14,7 +14,8 @@ portable component relationships of the value-owned resident-footprint evidence
 published by those successful document results, then passes the resolved catalog
 through the product Ready-session owner for admission, borrowed lookup, and
 synchronous idempotent close with explicit released-resource evidence. A separate
-Native Range-resume loop drives that same generated PDF through the product runtime arbiter.
+Native Range-resume loop drives that same generated PDF through the product runtime arbiter, and a
+sibling strict-open runtime loop places the real opening job behind its single-job execution owner.
 
 # Semantic owner
 
@@ -26,7 +27,8 @@ Quality/Corpus workstream.
 - RPE-ARCH-001 section 9.1 and RPE-STD-002 sections 5 and 10 define the
   single-owner Ready-cache and session-close integration exercised by the loop.
 - RPE-ARCH-001 sections 5.1-5.2 and RPE-STD-002 sections 6-7 define the explicit
-  Pending-registration and non-inline one-shot requeue boundary exercised by the Range loop.
+  Pending-registration, arbiter-bound move-only permit, and generation-gated non-inline execution
+  boundaries exercised by the Range and strict-open runtime loops.
 - RPE-ARCH-001 sections 5.8-5.9 define the strict Catalog and protected
   Page/Pages traversal exercised by the loop.
 - RPE-STD-001 sections 2, 5, 6, and 9.
@@ -74,10 +76,20 @@ The `m1.native-range-resume-loop.v1` integration test binds the canonical genera
 registers each returned ticket with its exact job, checkpoint, and runtime generation. At every
 real suspension it supplies the upper half of each missing range before the lower half, exercising
 out-of-order delivery across all five xref/attestation checkpoints. Each response only queues a
-one-shot target, which is taken on a later turn and compared in full, including its generation,
-before the parser is polled again. Separate paths cancel an exact generation before late supply and
+one-shot move-only permit, which is taken on a later turn and inspected in full, including its
+issuing arbiter, completed ticket, and target generation, before the parser is polled again.
+Separate paths cancel an exact generation before late supply and
 signal source change before another late response. Both paths reject late requeue or mutation and
 release terminal resources. The loop does not provide a platform transport or production scheduler.
+
+The `m1.native-strict-open-runtime-loop.v1` integration test uses the same generated input and real
+five-checkpoint suspension path, but gives the `OpenStrictBaseRevisionJob` to
+`StrictBaseOpenJobOwner`. After the one initial start, only an arbiter-issued move-only permit whose
+issuer, completed ticket, job, checkpoint, and generation all match the owner's current suspension
+may poll the parser. The loop injects a completed stale-generation permit, observes it being
+consumed without parser phase or stats changes, then delivers the exact current permit and proceeds
+through upper-half-before-lower supply to the attested result. This is executable generation gating
+for one strict-open job, not a generic multi-job scheduler or complete Session.
 
 The same attested index mints one bounded strict page-count job. The canonical
 Catalog must point to the exact Pages root; the job then reopens only the Catalog,
@@ -208,8 +220,10 @@ platform-dependent sizes. The same loop covers owner admission, the borrowed
 warm hit, report-accounted full-store close, zero post-close resources, and
 idempotent repeated close.
 The Native Range-resume loop additionally covers upper-before-lower delivery of real parser
-requests, non-inline one-shot requeue targets, complete target-generation comparison, exact
-cancellation before late supply, source-change terminal stability, and zero terminal resources.
+requests, non-inline move-only permits, complete issuer/ticket/target evidence, exact cancellation
+before late supply, source-change terminal stability, and zero terminal resources. The strict-open
+runtime loop separately covers owner-mediated exact permit execution, stale-generation discard
+without parser work, all five checkpoints, and final zero job/target resources.
 
 This is not a registered fuzz target. It has no coverage guidance, randomness,
 dictionary, corpus growth, sanitizer, watchdog, minimizer, nightly campaign, or
@@ -257,16 +271,21 @@ interrupted-write recovery remain planned before T1 inputs.
   unregistered and likewise does not advance the feature or complete M1 exit. Its 128-page
   boundary-performance follow-up adds raw local timing samples but remains unequal-scope,
   performance-ineligible, and outside every release threshold.
-- Passing the Native Range-resume loop proves only the in-memory handoff among one generated PDF,
-  one strict-base job, and one actor-style arbiter. It does not supply a platform Range transport,
-  a job-owning scheduler, automatic generation validation, a complete Session state machine, IPC,
-  event publication, broad lifecycle model evidence, or a registered differential. The arbiter API
-  reports RangeStore backing and registration capacity separately, while the store's internal
-  allocator metadata remains only indirectly bounded. The relevant features remain `PLANNED`, and
-  neither this loop nor the Native object loop establishes M1 exit.
+- Passing the Native Range-resume loop proves only the in-memory permit handoff among one generated
+  PDF, one strict-base job, and one actor-style arbiter. The strict-open runtime loop adds real
+  issuer/ticket/job/checkpoint/generation validation and stale-permit discard for one privately
+  owned strict-open job. Together they still do not supply a platform Range transport, generic
+  multi-job queue, priority, fairness, backpressure, Session/request/Worker registry, viewport
+  generations, IPC, event publication, broad lifecycle model evidence, or a registered
+  differential. The arbiter API reports RangeStore backing and registration capacity separately,
+  while the store's internal allocator metadata remains only indirectly bounded. The relevant
+  features remain `PLANNED`, and none of these loops establishes M1 exit.
 
 # History
 
+- 2026-07-14: Added the strict-open runtime loop that consumes arbiter-bound move-only permits
+  through the single-job owner, rejects a stale generation without parser work, and retains the
+  explicit generic-scheduler, complete-Session, and M1 gaps.
 - 2026-07-13: Added canonical manifest schema 1, SHA-256 addressing, and complete
   synthetic parse/Scene/Text/Pixel failure bundles.
 - 2026-07-13: Added the bounded cross-tool deterministic parser-mutation smoke.

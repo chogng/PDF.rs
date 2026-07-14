@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.29.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.29.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.30.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.30.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -790,9 +790,35 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(range_feature.contains("profile = \"m1.native-range-resume-loop.v1\""));
     assert!(range_feature.contains("RPE-ARCH-001/15.3/M1"));
     assert!(range_feature.contains("modules = [\"tools/quality\"]"));
-    assert!(range_feature.contains("tests = [\"tools/quality::native_range_resume_loop\"]"));
+    assert!(range_feature.contains("tools/quality::native_range_resume_loop"));
     assert!(range_feature.contains("fuzz_targets = []"));
     assert!(range_feature.contains("benchmarks = []"));
+
+    let strict_runtime_feature = record_with_id(
+        FEATURE_MAP,
+        "feature",
+        "quality.native-strict-open-runtime-loop",
+    )
+    .expect("the Native strict-open runtime-loop feature record must exist");
+    assert!(strict_runtime_feature.contains("owner = \"quality-corpus\""));
+    assert!(strict_runtime_feature.contains("state = \"PLANNED\""));
+    assert!(strict_runtime_feature.contains("profile = \"m1.native-strict-open-runtime-loop.v1\""));
+    for clause in [
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/12.6",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+    ] {
+        assert!(strict_runtime_feature.contains(clause));
+    }
+    assert!(strict_runtime_feature.contains("modules = [\"tools/quality\"]"));
+    assert!(
+        strict_runtime_feature
+            .contains("tests = [\"tools/quality::native_strict_open_runtime_loop\"]")
+    );
+    assert!(strict_runtime_feature.contains("fuzz_targets = []"));
+    assert!(strict_runtime_feature.contains("benchmarks = []"));
 
     let candidate_feature =
         record_with_id(FEATURE_MAP, "feature", "core.base-revision-candidate-index")
@@ -832,6 +858,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(strict_open_feature.contains("core/document::repository_policy"));
     assert!(strict_open_feature.contains("tools/quality::native_object_loop"));
     assert!(strict_open_feature.contains("tools/quality::native_range_resume_loop"));
+    assert!(strict_open_feature.contains("tools/quality::native_strict_open_runtime_loop"));
     assert!(strict_open_feature.contains("fuzz_targets = []"));
     assert!(strict_open_feature.contains("benchmarks = []"));
 
