@@ -135,6 +135,26 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   inside the terminal job state and is returned by shared borrow, so repeated polls replay the same
   error without `Arc`, `Box`, clone, or another allocation.
 
+## Successful-value resident footprint
+
+- `AttestedObject` treats its contained `IndirectObject` as the single source of syntax-heap
+  evidence. Before publication, object stats and the returned object's retained-heap value must
+  agree. Its checked footprint is `size_of::<AttestedObject>() + syntax_heap_bytes`; the chain
+  component is zero.
+- `ResolvedReference` computes its footprint from the value that owns the allocations rather than
+  storing a second total. Its checked formula is `size_of::<ResolvedReference>() + terminal syntax
+  heap bytes + chain prefix capacity * size_of::<ObjectRef>()`. The top-level inline size already
+  contains `AttestedObject`, `ReferenceChain`, vector headers, and stats, so none of those inline
+  values are added again. Intermediate reference objects are dropped and do not contribute.
+- Every `usize` conversion, capacity multiplication, and component sum is checked. Arithmetic
+  failure maps to the existing internal/do-not-retry policy because this API measures a value; it
+  does not decide a resource budget. The components include Rust inline storage and
+  allocator-reported syntax/reference-path backing capacity. They exclude allocator metadata,
+  source and byte-cache storage, opaque stream payloads, and any future outer cache container.
+- The footprint is admission evidence only. It does not reserve bytes, establish a resident owner,
+  publish an eviction policy, cache failures, coalesce work, or make active-job historical stats
+  equivalent to current ownership.
+
 # Resource accounting and resumability
 
 - Revision-attestation limits independently bound source length, object count, exact scan chunk,
@@ -153,7 +173,9 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   the job-wide limit while retaining the complete lower `ObjectError`.
 - Reference-chain limits apply to one job only. Repeated jobs do not share a budget owner, resident
   cache, or reservation ledger. A future persistent resolver must add complete retained-object
-  accounting plus cross-job/session ownership before it can cache `Ready` values or coalesce work.
+  ownership, admission/reservation, and eviction before it can cache `Ready` values or coalesce
+  work. The successful-value footprint supplies only the value-owned measurement needed by such
+  an owner.
 - A scan request is charged before `ByteSource::poll`. `Pending` preserves its exact range,
   checkpoint, lexical state, and charged flag, so re-polling does not charge again. Source snapshot
   equality is checked before cancellation on every active loop. Scanning probes cancellation after
@@ -210,7 +232,10 @@ containment, and invalid stream span order. Reference-chain tests cover terminal
 aliases, nested-reference non-traversal, self and multi-object cycles, lookup failures, exact and
 one-less limits, pending idempotence, source and cancellation priority, stable terminal replay, and
 redacted diagnostics. Repository policy checks the sibling dependency allowlist and absence of
-platform/external-engine APIs.
+platform/external-engine APIs. Resident-footprint tests cover checked component and capacity
+overflow, portable runtime inline sizes, scalar and allocated syntax values, identical small/large
+stream-dictionary footprints, nonzero pre-reserved root-chain capacity, multi-hop terminal-only
+syntax ownership, and exact component totals without fixed platform-specific byte constants.
 
 # Known deviations and unsupported cases
 
@@ -219,8 +244,9 @@ platform/external-engine APIs.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, and
   the chain job can follow top-level whole-object aliases with cycle detection. They are not a lazy
   document model or complete resolver: nested semantic references, persistent dependency states,
-  concurrent work coalescing, retained-value caching, and cross-job aggregate ownership remain
-  unsupported.
+  concurrent work coalescing, retained-value caching, negative caching, admission/reservation,
+  eviction, and cross-job/session resident ownership remain unsupported. Successful footprints
+  are measurement evidence only.
 - Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
   payloads, catalog/page services, writer behavior, and document actions remain unsupported.
 - The closed-world trivia-gap policy is intentionally stricter than general PDF compatibility and
@@ -239,3 +265,5 @@ platform/external-engine APIs.
   move-only value wrappers without exposing raw targets or lower jobs.
 - 2026-07-13: Added an iterative attested top-level reference-chain job with exact cycle chains,
   fallibly retained paths, and job-wide object, edge, depth, read, and parse budgets.
+- 2026-07-13: Added checked value-owned resident footprints for proof-bearing objects and resolved
+  references without introducing a cache, reservation ledger, or eviction policy.

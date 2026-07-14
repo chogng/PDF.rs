@@ -7,7 +7,9 @@
 //! bounded job that reopens one parsed object into a wrapper retaining its
 //! proof. A second bounded job can iteratively follow whole-object direct
 //! reference aliases, but dictionaries, arrays, streams, and nested references
-//! remain terminal; this is not a complete object-graph resolver.
+//! remain terminal; this is not a complete object-graph resolver. Successful
+//! proof-bearing values expose checked value-owned footprint components as
+//! evidence for a future cache owner, but this crate does not cache them.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -25,6 +27,7 @@ mod limits;
 mod model;
 mod reference_chain;
 mod reference_chain_limits;
+mod residency;
 
 pub use access::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPhase, AttestedObjectPoll,
@@ -50,3 +53,4 @@ pub use reference_chain::{
     ReferenceChainPoll, ReferenceChainStats, ResolveReferenceChainJob, ResolvedReference,
 };
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
+pub use residency::DocumentResidentFootprint;

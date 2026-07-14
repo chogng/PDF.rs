@@ -12,7 +12,8 @@ use pdf_rs_syntax::{ByteSpan, ObjectRef, SyntaxLimits};
 
 use crate::{
     AttestedRevisionIndex, DocumentCancellation, DocumentError, DocumentErrorCode,
-    ObjectAttestation, ObjectAttestationKind, PhysicalObjectInterval, RevisionId,
+    DocumentResidentFootprint, ObjectAttestation, ObjectAttestationKind, PhysicalObjectInterval,
+    RevisionId,
 };
 
 /// Runtime identity, phase checkpoints, and scheduling priority for attested object access.
@@ -163,6 +164,24 @@ impl AttestedObject {
     /// Returns the exact terminal `endobj` keyword span.
     pub const fn endobj_span(&self) -> ByteSpan {
         self.attestation.endobj_span()
+    }
+
+    /// Returns allocator-reported syntax heap capacity retained by the parsed value.
+    pub const fn syntax_heap_bytes(&self) -> u64 {
+        self.object.retained_heap_bytes()
+    }
+
+    /// Computes the checked value-owned footprint suitable for future cache admission.
+    ///
+    /// This does not reserve cache space or account for allocator metadata, source
+    /// storage, byte caches, stream payloads, or an outer cache container.
+    pub fn try_resident_footprint(&self) -> Result<DocumentResidentFootprint, DocumentError> {
+        DocumentResidentFootprint::for_value::<Self>(
+            self.syntax_heap_bytes(),
+            0,
+            self.reference(),
+            Some(self.attestation.xref_offset()),
+        )
     }
 
     /// Borrows the parsed direct value or strictly framed stream retained beside its proof.
@@ -347,6 +366,7 @@ impl OpenAttestedObjectJob {
         let observed = ObjectAttestation::from_object(self.revision_id, &object);
         if object.snapshot() != self.snapshot
             || object.revision_startxref() != self.revision_startxref
+            || self.child.stats().retained_heap_bytes() != object.retained_heap_bytes()
             || observed != self.attestation
         {
             return self.fail(DocumentError::for_code(

@@ -11,7 +11,8 @@ use pdf_rs_syntax::{ObjectRef, SyntaxObject};
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     DocumentCancellation, DocumentError, DocumentErrorCategory, DocumentErrorCode, DocumentLimit,
-    DocumentLimitKind, DocumentRecoverability, OpenAttestedObjectJob, ReferenceChainLimits,
+    DocumentLimitKind, DocumentRecoverability, DocumentResidentFootprint, OpenAttestedObjectJob,
+    ReferenceChainLimits,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -176,6 +177,15 @@ impl ReferenceChain {
             .copied()
             .chain(std::iter::once(self.terminal))
     }
+
+    fn capacity_bytes(&self, offset: Option<u64>) -> Result<u64, DocumentError> {
+        crate::residency::checked_capacity_bytes(
+            self.prefix.capacity(),
+            mem::size_of::<ObjectRef>(),
+            self.terminal,
+            offset,
+        )
+    }
 }
 
 impl fmt::Debug for ReferenceChain {
@@ -228,6 +238,21 @@ impl ResolvedReference {
     /// Returns deterministic work and retained-path accounting for this resolution.
     pub const fn stats(&self) -> ReferenceChainStats {
         self.stats
+    }
+
+    /// Computes the checked value-owned footprint suitable for future cache admission.
+    ///
+    /// The inline component already contains the terminal `AttestedObject` and
+    /// chain vector header. Only the terminal object's syntax heap and the
+    /// chain's separately allocated backing capacity are added.
+    pub fn try_resident_footprint(&self) -> Result<DocumentResidentFootprint, DocumentError> {
+        let offset = Some(self.object.attestation().xref_offset());
+        DocumentResidentFootprint::for_value::<Self>(
+            self.object.syntax_heap_bytes(),
+            self.chain.capacity_bytes(offset)?,
+            self.terminal_reference(),
+            offset,
+        )
     }
 }
 

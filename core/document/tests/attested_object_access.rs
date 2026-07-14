@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -381,6 +382,23 @@ fn canonical_direct_reopens_with_exact_proof_and_stats() {
     assert_eq!(job.stats().envelope_attempts(), 1);
     assert_eq!(job.stats().boundary_attempts(), 0);
     assert_eq!(job.stats().declared_stream_bytes(), 0);
+    assert_eq!(
+        object.syntax_heap_bytes(),
+        job.stats().retained_heap_bytes()
+    );
+    let footprint = object
+        .try_resident_footprint()
+        .expect("small attested footprint fits u64");
+    let inline_bytes = u64::try_from(mem::size_of::<AttestedObject>()).unwrap();
+    assert_eq!(footprint.inline_bytes(), inline_bytes);
+    assert_eq!(footprint.syntax_heap_bytes(), object.syntax_heap_bytes());
+    assert_eq!(footprint.chain_capacity_bytes(), 0);
+    assert_eq!(
+        footprint.total_bytes(),
+        inline_bytes
+            .checked_add(object.syntax_heap_bytes())
+            .unwrap()
+    );
 
     match job.poll(&store, &DocumentNeverCancelled) {
         AttestedObjectPoll::Failed(error) => {
@@ -398,6 +416,14 @@ fn canonical_small_and_large_streams_reopen_with_exact_unretained_payload_geomet
     let small_index = ready(&small);
     let small_store = supplied_store(&small);
     let (object, job) = poll_ready(&small_index, object_ref(10), &small_store);
+    let small_heap_bytes = object.syntax_heap_bytes();
+    let small_footprint = object
+        .try_resident_footprint()
+        .expect("small stream footprint fits u64");
+    assert!(small_heap_bytes > 0);
+    assert_eq!(small_heap_bytes, job.stats().retained_heap_bytes());
+    assert_eq!(small_footprint.syntax_heap_bytes(), small_heap_bytes);
+    assert_eq!(small_footprint.chain_capacity_bytes(), 0);
     let evidence = object.attestation();
     assert_eq!(
         (evidence.xref_offset(), evidence.object_upper_bound()),
@@ -442,6 +468,16 @@ fn canonical_small_and_large_streams_reopen_with_exact_unretained_payload_geomet
     let large_index = ready(&large);
     let large_store = supplied_store(&large);
     let (object, job) = poll_ready(&large_index, object_ref(1), &large_store);
+    let large_footprint = object
+        .try_resident_footprint()
+        .expect("large stream footprint fits u64");
+    assert_eq!(object.syntax_heap_bytes(), small_heap_bytes);
+    assert_eq!(
+        object.syntax_heap_bytes(),
+        job.stats().retained_heap_bytes()
+    );
+    assert_eq!(large_footprint.syntax_heap_bytes(), small_heap_bytes);
+    assert_eq!(large_footprint.total_bytes(), small_footprint.total_bytes());
     let evidence = object.attestation();
     assert_eq!(
         (evidence.xref_offset(), evidence.object_upper_bound()),
@@ -518,6 +554,39 @@ fn every_retained_value_kind_reopens_with_the_same_exact_evidence() {
         );
         assert_eq!(object.attestation().kind(), kind);
         assert!(matches!(object.value(), IndirectObjectValue::Direct(_)));
+        let footprint = object
+            .try_resident_footprint()
+            .expect("fixture footprint fits u64");
+        assert_eq!(
+            footprint.inline_bytes(),
+            u64::try_from(mem::size_of::<AttestedObject>()).unwrap()
+        );
+        assert_eq!(footprint.syntax_heap_bytes(), object.syntax_heap_bytes());
+        assert_eq!(footprint.chain_capacity_bytes(), 0);
+        assert_eq!(
+            footprint.total_bytes(),
+            footprint
+                .inline_bytes()
+                .checked_add(footprint.syntax_heap_bytes())
+                .unwrap()
+        );
+        if matches!(
+            kind,
+            ObjectAttestationKind::Real
+                | ObjectAttestationKind::Name
+                | ObjectAttestationKind::String
+        ) {
+            assert!(footprint.syntax_heap_bytes() > 0);
+        }
+        if matches!(
+            kind,
+            ObjectAttestationKind::Null
+                | ObjectAttestationKind::Boolean
+                | ObjectAttestationKind::Integer
+                | ObjectAttestationKind::Reference
+        ) {
+            assert_eq!(footprint.syntax_heap_bytes(), 0);
+        }
     }
 
     let retained = index

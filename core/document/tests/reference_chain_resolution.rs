@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::atomic::AtomicBool;
 
 use pdf_rs_bytes::{
@@ -94,6 +95,16 @@ fn chain_fixture() -> Fixture {
             (3, b"3 0 obj\n42\nendobj\n"),
         ],
         5,
+    )
+}
+
+fn heap_terminal_chain_fixture() -> Fixture {
+    fixture(
+        &[
+            (1, b"1 0 obj\n2 0 R\nendobj\n"),
+            (2, b"2 0 obj\n<< /Meta [(terminal)] >>\nendobj\n"),
+        ],
+        3,
     )
 }
 
@@ -362,6 +373,31 @@ fn terminal_root_and_three_object_chain_return_exact_paths_values_and_stats() {
         job.stats().retained_path_bytes()
             >= u64::try_from(std::mem::size_of::<ObjectRef>()).unwrap()
     );
+    let footprint = resolved
+        .try_resident_footprint()
+        .expect("terminal-root footprint fits u64");
+    assert_eq!(
+        footprint.inline_bytes(),
+        u64::try_from(mem::size_of::<ResolvedReference>()).unwrap()
+    );
+    assert_eq!(
+        footprint.syntax_heap_bytes(),
+        resolved.object().syntax_heap_bytes()
+    );
+    assert_eq!(footprint.syntax_heap_bytes(), 0);
+    assert_eq!(
+        footprint.chain_capacity_bytes(),
+        job.stats().retained_path_bytes()
+    );
+    assert!(footprint.chain_capacity_bytes() > 0);
+    assert_eq!(
+        footprint.total_bytes(),
+        footprint
+            .inline_bytes()
+            .checked_add(footprint.syntax_heap_bytes())
+            .and_then(|value| value.checked_add(footprint.chain_capacity_bytes()))
+            .unwrap()
+    );
     let pdf_rs_object::IndirectObjectValue::Direct(value) = resolved.object().value() else {
         panic!("terminal object must be direct")
     };
@@ -420,6 +456,59 @@ fn terminal_root_and_three_object_chain_return_exact_paths_values_and_stats() {
     assert_eq!(complete_error.code(), DocumentErrorCode::JobAlreadyComplete);
     assert_eq!(complete_error.reference(), Some(object_ref(1)));
     assert_eq!(complete_error.offset(), Some(root_offset));
+}
+
+#[test]
+fn reference_footprint_counts_terminal_heap_once_for_root_and_multi_hop_results() {
+    let fixture = heap_terminal_chain_fixture();
+    let index = ready_index(&fixture);
+    let store = supplied_store(&fixture);
+
+    let (root_terminal, root_job) = poll_ready(
+        &index,
+        object_ref(2),
+        &store,
+        ReferenceChainLimits::default(),
+    );
+    let root_footprint = root_terminal
+        .try_resident_footprint()
+        .expect("root-terminal footprint fits u64");
+    assert!(root_footprint.syntax_heap_bytes() > 0);
+    assert_eq!(root_terminal.chain().prefix(), &[]);
+    assert_eq!(
+        root_footprint.chain_capacity_bytes(),
+        root_job.stats().retained_path_bytes()
+    );
+    assert!(root_footprint.chain_capacity_bytes() > 0);
+
+    let (multi_hop, multi_job) = poll_ready(
+        &index,
+        object_ref(1),
+        &store,
+        ReferenceChainLimits::default(),
+    );
+    let multi_footprint = multi_hop
+        .try_resident_footprint()
+        .expect("multi-hop footprint fits u64");
+    assert_eq!(multi_hop.chain().prefix(), &[object_ref(1)]);
+    assert_eq!(multi_hop.terminal_reference(), object_ref(2));
+    assert_eq!(
+        multi_footprint.syntax_heap_bytes(),
+        root_footprint.syntax_heap_bytes()
+    );
+    assert_eq!(
+        multi_footprint.syntax_heap_bytes(),
+        multi_hop.object().syntax_heap_bytes()
+    );
+    assert_eq!(
+        multi_footprint.chain_capacity_bytes(),
+        multi_job.stats().retained_path_bytes()
+    );
+    assert_eq!(
+        multi_footprint.inline_bytes(),
+        u64::try_from(mem::size_of::<ResolvedReference>()).unwrap()
+    );
+    assert_eq!(multi_footprint.total_bytes(), root_footprint.total_bytes());
 }
 
 #[test]
