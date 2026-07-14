@@ -20,6 +20,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-bytes"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-compare"
 version = "0.1.0"
 
