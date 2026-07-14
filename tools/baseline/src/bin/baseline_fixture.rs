@@ -116,6 +116,55 @@ fn run() -> Result<(), ()> {
                 ),
             )
         }
+        "outline-only" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}\n"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "outline-parse-failed" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Failed,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "outline-scene-produced" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}\n"),
+            BaselineChannel::Produced(b"{}"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "outline-text-produced" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}\n"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Produced(b"{}"),
+            BaselineChannel::Unsupported,
+        ),
+        "outline-pixel-produced" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}\n"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Produced(&[0; 4]),
+        ),
+        "outline-invalid-utf8" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Produced(&[0xff, b'\n']),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
+        "outline-no-newline" => write_outline_response(
+            read_request()?,
+            BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}"),
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+            BaselineChannel::Unsupported,
+        ),
         "profile-violation" => {
             let request = read_request()?;
             write_produced_response(request, 2, 0)
@@ -267,6 +316,19 @@ fn write_pixel_profile_violation(request: AdapterRequest, failed_channel: usize)
     write_channels(
         &request,
         AdapterResponseChannels::new(parse, scene, text, BaselineChannel::Produced(&rgba)),
+    )
+}
+
+fn write_outline_response(
+    request: AdapterRequest,
+    parse: BaselineChannel<&[u8]>,
+    scene: BaselineChannel<&[u8]>,
+    text: BaselineChannel<&[u8]>,
+    rgba: BaselineChannel<&[u8]>,
+) -> Result<(), ()> {
+    write_channels(
+        &request,
+        AdapterResponseChannels::new(parse, scene, text, rgba),
     )
 }
 

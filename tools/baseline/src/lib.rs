@@ -16,7 +16,9 @@ use std::fmt;
 use pdf_rs_digest::{Sha256, sha256};
 
 pub use pdfium::{
-    PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumPixelAdapter,
+    PDFIUM_OUTLINE_ADAPTER_MAX_PARSE_BYTES, PDFIUM_OUTLINE_ADAPTER_PROFILE,
+    PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumOutlineAdapter,
+    PdfiumPixelAdapter,
 };
 pub use process::{ProcessBaselineRunner, ProcessLimits, ProcessSpec};
 

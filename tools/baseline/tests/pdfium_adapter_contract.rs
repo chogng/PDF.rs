@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use pdf_rs_baseline::{
     BaselineChannel, BaselineDescriptor, BaselineErrorCode, BaselineRequest, BaselineRunner,
-    OracleAuthority, PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE,
+    OracleAuthority, PDFIUM_OUTLINE_ADAPTER_MAX_PARSE_BYTES, PDFIUM_OUTLINE_ADAPTER_PROFILE,
+    PDFIUM_PIXEL_ADAPTER_MAX_RGBA_BYTES, PDFIUM_PIXEL_ADAPTER_PROFILE, PdfiumOutlineAdapter,
     PdfiumPixelAdapter, ProcessLimits, ProcessSpec,
 };
 use pdf_rs_digest::sha256;
@@ -180,9 +181,95 @@ fn pixel_geometry_is_rejected_before_the_helper_is_spawned() {
     assert!(!directory.path().join("spawned").exists());
 }
 
+#[test]
+fn outline_profile_accepts_only_canonical_parse_output() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("outline-outcome");
+    let adapter = outline_runner("outline-only", &directory);
+    assert_eq!(
+        adapter.describe().unwrap().id,
+        PDFIUM_OUTLINE_ADAPTER_PROFILE
+    );
+    let observation = adapter.observe(&request()).unwrap();
+    assert_eq!(observation.authority(), OracleAuthority::O4Observation);
+    assert_eq!(
+        observation.parse_json,
+        BaselineChannel::Produced(b"{\"schema\":1,\"items\":[]}\n".to_vec())
+    );
+    assert_eq!(observation.scene_json, BaselineChannel::Unsupported);
+    assert_eq!(observation.text_json, BaselineChannel::Unsupported);
+    assert_eq!(observation.rgba, BaselineChannel::Unsupported);
+}
+
+#[test]
+fn outline_profile_rejects_missing_malformed_or_extra_channels() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("outline-violation");
+    for mode in [
+        "outline-parse-failed",
+        "outline-scene-produced",
+        "outline-text-produced",
+        "outline-pixel-produced",
+        "outline-invalid-utf8",
+        "outline-no-newline",
+    ] {
+        let error = outline_runner(mode, &directory)
+            .observe(&request())
+            .err()
+            .unwrap();
+        assert_eq!(error.code, BaselineErrorCode::MalformedResponse, "{mode}");
+        assert_eq!(error.diagnostic_id, "RPE-BASELINE-0005", "{mode}");
+    }
+}
+
+#[test]
+fn outline_profile_rejects_noncanonical_requests_and_output_ceilings() {
+    let _fixture_serial = fixture_serial_guard();
+    let directory = TestDirectory::new("outline-config");
+    let adapter = outline_runner("outline-only", &directory);
+    let pdf = b"%PDF-1.7".to_vec();
+    let nonzero_page = BaselineRequest::new(sha256(&pdf).unwrap(), pdf, 1, 1, 1).unwrap();
+    assert_eq!(
+        adapter.observe(&nonzero_page).err().unwrap().code,
+        BaselineErrorCode::InvalidRequest
+    );
+    assert_eq!(
+        adapter
+            .observe(&request_with_geometry(2, 1))
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidRequest
+    );
+
+    let limits = ProcessLimits::new(
+        1024,
+        PDFIUM_OUTLINE_ADAPTER_MAX_PARSE_BYTES + 113,
+        1024,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let (mut descriptor, process, limits) =
+        parts_with_limits("outline-only", &directory, Vec::new(), Vec::new(), limits);
+    descriptor.id = PDFIUM_OUTLINE_ADAPTER_PROFILE.into();
+    assert_eq!(
+        PdfiumOutlineAdapter::new(descriptor, process, limits)
+            .err()
+            .unwrap()
+            .code,
+        BaselineErrorCode::InvalidProcessConfig
+    );
+}
+
 fn runner(mode: &str, directory: &TestDirectory) -> PdfiumPixelAdapter {
     let (descriptor, process, limits) = parts(mode, directory, Vec::new());
     PdfiumPixelAdapter::new(descriptor, process, limits).unwrap()
+}
+
+fn outline_runner(mode: &str, directory: &TestDirectory) -> PdfiumOutlineAdapter {
+    let (mut descriptor, process, limits) = parts(mode, directory, Vec::new());
+    descriptor.id = PDFIUM_OUTLINE_ADAPTER_PROFILE.into();
+    PdfiumOutlineAdapter::new(descriptor, process, limits).unwrap()
 }
 
 fn parts(

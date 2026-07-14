@@ -1,0 +1,14 @@
+executable("pdf_rs_pdfium_outline_probe") {
+  testonly = true
+  sources = [ "pdf_rs_pdfium_outline_probe.cc" ]
+
+  deps = [
+    "//:pdfium",
+    "//build/win:default_exe_manifest",
+  ]
+
+  configs += [
+    "//:pdfium_strict_config",
+    "//:pdfium_noshorten_config",
+  ]
+}
