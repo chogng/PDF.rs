@@ -376,6 +376,8 @@ fn canonical_direct_reopens_with_exact_proof_and_stats() {
     let (object, mut job) = poll_ready(&index, object_ref(1), &store);
 
     assert_canonical_direct(&object, fixture.snapshot);
+    assert_eq!(object.object_limits(), job.object_limits());
+    assert_eq!(object.syntax_limits(), job.syntax_limits());
     assert_eq!(job.phase(), AttestedObjectPhase::Complete);
     assert_eq!(job.stats().read_bytes(), 21);
     assert_eq!(job.stats().parse_bytes(), 21);

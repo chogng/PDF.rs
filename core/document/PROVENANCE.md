@@ -150,6 +150,10 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   that produced it. A future warm lookup must include that profile in its key; otherwise a value
   created under a larger object, edge, depth, retained-path, read, or parse budget could bypass the
   colder request's stricter failure boundary.
+- Every successful `AttestedObject`, including the terminal object inside a resolved reference,
+  retains the exact validated object-framing and direct-syntax profiles that produced it. This
+  keeps cache admission able to reject a value created under a different parser profile after the
+  one-shot access job and its borrowed attested index are gone.
 - Every `usize` conversion, capacity multiplication, and component sum is checked. Arithmetic
   failure maps to the existing internal/do-not-retry policy because this API measures a value; it
   does not decide a resource budget. The components include Rust inline storage and
@@ -273,3 +277,5 @@ syntax ownership, and exact component totals without fixed platform-specific byt
   references without introducing a cache, reservation ledger, or eviction policy.
 - 2026-07-14: Retained the complete successful reference-resolution limit profile as cache-key
   evidence without adding warm lookup or persistent ownership.
+- 2026-07-14: Retained successful object and syntax profiles on proof-bearing values so a future
+  session owner can validate parser-profile-equivalent admission.

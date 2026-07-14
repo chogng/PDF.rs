@@ -362,6 +362,14 @@ fn terminal_root_and_three_object_chain_return_exact_paths_values_and_stats() {
     assert_eq!(resolved.root(), object_ref(1));
     assert_eq!(resolved.terminal_reference(), object_ref(1));
     assert_eq!(resolved.limits(), resolution_limits);
+    assert_eq!(
+        resolved.object().object_limits(),
+        terminal_index.object_limits()
+    );
+    assert_eq!(
+        resolved.object().syntax_limits(),
+        terminal_index.syntax_limits()
+    );
     assert_eq!(job.phase(), ReferenceChainPhase::Ready);
     assert_eq!(job.stats().objects_started(), 1);
     assert_eq!(job.stats().reference_edges(), 0);

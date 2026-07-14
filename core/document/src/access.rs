@@ -123,6 +123,8 @@ impl fmt::Debug for AttestedObjectPoll {
 pub struct AttestedObject {
     attestation: ObjectAttestation,
     object: IndirectObject,
+    object_limits: ObjectLimits,
+    syntax_limits: SyntaxLimits,
 }
 
 impl AttestedObject {
@@ -144,6 +146,16 @@ impl AttestedObject {
     /// Returns the exact object number and generation reproduced by reopening.
     pub const fn reference(&self) -> ObjectRef {
         self.attestation.reference()
+    }
+
+    /// Returns the validated indirect-object profile that produced this value.
+    pub const fn object_limits(&self) -> ObjectLimits {
+        self.object_limits
+    }
+
+    /// Returns the validated direct-syntax profile that produced this value.
+    pub const fn syntax_limits(&self) -> SyntaxLimits {
+        self.syntax_limits
     }
 
     /// Borrows the fixed-size top-level framing evidence reproduced by this object.
@@ -197,6 +209,8 @@ impl fmt::Debug for AttestedObject {
             .field("snapshot", &self.object.snapshot())
             .field("revision_startxref", &self.object.revision_startxref())
             .field("attestation", &self.attestation)
+            .field("object_limits", &self.object_limits)
+            .field("syntax_limits", &self.syntax_limits)
             .field("value", &"[REDACTED]")
             .finish()
     }
@@ -381,6 +395,8 @@ impl OpenAttestedObjectJob {
         AttestedObjectPoll::Ready(AttestedObject {
             attestation,
             object,
+            object_limits: self.object_limits,
+            syntax_limits: self.syntax_limits,
         })
     }
 
