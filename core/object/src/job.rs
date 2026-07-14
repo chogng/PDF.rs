@@ -14,7 +14,7 @@ use crate::parser::{
 };
 use crate::{
     FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue, ObjectError,
-    ObjectErrorCode, ObjectLimitKind, ObjectLimits,
+    ObjectErrorCode, ObjectLimitKind, ObjectLimits, ObjectWorkCaps,
 };
 
 /// Runtime identity, phase checkpoints, and scheduling priority for one object job.
@@ -185,6 +185,7 @@ pub struct OpenObjectJob {
     source_len: u64,
     context: ObjectJobContext,
     limits: ObjectLimits,
+    work_caps: ObjectWorkCaps,
     syntax_limits: SyntaxLimits,
     stats: ObjectStats,
     state: JobState,
@@ -198,7 +199,36 @@ impl OpenObjectJob {
         limits: ObjectLimits,
         syntax_limits: SyntaxLimits,
     ) -> Result<Self, ObjectError> {
+        Self::new_with_work_caps(
+            target,
+            context,
+            limits,
+            syntax_limits,
+            ObjectWorkCaps::from_limits(limits),
+        )
+    }
+
+    /// Validates configuration and binds a job to parent-supplied cumulative work caps.
+    ///
+    /// The caps may be smaller than configured phase windows, but they cannot exceed the
+    /// corresponding cumulative totals in `limits`.
+    pub fn new_with_work_caps(
+        target: IndirectObjectTarget,
+        context: ObjectJobContext,
+        limits: ObjectLimits,
+        syntax_limits: SyntaxLimits,
+        work_caps: ObjectWorkCaps,
+    ) -> Result<Self, ObjectError> {
         let reference = target.reference();
+        if work_caps.max_read_bytes() > limits.max_total_read_bytes()
+            || work_caps.max_parse_bytes() > limits.max_total_parse_bytes()
+        {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::InvalidLimits,
+                Some(reference),
+                None,
+            ));
+        }
         if context.envelope_checkpoint == context.boundary_checkpoint {
             return Err(ObjectError::for_code(
                 ObjectErrorCode::InvalidJobContext,
@@ -246,6 +276,7 @@ impl OpenObjectJob {
             source_len,
             context,
             limits,
+            work_caps,
             syntax_limits,
             stats: ObjectStats::default(),
             state: JobState::Envelope {
@@ -273,6 +304,11 @@ impl OpenObjectJob {
     /// Returns the validated deterministic object limits.
     pub const fn limits(&self) -> ObjectLimits {
         self.limits
+    }
+
+    /// Returns the parent-supplied cumulative work caps enforced by this job.
+    pub const fn work_caps(&self) -> ObjectWorkCaps {
+        self.work_caps
     }
 
     /// Returns cumulative work charged through the most recent poll.
@@ -674,17 +710,17 @@ impl OpenObjectJob {
         let Some(total) = self.stats.read_bytes.checked_add(amount) else {
             return Err(ObjectError::resource(
                 ObjectLimitKind::TotalReadBytes,
-                self.limits.max_total_read_bytes(),
+                self.work_caps.max_read_bytes(),
                 self.stats.read_bytes,
                 amount,
                 Some(self.target.reference()),
                 offset,
             ));
         };
-        if total > self.limits.max_total_read_bytes() {
+        if total > self.work_caps.max_read_bytes() {
             return Err(ObjectError::resource(
                 ObjectLimitKind::TotalReadBytes,
-                self.limits.max_total_read_bytes(),
+                self.work_caps.max_read_bytes(),
                 self.stats.read_bytes,
                 amount,
                 Some(self.target.reference()),
@@ -699,17 +735,17 @@ impl OpenObjectJob {
         let Some(total) = self.stats.parse_bytes.checked_add(amount) else {
             return Err(ObjectError::resource(
                 ObjectLimitKind::TotalParseBytes,
-                self.limits.max_total_parse_bytes(),
+                self.work_caps.max_parse_bytes(),
                 self.stats.parse_bytes,
                 amount,
                 Some(self.target.reference()),
                 offset,
             ));
         };
-        if total > self.limits.max_total_parse_bytes() {
+        if total > self.work_caps.max_parse_bytes() {
             return Err(ObjectError::resource(
                 ObjectLimitKind::TotalParseBytes,
-                self.limits.max_total_parse_bytes(),
+                self.work_caps.max_parse_bytes(),
                 self.stats.parse_bytes,
                 amount,
                 Some(self.target.reference()),
@@ -815,6 +851,7 @@ impl fmt::Debug for OpenObjectJob {
             .field("source_len", &self.source_len)
             .field("context", &self.context)
             .field("limits", &self.limits)
+            .field("work_caps", &self.work_caps)
             .field("syntax_limits", &self.syntax_limits)
             .field("stats", &self.stats)
             .field("phase", &self.phase())

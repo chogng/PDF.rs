@@ -21,5 +21,5 @@ pub use job::{
     NeverCancelled, ObjectCancellation, ObjectJobContext, ObjectPhase, ObjectPoll, ObjectStats,
     OpenObjectJob,
 };
-pub use limits::{ObjectLimitConfig, ObjectLimits};
+pub use limits::{ObjectLimitConfig, ObjectLimits, ObjectWorkCaps};
 pub use model::{FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue};

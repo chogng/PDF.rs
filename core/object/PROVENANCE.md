@@ -70,6 +70,12 @@ claim.
   new logical exact request and each complete parse window is charged cumulatively across
   geometric retries, including requests satisfied from an existing cache or ending in source
   failure.
+- `ObjectWorkCaps` lets a parent composition job lend a nonzero cumulative read/parse slice that
+  cannot exceed either the fixed object-work hard ceiling or the object's configured totals. The
+  legacy constructor supplies the configured totals unchanged. A scoped read is charged before
+  `ByteSource::poll`, and a scoped parse window is charged before parser invocation, so exhausted
+  parent work cannot perform the rejected lower-layer operation. The scoped caps do not weaken
+  per-object envelope, boundary, stream, source, or syntax limits.
 - Cancellation is checked before source polls and phase transitions. Syntax loops use fixed
   256-iteration probes, and the object-owned `/Length` scan applies the same bound. Cancellation,
   malformed input, unsupported behavior, resource exhaustion, source failure, and internal
@@ -112,7 +118,10 @@ header and stream spans, xref-number/generation/token-boundary checks, two-phase
 tickets, disconnected envelope/boundary supply with a missing payload middle, request priority,
 direct `/Length` policies, strict LF/CRLF boundaries, incorrect lengths without repair scanning,
 cumulative read/parse budgets, cancellation, full snapshot mismatch, one-shot lifecycle, and
-redacted diagnostics. A framing matrix exhausts every initial envelope/boundary split and
+redacted diagnostics. Scoped-work tests cover positive minima and hard ceilings, zero and
+hard-ceiling-plus-one rejection, caps above configured totals, exact and one-less read/parse work
+for both direct and stream objects, getters, and equivalence of the legacy constructor with
+explicit configured-total caps. A framing matrix exhausts every initial envelope/boundary split and
 direct/stream candidate physical-bound cut for the bootstrap fixtures,
 and exact and one-less runtime resource boundaries. Physical-bound cases assert stable
 `RPE-OBJECT-0021` policy and terminal re-poll behavior.
@@ -161,3 +170,5 @@ Native/external-engine differential is claimed in this bootstrap slice.
 - 2026-07-13: Added independent candidate physical bounds, PDF-whitespace predecessor policy,
   stable `RPE-OBJECT-0021` crossing diagnostics, and document-index governance without claiming
   top-level attestation.
+- 2026-07-13: Added parent-lent cumulative object work caps with pre-poll/pre-parse charging and
+  exact direct/stream boundary coverage.

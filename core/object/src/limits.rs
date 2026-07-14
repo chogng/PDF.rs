@@ -6,6 +6,55 @@ const HARD_MAX_BOUNDARY_BYTES: u64 = 4 * 1024 * 1024;
 const HARD_MAX_STREAM_BYTES: u64 = 1024 * 1024 * 1024;
 const HARD_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
+/// Validated parent-supplied cumulative work caps for one object job.
+///
+/// These caps can be smaller than the object's configured envelope and boundary windows. The job
+/// checks the read cap before polling its byte source and the parse cap before invoking a parser,
+/// allowing a parent composition job to lend only its remaining aggregate budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectWorkCaps {
+    max_read_bytes: u64,
+    max_parse_bytes: u64,
+}
+
+impl ObjectWorkCaps {
+    /// Validates nonzero cumulative caps beneath the fixed object-work hard ceiling.
+    pub fn new(max_read_bytes: u64, max_parse_bytes: u64) -> Result<Self, ObjectError> {
+        if max_read_bytes == 0
+            || max_read_bytes > HARD_MAX_TOTAL_BYTES
+            || max_parse_bytes == 0
+            || max_parse_bytes > HARD_MAX_TOTAL_BYTES
+        {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::InvalidLimits,
+                None,
+                None,
+            ));
+        }
+        Ok(Self {
+            max_read_bytes,
+            max_parse_bytes,
+        })
+    }
+
+    pub(crate) const fn from_limits(limits: ObjectLimits) -> Self {
+        Self {
+            max_read_bytes: limits.max_total_read_bytes,
+            max_parse_bytes: limits.max_total_parse_bytes,
+        }
+    }
+
+    /// Returns the cumulative exact-read ceiling lent to this job.
+    pub const fn max_read_bytes(self) -> u64 {
+        self.max_read_bytes
+    }
+
+    /// Returns the cumulative complete-window parse ceiling lent to this job.
+    pub const fn max_parse_bytes(self) -> u64 {
+        self.max_parse_bytes
+    }
+}
+
 /// Unvalidated deterministic indirect-object framing limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ObjectLimitConfig {
