@@ -6,13 +6,13 @@ use pdf_rs_bytes::{ByteSource, DataTicket, JobId, ResumeCheckpoint, SmallRanges,
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{
-    OpenXrefJob, XrefCancellation, XrefError, XrefJobContext, XrefLimits, XrefPhase, XrefPoll,
-    XrefStats,
+    OpenXrefJob, XrefCancellation, XrefError, XrefErrorCategory, XrefJobContext, XrefLimits,
+    XrefPhase, XrefPoll, XrefStats,
 };
 
 use crate::{
     AttestRevisionJob, AttestedRevisionIndex, CandidateRevisionIndex, DocumentCancellation,
-    DocumentError, DocumentErrorCode, DocumentIndexStats, DocumentLimits,
+    DocumentError, DocumentErrorCategory, DocumentErrorCode, DocumentIndexStats, DocumentLimits,
     RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPhase,
     RevisionAttestationPoll, RevisionAttestationStats, RevisionId,
 };
@@ -167,6 +167,16 @@ pub enum StrictBaseOpenError {
 }
 
 impl StrictBaseOpenError {
+    /// Returns whether the failing child reported normal runtime cancellation.
+    pub const fn is_cancelled(self) -> bool {
+        match self {
+            Self::Xref(error) => matches!(error.category(), XrefErrorCategory::Cancellation),
+            Self::Document(error) => {
+                matches!(error.category(), DocumentErrorCategory::Cancellation)
+            }
+        }
+    }
+
     /// Returns the complete xref error when the xref phase failed.
     pub const fn xref(self) -> Option<XrefError> {
         match self {

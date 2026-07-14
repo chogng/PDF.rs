@@ -1,5 +1,6 @@
 use std::fmt;
 use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use pdf_rs_bytes::{
     ByteSource, DataTicket, JobId, RangeResponse, RangeStore, RangeStoreLimits, ResumeCheckpoint,
@@ -7,6 +8,26 @@ use pdf_rs_bytes::{
 };
 
 use crate::RangeResumeError;
+
+static NEXT_RANGE_RESUME_ARBITER_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Opaque process-local identity of one Range-resume arbiter.
+///
+/// Identities are allocated only by [`RangeResumeArbiter::new`] and bind
+/// move-only permits to the arbiter that observed ticket completion.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RangeResumeArbiterId(u64);
+
+impl RangeResumeArbiterId {
+    fn allocate() -> Result<Self, RangeResumeError> {
+        NEXT_RANGE_RESUME_ARBITER_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map(Self)
+            .map_err(|_| RangeResumeError::arbiter_failed())
+    }
+}
 
 /// Opaque generation retained with one resumable runtime job.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -97,15 +118,42 @@ pub enum RangeResumeCancelOutcome {
 }
 
 /// One one-shot scheduler disposition taken from the arbiter.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum RangeResumeDispatch {
-    /// The completed ticket produced this scheduler target.
-    ///
-    /// The scheduler must compare the enclosed generation with its current job
-    /// generation before running parser code. Taking the target never executes it.
-    Requeue(RangeResumeTarget),
+    /// The completed ticket produced this one-shot resume permit.
+    Requeue(RangeResumePermit),
     /// No completed target remains queued.
     Empty,
+}
+
+/// Move-only evidence that one exact Range ticket completed for a resume target.
+///
+/// Only [`RangeResumeArbiter`] can create a permit. Taking it removes the
+/// underlying registration, and consuming code must still validate the issuing
+/// arbiter plus the ticket, job, checkpoint, and generation before running
+/// parser code.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RangeResumePermit {
+    arbiter_id: RangeResumeArbiterId,
+    ticket: DataTicket,
+    target: RangeResumeTarget,
+}
+
+impl RangeResumePermit {
+    /// Returns the opaque arbiter identity that issued this permit.
+    pub const fn arbiter_id(&self) -> RangeResumeArbiterId {
+        self.arbiter_id
+    }
+
+    /// Returns the completed byte ticket carried by this one-shot permit.
+    pub const fn ticket(&self) -> DataTicket {
+        self.ticket
+    }
+
+    /// Returns the complete job, checkpoint, and generation resume target.
+    pub const fn target(&self) -> RangeResumeTarget {
+        self.target
+    }
 }
 
 /// Current source and scheduler resources owned exclusively by one arbiter.
@@ -419,6 +467,7 @@ enum RangeResumeState {
 /// dispatch, and close. That models one logical session actor and prevents those
 /// transitions from racing a borrowed byte source in safe Rust.
 pub struct RangeResumeArbiter {
+    arbiter_id: RangeResumeArbiterId,
     snapshot: SourceSnapshot,
     state: RangeResumeState,
 }
@@ -429,6 +478,7 @@ impl RangeResumeArbiter {
         snapshot: SourceSnapshot,
         store_limits: RangeStoreLimits,
     ) -> Result<Self, RangeResumeError> {
+        let arbiter_id = RangeResumeArbiterId::allocate()?;
         let registration_limit = store_limits.max_total_subscriptions();
         let mut registrations = Vec::new();
         registrations
@@ -448,6 +498,7 @@ impl RangeResumeArbiter {
         let store =
             RangeStore::new(snapshot, store_limits).map_err(RangeResumeError::from_source)?;
         Ok(Self {
+            arbiter_id,
             snapshot,
             state: RangeResumeState::Active(ActiveRangeResume {
                 store,
@@ -460,6 +511,11 @@ impl RangeResumeArbiter {
                 cached_bytes: 0,
             }),
         })
+    }
+
+    /// Returns the opaque identity carried by every permit from this arbiter.
+    pub const fn arbiter_id(&self) -> RangeResumeArbiterId {
+        self.arbiter_id
     }
 
     /// Returns the immutable source snapshot retained across every phase.
@@ -658,11 +714,11 @@ impl RangeResumeArbiter {
         })
     }
 
-    /// Takes the earliest completed target exactly once without executing it.
+    /// Takes the earliest completed target as a move-only permit exactly once.
     ///
-    /// The returned target carries the captured generation. The scheduler must
-    /// compare it with current job state before requeueing parser work; a stale
-    /// target is simply dropped after this one-shot take.
+    /// The returned permit carries the completed ticket and captured target. The
+    /// execution owner must compare all identities with current job state before
+    /// polling parser code; a stale permit is simply consumed and dropped.
     pub fn take_requeue(&mut self) -> Result<RangeResumeDispatch, RangeResumeError> {
         let active = match &mut self.state {
             RangeResumeState::Active(active) => active,
@@ -686,7 +742,11 @@ impl RangeResumeArbiter {
             return Err(RangeResumeError::arbiter_failed());
         };
         active.ready_requeues = remaining;
-        Ok(RangeResumeDispatch::Requeue(registration.target))
+        Ok(RangeResumeDispatch::Requeue(RangeResumePermit {
+            arbiter_id: self.arbiter_id,
+            ticket: registration.ticket,
+            target: registration.target,
+        }))
     }
 
     /// Returns current owned resources, which are all zero after any terminal phase.

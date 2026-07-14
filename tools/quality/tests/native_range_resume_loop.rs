@@ -183,10 +183,15 @@ fn native_range_resume_loop_is_out_of_order_one_shot_and_terminal_safe() {
                     if index == last {
                         assert_eq!(supplied.ready_tickets(), 1);
                         assert_eq!(supplied.queued_requeues(), 1);
-                        assert_eq!(
-                            arbiter.take_requeue().unwrap(),
-                            RangeResumeDispatch::Requeue(target)
-                        );
+                        let permit = match arbiter.take_requeue().unwrap() {
+                            RangeResumeDispatch::Requeue(permit) => permit,
+                            RangeResumeDispatch::Empty => {
+                                panic!("a complete ticket must yield one resume permit")
+                            }
+                        };
+                        assert_eq!(permit.arbiter_id(), arbiter.arbiter_id());
+                        assert_eq!(permit.ticket(), ticket);
+                        assert_eq!(permit.target(), target);
                         assert_eq!(
                             arbiter.take_requeue().unwrap(),
                             RangeResumeDispatch::Empty,

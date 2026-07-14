@@ -469,6 +469,7 @@ fn xref_and_attestation_cancellation_are_terminal_without_publication() {
         other => panic!("pre-cancellation must stop xref opening: {other:?}"),
     };
     assert_eq!(pre_error.xref().unwrap().code(), XrefErrorCode::Cancelled);
+    assert!(pre_error.is_cancelled());
     assert_eq!(pre.stats().xref().read_bytes(), 0);
     assert_eq!(pre.stats().index(), None);
     assert_eq!(pre.phase(), StrictBaseOpenPhase::Failed);
@@ -501,6 +502,7 @@ fn xref_and_attestation_cancellation_are_terminal_without_publication() {
                     error.document().unwrap().code(),
                     DocumentErrorCode::Cancelled
                 );
+                assert!(error.is_cancelled());
                 assert_eq!(mid.stats(), charged);
                 assert_eq!(mid.phase(), StrictBaseOpenPhase::Failed);
 

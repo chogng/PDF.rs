@@ -22,6 +22,16 @@ pub(crate) struct Fixture {
     snapshot: SourceSnapshot,
 }
 
+impl Fixture {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) const fn snapshot(&self) -> SourceSnapshot {
+        self.snapshot
+    }
+}
+
 fn snapshot(len: u64, seed: u8) -> SourceSnapshot {
     SourceSnapshot::new(
         SourceIdentity::new(
@@ -89,15 +99,15 @@ pub(crate) fn object_ref(number: u32) -> ObjectRef {
 
 pub(crate) fn store_for(fixture: &Fixture) -> RangeStore {
     let store =
-        RangeStore::new(fixture.snapshot, Default::default()).expect("store limits validate");
+        RangeStore::new(fixture.snapshot(), Default::default()).expect("store limits validate");
     let range = ByteRange::new(
         0,
-        u64::try_from(fixture.bytes.len()).expect("fixture length fits u64"),
+        u64::try_from(fixture.bytes().len()).expect("fixture length fits u64"),
     )
     .expect("fixture range is nonempty");
     store
         .supply(
-            RangeResponse::new(fixture.snapshot, range, fixture.bytes.clone())
+            RangeResponse::new(fixture.snapshot(), range, fixture.bytes().to_vec())
                 .expect("fixture response matches its range"),
         )
         .expect("fixture fits byte-store limits");
@@ -107,7 +117,7 @@ pub(crate) fn store_for(fixture: &Fixture) -> RangeStore {
 pub(crate) fn ready_index(fixture: &Fixture) -> AttestedRevisionIndex {
     let store = store_for(fixture);
     let mut xref = OpenXrefJob::new(
-        fixture.snapshot,
+        fixture.snapshot(),
         XrefJobContext::new(
             JobId::new(101),
             ResumeCheckpoint::new(102),

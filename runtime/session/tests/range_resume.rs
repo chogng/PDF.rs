@@ -5,8 +5,8 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_session::{
     RangeResumeArbiter, RangeResumeCancelOutcome, RangeResumeDispatch, RangeResumeErrorCategory,
-    RangeResumeErrorCode, RangeResumeGeneration, RangeResumePhase, RangeResumeRecoverability,
-    RangeResumeRegistrationOutcome, RangeResumeTarget,
+    RangeResumeErrorCode, RangeResumeGeneration, RangeResumePermit, RangeResumePhase,
+    RangeResumeRecoverability, RangeResumeRegistrationOutcome, RangeResumeTarget,
 };
 
 fn snapshot(seed: u8, len: Option<u64>) -> SourceSnapshot {
@@ -86,6 +86,17 @@ fn byte_source_error(arbiter: &RangeResumeArbiter) -> pdf_rs_session::RangeResum
     }
 }
 
+fn take_permit(arbiter: &mut RangeResumeArbiter) -> RangeResumePermit {
+    let expected_arbiter = arbiter.arbiter_id();
+    match arbiter.take_requeue().unwrap() {
+        RangeResumeDispatch::Requeue(permit) => {
+            assert_eq!(permit.arbiter_id(), expected_arbiter);
+            permit
+        }
+        RangeResumeDispatch::Empty => panic!("expected one completed Range resume permit"),
+    }
+}
+
 #[test]
 fn out_of_order_supply_queues_one_requeue_and_close_drops_all_resources() {
     let bound = snapshot(0x31, Some(8));
@@ -120,10 +131,9 @@ fn out_of_order_supply_queues_one_requeue_and_close_drops_all_resources() {
     assert_eq!(arbiter.resources().pending_tickets(), 0);
     assert_eq!(arbiter.resources().ready_requeues(), 1);
 
-    assert_eq!(
-        arbiter.take_requeue().unwrap(),
-        RangeResumeDispatch::Requeue(resume)
-    );
+    let permit = take_permit(&mut arbiter);
+    assert_eq!(permit.ticket(), ticket);
+    assert_eq!(permit.target(), resume);
     assert_eq!(arbiter.take_requeue().unwrap(), RangeResumeDispatch::Empty);
     assert_eq!(arbiter.resources().registrations(), 0);
     match arbiter.byte_source().unwrap().poll(read) {
@@ -183,13 +193,13 @@ fn reverse_ticket_completion_preserves_sequence_for_scheduler_generation_validat
             .queued_requeues(),
         1
     );
-    let earliest = arbiter.take_requeue().unwrap();
-    assert_eq!(earliest, RangeResumeDispatch::Requeue(second_target));
+    let earliest = take_permit(&mut arbiter);
+    assert_eq!(earliest.ticket(), second_ticket);
+    assert_eq!(earliest.target(), second_target);
     assert_ne!(second_target.generation(), RangeResumeGeneration::new(5));
-    assert_eq!(
-        arbiter.take_requeue().unwrap(),
-        RangeResumeDispatch::Requeue(first_target)
-    );
+    let next = take_permit(&mut arbiter);
+    assert_eq!(next.ticket(), first_ticket);
+    assert_eq!(next.target(), first_target);
     assert_eq!(arbiter.resources().registrations(), 0);
 }
 
@@ -222,10 +232,9 @@ fn exact_cancel_leaves_shared_ticket_live_and_never_requeues_cancelled_job() {
 
     let supplied = arbiter.supply(response(bound, 0, b"ABCD")).unwrap();
     assert_eq!(supplied.queued_requeues(), 1);
-    assert_eq!(
-        arbiter.take_requeue().unwrap(),
-        RangeResumeDispatch::Requeue(second)
-    );
+    let permit = take_permit(&mut arbiter);
+    assert_eq!(permit.ticket(), second_ticket);
+    assert_eq!(permit.target(), second);
     assert_eq!(arbiter.take_requeue().unwrap(), RangeResumeDispatch::Empty);
 }
 
@@ -376,10 +385,9 @@ fn queued_metadata_is_bounded_and_rejected_subscription_is_rolled_back() {
     assert_eq!(arbiter.resources().registrations(), 1);
     assert_eq!(arbiter.resources().pending_tickets(), 0);
 
-    assert_eq!(
-        arbiter.take_requeue().unwrap(),
-        RangeResumeDispatch::Requeue(first)
-    );
+    let permit = take_permit(&mut arbiter);
+    assert_eq!(permit.ticket(), first_ticket);
+    assert_eq!(permit.target(), first);
     assert_eq!(arbiter.resources().registrations(), 0);
     let replacement_ticket = pending(&arbiter, request(4, 4, 2, 20));
     arbiter
