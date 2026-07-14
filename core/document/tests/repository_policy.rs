@@ -78,6 +78,69 @@ fn product_document_core_has_only_approved_sibling_dependencies_and_no_platform_
 }
 
 #[test]
+fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+
+    let feature = record_with_id(&feature_map, "feature", "core.strict-base-open")
+        .expect("strict base-open feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.strict-base-open.v1\"",
+        "RPE-ARCH-001/5.4",
+        "RPE-STD-002/6-7",
+        "RPE-STD-005/5-9",
+        "modules = [\"core/document\"]",
+        "core/document::strict_base_open",
+        "core/document::repository_policy",
+        "tools/quality::native_object_loop",
+        "tools/quality::native_range_resume_loop",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "strict base-open feature must contain {required:?}"
+        );
+    }
+
+    let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
+        .expect("strict base-revision architecture requirement must exist");
+    for required in [
+        "core.strict-base-open",
+        "core/document::strict_base_open",
+        "core/document::repository_policy",
+        "tools/quality::native_range_resume_loop",
+        "status = \"partial\"",
+        "product entry that composes xref discovery, candidate construction, and attestation under one JobId and five distinct checkpoints",
+        "preserves complete lower xref or document errors and cumulative phase accounting",
+        "propagates Pending without double charging",
+        "publishes only the sealed `AttestedRevisionIndex`",
+        "neither the xref section nor candidate index crosses the entry boundary",
+        "Component and generated-PDF quality tests cover all five checkpoints",
+        "reverse physical delivery",
+        "upper-half-before-lower delivery",
+        "cancellation in both child layers",
+        "successful direct handoff into document services",
+        "complete Session lifecycle and scheduler execution",
+        "does not claim M1 exit",
+    ] {
+        assert!(
+            requirement.contains(required),
+            "strict base-revision mapping must contain {required:?}"
+        );
+    }
+}
+
+#[test]
 fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -89,8 +152,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.28.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.28.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.29.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.29.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

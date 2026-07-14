@@ -1,7 +1,6 @@
 use pdf_rs_bytes::{
-    ByteRange, ByteSource, JobId, RangeResponse, RangeStore, RequestPriority, ResumeCheckpoint,
-    SourceIdentity, SourceRevision, SourceSnapshot, SourceStableId, SourceValidator,
-    SourceValidatorKind,
+    ByteRange, JobId, RangeResponse, RangeStore, RequestPriority, ResumeCheckpoint, SourceIdentity,
+    SourceRevision, SourceSnapshot, SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_cache::{
     ReadyAdmission, ReadyLookup, ReadyStoreBinding, ReadyStoreEpoch, ReadyStoreKey,
@@ -9,17 +8,18 @@ use pdf_rs_cache::{
 };
 use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_document::{
-    AttestRevisionJob, AttestedObject, AttestedObjectJobContext, AttestedObjectPoll,
-    CandidateRevisionIndex, DocumentLimits, NeverCancelled as NeverCancelledDocument,
-    ObjectAttestationKind, PageCountPoll, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
-    PageTreePhase, ReferenceChainJobContext, ReferenceChainLimits, ReferenceChainPoll,
-    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, DocumentLimits,
+    NeverCancelled as NeverCancelledDocument, ObjectAttestationKind, OpenStrictBaseRevisionJob,
+    PageCountPoll, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits, PageTreePhase,
+    ReferenceChainJobContext, ReferenceChainLimits, ReferenceChainPoll,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionId, StrictBaseOpenContext,
+    StrictBaseOpenLimits, StrictBaseOpenPhase, StrictBaseOpenPoll,
 };
 use pdf_rs_generate::generate_one_page_pdf;
 use pdf_rs_object::{IndirectObjectValue, ObjectLimits, ObjectWorkCaps};
 use pdf_rs_session::{ReadySessionOwner, ReadySessionPhase};
 use pdf_rs_syntax::{ObjectRef, PdfDictionary, SyntaxLimits, SyntaxObject};
-use pdf_rs_xref::{OpenXrefJob, XrefEntryKind, XrefJobContext, XrefLimits, XrefPoll, XrefSection};
+use pdf_rs_xref::{XrefJobContext, XrefLimits, XrefPhase};
 
 const PDF_BYTES: u64 = 612;
 const PDF_SHA256: &str = "9c819e549afcc89d03b380c3c1bd47128aa2b70ae30a35245e6a0e30132875db";
@@ -115,26 +115,6 @@ fn dictionary_value<'a>(dictionary: &'a PdfDictionary, key: &[u8]) -> &'a Syntax
         .get(key)
         .unwrap_or_else(|| panic!("canonical dictionary must contain {key:?}"))
         .value()
-}
-
-fn parse_xref(store: &RangeStore) -> XrefSection {
-    let mut job = OpenXrefJob::new(
-        store.snapshot(),
-        XrefJobContext::new(
-            JobId::new(1),
-            ResumeCheckpoint::new(10),
-            ResumeCheckpoint::new(11),
-        ),
-        XrefLimits::default(),
-        SyntaxLimits::default(),
-    )
-    .expect("canonical xref job configuration is valid");
-
-    match job.poll(store, &pdf_rs_xref::NeverCancelled) {
-        XrefPoll::Ready(section) => section,
-        XrefPoll::Pending { .. } => panic!("a fully supplied canonical PDF must not suspend xref"),
-        XrefPoll::Failed(error) => panic!("canonical xref must parse: {error}"),
-    }
 }
 
 #[test]
@@ -292,83 +272,52 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
         )
         .expect("canonical bytes fit the range store limits");
 
-    let section = parse_xref(&store);
-    assert_eq!(section.snapshot(), source);
-    assert_eq!(section.startxref(), STARTXREF);
-    assert_eq!(section.span().start(), STARTXREF);
-    assert_eq!(section.span().end_exclusive(), 591);
-    assert_eq!(section.declared_size(), 5);
-    assert_eq!(
-        (section.root().number(), section.root().generation()),
-        (1, 0)
-    );
-    assert_eq!(
-        (
-            section.trailer().span().start(),
-            section.trailer().span().end_exclusive()
-        ),
-        (566, 591)
-    );
-
-    let in_use_offsets = section
-        .entries()
-        .iter()
-        .filter_map(|entry| match entry.kind() {
-            XrefEntryKind::Free { .. } => None,
-            XrefEntryKind::InUse { offset } => Some(offset),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(in_use_offsets, OBJECT_OFFSETS);
-
-    let candidate_index = CandidateRevisionIndex::from_xref(
-        &section,
-        RevisionId::new(1),
-        DocumentLimits::default(),
-        &NeverCancelledDocument,
-    )
-    .expect("canonical xref metadata yields a bounded candidate revision index");
-    assert_eq!(candidate_index.snapshot(), source);
-    assert_eq!(candidate_index.revision_id(), RevisionId::new(1));
-    assert_eq!(candidate_index.startxref(), STARTXREF);
-    assert_eq!(candidate_index.root(), ObjectRef::new(1, 0).unwrap());
-    assert_eq!(candidate_index.stats().total_entries(), 5);
-    assert_eq!(candidate_index.stats().in_use_entries(), 4);
-    assert_eq!(candidate_index.physical_intervals().len(), 4);
-    for (index, interval) in candidate_index.physical_intervals().iter().enumerate() {
-        let number = u32::try_from(index + 1).unwrap();
-        assert_eq!(interval.revision_id(), RevisionId::new(1));
-        assert_eq!(interval.reference(), ObjectRef::new(number, 0).unwrap());
-        assert_eq!(interval.xref_offset(), OBJECT_OFFSETS[index]);
-        assert_eq!(interval.object_upper_bound(), OBJECT_UPPER_BOUNDS[index]);
-        assert_eq!(
-            interval.len(),
-            OBJECT_UPPER_BOUNDS[index] - OBJECT_OFFSETS[index]
-        );
-    }
-
-    let mut attestation_job = AttestRevisionJob::new(
-        candidate_index,
-        RevisionAttestationJobContext::new(
+    let open_context = StrictBaseOpenContext::new(
+        XrefJobContext::new(
             JobId::new(90),
             ResumeCheckpoint::new(91),
             ResumeCheckpoint::new(92),
+        ),
+        RevisionAttestationJobContext::new(
+            JobId::new(90),
             ResumeCheckpoint::new(93),
+            ResumeCheckpoint::new(94),
+            ResumeCheckpoint::new(95),
             RequestPriority::VisiblePage,
         ),
-        RevisionAttestationLimits::default(),
-        ObjectLimits::default(),
-        SyntaxLimits::default(),
+    );
+    let mut open_job = OpenStrictBaseRevisionJob::new(
+        source,
+        RevisionId::new(1),
+        open_context,
+        StrictBaseOpenLimits::new(
+            XrefLimits::default(),
+            DocumentLimits::default(),
+            RevisionAttestationLimits::default(),
+            ObjectLimits::default(),
+            SyntaxLimits::default(),
+        ),
     )
-    .expect("canonical revision-attestation job configuration is valid");
-    let attested = match attestation_job.poll(&store, &NeverCancelledDocument) {
-        RevisionAttestationPoll::Ready(index) => index,
-        RevisionAttestationPoll::Pending { .. } => {
-            panic!("a fully supplied canonical PDF must not suspend revision attestation")
+    .expect("canonical strict base-open configuration is valid");
+    assert_eq!(open_job.phase(), StrictBaseOpenPhase::Xref(XrefPhase::Tail));
+    let attested = match open_job.poll(&store, &NeverCancelledDocument) {
+        StrictBaseOpenPoll::Ready(index) => index,
+        StrictBaseOpenPoll::Pending { .. } => {
+            panic!("a fully supplied canonical PDF must not suspend strict base opening")
         }
-        RevisionAttestationPoll::Failed(error) => {
-            panic!("canonical strict base revision must attest: {error}")
+        StrictBaseOpenPoll::Failed(error) => {
+            panic!("canonical strict base revision must open and attest: {error}")
         }
     };
+    assert_eq!(open_job.phase(), StrictBaseOpenPhase::Ready);
+    let open_stats = open_job.stats();
+    assert_eq!(open_stats.xref().entries(), 5);
+    let index_stats = open_stats
+        .index()
+        .expect("successful strict base opening retains candidate-index accounting");
+    assert_eq!(index_stats.total_entries(), 5);
+    assert_eq!(index_stats.in_use_entries(), 4);
+    assert_eq!(open_stats.attestation().objects_attested(), 4);
 
     assert_eq!(attested.snapshot(), source);
     assert_eq!(attested.revision_id(), RevisionId::new(1));
@@ -384,10 +333,11 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
         ),
         (0, 8, 1, 7)
     );
-    assert_eq!(attested.index_stats().total_entries(), 5);
+    assert_eq!(attested.index_stats(), index_stats);
     assert_eq!(attested.object_limits(), ObjectLimits::default());
     assert_eq!(attested.syntax_limits(), SyntaxLimits::default());
     let stats = attested.attestation_stats();
+    assert_eq!(stats, open_stats.attestation());
     assert_eq!(stats.objects_attested(), 4);
     assert!(stats.trivia_read_bytes() > 0);
     assert!(stats.trivia_scan_bytes() > 0);
@@ -454,7 +404,6 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     assert!(native_pdfium_page_count_smoke_equal);
 
     let objects = attested.object_attestations();
-    assert_eq!(objects.len(), 4);
     for (index, object) in objects.iter().enumerate() {
         let number = u32::try_from(index + 1).unwrap();
         assert_eq!(object.revision_id(), RevisionId::new(1));
@@ -486,7 +435,7 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     for pair in objects.windows(2) {
         assert!(pair[0].object_span().end_exclusive() <= pair[1].object_span().start());
     }
-    assert!(objects[3].object_span().end_exclusive() <= section.startxref());
+    assert!(objects[3].object_span().end_exclusive() <= STARTXREF);
 
     for (index, object) in objects[..3].iter().enumerate() {
         assert_eq!(object.kind(), ObjectAttestationKind::Dictionary);
@@ -810,7 +759,7 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     );
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true strict_catalog_validated=true strict_page_tree_counted=true native_page_count={native_page_count} page_tree_objects_started={} page_tree_nodes_started={} page_tree_max_depth={} page_tree_reserved_traversal_bytes={} reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_owner_closed=true session_ready_owner_resources_zero=true session_ready_owner_close_idempotent=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} ready_store_released_resident_bytes={ready_store_released_resident_bytes} pdfium_build_readiness_pageinfo_pages_processed={pdfium_pages_processed} native_pdfium_page_count_smoke_equal={native_pdfium_page_count_smoke_equal} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false",
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_open_composed=true strict_base_revision_attested=true attested_object_access=true strict_catalog_validated=true strict_page_tree_counted=true native_page_count={native_page_count} page_tree_objects_started={} page_tree_nodes_started={} page_tree_max_depth={} page_tree_reserved_traversal_bytes={} reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_owner_closed=true session_ready_owner_resources_zero=true session_ready_owner_close_idempotent=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} ready_store_released_resident_bytes={ready_store_released_resident_bytes} pdfium_build_readiness_pageinfo_pages_processed={pdfium_pages_processed} native_pdfium_page_count_smoke_equal={native_pdfium_page_count_smoke_equal} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false",
         page_tree_stats.objects_started(),
         page_tree_stats.nodes_started(),
         page_tree_stats.max_depth(),
@@ -820,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.28.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.28.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.29.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.29.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -833,6 +782,17 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(feature.contains("tests = [\"tools/quality::native_object_loop\"]"));
     assert!(feature.contains("fuzz_targets = []"));
     assert!(feature.contains("benchmarks = []"));
+
+    let range_feature = record_with_id(FEATURE_MAP, "feature", "quality.native-range-resume-loop")
+        .expect("the Native Range-resume-loop feature record must exist");
+    assert!(range_feature.contains("owner = \"quality-corpus\""));
+    assert!(range_feature.contains("state = \"PLANNED\""));
+    assert!(range_feature.contains("profile = \"m1.native-range-resume-loop.v1\""));
+    assert!(range_feature.contains("RPE-ARCH-001/15.3/M1"));
+    assert!(range_feature.contains("modules = [\"tools/quality\"]"));
+    assert!(range_feature.contains("tests = [\"tools/quality::native_range_resume_loop\"]"));
+    assert!(range_feature.contains("fuzz_targets = []"));
+    assert!(range_feature.contains("benchmarks = []"));
 
     let candidate_feature =
         record_with_id(FEATURE_MAP, "feature", "core.base-revision-candidate-index")
@@ -861,6 +821,19 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(attestation_feature.contains("tools/quality::native_object_loop"));
     assert!(attestation_feature.contains("fuzz_targets = []"));
     assert!(attestation_feature.contains("benchmarks = []"));
+
+    let strict_open_feature = record_with_id(FEATURE_MAP, "feature", "core.strict-base-open")
+        .expect("the strict base-open feature record must exist");
+    assert!(strict_open_feature.contains("owner = \"parser-security\""));
+    assert!(strict_open_feature.contains("state = \"PLANNED\""));
+    assert!(strict_open_feature.contains("profile = \"m1.strict-base-open.v1\""));
+    assert!(strict_open_feature.contains("modules = [\"core/document\"]"));
+    assert!(strict_open_feature.contains("core/document::strict_base_open"));
+    assert!(strict_open_feature.contains("core/document::repository_policy"));
+    assert!(strict_open_feature.contains("tools/quality::native_object_loop"));
+    assert!(strict_open_feature.contains("tools/quality::native_range_resume_loop"));
+    assert!(strict_open_feature.contains("fuzz_targets = []"));
+    assert!(strict_open_feature.contains("benchmarks = []"));
 
     let access_feature = record_with_id(FEATURE_MAP, "feature", "core.attested-object-access")
         .expect("the proof-preserving object-access feature record must exist");
@@ -955,6 +928,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "RPE-ARCH-001/14.2",
         "RPE-ARCH-001/12.6",
         "RPE-ARCH-001/15.3/M0",
+        "RPE-ARCH-001/15.3/M1",
     ] {
         let requirement = record_with_id(SPEC_MAP, "requirement", requirement_id)
             .unwrap_or_else(|| panic!("requirement {requirement_id} must exist"));
@@ -970,6 +944,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     let m0_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/15.3/M0")
         .expect("the M0 quality-infrastructure requirement must exist");
     assert!(m0_requirement.contains("\"quality.native-object-loop\""));
+    assert!(m0_requirement.contains("formal-strict-base-open"));
     assert!(m0_requirement.contains("ReadySessionOwner"));
     assert!(m0_requirement.contains("page_count=1"));
     assert!(m0_requirement.contains("pages_processed=1"));

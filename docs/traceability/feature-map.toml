@@ -1,5 +1,5 @@
 schema = 1
-version = "0.28.0"
+version = "0.29.0"
 status = "active"
 
 [[feature]]
@@ -9,7 +9,7 @@ state = "PLANNED"
 profile = "m1.range-store.v1"
 clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-STD-002/7", "RPE-STD-005/8"]
 modules = ["core/bytes"]
-tests = ["core/bytes::range_store", "core/bytes::repository_policy"]
+tests = ["core/bytes::range_store", "core/bytes::repository_policy", "runtime/session::range_resume", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -70,6 +70,18 @@ profile = "m1.strict-base-revision-attestation.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
 modules = ["core/document"]
 tests = ["core/document::revision_attestation", "core/document::revision_attestation_limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-base-open"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.strict-base-open.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::strict_base_open", "core/document::repository_policy", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -147,6 +159,18 @@ benchmarks = []
 introduced_in = "0.1.0"
 
 [[feature]]
+id = "runtime.range-resume-arbiter"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.range-resume-arbiter.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::range_resume", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
 id = "runtime.session-ready-store"
 owner = "runtime-platform"
 state = "PLANNED"
@@ -177,7 +201,7 @@ state = "PLANNED"
 profile = "m0.one-page-table.v1"
 clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
 modules = ["tools/generate"]
-tests = ["tools/generate::tests", "tools/quality/tests/parser_mutation_smoke.rs", "tools/quality::native_object_loop", "infrastructure/synthetic-failure-bundle-001"]
+tests = ["tools/generate::tests", "tools/quality/tests/parser_mutation_smoke.rs", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop", "infrastructure/synthetic-failure-bundle-001"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -190,6 +214,18 @@ profile = "m1.native-object-loop.v1"
 clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
 modules = ["tools/quality"]
 tests = ["tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.native-range-resume-loop"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m1.native-range-resume-loop.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1"]
+modules = ["tools/quality"]
+tests = ["tools/quality::native_range_resume_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

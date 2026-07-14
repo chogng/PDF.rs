@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.28.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.28.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.29.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.29.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -104,6 +104,16 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(attestation.contains("core/document::revision_attestation"));
     assert!(attestation.contains("core/document::revision_attestation_limit_config"));
     assert!(attestation.contains("tools/quality::native_object_loop"));
+
+    let strict_open = record_with_id(&feature_map, "feature", "core.strict-base-open")
+        .expect("the strict base-open feature record must exist");
+    assert!(strict_open.contains("state = \"PLANNED\""));
+    assert!(strict_open.contains("profile = \"m1.strict-base-open.v1\""));
+    assert!(strict_open.contains("modules = [\"core/document\"]"));
+    assert!(strict_open.contains("core/document::strict_base_open"));
+    assert!(strict_open.contains("core/document::repository_policy"));
+    assert!(strict_open.contains("tools/quality::native_object_loop"));
+    assert!(strict_open.contains("tools/quality::native_range_resume_loop"));
 
     let access = record_with_id(&feature_map, "feature", "core.attested-object-access")
         .expect("the proof-preserving object-access feature record must exist");
@@ -155,17 +165,28 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("core/xref::source_error_policy"));
     assert!(requirement.contains("core/xref::repository_policy"));
     assert!(requirement.contains("\"core.strict-base-revision-attestation\""));
+    assert!(requirement.contains("\"core.strict-base-open\""));
     assert!(requirement.contains("\"core.attested-object-access\""));
     assert!(requirement.contains("\"core.attested-reference-chain-resolution\""));
     assert!(requirement.contains("\"core.attested-resident-footprint\""));
     assert!(requirement.contains("core/document::revision_attestation"));
     assert!(requirement.contains("core/document::revision_attestation_limit_config"));
+    assert!(requirement.contains("core/document::strict_base_open"));
     assert!(requirement.contains("core/document::attested_object_access"));
     assert!(requirement.contains("core/document::reference_chain_resolution"));
     assert!(requirement.contains("core/document::reference_chain_limit_config"));
     assert!(requirement.contains("tools/quality::native_object_loop"));
+    assert!(requirement.contains("tools/quality::native_range_resume_loop"));
     assert!(requirement.contains("header-to-startxref"));
     assert!(requirement.contains("line-terminated comments"));
+    assert!(requirement.contains("product entry that composes xref discovery, candidate construction, and attestation under one JobId and five distinct checkpoints"));
+    assert!(requirement.contains("publishes only the sealed `AttestedRevisionIndex`"));
+    assert!(
+        requirement
+            .contains("neither the xref section nor candidate index crosses the entry boundary")
+    );
+    assert!(requirement.contains("all five checkpoints"));
+    assert!(requirement.contains("successful direct handoff into document services"));
     assert!(requirement.contains("explicit caller-lent work cap"));
     assert!(requirement.contains("never a raw target"));
     assert!(requirement.contains("top-level direct indirect-reference value"));

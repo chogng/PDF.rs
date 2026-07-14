@@ -2,7 +2,9 @@
 
 `core/bytes` is the first Native product-core slice. It defines immutable source snapshots,
 checked non-empty byte ranges, stable source-bound byte slices, synchronous resumable read polling,
-and a bounded in-memory Range store. It performs no file, network, callback, or async-runtime I/O.
+and a bounded in-memory Range store. It performs no file, network, callback, scheduler, or
+async-runtime I/O. `RangeResumeArbiter` in `runtime/session` is the first product runtime owner of
+a private store; that wrapper does not move transport or scheduling semantics into this crate.
 
 # Semantic owner
 
@@ -59,6 +61,11 @@ semantic-coverage claim; the separate syntax and traditional-xref modules consum
   every later poll fails the poisoned session.
 - Integrity-class ticket failures poison the complete snapshot. Runtime must take terminal
   subscriptions before releasing a ticket, so no job/checkpoint can be silently discarded.
+- The runtime Range arbiter now consumes these public store operations through a private
+  snapshot-bound `RangeStore`: it registers the store's `(ticket, JobId, ResumeCheckpoint)`
+  subscription together with a runtime generation, supplies bytes only on later actor turns, and
+  converts returned terminal ticket identities into one-shot scheduler targets without invoking
+  parser code inline. Generation validation remains a scheduler responsibility outside this crate.
 
 # External observations
 
@@ -83,19 +90,25 @@ zero-copy slice lifetime, resident reclamation, a barrier-controlled supply/sour
 linearization race, and `Send + Sync`.
 
 A repository policy test scans product source for forbidden filesystem, network, async-runtime, and
-external-engine tokens and verifies the crate dependency table remains empty. No coverage-guided
-fuzz target or platform Range E2E exists in this initial M1 bootstrap slice.
+external-engine tokens and verifies the crate dependency table remains empty. The repository
+quality lane drives this store through the runtime arbiter with a generated PDF,
+upper-half-before-lower response delivery, exact cancellation, and source-change termination. No
+coverage-guided fuzz target or platform/network Range E2E exists in this M1 bootstrap slice.
 
 # Known deviations and unsupported cases
 
 - This is byte infrastructure only. The separate syntax, traditional-xref, and indirect-object
   framing bootstraps consume it, while repair, document services, and Native rendering remain
   unimplemented; no Native/PDFium differential claim is made.
-- Physical Range request merging, HTTP validation, local-file identity, retry policy, cancellation
-  arbitration, and parser requeueing belong to future runtime/platform integration.
+- Physical Range request merging, HTTP validation, local-file identity, retry policy, actual
+  scheduler execution, and transport callbacks belong to future runtime/platform integration. The
+  current session arbiter covers bounded registration, exact cancellation, and one-shot target
+  production only.
 - The store retains cached content until drop; it has no eviction policy. Cached and resident bytes
-  are bounded, while allocator metadata overhead is bounded indirectly by segment, ticket,
-  subscription, and missing-range counts.
+  are bounded. Backing capacity is charged directly, while the store's own segment, ticket,
+  subscription, and missing-range allocator metadata remains bounded only indirectly by their count
+  limits. The runtime arbiter separately charges its actual registration-vector capacity; that does
+  not convert the store's internal metadata into direct byte accounting.
 - A job/checkpoint conflict is enforced within one pending ticket. Runtime remains responsible for
   preventing one job from waiting on incompatible checkpoints across distinct tickets.
 - The public immutable `SourceSnapshot` keeps `len = None` when length was unknown at session bind;
@@ -111,3 +124,6 @@ fuzz target or platform Range E2E exists in this initial M1 bootstrap slice.
 - 2026-07-13: Added snapshot-bound byte identities, checked ranges, bounded shared backing,
   resumable tickets, source-change poisoning, structured limits, and deterministic integration
   tests.
+- 2026-07-14: Recorded the runtime arbiter's private-store consumption, non-inline one-shot requeue
+  boundary, and separate registration-versus-source backing accounting without assigning scheduler
+  generation validation or transport ownership to `core/bytes`.

@@ -102,8 +102,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.28.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.28.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.29.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.29.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -151,13 +151,109 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         "runtime/session::ready_owner",
         "same close report",
         "drops the complete Ready store before returning",
-        "request cancellation",
-        "SessionClosed` event publication",
+        "Created/Opening/Waiting/Failed orchestration",
+        "before publishing `SessionClosed`",
         "partial",
     ] {
         assert!(
             lifecycle.contains(required),
             "lifecycle mapping must contain {required:?}"
+        );
+    }
+}
+
+#[test]
+fn traceability_registers_range_resume_as_planned_scheduler_handoff() {
+    let root = repository_root();
+    let feature_map = fs::read_to_string(root.join("docs/traceability/feature-map.toml"))
+        .expect("feature map must be readable");
+    let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map must be readable");
+
+    let feature = record_with_id(&feature_map, "feature", "runtime.range-resume-arbiter")
+        .expect("Range-resume arbiter feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.range-resume-arbiter.v1\"",
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"runtime/session\"]",
+        "runtime/session::range_resume",
+        "runtime/session::repository_policy",
+        "tools/quality::native_range_resume_loop",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "Range-resume feature must contain {required:?}"
+        );
+    }
+
+    let byte_access = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.1-5.2")
+        .expect("Native byte-access requirement must exist");
+    for required in [
+        "runtime.range-resume-arbiter",
+        "runtime/session::range_resume",
+        "runtime/session::repository_policy",
+        "tools/quality::native_range_resume_loop",
+        "status = \"partial\"",
+        "runtime caller registers each returned Pending ticket with its job, checkpoint, and generation",
+        "converts terminal tickets into one-shot scheduler records only after the store call returns",
+        "releasing exact subscriptions on cancellation without disturbing shared waiters",
+        "scheduler must still compare the generation carried by a taken record before executing it",
+        "tail, xref-section, prefix-scan, object-envelope, and stream-boundary checkpoints",
+        "upper-half-before-lower out-of-order delivery",
+        "exact one-shot requeue",
+        "all features stay PLANNED",
+        "does not claim M1 exit",
+    ] {
+        assert!(
+            byte_access.contains(required),
+            "byte-access mapping must contain {required:?}"
+        );
+    }
+
+    let lifecycle = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/14.2")
+        .expect("handle lifecycle requirement must exist");
+    for required in [
+        "runtime.range-resume-arbiter",
+        "runtime/session::range_resume",
+        "runtime/session::repository_policy",
+        "tools/quality::native_range_resume_loop",
+        "status = \"partial\"",
+        "exact job/checkpoint/generation registrations",
+        "completed scheduler records",
+        "Data arrival only queues a record; it does not run parser code",
+        "external scheduler remains responsible for rejecting a taken record whose captured generation is stale",
+        "two isolated synchronous owners, not one complete Session",
+    ] {
+        assert!(
+            lifecycle.contains(required),
+            "lifecycle mapping must contain {required:?}"
+        );
+    }
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("M1 byte-and-object milestone requirement must exist");
+    for required in [
+        "runtime.range-resume-arbiter",
+        "quality.native-range-resume-loop",
+        "runtime/session::range_resume",
+        "tools/quality::native_range_resume_loop",
+        "status = \"partial\"",
+        "all five parser checkpoints",
+        "upper-half-before-lower out-of-order supply",
+        "exact one-shot dispatch",
+        "an executing scheduler that validates current generations",
+        "R0/R1 repair profiles are also absent",
+        "not registered DIFFERENTIAL evidence",
+        "does not claim M1 exit",
+    ] {
+        assert!(
+            milestone.contains(required),
+            "M1 mapping must contain {required:?}"
         );
     }
 }

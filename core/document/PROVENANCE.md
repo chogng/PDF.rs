@@ -1,10 +1,12 @@
 # Scope
 
-`core/document` composes one already parsed traditional `XrefSection` in two explicit trust
-states. `CandidateRevisionIndex` derives unauthenticated physical intervals. `AttestRevisionJob`
-then consumes that candidate, validates a supported PDF header at source offset zero, frames every
-in-use object in physical order, and scans the prefix and every gap through `startxref` for only
-PDF whitespace and terminated comments. Only complete success publishes `AttestedRevisionIndex`.
+`core/document` provides `OpenStrictBaseRevisionJob` as the resumable product composition for one
+strict traditional base revision. It runs traditional-xref opening, derives an unauthenticated
+`CandidateRevisionIndex`, and consumes that candidate through `AttestRevisionJob` without
+publishing the intermediate from the composition job. Attestation validates a supported PDF
+header at source offset zero, frames every in-use object in physical order, and scans the prefix
+and every gap through `startxref` for only PDF whitespace and terminated comments. Only complete
+success publishes `AttestedRevisionIndex`.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
@@ -65,6 +67,24 @@ semantic responsibilities.
 This slice does not claim an ISO 32000 conformance profile or R0 resolver coverage.
 
 # Algorithms and derivations
+
+## Strict base-revision opening
+
+- `OpenStrictBaseRevisionJob` owns the complete xref-to-candidate-to-attestation transition for one
+  immutable source snapshot and caller-assigned revision identity. Its validated profile bundles
+  the existing xref, candidate-index, attestation, object-framing, and direct-syntax limits; it does
+  not replace or weaken any child limit.
+- The xref and attestation contexts must carry one identical `JobId`. Their tail, xref-section,
+  top-level scan, object-envelope, and stream-boundary checkpoints must be five pairwise-distinct
+  values, so each `Pending` result identifies the exact child phase to requeue.
+- Xref success is synchronously converted into a candidate index, which is immediately consumed by
+  a newly constructed attestation child. Neither the `XrefSection` nor candidate is returned by the
+  composition job. Xref and document failures retain their complete lower structured error, while
+  terminal failure is stable and a repeated poll after success returns `JobAlreadyComplete`.
+- `Pending` forwards the child's exact ticket, canonical missing ranges, and checkpoint unchanged.
+  Cumulative stats retain the latest xref work, the completed candidate-index accounting, and the
+  latest attestation work. One injected `DocumentCancellation` is adapted for xref work and used
+  directly by candidate construction and attestation, preserving cancellation across every phase.
 
 ## Candidate physical index
 
@@ -272,6 +292,9 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
 
 # Resource accounting and resumability
 
+- Strict base opening adds no independent unbounded work or allocation pool. Its stats expose the
+  three existing child accounting domains separately; repeated child `Pending` polls retain the
+  lower layer's exact first-request charging rather than charging the composition transition again.
 - Revision-attestation limits independently bound source length, object count, exact scan chunk,
   cumulative prefix/gap reads, one comment, aggregate child reads, aggregate child parses, and
   retained evidence. Evidence is prechecked, reserved fallibly, charged by actual allocator
@@ -369,6 +392,10 @@ I/O APIs, external PDF engines, or async runtimes.
 
 # Tests
 
+Strict-base-open tests cover complete product-entry publication, all five distinct checkpoints,
+same-job context validation, reverse physical Range delivery, unchanged `Pending` replay and
+charging, xref and document error preservation, cancellation in both xref and attestation phases,
+snapshot mismatch, cumulative stats, and stable successful and failed terminals.
 Candidate tests cover physical sort ordering, exact sort-budget exhaustion, the 256-step
 cancellation ceiling, checked conservative accounting, exact logical lookup outcomes, duplicate
 and out-of-revision offsets, and trailer-root policy. Attestation unit tests guard fixed evidence
@@ -405,6 +432,9 @@ document-architecture requirement links and explicit partial-scope boundaries.
 
 - Only one strict traditional base revision is accepted. Revision chains, `/Prev`, xref streams,
   hybrid references, object streams, and revision precedence remain unsupported.
+- The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
+  physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
+  by itself establish M1 exit.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
   chain job can follow top-level whole-object aliases, and the count job can traverse strict
   Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
@@ -458,3 +488,6 @@ document-architecture requirement links and explicit partial-scope boundaries.
 - 2026-07-14: Added strict bounded outline enumeration with exact linked-list topology, recursively
   validated signed counts, direct decoded titles and target kinds, aggregate work and retained-byte
   limits, and explicit no-action/no-destination-resolution boundaries.
+- 2026-07-14: Added the formal resumable strict-base opening entry, composing xref discovery,
+  candidate indexing, and attestation under one job identity, five distinct checkpoints, preserved
+  child errors and stats, and one cancellation source without publishing an intermediate index.
