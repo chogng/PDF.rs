@@ -89,7 +89,7 @@ fn repository_report_is_canonical_non_verdict_and_ledger_bound() {
 
     let spec_map = fs::read_to_string(spec_map_path).unwrap();
     let milestone = array_record(&spec_map, "[[requirement]]", "RPE-ARCH-001/15.3/M0");
-    assert!(milestone.contains("measured benchmark evidence"));
+    assert!(milestone.contains("performance-eligible fixed-pool benchmark evidence"));
     let benchmark_requirement = array_record(&spec_map, "[[requirement]]", "RPE-ARCH-001/12.21");
     assert_line(
         benchmark_requirement,
