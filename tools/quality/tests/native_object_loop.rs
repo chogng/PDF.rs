@@ -11,7 +11,8 @@ use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_document::{
     AttestRevisionJob, AttestedObject, AttestedObjectJobContext, AttestedObjectPoll,
     CandidateRevisionIndex, DocumentLimits, NeverCancelled as NeverCancelledDocument,
-    ObjectAttestationKind, ReferenceChainJobContext, ReferenceChainLimits, ReferenceChainPoll,
+    ObjectAttestationKind, PageCountPoll, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
+    PageTreePhase, ReferenceChainJobContext, ReferenceChainLimits, ReferenceChainPoll,
     RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
 };
 use pdf_rs_generate::generate_one_page_pdf;
@@ -27,6 +28,9 @@ const READY_STORE_SESSION_ID: ReadyStoreSessionId = ReadyStoreSessionId::new(0x6
 const READY_STORE_EPOCH: ReadyStoreEpoch = ReadyStoreEpoch::new(1);
 const PDFIUM_O4_EVIDENCE: &str = include_str!(
     "../../baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml"
+);
+const PDFIUM_BUILD_READINESS_EVIDENCE: &str = include_str!(
+    "../../baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-build-readiness-v1.toml"
 );
 const FEATURE_MAP: &str = include_str!("../../../docs/traceability/feature-map.toml");
 const SPEC_MAP: &str = include_str!("../../../docs/traceability/spec-map.toml");
@@ -59,6 +63,22 @@ fn unique_value<'a>(document: &'a str, key: &str) -> &'a str {
     assert!(
         values.next().is_none(),
         "evidence must contain exactly one {key} field"
+    );
+    value
+}
+
+fn top_level_value<'a>(document: &'a str, key: &str) -> &'a str {
+    let prefix = format!("{key} = ");
+    let mut values = document
+        .lines()
+        .take_while(|line| !line.starts_with("[["))
+        .filter_map(|line| line.strip_prefix(&prefix));
+    let value = values
+        .next()
+        .unwrap_or_else(|| panic!("evidence top level must contain exactly one {key} field"));
+    assert!(
+        values.next().is_none(),
+        "evidence top level must contain exactly one {key} field"
     );
     value
 }
@@ -133,6 +153,10 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
         "\"c040cf96106a87220b814a1a892649cf2d7f1934\""
     );
     assert_eq!(
+        unique_value(PDFIUM_O4_EVIDENCE, "upstream_build_readiness_evidence"),
+        "\"pdfium-c040cf96-macos-arm64-build-readiness-v1\""
+    );
+    assert_eq!(
         unique_value(PDFIUM_O4_EVIDENCE, "platform"),
         "\"macos-arm64\""
     );
@@ -192,6 +216,70 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     assert_eq!(
         unique_value(PDFIUM_O4_EVIDENCE, "release_gate_eligible"),
         "false"
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "id"),
+        "\"pdfium-c040cf96-macos-arm64-build-readiness-v1\""
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "engine"),
+        "\"pdfium\""
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "platform"),
+        "\"macos-arm64\""
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "upstream_revision"),
+        "\"c040cf96106a87220b814a1a892649cf2d7f1934\""
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "build_readiness_outcome"),
+        "\"pass\""
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "pdf_rs_fixture_exercised"),
+        "true"
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "differential_eligible"),
+        "false"
+    );
+    assert_eq!(
+        top_level_value(PDFIUM_BUILD_READINESS_EVIDENCE, "oracle_authority"),
+        "\"not-applicable\""
+    );
+    let pdfium_pageinfo = record_with_id(
+        PDFIUM_BUILD_READINESS_EVIDENCE,
+        "execution",
+        "pdf-rs-generated-fixture-pageinfo",
+    )
+    .expect("PDFium build-readiness evidence must retain the same-input pageinfo execution");
+    assert_eq!(
+        unique_value(pdfium_pageinfo, "kind"),
+        "\"project-fixture-parse-smoke\""
+    );
+    assert_eq!(
+        unique_value(pdfium_pageinfo, "program"),
+        "\"out/Testing/pdfium_test\""
+    );
+    assert_eq!(
+        unique_value(pdfium_pageinfo, "argv"),
+        "[\"--show-pageinfo\", \"$PDF_RS_ROOT/tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf\"]"
+    );
+    assert_eq!(
+        unique_value(pdfium_pageinfo, "fixture_sha256"),
+        format!("\"sha256:{PDF_SHA256}\"")
+    );
+    assert_eq!(unique_value(pdfium_pageinfo, "fixture_bytes"), "612");
+    assert_eq!(unique_value(pdfium_pageinfo, "exit_code"), "0");
+    let pdfium_pages_processed = unique_value(pdfium_pageinfo, "pages_processed")
+        .parse::<u64>()
+        .expect("recorded PDFium pages_processed is a u64");
+    assert_eq!(pdfium_pages_processed, 1);
+    assert_eq!(
+        unique_value(pdfium_pageinfo, "observed_page_info"),
+        "\"page 0 MediaBox 0,0,200,200; no CropBox, BleedBox, TrimBox, or ArtBox\""
     );
 
     let source = snapshot(output_sha256);
@@ -306,6 +394,64 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     assert!(stats.object_read_bytes() > 0);
     assert!(stats.object_parse_bytes() > 0);
     assert!(stats.retained_evidence_bytes() > 0);
+
+    let page_tree_limits = PageTreeLimits::validate(PageTreeLimitConfig {
+        max_nodes: 8,
+        max_depth: 4,
+        max_pages: 4,
+        max_kids_per_node: 4,
+        max_total_object_read_bytes: 1 << 20,
+        max_total_object_parse_bytes: 1 << 20,
+        max_retained_traversal_bytes: 4 << 10,
+    })
+    .expect("the canonical one-page loop uses a valid compact page-tree profile");
+    let mut page_count_job = attested
+        .count_pages(
+            PageTreeJobContext::new(
+                JobId::new(250),
+                ResumeCheckpoint::new(251),
+                ResumeCheckpoint::new(252),
+                RequestPriority::Metadata,
+            ),
+            page_tree_limits,
+        )
+        .expect("the attested index mints a bounded strict page-count job");
+    assert_eq!(page_count_job.phase(), PageTreePhase::Catalog);
+    assert_eq!(page_count_job.stats().objects_started(), 0);
+    assert!(page_count_job.stats().reserved_traversal_bytes() > 0);
+    let page_count = match page_count_job.poll(&store, &NeverCancelledDocument) {
+        PageCountPoll::Ready(count) => count,
+        PageCountPoll::Pending { .. } => {
+            panic!("a fully supplied canonical PDF must not suspend page counting")
+        }
+        PageCountPoll::Failed(error) => {
+            panic!("canonical strict page tree must count: {error}")
+        }
+    };
+    assert_eq!(page_count_job.phase(), PageTreePhase::Ready);
+    assert_eq!(page_count.catalog().snapshot(), source);
+    assert_eq!(page_count.catalog().revision_id(), RevisionId::new(1));
+    assert_eq!(page_count.catalog().revision_startxref(), STARTXREF);
+    assert_eq!(page_count.catalog().root(), ObjectRef::new(1, 0).unwrap());
+    assert_eq!(page_count.catalog().pages(), ObjectRef::new(2, 0).unwrap());
+    let native_page_count = page_count.page_count();
+    assert_eq!(native_page_count, 1);
+    let page_tree_stats = page_count.stats();
+    assert_eq!(page_tree_stats, page_count_job.stats());
+    assert_eq!(page_tree_stats.objects_started(), 3);
+    assert_eq!(page_tree_stats.nodes_started(), 2);
+    assert_eq!(page_tree_stats.pages(), 1);
+    assert_eq!(page_tree_stats.max_depth(), 2);
+    assert_eq!(page_tree_stats.max_kids_per_node(), 1);
+    assert!(page_tree_stats.object_read_bytes() > 0);
+    assert!(page_tree_stats.object_parse_bytes() > 0);
+    assert!(page_tree_stats.reserved_traversal_bytes() > 0);
+    assert!(
+        page_tree_stats.reserved_traversal_bytes()
+            <= page_tree_limits.max_retained_traversal_bytes()
+    );
+    let native_pdfium_page_count_smoke_equal = native_page_count == pdfium_pages_processed;
+    assert!(native_pdfium_page_count_smoke_equal);
 
     let objects = attested.object_attestations();
     assert_eq!(objects.len(), 4);
@@ -664,14 +810,18 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
     );
 
     println!(
-        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_owner_closed=true session_ready_owner_resources_zero=true session_ready_owner_close_idempotent=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} ready_store_released_resident_bytes={ready_store_released_resident_bytes} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false"
+        "native_object_loop_result sha256={PDF_SHA256} bytes={PDF_BYTES} startxref={STARTXREF} trailer=566..591 offsets=186,235,292,396 upper_bounds=235,292,396,449 objects=dictionary,dictionary,dictionary,stream payload4=427..431:710a510a strict_base_revision_attested=true attested_object_access=true strict_catalog_validated=true strict_page_tree_counted=true native_page_count={native_page_count} page_tree_objects_started={} page_tree_nodes_started={} page_tree_max_depth={} page_tree_reserved_traversal_bytes={} reference_chain_resolved=true resident_footprint_accounted=true session_ready_store_admitted=true session_ready_store_borrowed_hit=true session_ready_owner_closed=true session_ready_owner_resources_zero=true session_ready_owner_close_idempotent=true ready_store_metadata_bytes={metadata_baseline} ready_store_admitted_resident_bytes={ready_store_admitted_resident_bytes} ready_store_released_resident_bytes={ready_store_released_resident_bytes} pdfium_build_readiness_pageinfo_pages_processed={pdfium_pages_processed} native_pdfium_page_count_smoke_equal={native_pdfium_page_count_smoke_equal} pdfium_o4_same_input=true pdfium_o4_vs_analytic_different_pixels=0 native_pdfium_differential=false",
+        page_tree_stats.objects_started(),
+        page_tree_stats.nodes_started(),
+        page_tree_stats.max_depth(),
+        page_tree_stats.reserved_traversal_bytes(),
     );
 }
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.23.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.23.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.24.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.24.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -757,6 +907,20 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(resident_feature.contains("fuzz_targets = []"));
     assert!(resident_feature.contains("benchmarks = []"));
 
+    let page_count_feature = record_with_id(FEATURE_MAP, "feature", "core.strict-page-count")
+        .expect("the strict page-count feature record must exist");
+    assert!(page_count_feature.contains("owner = \"parser-security\""));
+    assert!(page_count_feature.contains("state = \"PLANNED\""));
+    assert!(page_count_feature.contains("profile = \"m1.strict-page-count.v1\""));
+    assert!(page_count_feature.contains("RPE-ARCH-001/5.8-5.9"));
+    assert!(page_count_feature.contains("modules = [\"core/document\"]"));
+    assert!(page_count_feature.contains("core/document::page_tree_count"));
+    assert!(page_count_feature.contains("core/document::page_tree_limit_config"));
+    assert!(page_count_feature.contains("core/document::repository_policy"));
+    assert!(page_count_feature.contains("tools/quality::native_object_loop"));
+    assert!(page_count_feature.contains("fuzz_targets = []"));
+    assert!(page_count_feature.contains("benchmarks = []"));
+
     let ready_store_feature = record_with_id(FEATURE_MAP, "feature", "runtime.session-ready-store")
         .expect("the session Ready-store feature record must exist");
     assert!(ready_store_feature.contains("owner = \"runtime-platform\""));
@@ -784,6 +948,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     for requirement_id in [
         "RPE-ARCH-001/5.3",
         "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/5.8-5.9",
         "RPE-ARCH-001/9.1",
         "RPE-ARCH-001/14.2",
         "RPE-ARCH-001/12.6",
@@ -804,9 +969,24 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         .expect("the M0 quality-infrastructure requirement must exist");
     assert!(m0_requirement.contains("\"quality.native-object-loop\""));
     assert!(m0_requirement.contains("ReadySessionOwner"));
+    assert!(m0_requirement.contains("page_count=1"));
+    assert!(m0_requirement.contains("pages_processed=1"));
+    assert!(m0_requirement.contains("not a Native/PDFium semantic or pixel differential"));
     assert!(m0_requirement.contains("synchronously close the store"));
     assert!(m0_requirement.contains("zero post-close resources"));
     assert!(m0_requirement.contains("Native/PDFium differential evidence"));
+
+    let page_tree_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.8-5.9")
+        .expect("the document-model and page-tree requirement must exist");
+    assert!(page_tree_requirement.contains("\"core.strict-page-count\""));
+    assert!(page_tree_requirement.contains("core/document::page_tree_count"));
+    assert!(page_tree_requirement.contains("tools/quality::native_object_loop"));
+    assert!(page_tree_requirement.contains("open-addressing table"));
+    assert!(page_tree_requirement.contains("page_count=1"));
+    assert!(page_tree_requirement.contains("pages_processed=1"));
+    assert!(page_tree_requirement.contains("non-gating smoke observation"));
+    assert!(page_tree_requirement.contains("not a registered semantic differential"));
+    assert!(page_tree_requirement.contains("does not claim M1 or M2 exit"));
 
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")
         .expect("the xref architecture requirement must exist");

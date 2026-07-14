@@ -89,8 +89,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.23.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.23.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.24.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.24.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -101,6 +101,7 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "core/document::page_tree_count",
         "core/document::page_tree_limit_config",
         "core/document::repository_policy",
+        "tools/quality::native_object_loop",
         "fuzz_targets = []",
         "benchmarks = []",
     ] {
@@ -116,12 +117,16 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "core.strict-page-count",
         "core/document",
         "core/document::page_tree_count",
+        "tools/quality::native_object_loop",
         "open-addressing table",
         "exact Parent back-links",
         "never uses untrusted Count or Kids data for allocation",
         "does not implement revision chains",
         "reusable lazy PageIndex",
-        "Native/PDFium semantic differential evidence",
+        "page_count=1",
+        "pages_processed=1",
+        "not a registered semantic differential",
+        "Native/PDFium differential evidence",
         "does not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {

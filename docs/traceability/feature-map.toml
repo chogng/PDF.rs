@@ -1,5 +1,5 @@
 schema = 1
-version = "0.23.0"
+version = "0.24.0"
 status = "active"
 
 [[feature]]
@@ -117,7 +117,7 @@ state = "PLANNED"
 profile = "m1.strict-page-count.v1"
 clauses = ["RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::repository_policy"]
+tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
