@@ -93,6 +93,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-session"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-cache",
+ "pdf-rs-document",
+ "pdf-rs-object",
+ "pdf-rs-syntax",
+ "pdf-rs-xref",
+]
+
+[[package]]
 name = "pdf-rs-syntax"
 version = "0.1.0"
 dependencies = [
