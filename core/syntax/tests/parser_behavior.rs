@@ -455,21 +455,33 @@ fn compound_truncation_distinguishes_retryable_windows_from_final_input() {
 
 #[test]
 fn keywords_stream_boundaries_and_raw_bytes_share_one_cursor() {
-    let mut syntax_parser = parser_at(b"stream\r\nABCD", BASE, true, SyntaxLimits::default());
-    let keyword = ready(syntax_parser.expect_keyword(b"stream"));
-    assert_eq!(keyword.start(), BASE);
-    assert_eq!(keyword.end_exclusive(), BASE + 6);
+    let mut syntax_parser = parser_at(
+        b" % framing\nstream\r\nABCD",
+        BASE,
+        true,
+        SyntaxLimits::default(),
+    );
+    let keyword = ready(syntax_parser.parse_keyword());
+    assert_eq!(keyword.source(), identity());
+    assert_eq!(keyword.span().start(), BASE + 11);
+    assert_eq!(keyword.span().end_exclusive(), BASE + 17);
+    assert_eq!(keyword.bytes(), b"stream");
+    assert_eq!(syntax_parser.stats().tokens(), 1);
+    assert_eq!(syntax_parser.stats().owned_bytes(), 0);
+    assert_eq!(syntax_parser.stats().container_entries(), 0);
+    assert_eq!(syntax_parser.stats().max_depth(), 0);
+    assert_eq!(syntax_parser.stats().input_bytes(), 23);
 
     let line_ending = ready(syntax_parser.consume_stream_line_ending());
-    assert_eq!(line_ending.start(), BASE + 6);
-    assert_eq!(line_ending.end_exclusive(), BASE + 8);
+    assert_eq!(line_ending.start(), BASE + 17);
+    assert_eq!(line_ending.end_exclusive(), BASE + 19);
 
     let raw = ready(syntax_parser.take_raw_bytes(4));
     assert_eq!(raw.source(), identity());
-    assert_eq!(raw.span().start(), BASE + 8);
-    assert_eq!(raw.span().end_exclusive(), BASE + 12);
+    assert_eq!(raw.span().start(), BASE + 19);
+    assert_eq!(raw.span().end_exclusive(), BASE + 23);
     assert_eq!(raw.bytes(), b"ABCD");
-    assert_eq!(syntax_parser.position(), BASE + 12);
+    assert_eq!(syntax_parser.position(), BASE + 23);
     assert_eq!(syntax_parser.remaining(), 0);
 
     let empty = ready(syntax_parser.take_raw_bytes(0));
@@ -487,6 +499,76 @@ fn keywords_stream_boundaries_and_raw_bytes_share_one_cursor() {
         failed(bad.consume_stream_line_ending()).code(),
         SyntaxErrorCode::InvalidStreamBoundary
     );
+}
+
+#[test]
+fn borrowed_keyword_distinguishes_incomplete_and_non_keyword_input() {
+    assert!(matches!(
+        parser_at(b"", BASE, false, SyntaxLimits::default()).parse_keyword(),
+        SyntaxPoll::NeedMore {
+            minimum_end: value
+        } if value == BASE + 1
+    ));
+    let error = failed(parser_at(b"", BASE, true, SyntaxLimits::default()).parse_keyword());
+    assert_eq!(error.code(), SyntaxErrorCode::UnexpectedEndOfInput);
+    assert_eq!(error.offset(), Some(BASE));
+
+    let mut partial = parser_at(b"endst", BASE, false, SyntaxLimits::default());
+    assert!(matches!(
+        partial.parse_keyword(),
+        SyntaxPoll::NeedMore {
+            minimum_end: value
+        } if value == BASE + 6
+    ));
+    assert_eq!(partial.position(), BASE);
+
+    let mut final_keyword = parser_at(b"endstream", BASE, true, SyntaxLimits::default());
+    assert_eq!(ready(final_keyword.parse_keyword()).bytes(), b"endstream");
+
+    for bytes in [
+        b"/classified".as_slice(),
+        b"(classified)".as_slice(),
+        b"1.25".as_slice(),
+    ] {
+        let mut non_keyword = parser_at(bytes, BASE, true, SyntaxLimits::default());
+        let error = failed(non_keyword.parse_keyword());
+        assert_eq!(error.code(), SyntaxErrorCode::UnexpectedToken);
+        assert_eq!(error.offset(), Some(BASE));
+        assert_eq!(non_keyword.stats().tokens(), 1);
+        assert_eq!(non_keyword.stats().owned_bytes(), 0);
+        assert_eq!(non_keyword.position(), BASE);
+    }
+}
+
+#[test]
+fn borrowed_keyword_honors_cancellation_and_token_limits() {
+    let mut long_keyword = vec![b'k'; 600];
+    long_keyword.push(b' ');
+    let cancellation = CancelOnProbe::new(2);
+    let mut cancelled = SyntaxParser::new_with_cancellation(
+        input(&long_keyword, BASE, true),
+        SyntaxLimits::default(),
+        &cancellation,
+    )
+    .expect("valid bounded input constructs a parser");
+    let error = failed(cancelled.parse_keyword());
+    assert_eq!(error.code(), SyntaxErrorCode::Cancelled);
+    assert_eq!(cancellation.probes(), 2);
+    assert_eq!(cancelled.stats().owned_bytes(), 0);
+
+    let limits = configured(|config| {
+        config.max_token_bytes = 4;
+        config.max_comment_bytes = 4;
+        config.max_name_bytes = 4;
+    });
+    assert_eq!(
+        ready(parser_at(b"word ", BASE, true, limits).parse_keyword()).bytes(),
+        b"word"
+    );
+    let error = failed(parser_at(b"words ", BASE, true, limits).parse_keyword());
+    let limit = error.limit().expect("token failure carries context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::TokenBytes);
+    assert_eq!((limit.limit(), limit.attempted()), (4, 5));
 }
 
 #[test]

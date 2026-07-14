@@ -58,6 +58,8 @@ coverage claim.
 - Callers may bind a cooperative `SyntaxCancellation` probe. Every public parser operation checks
   cancellation before work, and every unbounded scanner/container loop checks again after at most
   256 iterations. Cancellation remains distinct from malformed input and resource exhaustion.
+- Keyword framing can be consumed as borrowed `RawBytes`, allowing higher object layers to
+  distinguish terminal markers without allocation, speculative rollback, or raw-buffer access.
 
 # External observations
 
@@ -80,7 +82,8 @@ redistribution obligation beyond those already recorded for the repository.
 Syntax behavior tests exercise complete and truncated headers/tokens, absolute spans, numbers,
 name escapes, nested and escaped literal strings, odd-nibble hex strings, arrays, ordered
 dictionaries with duplicate keys, indirect references, strict stream boundaries, redacted
-diagnostics, stable cancellation policy and fixed-interval scanner probes, and
+diagnostics, borrowed keyword retry semantics, stable cancellation policy and fixed-interval
+scanner probes, and
 boundary/equality/excess cases for deterministic limits.
 
 `core/syntax::repository_policy` scans product source for forbidden filesystem, network,
@@ -110,4 +113,4 @@ differential is claimed in this bootstrap slice.
 # History
 
 - 2026-07-13: Added the bounded, source-located strict syntax bootstrap, cooperative cancellation,
-  and repository purity guard.
+  borrowed keyword framing, and repository purity guard.

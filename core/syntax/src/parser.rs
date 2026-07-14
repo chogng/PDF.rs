@@ -302,19 +302,29 @@ impl<'a> SyntaxParser<'a> {
         }
     }
 
+    /// Consumes and borrows one keyword after PDF whitespace and comments.
+    pub fn parse_keyword(&mut self) -> SyntaxPoll<RawBytes<'a>> {
+        let result = self
+            .begin_operation()
+            .and_then(|()| self.parse_keyword_inner());
+        match result {
+            Ok(keyword) => SyntaxPoll::Ready(keyword),
+            Err(failure) => self.poll_failure(failure, false),
+        }
+    }
+
     /// Consumes one exact keyword after PDF whitespace and comments.
     pub fn expect_keyword(&mut self, expected: &[u8]) -> SyntaxPoll<ByteSpan> {
         let result = (|| {
             self.begin_operation()?;
-            let token = self.next_required_token(SyntaxErrorCode::UnexpectedEndOfInput)?;
-            match token.kind {
-                TokenKind::Keyword(actual) if actual == expected => {
-                    ByteSpan::from_bounds(token.start, token.end).map_err(ParseFailure::Failed)
-                }
-                _ => Err(ParseFailure::Failed(SyntaxError::for_code(
+            let keyword = self.parse_keyword_inner()?;
+            if keyword.bytes() == expected {
+                Ok(keyword.span())
+            } else {
+                Err(ParseFailure::Failed(SyntaxError::for_code(
                     SyntaxErrorCode::UnexpectedToken,
-                    Some(token.start),
-                ))),
+                    Some(keyword.span().start()),
+                )))
             }
         })();
         match result {
@@ -451,6 +461,49 @@ impl<'a> SyntaxParser<'a> {
             )));
         }
         Ok(())
+    }
+
+    fn parse_keyword_inner(&mut self) -> ParseResult<RawBytes<'a>> {
+        self.skip_trivia()?;
+        if self.cursor == self.input.bytes.len() {
+            return Err(ParseFailure::Incomplete {
+                final_code: SyntaxErrorCode::UnexpectedEndOfInput,
+                offset: self.absolute(self.input.bytes.len()),
+            });
+        }
+
+        let start = self.cursor;
+        let absolute_start = self.absolute(start);
+        self.charge_token(absolute_start)?;
+        let first = self.input.bytes[start];
+        if is_delimiter(first) || is_number_start(first) {
+            return Err(ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::UnexpectedToken,
+                Some(absolute_start),
+            )));
+        }
+
+        let mut end = start;
+        while end < self.input.bytes.len() && !is_delimiter(self.input.bytes[end]) {
+            self.probe_iteration(self.absolute(end))?;
+            end += 1;
+            self.check_token_len(start, end)?;
+        }
+        if end == self.input.bytes.len() && self.input.extent == InputExtent::MayContinue {
+            return Err(ParseFailure::Incomplete {
+                final_code: SyntaxErrorCode::UnexpectedEndOfInput,
+                offset: self.absolute(end),
+            });
+        }
+
+        let span = ByteSpan::from_bounds(absolute_start, self.absolute(end))
+            .map_err(ParseFailure::Failed)?;
+        self.cursor = end;
+        Ok(RawBytes {
+            source: self.input.source,
+            span,
+            bytes: &self.input.bytes[start..end],
+        })
     }
 
     fn parse_header_inner(&mut self) -> ParseResult<Located<PdfHeader>> {
