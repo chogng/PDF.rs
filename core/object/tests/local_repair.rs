@@ -7,9 +7,10 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_object::{
     IndirectObjectTarget, IndirectObjectValue, LocalObjectJobContext, LocalObjectPhase,
-    LocalObjectPoll, NeverCancelled, ObjectError, ObjectErrorCode, ObjectJobContext,
-    ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectRepairKind, ObjectRepairLimitConfig,
-    ObjectRepairLimits, ObjectRepairWorkCaps, ObjectWorkCaps, OpenLocalObjectJob,
+    LocalObjectPoll, NeverCancelled, ObjectError, ObjectErrorCategory, ObjectErrorCode,
+    ObjectJobContext, ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectRecoverability,
+    ObjectRepairKind, ObjectRepairLimitConfig, ObjectRepairLimits, ObjectRepairWorkCaps,
+    ObjectWorkCaps, OpenLocalObjectJob,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 
@@ -235,6 +236,33 @@ fn canonical_input_uses_only_the_strict_child() {
     assert_eq!(object.reference(), fixture.reference);
     assert_eq!(object.stats().repair_scan_bytes(), 0);
     assert_eq!(object.stats().candidate().read_bytes(), 0);
+}
+
+#[test]
+fn local_repair_rejects_xref_stream_anchor_before_kind_can_be_downgraded() {
+    let source = snapshot(128, 0x90);
+    let reference = ObjectRef::new(7, 0).unwrap();
+    let target = IndirectObjectTarget::at_xref_stream_anchor(source, reference, 64, 112, 64)
+        .expect("strict framing accepts explicit xref-stream-anchor geometry");
+    let error = match OpenLocalObjectJob::new(
+        target,
+        context(),
+        ObjectLimits::default(),
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+    ) {
+        Ok(_) => panic!("local R1 repair accepted an xref-stream anchor"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ObjectErrorCode::UnsupportedRepairTarget);
+    assert_eq!(error.category(), ObjectErrorCategory::Unsupported);
+    assert_eq!(
+        error.recoverability(),
+        ObjectRecoverability::UseSupportedFeature
+    );
+    assert_eq!(error.diagnostic_id(), "RPE-OBJECT-0027");
+    assert_eq!(error.reference(), Some(reference));
+    assert_eq!(error.offset(), Some(64));
 }
 
 #[test]

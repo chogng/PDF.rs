@@ -6,8 +6,12 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_syntax::{InputExtent, SyntaxLimits};
 
-use crate::parser::{SectionWindow, TailParse, parse_section, parse_tail};
-use crate::{XrefError, XrefErrorCode, XrefLimitKind, XrefLimits, XrefSection};
+use crate::final_anchor::grow_window;
+use crate::parser::{SectionWindow, parse_section};
+use crate::{
+    FinalStartXrefJobContext, FinalStartXrefPoll, OpenFinalStartXrefJob, XrefError, XrefErrorCode,
+    XrefLimitKind, XrefLimits, XrefSection,
+};
 
 /// Runtime identity and phase-specific resume checkpoints for one xref job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,10 +145,7 @@ pub enum XrefPoll {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum JobState {
-    Tail {
-        window: u64,
-        charged: bool,
-    },
+    Tail,
     Section {
         startxref: u64,
         window: u64,
@@ -164,6 +165,7 @@ pub struct OpenXrefJob {
     syntax_limits: SyntaxLimits,
     stats: XrefStats,
     discovered_startxref: Option<u64>,
+    tail: Option<OpenFinalStartXrefJob>,
     state: JobState,
 }
 
@@ -196,7 +198,11 @@ impl OpenXrefJob {
         if limits.max_section_bytes > syntax_limits.max_input_bytes() {
             return Err(XrefError::for_code(XrefErrorCode::InvalidLimits, None));
         }
-        let window = limits.initial_tail_bytes.min(source_len);
+        let tail = OpenFinalStartXrefJob::new(
+            snapshot,
+            FinalStartXrefJobContext::new(context.job, context.tail_checkpoint),
+            limits,
+        )?;
         Ok(Self {
             snapshot,
             source_len,
@@ -205,10 +211,8 @@ impl OpenXrefJob {
             syntax_limits,
             stats: XrefStats::default(),
             discovered_startxref: None,
-            state: JobState::Tail {
-                window,
-                charged: false,
-            },
+            tail: Some(tail),
+            state: JobState::Tail,
         })
     }
 
@@ -244,7 +248,7 @@ impl OpenXrefJob {
     /// Returns the job's current coarse phase.
     pub const fn phase(&self) -> XrefPhase {
         match self.state {
-            JobState::Tail { .. } => XrefPhase::Tail,
+            JobState::Tail => XrefPhase::Tail,
             JobState::Section { .. } => XrefPhase::Section,
             JobState::Complete => XrefPhase::Complete,
             JobState::Failed(_) => XrefPhase::Failed,
@@ -268,7 +272,7 @@ impl OpenXrefJob {
                     None,
                 ));
             }
-            JobState::Tail { .. } | JobState::Section { .. } => {}
+            JobState::Tail | JobState::Section { .. } => {}
         }
         loop {
             if source.snapshot() != self.snapshot {
@@ -278,9 +282,7 @@ impl OpenXrefJob {
                 return self.fail(XrefError::for_code(XrefErrorCode::Cancelled, None));
             }
             let outcome = match self.state {
-                JobState::Tail { window, charged } => {
-                    self.poll_tail(source, cancellation, window, charged)
-                }
+                JobState::Tail => self.poll_tail(source, cancellation),
                 JobState::Section {
                     startxref,
                     window,
@@ -304,96 +306,40 @@ impl OpenXrefJob {
         &mut self,
         source: &dyn ByteSource,
         cancellation: &dyn XrefCancellation,
-        window: u64,
-        charged: bool,
     ) -> Option<XrefPoll> {
-        let start = match self.source_len.checked_sub(window) {
-            Some(value) => value,
-            None => return Some(self.fail_internal(None)),
+        let Some(tail) = self.tail.as_mut() else {
+            return Some(self.fail_internal(None));
         };
-        let range = match ByteRange::new(start, window) {
-            Ok(value) => value,
-            Err(_) => return Some(self.fail_internal(Some(start))),
-        };
-        if !charged {
-            if let Err(error) = self.charge_read(window, Some(start)) {
-                return Some(self.fail(error));
-            }
-            self.stats.tail_attempts = match self.stats.tail_attempts.checked_add(1) {
-                Some(value) => value,
-                None => return Some(self.fail_internal(Some(start))),
-            };
-            self.state = JobState::Tail {
-                window,
-                charged: true,
-            };
-        }
-        let request = ReadRequest::new(
-            range,
-            RequestPriority::Metadata,
-            self.context.job,
-            self.context.tail_checkpoint,
-        );
-        match source.poll(request) {
-            ReadPoll::Pending { ticket, missing } => Some(XrefPoll::Pending {
+        let outcome = tail.poll(source, cancellation);
+        let stats = tail.stats();
+        self.stats.read_bytes = stats.read_bytes();
+        self.stats.parse_bytes = stats.parse_bytes();
+        self.stats.tail_attempts = stats.tail_attempts();
+        match outcome {
+            FinalStartXrefPoll::Pending {
                 ticket,
                 missing,
-                checkpoint: self.context.tail_checkpoint,
+                checkpoint,
+            } => Some(XrefPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
             }),
-            ReadPoll::EndOfFile => Some(self.fail(XrefError::for_code(
-                XrefErrorCode::UnexpectedEndOfSource,
-                Some(start),
-            ))),
-            ReadPoll::Failed(error) => Some(self.fail(XrefError::from_source(error))),
-            ReadPoll::Ready(bytes) => {
-                if let Err(error) = self.validate_slice(&bytes, range) {
-                    return Some(self.fail(error));
-                }
-                if let Err(error) = self.charge_parse(window, Some(start)) {
-                    return Some(self.fail(error));
-                }
-                match parse_tail(bytes.bytes(), start, self.source_len, cancellation) {
-                    Ok(TailParse::Found(startxref)) => {
-                        self.discovered_startxref = Some(startxref);
-                        let remaining = match self.source_len.checked_sub(startxref) {
-                            Some(value) if value != 0 => value,
-                            _ => return Some(self.fail_internal(Some(startxref))),
-                        };
-                        self.state = JobState::Section {
-                            startxref,
-                            window: self.limits.initial_section_bytes.min(remaining),
-                            charged: false,
-                        };
-                        None
-                    }
-                    Ok(TailParse::NeedLarger) => {
-                        let cap = self.limits.max_tail_bytes.min(self.source_len);
-                        if window >= cap {
-                            let error = if cap == self.source_len {
-                                XrefError::for_code(XrefErrorCode::StartXrefNotFound, Some(0))
-                            } else {
-                                XrefError::resource(
-                                    XrefLimitKind::TailBytes,
-                                    self.limits.max_tail_bytes,
-                                    window,
-                                    1,
-                                    Some(start),
-                                )
-                            };
-                            return Some(self.fail(error));
-                        }
-                        let next = match grow_window(window, cap) {
-                            Some(value) => value,
-                            None => return Some(self.fail_internal(Some(start))),
-                        };
-                        self.state = JobState::Tail {
-                            window: next,
-                            charged: false,
-                        };
-                        None
-                    }
-                    Err(error) => Some(self.fail(error)),
-                }
+            FinalStartXrefPoll::Failed(error) => Some(self.fail(error)),
+            FinalStartXrefPoll::Ready(final_startxref) => {
+                let startxref = final_startxref.startxref();
+                self.discovered_startxref = Some(startxref);
+                self.tail = None;
+                let remaining = match self.source_len.checked_sub(startxref) {
+                    Some(value) if value != 0 => value,
+                    _ => return Some(self.fail_internal(Some(startxref))),
+                };
+                self.state = JobState::Section {
+                    startxref,
+                    window: self.limits.initial_section_bytes.min(remaining),
+                    charged: false,
+                };
+                None
             }
         }
     }
@@ -580,11 +526,4 @@ impl OpenXrefJob {
     fn fail_internal(&mut self, offset: Option<u64>) -> XrefPoll {
         self.fail(XrefError::for_code(XrefErrorCode::InternalState, offset))
     }
-}
-
-fn grow_window(current: u64, cap: u64) -> Option<u64> {
-    current
-        .checked_mul(2)
-        .map(|doubled| doubled.min(cap))
-        .filter(|next| *next > current)
 }

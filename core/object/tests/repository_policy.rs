@@ -84,6 +84,36 @@ fn product_object_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io()
 }
 
 #[test]
+fn xref_stream_anchor_geometry_cannot_relax_ordinary_entry_targets() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("object library surface must be readable");
+    let model = fs::read_to_string(crate_root.join("src/model.rs"))
+        .expect("object target model must be readable");
+    let repair = fs::read_to_string(crate_root.join("src/repair.rs"))
+        .expect("object local-repair source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("object provenance must be readable");
+
+    assert!(library.contains("IndirectObjectTargetKind"));
+    assert!(model.contains("IndirectObjectTargetKind::XrefEntry"));
+    assert!(model.contains("IndirectObjectTargetKind::XrefStreamAnchor"));
+    assert!(model.contains("pub fn at_xref_stream_anchor("));
+    assert!(model.contains("object_upper_bound > revision_startxref"));
+    assert!(model.contains("revision_startxref < startxref"));
+    assert!(model.contains("object_upper_bound != revision_startxref"));
+    assert!(model.contains("target_kind: target.kind"));
+    assert!(repair.contains("target.kind() != IndirectObjectTargetKind::XrefEntry"));
+    assert!(repair.contains("ObjectErrorCode::UnsupportedRepairTarget"));
+    assert!(provenance.contains("does not relax or share the ordinary constructor's inequality"));
+    assert!(provenance.contains("must equal the exclusive `object_upper_bound`"));
+    assert!(provenance.contains("`XrefStreamAnchor` at construction"));
+    assert!(provenance.contains("silently\n  downgrading its geometry authority"));
+    assert!(provenance.contains("not itself prove `/Type /XRef`"));
+    assert!(provenance.contains("target kind survives into a completed object"));
+}
+
+#[test]
 fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -95,8 +125,27 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.49.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.49.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.50.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.50.0"));
+
+    let anchor_feature = record_with_id(&feature_map, "feature", "core.source-xref-anchor")
+        .expect("source xref-anchor feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.source-xref-anchor.v1\"",
+        "modules = [\"core/xref\", \"core/object\"]",
+        "core/xref::final_startxref",
+        "core/xref::xref_anchor",
+        "core/object::object_behavior",
+        "core/object::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            anchor_feature.contains(required),
+            "source xref-anchor feature must contain {required:?}"
+        );
+    }
 
     let feature = record_with_id(&feature_map, "feature", "core.staged-stream-length-framing")
         .expect("staged stream-length feature record must exist");

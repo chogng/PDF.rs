@@ -117,6 +117,55 @@ fn anchored_revision_surface_cannot_relax_the_strict_base_entry() {
 }
 
 #[test]
+fn final_and_anchor_jobs_remain_classification_only_primitives() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("xref library surface must be readable");
+    let strict_job = fs::read_to_string(crate_root.join("src/job.rs"))
+        .expect("strict xref job source must be readable");
+    let final_anchor = fs::read_to_string(crate_root.join("src/final_anchor.rs"))
+        .expect("final-anchor source must be readable");
+    let anchor = fs::read_to_string(crate_root.join("src/anchor.rs"))
+        .expect("anchor-classifier source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("xref provenance must be readable");
+
+    for required in [
+        "mod final_anchor;",
+        "mod anchor;",
+        "OpenFinalStartXrefJob",
+        "FinalStartXref",
+        "OpenXrefAnchorJob",
+        "XrefAnchorKind",
+    ] {
+        assert!(
+            library.contains(required),
+            "xref surface must retain {required:?}"
+        );
+    }
+    assert!(strict_job.contains("OpenFinalStartXrefJob"));
+    assert!(strict_job.contains("FinalStartXrefPoll"));
+    assert!(!strict_job.contains("parse_tail"));
+    assert!(final_anchor.contains("parse_tail"));
+    assert!(!final_anchor.contains("parse_section"));
+    assert!(anchor.contains("XrefAnchorKind::Traditional"));
+    assert!(anchor.contains("XrefAnchorKind::StreamObject"));
+    assert!(anchor.contains("XrefLimitKind::AnchorBytes"));
+    assert!(anchor.contains("self.range.end_exclusive() == source_len"));
+    assert!(anchor.contains("self.range.end_exclusive() == self.upper_bound"));
+    assert!(!anchor.contains("parse_unfiltered_xref_stream"));
+    assert!(!anchor.contains("pdf_rs_object"));
+    assert!(provenance.contains("there is no second tail implementation"));
+    assert!(provenance.contains("only header evidence"));
+    assert!(provenance.contains("snapshot's actual source length"));
+    assert!(provenance.contains("earlier caller physical bound is invalid anchor"));
+    assert!(provenance.contains("These tests do not"));
+    assert!(provenance.contains("frame or decode a stream"));
+    assert!(provenance.contains("jobs do not acquire a"));
+    assert!(provenance.contains("revision section"));
+}
+
+#[test]
 fn traceability_maps_are_versioned_together_and_register_xref() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -129,8 +178,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.49.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.49.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.50.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.50.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -165,6 +214,17 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(chain_feature.contains("core/xref::traditional_revision"));
     assert!(chain_feature.contains("fuzz_targets = []"));
     assert!(chain_feature.contains("benchmarks = []"));
+
+    let anchor_feature = record_with_id(&feature_map, "feature", "core.source-xref-anchor")
+        .expect("the source xref-anchor feature record must exist");
+    assert!(anchor_feature.contains("state = \"PLANNED\""));
+    assert!(anchor_feature.contains("profile = \"m1.source-xref-anchor.v1\""));
+    assert!(anchor_feature.contains("modules = [\"core/xref\", \"core/object\"]"));
+    assert!(anchor_feature.contains("core/xref::final_startxref"));
+    assert!(anchor_feature.contains("core/xref::xref_anchor"));
+    assert!(anchor_feature.contains("core/object::object_behavior"));
+    assert!(anchor_feature.contains("fuzz_targets = []"));
+    assert!(anchor_feature.contains("benchmarks = []"));
 
     let attestation = record_with_id(
         &feature_map,
@@ -233,12 +293,15 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
         .expect("the traditional-xref architecture requirement record must exist");
     assert!(requirement.contains("\"core.traditional-xref\""));
+    assert!(requirement.contains("\"core.source-xref-anchor\""));
     assert!(requirement.contains("\"core.decoded-xref-stream-table\""));
     assert!(requirement.contains("\"core.xref-revision-chain\""));
     assert!(requirement.contains("\"core/xref\""));
     assert!(requirement.contains("explicit base roots, update inheritance"));
     assert!(requirement.contains("validated base hybrids"));
     assert!(requirement.contains("core/xref::traditional_xref"));
+    assert!(requirement.contains("core/xref::final_startxref"));
+    assert!(requirement.contains("core/xref::xref_anchor"));
     assert!(requirement.contains("core/xref::traditional_revision"));
     assert!(requirement.contains("core/xref::xref_stream"));
     assert!(requirement.contains("core/xref::revision_chain"));
@@ -298,7 +361,12 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("OpenTraditionalRevisionJob"));
     assert!(requirement.contains("caller-selected traditional section"));
     assert!(requirement.contains("strict base parser still rejects sparse incremental tables"));
-    assert!(requirement.contains("final-anchor classification"));
+    assert!(requirement.contains("m1.source-xref-anchor.v1"));
+    assert!(requirement.contains("line-terminated traditional table header"));
+    assert!(requirement.contains("does not prove `/Type /XRef`"));
+    assert!(!requirement.contains("final-anchor classification for stream primaries"));
+    assert!(requirement.contains("source-bound final anchor"));
+    assert!(requirement.contains("exact table or stream-object headers"));
     assert!(requirement.contains("`/Prev` traversal"));
     assert!(requirement.contains("object streams"));
     assert!(requirement.contains("repair"));

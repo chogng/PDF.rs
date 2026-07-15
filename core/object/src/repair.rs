@@ -9,10 +9,11 @@ use pdf_rs_syntax::{ByteSpan, InputExtent, ObjectRef, SyntaxLimits};
 
 use crate::parser::{BoundaryParse, ParsedBoundary, parse_boundary};
 use crate::{
-    DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue,
-    ObjectCancellation, ObjectEnvelopePoll, ObjectError, ObjectErrorCategory, ObjectErrorCode,
-    ObjectJobContext, ObjectLimitKind, ObjectLimits, ObjectPhase, ObjectPoll, ObjectStats,
-    ObjectWorkCaps, OpenObjectEnvelopeJob, OpenObjectJob, StreamEnvelope, StreamLengthClaim,
+    DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget,
+    IndirectObjectTargetKind, IndirectObjectValue, ObjectCancellation, ObjectEnvelopePoll,
+    ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectJobContext, ObjectLimitKind,
+    ObjectLimits, ObjectPhase, ObjectPoll, ObjectStats, ObjectWorkCaps, OpenObjectEnvelopeJob,
+    OpenObjectJob, StreamEnvelope, StreamLengthClaim,
 };
 
 const HARD_MAX_OFFSET_DELTA: u64 = 4096;
@@ -665,6 +666,13 @@ impl OpenLocalObjectJob {
         work_caps: ObjectWorkCaps,
         repair_work_caps: ObjectRepairWorkCaps,
     ) -> Result<Self, ObjectError> {
+        if target.kind() != IndirectObjectTargetKind::XrefEntry {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::UnsupportedRepairTarget,
+                Some(target.reference()),
+                Some(target.xref_offset()),
+            ));
+        }
         let checkpoints = [
             context.strict().envelope_checkpoint(),
             context.strict().boundary_checkpoint(),

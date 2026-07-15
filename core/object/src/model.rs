@@ -7,6 +7,15 @@ use crate::{
     ObjectError, ObjectErrorCode, ObjectJobContext, ObjectLimits, ObjectStats, ObjectWorkCaps,
 };
 
+/// Geometry authority used to construct one indirect-object framing target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IndirectObjectTargetKind {
+    /// A normal uncompressed xref entry whose object ends no later than its revision anchor.
+    XrefEntry,
+    /// An xref-stream container whose indirect object begins at the section anchor itself.
+    XrefStreamAnchor,
+}
+
 /// Snapshot-bound location of one indirect object selected by cross-reference metadata.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct IndirectObjectTarget {
@@ -15,6 +24,7 @@ pub struct IndirectObjectTarget {
     xref_offset: u64,
     object_upper_bound: u64,
     revision_startxref: u64,
+    kind: IndirectObjectTargetKind,
 }
 
 impl IndirectObjectTarget {
@@ -56,6 +66,61 @@ impl IndirectObjectTarget {
             xref_offset,
             object_upper_bound,
             revision_startxref,
+            kind: IndirectObjectTargetKind::XrefEntry,
+        })
+    }
+
+    /// Binds an indirect xref-stream container that begins at its own section anchor.
+    ///
+    /// Unlike [`Self::new`], a primary xref-stream may extend beyond its own `startxref`
+    /// to an independently supplied object bound. A hybrid supplement must instead end
+    /// exactly at its owning traditional primary anchor. The ordinary xref-entry
+    /// constructor retains its stricter `object_upper_bound <= revision_startxref`
+    /// invariant.
+    pub fn at_xref_stream_anchor(
+        snapshot: SourceSnapshot,
+        reference: ObjectRef,
+        startxref: u64,
+        object_upper_bound: u64,
+        revision_startxref: u64,
+    ) -> Result<Self, ObjectError> {
+        let Some(source_len) = snapshot.len() else {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::UnknownSourceLength,
+                Some(reference),
+                None,
+            ));
+        };
+        let hybrid_upper_bound_mismatch =
+            revision_startxref > startxref && object_upper_bound != revision_startxref;
+        if startxref >= object_upper_bound
+            || object_upper_bound > source_len
+            || revision_startxref < startxref
+            || revision_startxref >= source_len
+            || hybrid_upper_bound_mismatch
+        {
+            let offset = if startxref >= object_upper_bound {
+                startxref
+            } else if object_upper_bound > source_len {
+                object_upper_bound
+            } else if revision_startxref < startxref || revision_startxref >= source_len {
+                revision_startxref
+            } else {
+                object_upper_bound
+            };
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::InvalidTarget,
+                Some(reference),
+                Some(offset),
+            ));
+        }
+        Ok(Self {
+            snapshot,
+            reference,
+            xref_offset: startxref,
+            object_upper_bound,
+            revision_startxref,
+            kind: IndirectObjectTargetKind::XrefStreamAnchor,
         })
     }
 
@@ -83,6 +148,11 @@ impl IndirectObjectTarget {
     pub const fn revision_startxref(self) -> u64 {
         self.revision_startxref
     }
+
+    /// Returns the explicit geometry authority used to create this target.
+    pub const fn kind(self) -> IndirectObjectTargetKind {
+        self.kind
+    }
 }
 
 impl fmt::Debug for IndirectObjectTarget {
@@ -94,6 +164,7 @@ impl fmt::Debug for IndirectObjectTarget {
             .field("xref_offset", &self.xref_offset)
             .field("object_upper_bound", &self.object_upper_bound)
             .field("revision_startxref", &self.revision_startxref)
+            .field("kind", &self.kind)
             .finish()
     }
 }
@@ -104,6 +175,7 @@ pub struct IndirectObject {
     snapshot: SourceSnapshot,
     reference: ObjectRef,
     revision_startxref: u64,
+    target_kind: IndirectObjectTargetKind,
     xref_offset: u64,
     object_upper_bound: u64,
     header_span: ByteSpan,
@@ -126,6 +198,7 @@ impl IndirectObject {
             snapshot: target.snapshot,
             reference: target.reference,
             revision_startxref: target.revision_startxref,
+            target_kind: target.kind,
             xref_offset: target.xref_offset,
             object_upper_bound: target.object_upper_bound,
             header_span,
@@ -149,6 +222,11 @@ impl IndirectObject {
     /// Returns the cross-reference offset anchoring the object's revision.
     pub const fn revision_startxref(&self) -> u64 {
         self.revision_startxref
+    }
+
+    /// Returns the explicit geometry authority carried from the framing target.
+    pub const fn target_kind(&self) -> IndirectObjectTargetKind {
+        self.target_kind
     }
 
     /// Returns the absolute offset at which the validated object header begins.
@@ -198,6 +276,7 @@ impl fmt::Debug for IndirectObject {
             .field("snapshot", &self.snapshot)
             .field("reference", &self.reference)
             .field("revision_startxref", &self.revision_startxref)
+            .field("target_kind", &self.target_kind)
             .field("xref_offset", &self.xref_offset)
             .field("object_upper_bound", &self.object_upper_bound)
             .field("header_span", &self.header_span)

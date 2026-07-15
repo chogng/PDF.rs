@@ -127,6 +127,8 @@ pub enum ObjectErrorCode {
     LocalRepairFailed,
     /// More than one bounded local object repair candidate passed validation.
     AmbiguousRepair,
+    /// Local R1 repair does not accept this target geometry authority.
+    UnsupportedRepairTarget,
 }
 
 /// Coarse indirect-object failure category.
@@ -325,6 +327,11 @@ impl ObjectError {
                 ObjectErrorCategory::Syntax,
                 ObjectRecoverability::CorrectInput,
                 "RPE-OBJECT-0026",
+            ),
+            ObjectErrorCode::UnsupportedRepairTarget => (
+                ObjectErrorCategory::Unsupported,
+                ObjectRecoverability::UseSupportedFeature,
+                "RPE-OBJECT-0027",
             ),
         };
         Self {

@@ -16,7 +16,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod anchor;
 mod error;
+mod final_anchor;
 mod job;
 mod limits;
 mod model;
@@ -26,8 +28,16 @@ mod revision;
 mod stream;
 mod traditional_revision;
 
+pub use anchor::{
+    OpenXrefAnchorJob, XrefAnchor, XrefAnchorJobContext, XrefAnchorKind, XrefAnchorLimitConfig,
+    XrefAnchorLimits, XrefAnchorPhase, XrefAnchorPoll, XrefAnchorStats,
+};
 pub use error::{
     XrefError, XrefErrorCategory, XrefErrorCode, XrefLimit, XrefLimitKind, XrefRecoverability,
+};
+pub use final_anchor::{
+    FinalStartXref, FinalStartXrefJobContext, FinalStartXrefPhase, FinalStartXrefPoll,
+    FinalStartXrefStats, OpenFinalStartXrefJob,
 };
 pub use job::{
     NeverCancelled, OpenXrefJob, XrefCancellation, XrefJobContext, XrefPhase, XrefPoll, XrefStats,

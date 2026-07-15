@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) enum TailParse {
-    Found(u64),
+    Found { startxref: u64, tail_start: u64 },
     NeedLarger,
 }
 
@@ -212,7 +212,10 @@ pub(crate) fn parse_tail(
             Some(absolute(base_offset, whitespace_before_value)?),
         ));
     }
-    Ok(TailParse::Found(value))
+    Ok(TailParse::Found {
+        startxref: value,
+        tail_start: absolute(base_offset, keyword_start)?,
+    })
 }
 
 pub(crate) fn parse_section(
@@ -1158,7 +1161,7 @@ fn is_pdf_whitespace(byte: u8) -> bool {
     matches!(byte, 0 | b'\t' | b'\n' | 12 | b'\r' | b' ')
 }
 
-fn is_horizontal_whitespace(byte: u8) -> bool {
+pub(crate) fn is_horizontal_whitespace(byte: u8) -> bool {
     matches!(byte, 0 | b'\t' | 12 | b' ')
 }
 

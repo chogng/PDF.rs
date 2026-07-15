@@ -35,6 +35,8 @@ pub enum XrefLimitKind {
     RepairDiagnostics,
     /// Allocator-reported bytes retained by repair diagnostics.
     RepairDiagnosticBytes,
+    /// Bytes inspected to classify one exact xref anchor.
+    AnchorBytes,
 }
 
 /// Structured resource-limit context without document bytes.
@@ -137,6 +139,8 @@ pub enum XrefErrorCode {
     LocalRepairFailed,
     /// More than one local xref candidate passed normal validation.
     AmbiguousRepair,
+    /// A declared xref anchor is neither an exact traditional prefix nor an indirect header.
+    InvalidXrefAnchor,
 }
 
 /// Coarse xref failure category.
@@ -330,6 +334,11 @@ impl XrefError {
                 XrefErrorCategory::Syntax,
                 XrefRecoverability::CorrectInput,
                 "RPE-XREF-0026",
+            ),
+            XrefErrorCode::InvalidXrefAnchor => (
+                XrefErrorCategory::Syntax,
+                XrefRecoverability::CorrectInput,
+                "RPE-XREF-0027",
             ),
         };
         Self {

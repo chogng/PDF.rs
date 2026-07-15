@@ -31,8 +31,9 @@ pub use job::{
 };
 pub use limits::{ObjectLimitConfig, ObjectLimits, ObjectWorkCaps};
 pub use model::{
-    DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue,
-    ResolvedStreamLength, StreamEnvelope, StreamLengthClaim,
+    DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget,
+    IndirectObjectTargetKind, IndirectObjectValue, ResolvedStreamLength, StreamEnvelope,
+    StreamLengthClaim,
 };
 pub use object_stream::{
     DecodedArray, DecodedDictionary, DecodedDictionaryEntry, DecodedLocatedObject, DecodedObject,

@@ -7,9 +7,10 @@ use pdf_rs_bytes::{
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_object::{
-    IndirectObject, IndirectObjectTarget, IndirectObjectValue, NeverCancelled, ObjectError,
-    ObjectErrorCategory, ObjectErrorCode, ObjectJobContext, ObjectLimitConfig, ObjectLimitKind,
-    ObjectLimits, ObjectPhase, ObjectPoll, ObjectRecoverability, OpenObjectJob,
+    IndirectObject, IndirectObjectTarget, IndirectObjectTargetKind, IndirectObjectValue,
+    NeverCancelled, ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectJobContext,
+    ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectPhase, ObjectPoll,
+    ObjectRecoverability, OpenObjectJob,
 };
 use pdf_rs_syntax::{
     InputExtent, ObjectRef, SyntaxInput, SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll,
@@ -1195,6 +1196,103 @@ fn target_snapshot_cancellation_and_job_context_are_terminal_and_classified() {
         },
         ObjectErrorCode::SnapshotMismatch
     );
+}
+
+#[test]
+fn xref_stream_anchor_geometry_is_explicit_and_does_not_relax_entry_targets() {
+    let source = snapshot(128);
+    let reference = object_ref(7, 0);
+
+    let primary = IndirectObjectTarget::at_xref_stream_anchor(source, reference, 64, 112, 64)
+        .expect("a primary xref-stream object may extend beyond its own anchor");
+    assert_eq!(primary.kind(), IndirectObjectTargetKind::XrefStreamAnchor);
+    assert_eq!(primary.xref_offset(), 64);
+    assert_eq!(primary.object_upper_bound(), 112);
+    assert_eq!(primary.revision_startxref(), 64);
+
+    let supplement = IndirectObjectTarget::at_xref_stream_anchor(source, reference, 64, 96, 96)
+        .expect("a hybrid stream may be bounded by its traditional primary anchor");
+    assert_eq!(
+        supplement.kind(),
+        IndirectObjectTargetKind::XrefStreamAnchor
+    );
+    assert_eq!(supplement.revision_startxref(), 96);
+    assert_eq!(supplement.object_upper_bound(), 96);
+
+    for (upper_bound, relation) in [
+        (95, "before its traditional primary anchor"),
+        (97, "beyond its traditional primary anchor"),
+    ] {
+        assert_eq!(
+            IndirectObjectTarget::at_xref_stream_anchor(source, reference, 64, upper_bound, 96,)
+                .unwrap_err()
+                .code(),
+            ObjectErrorCode::InvalidTarget,
+            "a hybrid stream must not end {relation}"
+        );
+    }
+
+    assert_eq!(
+        IndirectObjectTarget::new(source, reference, 64, 112, 64)
+            .unwrap_err()
+            .code(),
+        ObjectErrorCode::InvalidTarget,
+        "the ordinary xref-entry constructor must retain bound <= revision geometry"
+    );
+
+    for (startxref, upper_bound, primary_startxref) in
+        [(64, 64, 64), (64, 129, 64), (64, 96, 63), (128, 129, 128)]
+    {
+        assert_eq!(
+            IndirectObjectTarget::at_xref_stream_anchor(
+                source,
+                reference,
+                startxref,
+                upper_bound,
+                primary_startxref,
+            )
+            .unwrap_err()
+            .code(),
+            ObjectErrorCode::InvalidTarget
+        );
+    }
+
+    let unknown = SourceSnapshot::new(
+        identity(),
+        None,
+        SourceValidator::new(SourceValidatorKind::FrozenResponse, [0x27; 32]),
+    );
+    assert_eq!(
+        IndirectObjectTarget::at_xref_stream_anchor(unknown, reference, 1, 10, 1)
+            .unwrap_err()
+            .code(),
+        ObjectErrorCode::UnknownSourceLength
+    );
+
+    let mut bytes = vec![b' '; 64];
+    bytes.extend_from_slice(b"7 0 obj\nnull\nendobj\n");
+    let object_upper_bound = u64::try_from(bytes.len()).unwrap();
+    bytes.extend_from_slice(b"startxref\n64\n%%EOF\n");
+    let store = supplied_store(&bytes);
+    let anchored = IndirectObjectTarget::at_xref_stream_anchor(
+        store.snapshot(),
+        reference,
+        64,
+        object_upper_bound,
+        64,
+    )
+    .unwrap();
+    let mut open = job(anchored, ObjectLimits::default());
+    let object = match open.poll(&store, &NeverCancelled) {
+        ObjectPoll::Ready(object) => object,
+        other => panic!("explicit anchor target did not frame: {other:?}"),
+    };
+    assert_eq!(
+        object.target_kind(),
+        IndirectObjectTargetKind::XrefStreamAnchor
+    );
+    assert_eq!(object.xref_offset(), 64);
+    assert_eq!(object.object_upper_bound(), object_upper_bound);
 }
 
 #[test]

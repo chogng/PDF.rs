@@ -1,8 +1,10 @@
 # Scope
 
-`core/xref` owns strict cross-reference primitives for the Native product core. Its resumable
-bootstrap discovers the final `startxref` marker of a known-length immutable source and parses one
-bounded traditional xref table and trailer. A separate resumable anchored job parses one
+`core/xref` owns strict cross-reference primitives for the Native product core. A reusable
+resumable job discovers only the final source-bound `startxref` declaration, while the legacy
+strict bootstrap composes that unchanged tail job with one bounded traditional xref table and
+trailer. A separate bounded anchor job classifies an exact traditional prefix or indirect-object
+header without framing or trusting an xref stream. A separate resumable anchored job parses one
 caller-selected traditional revision section, retains optional `/Prev`, `/XRefStm`, and `/Root`
 metadata, and permits sparse update rows without changing the strict base bootstrap. A separate
 synchronous primitive validates one
@@ -55,6 +57,21 @@ coverage claim.
 - Final-marker discovery grows a suffix window from a 1-KiB default toward a 64-KiB default ceiling
   and selects the last validated `startxref`. Numeric offset parsing uses checked arithmetic, and
   the declared xref offset must remain inside the bound snapshot before another read is requested.
+  `OpenFinalStartXrefJob` publishes the complete snapshot, declared anchor, and physical start of
+  the final `startxref` keyword. `OpenXrefJob` owns and polls this same child, then continues through
+  its unchanged strict traditional-section parser; there is no second tail implementation.
+- `OpenXrefAnchorJob` reads one exact caller-bounded window beginning at a declared anchor. A
+  traditional result requires byte-zero `xref`, the shared strict horizontal-whitespace rule, and
+  LF, CR, or CRLF, matching the traditional parser's accepted table prefix. Otherwise the bounded
+  syntax parser requires a nonzero checked `u32` object number, checked `u16` generation, and exact
+  `obj` keyword whose first number begins at the anchor. Leading trivia, token continuations,
+  numeric overflow, and incomplete headers at the
+  configured cap are rejected. Only a range ending at the snapshot's actual source length is
+  exposed to syntax as known EOF. Exhausting an earlier caller physical bound is invalid anchor
+  syntax, while exhausting `max_anchor_bytes` before the caller bound is a structured resource
+  failure. The returned `ObjectRef` is only header evidence; `/Type /XRef`, stream dictionary,
+  `/Length`, payload, filter, self-entry, and revision geometry remain unproved. Pending re-polls
+  retain one ticket/checkpoint and do not recharge the installed window.
 - Table acquisition starts with a 4-KiB default contiguous window at the declared offset and grows
   geometrically up to the known end of input and a 1-MiB default window ceiling. Cumulative exact
   reads and rescanned input each have a 4-MiB default ceiling.
@@ -160,6 +177,15 @@ redistribution obligation beyond those already recorded for the repository.
 
 # Tests and fuzz targets
 
+Final-marker tests cover snapshot and tail-bound retention, equivalence with the legacy strict
+open, Pending without duplicate charge, source change, cancellation, terminal replay, and exact
+tail-limit failure. Anchor-classification tests cover LF/CRLF traditional prefixes, signed and
+unsigned exact indirect headers, retained `ObjectRef`, malformed keyword delimiters, leading
+trivia, object/generation overflow, Pending resume, snapshot change, cancellation, caller bounds,
+source limits, exact anchor-window exhaustion, object-keyword continuation behind a caller bound,
+CRLF split at a caller bound, and bare CR accepted only at actual source EOF. These tests do not
+frame or decode a stream.
+
 Traditional-xref behavior tests cover the canonical trailer root and five entries, absolute
 section and trailer spans, two-phase Pending/resume after partial Range supplies, equality and
 one-less source/entry/cumulative-work limits, complete limit-profile validation, multiple and
@@ -214,7 +240,9 @@ slice.
 # Known deviations and unsupported cases
 
 - The final-marker bootstrap and product strict-open profile still support one strict traditional
-  base table only. The separate anchored job now produces one source-bound, locally validated
+  base table only. The reusable final-marker and anchor-classification jobs do not acquire a
+  revision section or change the product strict-open result. The separate anchored job now
+  produces one source-bound, locally validated
   sparse traditional revision candidate and retains `/Prev` and `/XRefStm`, but it does not
   discover the final anchor, traverse `/Prev`, acquire or decode the hybrid supplement, frame an
   xref-stream container, compose the chain, or hand it to document services. The decoded
@@ -260,3 +288,6 @@ slice.
   construction, added newest-to-oldest root inheritance for updates with an explicit base root,
   and admitted validated base hybrids without weakening incremental hybrid geometry or latest-wins
   masking.
+- 2026-07-15: Extracted source-bound final `startxref` discovery for strict-job reuse and added a
+  bounded Range-resumable classifier for exact traditional prefixes and indirect-object headers;
+  neither result claims xref-stream framing or mixed revision acquisition.

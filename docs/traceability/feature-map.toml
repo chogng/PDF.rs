@@ -1,5 +1,5 @@
 schema = 1
-version = "0.49.0"
+version = "0.50.0"
 status = "active"
 
 [[feature]]
@@ -70,6 +70,18 @@ profile = "m1.traditional-xref.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
 modules = ["core/xref"]
 tests = ["core/xref::traditional_xref", "core/xref::traditional_revision", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.source-xref-anchor"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.source-xref-anchor.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/xref", "core/object"]
+tests = ["core/xref::final_startxref", "core/xref::xref_anchor", "core/xref::repository_policy", "core/object::object_behavior", "core/object::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

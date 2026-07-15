@@ -52,12 +52,22 @@ makes no ISO or R0 semantic coverage claim.
 
 # Algorithms and derivations
 
-- An object job binds a complete known-length `SourceSnapshot`, expected `ObjectRef`, xref offset,
-  an independent exclusive physical upper bound, and the revision `startxref`. It requires
+- An ordinary xref-entry object job binds a complete known-length `SourceSnapshot`, expected
+  `ObjectRef`, xref offset, an independent exclusive physical upper bound, and the revision
+  `startxref`. Its unchanged constructor requires
   `xref_offset < object_upper_bound <= startxref < source_len`, rejects inconsistent geometry
-  before reading, and compares the complete snapshot on every poll. Envelope, payload-end, and
-  terminal-boundary work is capped by the physical bound. The completed object retains the full
-  snapshot and that bound.
+  before reading, and compares the complete snapshot on every poll. A distinct
+  `IndirectObjectTarget::at_xref_stream_anchor` constructor retains an explicit target kind for an
+  xref-stream container beginning at its own section anchor; it requires
+  `startxref < object_upper_bound <= source_len`. When the xref stream is itself the primary anchor,
+  `revision_startxref == startxref` and the independently supplied physical bound may follow it.
+  For a hybrid supplement, `revision_startxref > startxref` and the owning traditional primary
+  anchor must equal the exclusive `object_upper_bound`, so framing cannot cross into the primary
+  section. This alternate geometry does not relax or share the ordinary constructor's inequality
+  and does not itself prove `/Type /XRef`, stream framing, `/Length`, filter output, or self-entry
+  semantics.
+  The target kind survives into a completed object so later composition can enforce the intended
+  use. Envelope, payload-end, and terminal-boundary work remains capped by the physical bound.
 - The envelope range includes the byte immediately before a nonzero xref offset. That byte must be
   one of the PDF whitespace bytes NUL, horizontal tab, line feed, form feed, carriage return, or
   space; closing delimiters and all other bytes are rejected. The first parsed object-number span
@@ -110,10 +120,15 @@ makes no ISO or R0 semantic coverage claim.
   `ByteSource::poll`, and a scoped parse window is charged before parser invocation, so exhausted
   parent work cannot perform the rejected lower-layer operation. The scoped caps do not weaken
   per-object envelope, boundary, stream, source, or syntax limits.
-- `OpenLocalObjectJob` always polls one unchanged `OpenObjectJob` first. It enters repair only for
-  an invalid expected header or a direct stream whose declared boundary fails locally. Unsupported
-  indirect lengths, resource exhaustion, cancellation, snapshot/source failures, configuration,
-  and internal failures remain terminal and never enter a recovery path.
+- `OpenLocalObjectJob` accepts only an ordinary `XrefEntry` target and rejects an
+  `XrefStreamAnchor` at construction with stable `RPE-OBJECT-0027` unsupported policy. This keeps
+  header repair from rebuilding the anchor through the ordinary target constructor and silently
+  downgrading its geometry authority. Strict `OpenObjectJob` continues to support the explicit
+  xref-stream-anchor target. For accepted entry targets, local repair always polls one unchanged
+  strict child first. It enters repair only for an invalid expected header or a direct stream whose
+  declared boundary fails locally. Unsupported indirect lengths, resource exhaustion,
+  cancellation, snapshot/source failures, configuration, and internal failures remain terminal
+  and never enter a recovery path.
 - Header repair scans only a fixed caller-bounded delta around the declared xref offset for the
   exact expected object number, generation, `obj` keyword, and following PDF whitespace. Matching
   anchors, including later-invalid candidates, consume a fixed candidate budget. Exactly one
@@ -199,8 +214,11 @@ tickets, disconnected envelope/boundary supply with a missing payload middle, re
 direct `/Length` policies, strict LF/CRLF boundaries, incorrect lengths without repair scanning,
 cumulative read/parse budgets, exact retained scalar/container capacity for direct and stream
 objects, discarded-retry isolation, cancellation, full snapshot mismatch, one-shot lifecycle,
-and redacted diagnostics. Scoped-work tests cover positive minima and hard ceilings, zero and
-hard-ceiling-plus-one rejection, caps above configured totals, exact and one-less read/parse work
+and redacted diagnostics. They also prove that explicit primary and hybrid xref-stream-anchor
+targets may extend beyond their own stream anchor, carry their distinct kind through framing, and
+leave every invalid or widened ordinary xref-entry target rejected. Scoped-work tests cover
+positive minima and hard ceilings, zero and hard-ceiling-plus-one rejection, caps above configured
+totals, exact and one-less read/parse work
 for both direct and stream objects, getters, and equivalence of the legacy constructor with
 explicit configured-total caps. A framing matrix exhausts every initial envelope/boundary split and
 direct/stream candidate physical-bound cut for the bootstrap fixtures,
@@ -210,9 +228,10 @@ indirect declaration classification, same-snapshot and exact-reference claim bin
 `RPE-OBJECT-0022` mismatch policy, sparse envelope and exact-boundary Pending/resume checkpoints,
 a deliberately unsupplied large payload tail, terminal source change, cancellation, retained
 resolved-value provenance, and exact versus one-less aggregate work across both phases.
-Local-repair tests cover unchanged strict success, nearby exact-header correction, direct-length
-correction with LF/CRLF/bare-CR distinctions, combined offset and length evidence, ambiguous and
-missing candidates, strict failure allowlisting, same-snapshot Pending/resume and source change,
+Local-repair tests cover unchanged strict success, construction-time rejection of xref-stream
+anchors without target-kind downgrade, nearby exact-header correction, direct-length correction
+with LF/CRLF/bare-CR distinctions, combined offset and length evidence, ambiguous and missing
+candidates, strict failure allowlisting, same-snapshot Pending/resume and source change,
 configuration/checkpoint validation, exact and one-less scan/delta/candidate ceilings, invalid
 looks-like boundary attempts, per-candidate boundary caps, and exact versus one-less parent-lent
 aggregate read/parse totals spanning strict, candidate, replay, and repair-scan work.
