@@ -196,6 +196,103 @@ fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
 }
 
 #[test]
+fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let source = fs::read_to_string(crate_root.join("src/source_revision_chain.rs"))
+        .expect("source revision-chain acquisition source must be readable");
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("document library source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("document provenance must be readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+
+    for required in [
+        "pub struct OpenSourceRevisionChainJob",
+        "pub struct SourceAcquiredRevisionChain",
+        "reserve_active_child",
+        "complete_active_child",
+        "max_admitted_read_bytes",
+        "max_admitted_parse_bytes",
+        "max_admitted_retained_bound_bytes",
+        "pub(crate) const fn revision_chain(&self) -> &RevisionChain",
+    ] {
+        assert!(
+            source.contains(required),
+            "source revision-chain acquisition must retain {required:?}"
+        );
+    }
+    assert!(!source.contains("pub const fn revision_chain(&self) -> &RevisionChain"));
+    assert!(!source.contains("pub fn revision_chain(&self) -> &RevisionChain"));
+    assert!(library.contains("OpenSourceRevisionChainJob"));
+    assert!(library.contains("SourceAcquiredRevisionChain"));
+
+    for required in [
+        "one active lower `Pending` result",
+        "strict backward `/Prev` links",
+        "without publicly lending the cloneable naked `RevisionChain`",
+        "admits the complete geometric worst-case read/parse work",
+        "explicit conservative `retained_bound`",
+        "supports only unfiltered direct-Length xref streams",
+        "does not establish M1 exit",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "source revision-chain provenance must state {required:?}"
+        );
+    }
+
+    let feature = record_with_id(
+        &feature_map,
+        "feature",
+        "core.source-revision-chain-acquisition",
+    )
+    .expect("source revision-chain acquisition feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.source-revision-chain-acquisition.v1\"",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"core/document\", \"core/xref\", \"core/object\"]",
+        "core/document::source_revision_chain",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "source revision-chain feature must contain {required:?}"
+        );
+    }
+
+    for requirement_id in ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1"] {
+        let requirement = record_with_id(&spec_map, "requirement", requirement_id)
+            .expect("source revision-chain requirement record must exist");
+        for required in [
+            "core.source-revision-chain-acquisition",
+            "core/document::source_revision_chain",
+            "OpenSourceRevisionChainJob",
+        ] {
+            assert!(
+                requirement.contains(required),
+                "{requirement_id} must trace source revision-chain evidence {required:?}"
+            );
+        }
+    }
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("M1 requirement record must exist");
+    assert!(milestone.contains("status = \"partial\""));
+    assert!(milestone.contains("filtered or indirect-Length xref streams"));
+    assert!(milestone.contains("complete Session ownership remain open"));
+}
+
+#[test]
 fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -407,8 +504,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.53.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.53.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.54.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.54.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

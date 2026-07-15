@@ -209,8 +209,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.53.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.53.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.54.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.54.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -388,7 +388,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("relative decoded spans rather than physical source ByteSpan"));
     assert!(requirement.contains("does not interpret the filter plan or mint decode proof"));
     assert!(requirement.contains("sealed DecodedStream attestation"));
-    assert!(requirement.contains("Filtered xref/object-stream decode"));
+    assert!(requirement.contains("Filtered xref/object-stream decoding"));
     assert!(requirement.contains("current traditional primary, current hybrid supplement"));
     assert!(
         requirement
@@ -396,9 +396,10 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     );
     assert!(requirement.contains("hybrid geometry, unique anchors"));
     assert!(requirement.contains("already-composed chain"));
-    assert!(requirement.contains("hybrid-supplement acquisition"));
-    assert!(requirement.contains("OpenTraditionalRevisionJob"));
-    assert!(requirement.contains("source-xref-stream job can acquire one caller-selected table"));
+    assert!(requirement.contains("OpenSourceRevisionChainJob"));
+    assert!(requirement.contains("optional hybrid anchor classification"));
+    assert!(requirement.contains("anchored traditional or source-framed stream acquisition"));
+    assert!(requirement.contains("every raw source proof"));
     assert!(requirement.contains("m1.source-xref-stream-acquisition.v1"));
     assert!(requirement.contains("single active Pending ticket"));
     assert!(
@@ -409,10 +410,14 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("line-terminated traditional table header"));
     assert!(requirement.contains("classification result only identifies an ObjectRef"));
     assert!(!requirement.contains("final-anchor classification for stream primaries"));
-    assert!(requirement.contains("source-bound final anchor"));
-    assert!(requirement.contains("exact table or stream-object headers"));
+    assert!(requirement.contains("source-bound final and revision anchors"));
+    assert!(
+        requirement.contains(
+            "line-terminated traditional table header or an exact indirect-object header"
+        )
+    );
     assert!(requirement.contains("`/Prev` traversal"));
-    assert!(requirement.contains("object streams"));
+    assert!(requirement.contains("object-stream scheduling and ownership"));
     assert!(requirement.contains("repair"));
     assert!(requirement.contains("does not claim M1 exit"));
     assert!(requirement.contains("ISO clause coverage"));

@@ -22,6 +22,12 @@ stream-object anchor. It frames that exact indirect object, accepts only direct 
 the exact encoded payload from the same immutable snapshot, validates the declared terminal
 boundary, and publishes the existing unfiltered `XrefStream` only inside a non-cloneable wrapper
 that also retains the complete framed container.
+`OpenSourceRevisionChainJob` is the proof-preserving parent for the unfiltered direct-Length
+profile. It discovers the final marker, classifies each exact primary anchor, acquires traditional
+or stream primaries plus optional hybrid supplements, follows strict backward `/Prev` links, and
+calls the existing pure newest-to-oldest composer only after every raw source proof is retained.
+Its move-only result keeps the final marker, every classified anchor, every original parsed
+section, and the composed chain without publicly lending the cloneable naked `RevisionChain`.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
@@ -147,6 +153,44 @@ repair or publish partially attested state.
   a traditional primary or `/XRefStm` partner, compose revision precedence, publish a revision
   chain, integrate strict-open or repaired services, schedule object streams, or provide Session
   ownership. It is therefore partial M1 evidence rather than a source revision or M1 exit.
+
+## Source-acquired mixed revision chains
+
+- One caller `JobId` owns six pairwise-distinct checkpoints for final-tail, anchor, traditional,
+  stream-envelope, stream-boundary, and stream-payload work. Sequential child jobs reuse their
+  phase checkpoint, but the parent exposes only the one active lower `Pending` result and forwards
+  its ticket, missing ranges, and checkpoint unchanged. Terminal failure is stable; successful
+  one-shot replay is rejected before source or cancellation checks.
+- The final marker's `tail_start` is the exclusive upper bound for the newest primary. Each older
+  primary is bounded by the next newer primary anchor, and a hybrid stream is bounded by its owning
+  traditional primary. `/Prev` must be nonzero, strictly backward, and not equal any retained
+  primary or hybrid anchor. `/XRefStm` must be nonzero, strictly below its primary, strictly above
+  that revision's optional `/Prev`, and globally unique. Count caps are checked before starting the
+  next child whenever the next section is already known.
+- Traditional primaries retain their original `TraditionalRevisionSection`; stream primaries and
+  hybrid supplements retain their original non-cloneable `SourceAcquiredXrefStream`. Candidate
+  entry vectors are copied only through checked, cancellation-probed, fallible reservations.
+  Revision and proof vectors are likewise preflighted and reserved before append. The final
+  `RevisionChain` remains crate-private inside the move-only result; public access is limited to
+  scalar root/latest-wins lookup and borrowed raw proof wrappers.
+- Before polling each child, the parent admits the complete geometric worst-case read/parse work
+  that child can perform: exact anchor bytes, bounded exponential tail/section windows, or staged
+  object windows plus the largest permitted payload. The active reservation remains held across
+  `Pending` replay and is released only after terminal child return, so the aggregate ceiling is not
+  a post-work observation. Parent stats separately aggregate lower reported work without double
+  charging unresolved replays and retain admission high-water marks.
+- Active child heap is admitted before polling as part of the same parent scope. Publication
+  retention uses an explicit conservative `retained_bound`, not an allocator-exact claim: each
+  traditional proof reserves its maximum physical section span, the complete configured xref-entry
+  count at fixed per-entry width, and configured syntax-owned/container ceilings because the lower
+  section does not expose trailer or entry-vector capacity accounting. Stream children reserve the
+  complete lower syntax/xref retained ceilings before polling and commit only their checked lower
+  metric. Candidate and parent vectors use allocator-reported capacities. Every checked addition
+  and allocation can fail before work or publication.
+- This coordinator supports only unfiltered direct-Length xref streams. It does not decode filters,
+  resolve indirect xref-stream Length, invoke R1 repair, attest the resulting object geometry,
+  schedule object-stream decoding, provide page or outline services, or own a Range store,
+  scheduler, or Session. It is a source-acquisition component and does not establish M1 exit.
 
 ## Strict base-revision opening
 
@@ -591,6 +635,12 @@ indirect-Length and filtered-stream Unsupported policy, malformed Type/container
 single-ticket Pending replay with boundary bytes delivered before payload bytes, cancellation,
 source change, lower byte-source failure preservation, stable terminal replay, and object/xref
 size and work limits.
+Source-revision-chain tests cover traditional, primary-stream, hybrid, and two-revision `/Prev`
+acquisition; exact newest/older/hybrid upper bounds; raw proof retention and latest-wins lookup;
+single-ticket Pending replay; cancellation, source change, stable terminal replay, strict backward
+geometry, pairwise checkpoint rejection, parent revision and conservative retained-bound limits,
+stream-child read/parse/retained exact-and-one-less pre-admission without a rejected child poll,
+bounded sparse replay through final publication, and complete lower xref error preservation.
 Revision-resolver tests cover nearest cross-revision anchors, primary and hybrid-supplement
 provenance, primary target plus supplement-only indirect Length, supplement self-container bounds,
 older effective revision bounds, latest free/null/compressed/generation terminal states, primary
@@ -656,8 +706,9 @@ first-pass, and final-attestation phases without repeated charging.
 
 - The product strict-open path still accepts only one traditional base revision. A separate
   already-composed-chain resolver implements latest-wins uncompressed lookup and binds validated
-  unfiltered object streams, but `/Prev` and `/XRefStm` source acquisition, filtered stream decode,
-  object-stream scheduling/ownership, and service integration remain unsupported.
+  unfiltered object streams. The new source coordinator acquires unfiltered direct-Length `/Prev`
+  and `/XRefStm` chains, but filtered or indirect-Length xref streams, product attestation of that
+  chain, object-stream scheduling/ownership, and service integration remain unsupported.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
@@ -739,3 +790,6 @@ first-pass, and final-attestation phases without repeated charging.
   preallocated proof plans, parent-lent first-pass aggregate caps, and sparse Range replay evidence.
 - 2026-07-15: Added a sealed cloneable attested-index ownership handle and owned page-count and
   outline job constructors without adding a Session, registry, or alternate proof-minting path.
+- 2026-07-15: Added complete unfiltered direct-Length traditional, primary-stream, hybrid, and
+  incremental source-chain acquisition with exact upper bounds, one active Pending, conservative
+  retained-proof admission, raw proof ownership, and move-only composed publication.

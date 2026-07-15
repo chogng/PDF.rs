@@ -20,8 +20,12 @@
 //! unauthenticated intermediate typestate.
 //! A separate source xref-stream job frames an already-classified primary or
 //! hybrid stream anchor, acquires its exact direct-Length payload, and retains
-//! the framed container with an unfiltered table proof. It does not traverse
-//! revisions, resolve indirect Length, or decode filters.
+//! the framed container with an unfiltered table proof. A parent source-chain
+//! job discovers the final marker, classifies and acquires traditional,
+//! primary-stream, and hybrid sections newest-to-oldest, and publishes only
+//! after pure revision composition succeeds. Both jobs still reject indirect
+//! Length and filtered payloads, and neither integrates the chain into the
+//! strict attestation opener or a Session.
 //! An explicit local-repair planning surface can instead retain xref and
 //! object-offset proof, rebuild every effective interval atomically, and
 //! publish only an explicitly unauthenticated wrapper. A consuming sibling
@@ -61,6 +65,7 @@ mod reference_chain_limits;
 mod repair;
 mod residency;
 mod revision_resolver;
+mod source_revision_chain;
 mod source_xref_stream;
 mod strict_base_open;
 mod text_string;
@@ -115,6 +120,15 @@ pub use revision_resolver::{
     ResolvedObject, RevisionObjectIndex, RevisionObjectIndexStats, RevisionResolverJobContext,
     RevisionResolverLimits, RevisionResolverPhase, RevisionResolverPoll, RevisionResolverStats,
     UncompressedObjectLocator,
+};
+pub use source_revision_chain::{
+    NeverCancelSourceRevisionChain, OpenSourceRevisionChainJob, SourceAcquiredRevisionChain,
+    SourceHybridRevisionProof, SourceRevisionChainCancellation, SourceRevisionChainError,
+    SourceRevisionChainErrorCategory, SourceRevisionChainErrorCode, SourceRevisionChainJobContext,
+    SourceRevisionChainLimit, SourceRevisionChainLimitConfig, SourceRevisionChainLimitKind,
+    SourceRevisionChainLimits, SourceRevisionChainPhase, SourceRevisionChainPoll,
+    SourceRevisionChainRecoverability, SourceRevisionChainStats, SourceRevisionPrimaryProof,
+    SourceRevisionProof,
 };
 pub use source_xref_stream::{
     NeverCancelSourceXrefStream, OpenSourceXrefStreamJob, SourceAcquiredXrefStream,
