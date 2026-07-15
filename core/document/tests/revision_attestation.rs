@@ -512,6 +512,7 @@ fn job_construction_requires_exact_eight_byte_header_syntax_capacity() {
             max_owned_bytes: 1,
             max_total_tokens: 16,
             max_container_entries: 8,
+            max_container_bytes: 1024,
             max_container_depth: 4,
         })
         .unwrap()

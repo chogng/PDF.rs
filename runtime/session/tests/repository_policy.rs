@@ -248,8 +248,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.37.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.37.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.38.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.38.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -535,7 +535,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "later exclusive actor turn",
         "consumes one exact failure completion",
         "without a parser poll or cancellation probe",
-        "opaque move-only Ready handoff",
+        "opaque move-only handoff",
         "same private source owner",
         "coordinator then reports zero resources",
         "consuming close returns exact owner-release evidence",

@@ -6,8 +6,9 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_object::{
     DeclaredStreamLength, IndirectObject, IndirectObjectTarget, ObjectCancellation,
-    ObjectEnvelopePoll, ObjectJobContext, ObjectLimits, ObjectPoll, ObjectStats,
-    OpenObjectEnvelopeJob, OpenStreamBoundaryJob, ResolvedStreamLength, StreamEnvelope,
+    ObjectEnvelopePoll, ObjectJobContext, ObjectLimits, ObjectPoll, ObjectStats, ObjectStream,
+    ObjectStreamEntry, OpenObjectEnvelopeJob, OpenStreamBoundaryJob, ResolvedStreamLength,
+    StreamEnvelope,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 use pdf_rs_xref::{ResolvedXrefEntry, RevisionChain, RevisionEntryKind};
@@ -50,7 +51,7 @@ impl UncompressedObjectLocator {
     }
 }
 
-/// Effective compressed definition awaiting object-stream decoding support.
+/// Effective compressed definition using generation-zero decoded object-stream coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompressedObjectLocator {
     provenance: ResolvedXrefEntry,
@@ -375,6 +376,116 @@ impl RevisionObjectIndex {
         })
     }
 
+    /// Binds one effective compressed row to its validated latest-wins object-stream container.
+    ///
+    /// The supplied stream must already have crossed the `core/object` framing and unfiltered
+    /// payload boundary. This method rechecks the effective container definition, exact physical
+    /// framing interval, decoded index, and embedded object number before exposing a borrowed value.
+    pub fn resolve_compressed<'stream>(
+        &self,
+        reference: ObjectRef,
+        stream: &'stream ObjectStream,
+    ) -> Result<ResolvedCompressedObject<'stream>, DocumentError> {
+        if reference.generation() != 0 {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::GenerationMismatch,
+                Some(reference),
+                None,
+            ));
+        }
+        let locator = match self.locator(reference.number()) {
+            Some(EffectiveObjectLocator::Compressed(locator)) => locator,
+            Some(EffectiveObjectLocator::Null { .. }) => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::NullObject,
+                    Some(reference),
+                    None,
+                ));
+            }
+            Some(EffectiveObjectLocator::Free { .. }) => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::FreeObject,
+                    Some(reference),
+                    None,
+                ));
+            }
+            Some(EffectiveObjectLocator::Uncompressed(locator)) => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::NotCompressedObject,
+                    Some(reference),
+                    Some(locator.offset),
+                ));
+            }
+            None => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::MissingObject,
+                    Some(reference),
+                    None,
+                ));
+            }
+        };
+        if stream.snapshot() != self.snapshot() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::SourceSnapshotMismatch,
+                Some(reference),
+                Some(locator.provenance.revision_startxref()),
+            ));
+        }
+        if stream.container().number() != locator.object_stream
+            || stream.container().generation() != 0
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidObjectStreamContainer,
+                Some(reference),
+                Some(locator.provenance.revision_startxref()),
+            ));
+        }
+        let container_locator = match self.locator(locator.object_stream) {
+            Some(EffectiveObjectLocator::Uncompressed(locator)) => locator,
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidObjectStreamContainer,
+                    Some(reference),
+                    Some(stream.container_offset()),
+                ));
+            }
+        };
+        if container_locator.generation != 0
+            || container_locator.offset != stream.container_offset()
+            || container_locator.object_upper_bound != stream.container_upper_bound()
+            || container_locator.provenance.revision_startxref() != stream.revision_startxref()
+            || container_locator.offset >= container_locator.provenance.revision_startxref()
+            || stream.encoded_payload_span().start() < container_locator.offset
+            || stream.encoded_payload_span().end_exclusive() > container_locator.object_upper_bound
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidObjectStreamContainer,
+                Some(reference),
+                Some(stream.container_offset()),
+            ));
+        }
+        let entry = stream.entry(locator.index).ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::CompressedObjectMismatch,
+                Some(reference),
+                Some(stream.encoded_payload_span().start()),
+            )
+        })?;
+        if entry.index() != locator.index || entry.object_number() != reference.number() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::CompressedObjectMismatch,
+                Some(reference),
+                Some(stream.encoded_payload_span().start()),
+            ));
+        }
+        Ok(ResolvedCompressedObject {
+            locator,
+            container_locator,
+            stream,
+            entry,
+        })
+    }
+
     fn target(
         &self,
         reference: ObjectRef,
@@ -659,6 +770,51 @@ pub struct ResolvedObject {
     object: IndirectObject,
 }
 
+/// Effective compressed xref evidence paired with one decoded object-stream entry.
+///
+/// The wrapper borrows both the complete object-stream proof and its exact entry so neither the
+/// latest-wins locator nor the physical container evidence can be discarded independently.
+pub struct ResolvedCompressedObject<'stream> {
+    locator: CompressedObjectLocator,
+    container_locator: UncompressedObjectLocator,
+    stream: &'stream ObjectStream,
+    entry: &'stream ObjectStreamEntry,
+}
+
+impl<'stream> ResolvedCompressedObject<'stream> {
+    /// Returns the effective compressed xref definition.
+    pub const fn locator(&self) -> CompressedObjectLocator {
+        self.locator
+    }
+
+    /// Returns the effective uncompressed definition of the object-stream container.
+    pub const fn container_locator(&self) -> UncompressedObjectLocator {
+        self.container_locator
+    }
+
+    /// Borrows the complete validated object stream.
+    pub const fn stream(&self) -> &'stream ObjectStream {
+        self.stream
+    }
+
+    /// Borrows the exact decoded entry selected by the compressed xref row.
+    pub const fn entry(&self) -> &'stream ObjectStreamEntry {
+        self.entry
+    }
+}
+
+impl fmt::Debug for ResolvedCompressedObject<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResolvedCompressedObject")
+            .field("locator", &self.locator)
+            .field("container_locator", &self.container_locator)
+            .field("stream", &self.stream)
+            .field("entry", &self.entry)
+            .finish()
+    }
+}
+
 impl ResolvedObject {
     /// Returns the effective xref definition and physical interval used for framing.
     pub const fn locator(&self) -> UncompressedObjectLocator {
@@ -723,8 +879,9 @@ enum ResolverState {
 
 /// One-shot resolver for effective uncompressed objects and uncompressed indirect stream lengths.
 ///
-/// Compressed targets are reported as an explicit unsupported terminal state until
-/// decoded object-stream coordinates and their own provenance model are available.
+/// Compressed targets remain an explicit unsupported terminal state on this source-facing job;
+/// callers first resolve and decode the object-stream container, then bind its proof through
+/// [`RevisionObjectIndex::resolve_compressed`].
 pub struct ResolveObjectJob<'index> {
     index: &'index RevisionObjectIndex,
     reference: ObjectRef,

@@ -13,6 +13,7 @@ mod error;
 mod job;
 mod limits;
 mod model;
+mod object_stream;
 mod parser;
 mod staged;
 
@@ -28,5 +29,11 @@ pub use limits::{ObjectLimitConfig, ObjectLimits, ObjectWorkCaps};
 pub use model::{
     DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue,
     ResolvedStreamLength, StreamEnvelope, StreamLengthClaim,
+};
+pub use object_stream::{
+    DecodedArray, DecodedDictionary, DecodedDictionaryEntry, DecodedLocatedObject, DecodedObject,
+    DecodedObjectSpan, ObjectStream, ObjectStreamEntry, ObjectStreamError,
+    ObjectStreamErrorCategory, ObjectStreamErrorCode, ObjectStreamLimit, ObjectStreamLimitConfig,
+    ObjectStreamLimitKind, ObjectStreamLimits, ObjectStreamStats, parse_unfiltered_object_stream,
 };
 pub use staged::{ObjectEnvelopePoll, OpenObjectEnvelopeJob, OpenStreamBoundaryJob};

@@ -4,14 +4,17 @@
 It validates one xref-derived target against its exact object header, parses one direct value, and
 frames a stream with bounded resumable reads. A staged path may stop after the stream dictionary,
 publish a direct value or indirect `/Length` dependency, and resume exact boundary validation only
-after a same-snapshot resolver supplies the referenced integer metadata. It performs no file,
-network, callback, filter decoding, or async-runtime I/O.
+after a same-snapshot resolver supplies the referenced integer metadata. A separate strict entry
+parses one complete unfiltered object-stream payload only from a fully framed stream container and
+an exact source-bound `ByteSlice`, preserving decoded coordinates separately from physical spans.
+It performs no file, network, callback, filter decoding, or async-runtime I/O.
 
 # Semantic owner
 
 Parser/Security owns indirect-object header validation, `/Length` declaration classification,
 same-snapshot length-claim checks, exact stream framing, source identity, deterministic budgets,
-cancellation, and stable object failures.
+cancellation, object-stream header/index validation, decoded-coordinate values, and stable object
+failures.
 `core/bytes` owns immutable source snapshots and byte delivery, while `core/syntax` owns direct
 object and keyword syntax. `core/xref` is a sibling consumer of syntax rather than an object-crate
 dependency. `core/document` composes one validated traditional base section into candidate
@@ -35,10 +38,15 @@ precedence, and caching.
 - [RPE-STD-005, sections 4-10](../../docs/standards/security-and-resource-budget.md) requires
   deterministic input, stream, retry-work and allocation limits, fixed-interval cancellation,
   immutable source validation, and checked object offsets and lengths.
+- [ISO 32000-1:2008, 7.5.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines object-stream `/Type`, `/N`, `/First`, optional `/Extends`, generation-zero containers
+  and embedded objects, header object-number/relative-offset pairs, and the prohibition on stream
+  objects inside object streams. The authorized Adobe snapshot acquired on 2026-07-14 has SHA-256
+  `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
 
-The repository does not yet bind this bootstrap profile to a pinned ISO 32000 snapshot, errata
-set, or clause-level conformance cases. This module therefore makes no ISO or R0 semantic coverage
-claim.
+The repository does not yet bind this bootstrap profile to an approved errata set or registered
+clause-level conformance cases. The hash-pinned source informs the implementation but this module
+makes no ISO or R0 semantic coverage claim.
 
 # Algorithms and derivations
 
@@ -109,6 +117,27 @@ claim.
   `RPE-OBJECT-0021`, category `Syntax`, recovery `CorrectInput`, and the exclusive bound as its
   offset. This distinguishes candidate-index geometry failure from source EOF, ordinary malformed
   stream framing, and configured resource exhaustion.
+- `parse_unfiltered_object_stream` accepts only a complete `IndirectObjectValue::Stream` plus a
+  `ByteSlice` whose source identity and exact range equal the framed payload span. The container
+  must have generation zero and unique `/Type /ObjStm`, nonnegative `/N` and `/First`, no `/Filter`
+  or `/DecodeParms`, and an optional generation-zero `/Extends` reference. `/Extends` is retained
+  as provenance only and never changes xref lookup order; an immediate self-reference is rejected.
+- The decoded header begins with `/N` nonzero object-number/relative-offset pairs. Any remaining
+  bytes before `/First` are retained as an uninterpreted decoded-coordinate extension span instead
+  of being mistaken for additional standard pairs. The first relative offset is zero; later offsets
+  are strictly increasing, all object numbers are unique, and every computed entry slot remains
+  inside the complete payload. Duplicate detection uses fallibly reserved working vectors plus
+  cancellable heapsort rather than hidden hash-table allocation.
+- Each entry slot is parsed as exactly one supported direct syntax object followed only by PDF
+  whitespace/comments. A trailing `stream` construct or second object is rejected. Physical
+  `Located` values are consumed internally and converted into `DecodedObjectSpan`,
+  `DecodedLocatedObject`, `DecodedArray`, and `DecodedDictionary`; no decoded offset is published as
+  a physical `ByteSpan`. Scalar capacity, allocator-reported syntax and decoded container capacity,
+  entry capacity, header/index working capacity, cumulative syntax windows, limits, and
+  fixed-interval cancellation are accounted separately. Syntax container capacity is bounded by a
+  real child limit, and recursive conversion reserves the still-live syntax container bytes when
+  checking its decoded-value peak. Lower syntax resource failures retain their exact kind, limit,
+  consumed, and attempted evidence while exposing their position only as a decoded coordinate.
 - The public one-shot poll keeps its ready value inline. A documented Clippy exception avoids an
   additional infallible, untracked heap allocation solely to equalize enum variant sizes.
   Object results and polls are move-only rather than exposing an unbudgeted deep `Clone`.
@@ -154,6 +183,15 @@ indirect declaration classification, same-snapshot and exact-reference claim bin
 `RPE-OBJECT-0022` mismatch policy, sparse envelope and exact-boundary Pending/resume checkpoints,
 a deliberately unsupplied large payload tail, terminal source change, cancellation, retained
 resolved-value provenance, and exact versus one-less aggregate work across both phases.
+Object-stream tests build containers through the public RangeStore and `OpenObjectJob` path, then
+cover exact physical payload binding, independent decoded coordinates, nested arrays/dictionaries
+and references, `/Extends` validation and self-loop rejection, uninterpreted header-extension
+bytes, duplicate numbers, zero/nonincreasing offsets, slot crossing, top-level indirect-reference
+and embedded-stream rejection, unsupported filters, foreign source slices, exact/one-less working,
+retained-entry, retained-value, and cumulative-syntax limits, immediate cancellation, and
+fixed-interval cancellation during long numeric header scans and recursive conversion without
+partial publication. Child syntax exhaustion verifies decoded coordinates and preserved lower
+resource-limit evidence.
 Separate tests cover all limit-profile relationships and hard ceilings, lower source-error policy
 mapping, and repository dependency/purity rules. A `tools/quality` integration test generates the
 canonical PDF, parses its traditional xref section, and frames every in-use target while checking
@@ -164,14 +202,13 @@ Native/external-engine differential is claimed in this bootstrap slice.
 
 # Known deviations and unsupported cases
 
-- This is an object-framing component, not a complete object resolver. Indirect `/Length` is now an
-  explicit staged dependency and can be framed after resolver-supplied same-snapshot uncompressed
-  integer metadata, but no document resolver currently produces that metadata and no cycle,
-  precedence, generation, or attestation policy is integrated. Compressed length objects require
-  a future decoded-coordinate evidence model and cannot fabricate a physical `ByteSpan`. Object
-  caches, object streams, xref-stream
-  acquisition/filter decode, hybrid files, incremental revision integration, encryption, content
-  interpretation, and document services remain unimplemented.
+- This is an object-framing and unfiltered object-stream component, not a complete object resolver.
+  A separate document slice now supplies effective uncompressed `/Length` evidence and binds
+  compressed xref rows to these decoded entries, but filtered payload decoding, source-driven xref
+  and revision acquisition, aliased or compressed `/Length`, general cycle state, caching,
+  encryption, content interpretation, and document-service integration remain unimplemented.
+- `/Extends` is retained and an immediate self-loop is rejected, but this component does not acquire
+  predecessor object streams or validate a transitive `/Extends` graph for cycles.
 - `IndirectObjectTarget` carries xref-derived geometry but is publicly constructible so the object
   crate remains independent of its xref sibling. The object job therefore treats every target as
   untrusted and revalidates source geometry, its independent physical upper bound, the preceding
@@ -212,3 +249,8 @@ Native/external-engine differential is claimed in this bootstrap slice.
 - 2026-07-15: Added staged stream envelopes, explicit direct/indirect `/Length` dependencies,
   same-snapshot resolver claim metadata, and resumable exact-boundary validation while preserving
   the legacy direct-only framing contract.
+- 2026-07-15: Added bounded unfiltered object-stream parsing from exact framed source evidence,
+  separate decoded-coordinate values, and strict header, entry, capacity, and cancellation checks.
+- 2026-07-15: Added uninterpreted header-extension provenance, conversion-peak accounting and
+  cancellation evidence, numeric-scan probes, proof-preserving child limit mapping, strict
+  top-level member rules, and exact/one-less resource boundaries.

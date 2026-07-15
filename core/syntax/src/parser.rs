@@ -1585,10 +1585,53 @@ impl<'a> SyntaxParser<'a> {
         container: &mut Vec<T>,
         offset: u64,
     ) -> ParseResult<()> {
+        let element_size = u64::try_from(std::mem::size_of::<T>()).map_err(|_| {
+            ParseFailure::Failed(SyntaxError::for_code(
+                SyntaxErrorCode::InternalState,
+                Some(offset),
+            ))
+        })?;
         let capacity_before = container.capacity();
-        container
-            .try_reserve(1)
-            .map_err(|_| self.allocation_failure(offset, 1))?;
+        if container.len() == capacity_before {
+            let target_capacity = if capacity_before == 0 {
+                4
+            } else {
+                capacity_before.checked_mul(2).ok_or_else(|| {
+                    ParseFailure::Failed(SyntaxError::for_code(
+                        SyntaxErrorCode::InternalState,
+                        Some(offset),
+                    ))
+                })?
+            };
+            let requested_capacity =
+                target_capacity
+                    .checked_sub(capacity_before)
+                    .ok_or_else(|| {
+                        ParseFailure::Failed(SyntaxError::for_code(
+                            SyntaxErrorCode::InternalState,
+                            Some(offset),
+                        ))
+                    })?;
+            let requested_bytes = u64::try_from(requested_capacity)
+                .ok()
+                .and_then(|capacity| capacity.checked_mul(element_size))
+                .ok_or_else(|| {
+                    ParseFailure::Failed(SyntaxError::for_code(
+                        SyntaxErrorCode::InternalState,
+                        Some(offset),
+                    ))
+                })?;
+            self.charge_total(
+                SyntaxLimitKind::ContainerBytes,
+                self.limits.max_container_bytes,
+                self.stats.container_bytes,
+                requested_bytes,
+                offset,
+            )?;
+            container
+                .try_reserve_exact(requested_capacity)
+                .map_err(|_| self.allocation_failure(offset, requested_bytes))?;
+        }
         let capacity_after = container.capacity();
         let added_capacity = capacity_after.checked_sub(capacity_before).ok_or_else(|| {
             ParseFailure::Failed(SyntaxError::for_code(
@@ -1602,19 +1645,13 @@ impl<'a> SyntaxParser<'a> {
                 Some(offset),
             ))
         })?;
-        let element_size = u64::try_from(std::mem::size_of::<T>()).map_err(|_| {
-            ParseFailure::Failed(SyntaxError::for_code(
-                SyntaxErrorCode::InternalState,
-                Some(offset),
-            ))
-        })?;
         let added_bytes = added_capacity.checked_mul(element_size).ok_or_else(|| {
             ParseFailure::Failed(SyntaxError::for_code(
                 SyntaxErrorCode::InternalState,
                 Some(offset),
             ))
         })?;
-        self.stats.container_bytes = self
+        let total_container_bytes = self
             .stats
             .container_bytes
             .checked_add(added_bytes)
@@ -1624,6 +1661,16 @@ impl<'a> SyntaxParser<'a> {
                     Some(offset),
                 ))
             })?;
+        self.stats.container_bytes = total_container_bytes;
+        if total_container_bytes > self.limits.max_container_bytes {
+            return Err(ParseFailure::Failed(SyntaxError::resource(
+                SyntaxLimitKind::ContainerBytes,
+                self.limits.max_container_bytes,
+                total_container_bytes.saturating_sub(added_bytes),
+                added_bytes,
+                Some(offset),
+            )));
+        }
         Ok(())
     }
 

@@ -1187,6 +1187,7 @@ mod tests {
             max_owned_bytes: 1,
             max_total_tokens: 1,
             max_container_entries: 1,
+            max_container_bytes: 1,
             max_container_depth: 1,
         })
         .unwrap()

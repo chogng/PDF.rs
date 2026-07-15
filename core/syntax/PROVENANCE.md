@@ -54,10 +54,14 @@ coverage claim.
   token count, container entries, and container depth have validated soft limits beneath fixed
   hard ceilings. Arithmetic is checked and owned scalar allocation is fallible and charged before
   adoption. Container entry fuel is charged before child parsing or allocation. Every array and
-  dictionary reserve records the allocator-reported capacity delta multiplied by its element size
-  with checked arithmetic, so a successful parse reports the exact vector capacity retained by all
-  returned containers without changing the scalar owned-byte limit. Each attempt exposes its
-  complete window size so future ByteSource jobs can conservatively sum retry work.
+  dictionary reserve preflights the complete selected next capacity against the container-byte
+  ceiling, then uses an exact reserve request and records the allocator-reported capacity delta
+  multiplied by its element size with checked arithmetic. Growth beyond the configured
+  container-byte ceiling is rejected before a value is published, and failed-attempt stats retain
+  the actual allocator-reported capacity for audit. A
+  successful parse reports the exact vector capacity retained by all returned containers without
+  changing the scalar owned-byte limit. Each attempt exposes its complete window size so future
+  ByteSource jobs can conservatively sum retry work.
 - Callers may bind a cooperative `SyntaxCancellation` probe. Every public parser operation checks
   cancellation before work, and every unbounded scanner/container loop checks again after at most
   256 iterations. Cancellation remains distinct from malformed input and resource exhaustion.
@@ -86,9 +90,10 @@ Syntax behavior tests exercise complete and truncated headers/tokens, absolute s
 name escapes, nested and escaped literal strings, odd-nibble hex strings, arrays, ordered
 dictionaries with duplicate keys, indirect references, strict stream boundaries, redacted
 diagnostics, borrowed keyword retry semantics, stable cancellation policy and fixed-interval
-scanner probes, exact allocator-reported array/dictionary capacity accounting across empty,
-nested, failed-boundary, and retried parses, and boundary/equality/excess cases for deterministic
-limits.
+    scanner probes, exact allocator-reported array/dictionary capacity accounting across empty,
+    nested, failed-boundary, and retried parses, an exact/one-less allocator-reported container-byte
+    ceiling including failed-attempt stats, and boundary/equality/excess cases for deterministic
+    limits.
 
 `core/syntax::repository_policy` scans product source for forbidden filesystem, network,
 async-runtime, and external-engine tokens and verifies that the crate depends only on
@@ -121,3 +126,6 @@ differential is claimed in this bootstrap slice.
   borrowed keyword framing, and repository purity guard.
 - 2026-07-13: Added checked allocator-capacity accounting for every retained array and dictionary
   vector while preserving the existing scalar owned-byte and container-entry limit semantics.
+- 2026-07-15: Promoted allocator-reported container capacity from an evidence-only statistic to a
+  validated public limit with complete selected-growth preflight and exact failed-attempt
+  accounting.

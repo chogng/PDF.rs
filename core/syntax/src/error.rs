@@ -22,6 +22,8 @@ pub enum SyntaxLimitKind {
     Tokens,
     /// Total array items and dictionary entries.
     ContainerEntries,
+    /// Allocator-reported array and dictionary vector capacity bytes.
+    ContainerBytes,
     /// Nested array and dictionary depth.
     ContainerDepth,
     /// Fallible allocation within an already bounded operation.

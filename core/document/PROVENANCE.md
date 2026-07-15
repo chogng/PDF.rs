@@ -14,8 +14,9 @@ access boundary.
 
 The crate performs no file, network, data callback, async-runtime, stream decoding, general object
 graph traversal, or caching. Its first resolver slice follows only whole-object reference aliases;
-an independent revision-aware slice can frame one effective uncompressed definition and resolve an
-uncompressed direct-integer stream `/Length` dependency from an already-composed revision chain;
+an independent revision-aware slice can frame one effective uncompressed definition, resolve an
+uncompressed direct-integer stream `/Length` dependency, and bind one predecoded object-stream
+entry to its latest-wins compressed xref row from an already-composed revision chain;
 the separate page-count slice interprets only Catalog and Page/Pages structural fields, while the
 outline slice interprets only the optional Catalog `Outlines` reference and strict linked outline
 dictionaries reachable from it. Neither publishes page handles, inherited resources, a reusable
@@ -59,6 +60,11 @@ semantic responsibilities.
   revision-aware slice implements only effective uncompressed object framing and an uncompressed
   direct-integer Length target; it does not decode object streams or acquire revision sections.
   The same authorized snapshot and SHA-256 above apply.
+- [ISO 32000-1:2008, 7.5.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines generation-zero compressed entries, object-stream container/index lookup, and decoded
+  entry boundaries. The revision-aware slice binds already-validated unfiltered object streams but
+  does not acquire or filter-decode their payloads. The same authorized snapshot and SHA-256 above
+  apply.
 - [ISO 32000-1:2008, 7.7.2 and 12.3.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines the Catalog's optional indirect `Outlines` entry and the outline root/item dictionaries,
   linked-list topology, text titles, targets, and signed visible-item counts used by the strict
@@ -133,7 +139,7 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   `AttestedRevisionIndex`. The index also retains the exact validated object and syntax profiles
   used for initial framing. No partial attested type exists.
 
-## Revision-aware uncompressed resolution
+## Revision-aware object resolution
 
 - `RevisionObjectIndex` consumes one already-validated `RevisionChain`. It fallibly retains every
   primary and hybrid xref anchor plus every uncompressed entry offset, charges actual vector
@@ -142,7 +148,7 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
 - Lookup preserves the chain's exact newest-primary, same-revision-supplement, then older-revision
   precedence. A winning free or unknown-type null row hides all older definitions. Exact generation
   mismatch never falls back. Compressed definitions retain their object-stream number and decoded
-  entry index but return a stable unsupported result because no physical source span is fabricated.
+  entry index without fabricating a physical source span.
 - `ResolveObjectJob` validates the selected uncompressed number, generation, offset, preceding
   whitespace, `obj` header, value, and `endobj` framing through `core/object`. A primary xref-stream
   self entry remains unsupported because the ordinary target model is bounded before a revision's
@@ -160,10 +166,17 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   read and parse ceilings are exactly twice one validated child-object ceiling, and at most two
   children run sequentially, so neither child receives more than half the parent scope. Aggregate
   resolver stats report checked work without claiming a session-wide budget.
+- `RevisionObjectIndex::resolve_compressed` accepts only a complete `core/object::ObjectStream`
+  proof. It rechecks the immutable snapshot, generation-zero container identity, latest effective
+  uncompressed container locator, exact physical offset/bound/revision anchor, payload containment,
+  xref decoded index, and embedded object number. The returned `ResolvedCompressedObject` borrows
+  both the whole stream proof and exact entry, so neither container provenance nor latest-wins
+  compressed provenance can be discarded while retaining the decoded value.
 - The derived intervals remain xref metadata plus exact local header/framing validation. Unlike
   `AttestedRevisionIndex`, this slice does not linearly prove top-level trivia/object coverage. It
-  also does not acquire `/Prev` or `/XRefStm`, decode filters or object streams, implement repair,
-  cache values, integrate strict-open/page-count/outline, or establish a complete resolver or M1 exit.
+  also does not acquire `/Prev` or `/XRefStm`, decode filters, schedule object-stream acquisition,
+  implement repair, cache values, integrate strict-open/page-count/outline, or establish a complete
+  resolver or M1 exit.
 
 ## Proof-preserving object access
 
@@ -447,6 +460,11 @@ older effective revision bounds, latest free/null/compressed/generation terminal
 xref-stream self-entry rejection, exact integer Length evidence, three-checkpoint sparse resume
 without payload residency, cancellation, source change, self-dependency, stable terminals, explicit
 two-child parent work limits, and 256-step entry-count/dedup cancellation.
+Compressed-resolver tests obtain the container through `ResolveObjectJob` and an exact RangeStore
+payload slice, then cover valid generation-zero entries, mismatched decoded index/object number,
+explicit not-compressed lookup classification, same-revision and newest-revision free/null masking,
+stale replacement containers, nested compressed containers, nonzero requested generation, and
+foreign snapshot rejection.
 Candidate tests cover physical sort ordering, exact sort-budget exhaustion, the 256-step
 cancellation ceiling, checked conservative accounting, exact logical lookup outcomes, duplicate
 and out-of-revision offsets, and trailer-root policy. Attestation unit tests guard fixed evidence
@@ -482,9 +500,9 @@ document-architecture requirement links and explicit partial-scope boundaries.
 # Known deviations and unsupported cases
 
 - The product strict-open path still accepts only one traditional base revision. A separate
-  already-composed-chain resolver implements latest-wins uncompressed lookup, but `/Prev` and
-  `/XRefStm` acquisition, filtered xref streams, object streams, and service integration remain
-  unsupported.
+  already-composed-chain resolver implements latest-wins uncompressed lookup and binds validated
+  unfiltered object streams, but `/Prev` and `/XRefStm` source acquisition, filtered stream decode,
+  object-stream scheduling/ownership, and service integration remain unsupported.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
@@ -548,3 +566,7 @@ document-architecture requirement links and explicit partial-scope boundaries.
   child errors and stats, and one cancellation source without publishing an intermediate index.
 - 2026-07-15: Added bounded effective revision lookup, derived cross-revision physical anchors, and
   Range-resumable uncompressed object framing with same-snapshot indirect stream-Length evidence.
+- 2026-07-15: Bound validated unfiltered decoded object streams to effective generation-zero
+  container definitions and exact compressed xref indices without fabricating physical spans.
+- 2026-07-15: Added multi-revision stale/masked/nested container regression evidence and a distinct
+  generation-zero not-compressed lookup policy.

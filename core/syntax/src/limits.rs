@@ -8,6 +8,7 @@ const HARD_MAX_STRING_BYTES: u64 = 32 * 1024 * 1024;
 const HARD_MAX_OWNED_BYTES: u64 = 64 * 1024 * 1024;
 const HARD_MAX_TOKENS: u64 = 4_000_000;
 const HARD_MAX_CONTAINER_ENTRIES: u64 = 1_000_000;
+const HARD_MAX_CONTAINER_BYTES: u64 = 256 * 1024 * 1024;
 const HARD_MAX_CONTAINER_DEPTH: u16 = 512;
 
 /// Unvalidated deterministic PDF syntax limits.
@@ -31,6 +32,8 @@ pub struct SyntaxLimitConfig {
     pub max_total_tokens: u64,
     /// Maximum cumulative array items and dictionary entries.
     pub max_container_entries: u64,
+    /// Maximum allocator-reported array and dictionary vector capacity bytes.
+    pub max_container_bytes: u64,
     /// Maximum nested array and dictionary depth.
     pub max_container_depth: u16,
 }
@@ -47,6 +50,7 @@ impl Default for SyntaxLimitConfig {
             max_owned_bytes: 8 * 1024 * 1024,
             max_total_tokens: 250_000,
             max_container_entries: 100_000,
+            max_container_bytes: 64 * 1024 * 1024,
             max_container_depth: 128,
         }
     }
@@ -64,6 +68,7 @@ pub struct SyntaxLimits {
     pub(crate) max_owned_bytes: u64,
     pub(crate) max_total_tokens: u64,
     pub(crate) max_container_entries: u64,
+    pub(crate) max_container_bytes: u64,
     pub(crate) max_container_depth: u16,
 }
 
@@ -94,6 +99,8 @@ impl SyntaxLimits {
             || config.max_total_tokens > HARD_MAX_TOKENS
             || config.max_container_entries == 0
             || config.max_container_entries > HARD_MAX_CONTAINER_ENTRIES
+            || config.max_container_bytes == 0
+            || config.max_container_bytes > HARD_MAX_CONTAINER_BYTES
             || config.max_container_depth == 0
             || config.max_container_depth > HARD_MAX_CONTAINER_DEPTH
         {
@@ -109,6 +116,7 @@ impl SyntaxLimits {
             max_owned_bytes: config.max_owned_bytes,
             max_total_tokens: config.max_total_tokens,
             max_container_entries: config.max_container_entries,
+            max_container_bytes: config.max_container_bytes,
             max_container_depth: config.max_container_depth,
         })
     }
@@ -156,6 +164,11 @@ impl SyntaxLimits {
     /// Returns the maximum cumulative container entries.
     pub const fn max_container_entries(self) -> u64 {
         self.max_container_entries
+    }
+
+    /// Returns the maximum allocator-reported container capacity bytes.
+    pub const fn max_container_bytes(self) -> u64 {
+        self.max_container_bytes
     }
 
     /// Returns the maximum container depth.

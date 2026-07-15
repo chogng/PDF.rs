@@ -131,9 +131,9 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
         "neither the xref section nor candidate index crosses the entry boundary",
         "Component and generated-PDF quality tests cover all five checkpoints",
         "reverse physical delivery",
-        "upper-half-before-lower delivery",
+        "Ready crosses the boundary only as an opaque move-only handoff",
         "cancellation in both child layers",
-        "owner-mediated generation validation",
+        "Resume execution and source-failure disposition require exact arbiter",
         "generic multi-job scheduler and complete Session lifecycle",
         "does not claim M1 exit",
     ] {
@@ -188,10 +188,13 @@ fn traceability_registers_revision_resolution_without_claiming_complete_m1_suppo
         "core.revision-aware-object-resolver",
         "core/document::revision_resolver",
         "latest-wins",
-        "indirect `/Length`",
+        "resolves indirect Length",
         "unknown-type null",
-        "do not linearly attest top-level object placement",
-        "compressed-object resolution",
+        "do not linearly attest update placement",
+        "core.object-stream-resolution",
+        "m1.unfiltered-object-stream-resolution.v1",
+        "latest effective uncompressed container",
+        "object-stream scheduling and ownership",
         "does not claim M1 exit",
         "status = \"partial\"",
     ] {
@@ -214,8 +217,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.37.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.37.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.38.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.38.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

@@ -1,5 +1,5 @@
 schema = 1
-version = "0.37.0"
+version = "0.38.0"
 status = "active"
 
 [[feature]]
@@ -142,6 +142,18 @@ profile = "m1.revision-aware-uncompressed-resolver.v1"
 clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
 modules = ["core/document"]
 tests = ["core/document::revision_resolver", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.object-stream-resolution"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.unfiltered-object-stream-resolution.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/object", "core/document"]
+tests = ["core/object::object_stream", "core/object::repository_policy", "core/document::compressed_resolver", "core/document::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

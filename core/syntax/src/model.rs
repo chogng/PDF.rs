@@ -270,6 +270,11 @@ impl PdfArray {
     pub fn values(&self) -> &[Located<SyntaxObject>] {
         &self.0
     }
+
+    /// Consumes the array and returns its source-ordered values.
+    pub fn into_values(self) -> Vec<Located<SyntaxObject>> {
+        self.0
+    }
 }
 
 /// One ordered dictionary key/value pair.
@@ -293,6 +298,11 @@ impl DictionaryEntry {
     pub const fn value(&self) -> &Located<SyntaxObject> {
         &self.value
     }
+
+    /// Consumes the entry and returns its located key and value.
+    pub fn into_parts(self) -> (Located<PdfName>, Located<SyntaxObject>) {
+        (self.key, self.value)
+    }
 }
 
 /// Ordered PDF dictionary preserving duplicate keys for later policy.
@@ -307,6 +317,11 @@ impl PdfDictionary {
     /// Returns entries in source order.
     pub fn entries(&self) -> &[DictionaryEntry] {
         &self.0
+    }
+
+    /// Consumes the dictionary and returns entries in source order.
+    pub fn into_entries(self) -> Vec<DictionaryEntry> {
+        self.0
     }
 
     /// Returns the final source occurrence of a decoded key.

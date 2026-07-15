@@ -85,8 +85,8 @@ pub use reference_chain::{
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
 pub use residency::DocumentResidentFootprint;
 pub use revision_resolver::{
-    CompressedObjectLocator, EffectiveObjectLocator, ResolveObjectJob, ResolvedObject,
-    RevisionObjectIndex, RevisionObjectIndexStats, RevisionResolverJobContext,
+    CompressedObjectLocator, EffectiveObjectLocator, ResolveObjectJob, ResolvedCompressedObject,
+    ResolvedObject, RevisionObjectIndex, RevisionObjectIndexStats, RevisionResolverJobContext,
     RevisionResolverLimits, RevisionResolverPhase, RevisionResolverPoll, RevisionResolverStats,
     UncompressedObjectLocator,
 };

@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.37.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.37.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.38.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.38.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -212,31 +212,34 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
             .contains("neither the xref section nor candidate index crosses the entry boundary")
     );
     assert!(requirement.contains("all five checkpoints"));
-    assert!(requirement.contains("owner-mediated generation validation"));
-    assert!(requirement.contains("explicit caller-lent work cap"));
-    assert!(requirement.contains("never a raw target"));
-    assert!(requirement.contains("top-level direct indirect-reference value"));
-    assert!(requirement.contains("full closing chain"));
-    assert!(requirement.contains("job-wide object, edge, depth, path-capacity, read, and parse"));
-    assert!(requirement.contains("runtime inline Rust representation"));
-    assert!(requirement.contains("cache-admission evidence only"));
-    assert!(requirement.contains("stream payloads"));
-    assert!(requirement.contains("not a complete object-graph resolver"));
-    assert!(requirement.contains("nested semantic graph traversal"));
-    assert!(requirement.contains("persistent Ready caching"));
-    assert!(requirement.contains("cross-job/session aggregate work"));
+    assert!(
+        requirement
+            .contains("Resume execution and source-failure disposition require exact arbiter")
+    );
+    assert!(requirement.contains("caller-lent work cap"));
+    assert!(requirement.contains("one-shot reopen jobs under retained profiles"));
+    assert!(requirement.contains("follows only top-level whole-object aliases"));
+    assert!(requirement.contains("exact cycle chains and aggregate limits"));
+    assert!(requirement.contains("value-owned footprint evidence"));
+    assert!(requirement.contains("for later cache admission"));
+    assert!(requirement.contains("payload containment"));
+    assert!(requirement.contains("general graph traversal"));
+    assert!(requirement.contains("persistent reuse and coalescing"));
+    assert!(requirement.contains("parent budget hierarchy"));
     assert!(requirement.contains("caller-supplied complete unfiltered payload"));
     assert!(requirement.contains("relative decoded spans rather than physical source ByteSpan"));
-    assert!(requirement.contains("Filtered xref-stream acquisition and decode"));
+    assert!(requirement.contains("Filtered xref/object-stream decode"));
     assert!(requirement.contains("current traditional primary, current hybrid supplement"));
     assert!(
         requirement
             .contains("primary free and xref-stream unknown-type null rows hide older definitions")
     );
-    assert!(requirement.contains("Supplemental Prev metadata is retained but never drives"));
-    assert!(requirement.contains("already-composed chains"));
+    assert!(requirement.contains("hybrid geometry, unique anchors"));
+    assert!(requirement.contains("already-composed chain"));
     assert!(requirement.contains("hybrid acquisition"));
-    assert!(requirement.contains("Prev chains and stream filters are not acquired from source"));
+    assert!(
+        requirement.contains("Prev chains, stream filters, and object streams are not acquired")
+    );
     assert!(requirement.contains("object streams"));
     assert!(requirement.contains("repair"));
     assert!(requirement.contains("does not claim M1 exit"));

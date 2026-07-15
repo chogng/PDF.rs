@@ -863,6 +863,39 @@ fn container_capacity_does_not_consume_the_scalar_owned_byte_budget() {
 }
 
 #[test]
+fn container_capacity_budget_uses_allocator_reported_bytes() {
+    let exact_bytes = array_capacity_bytes(5);
+    let exact_limits = configured(|config| config.max_container_bytes = exact_bytes);
+    let mut exact = parser_at(b"[null null null null null]", 0, true, exact_limits);
+    ready(exact.parse_object());
+    assert_eq!(exact.stats().container_bytes(), exact_bytes);
+
+    let one_less_limits = configured(|config| config.max_container_bytes = exact_bytes - 1);
+    let mut one_less = parser_at(b"[null null null null null]", 0, true, one_less_limits);
+    let limit = failed(one_less.parse_object())
+        .limit()
+        .expect("container-byte failure carries context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::ContainerBytes);
+    assert_eq!(limit.limit(), exact_bytes - 1);
+    assert!(limit.consumed().checked_add(limit.attempted()).unwrap() > limit.limit());
+    assert_eq!(one_less.stats().container_bytes(), limit.consumed());
+
+    let element_bytes = u64::try_from(std::mem::size_of::<Located<SyntaxObject>>()).unwrap();
+    let initial_bytes = array_capacity_bytes(4);
+    let one_element_remaining = initial_bytes.checked_add(element_bytes).unwrap();
+    let preflight_limits = configured(|config| config.max_container_bytes = one_element_remaining);
+    let mut preflight = parser_at(b"[null null null null null]", 0, true, preflight_limits);
+    let limit = failed(preflight.parse_object())
+        .limit()
+        .expect("preflight container-byte failure carries context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::ContainerBytes);
+    assert_eq!(limit.limit(), one_element_remaining);
+    assert_eq!(limit.consumed(), initial_bytes);
+    assert_eq!(limit.attempted(), initial_bytes);
+    assert_eq!(preflight.stats().container_bytes(), initial_bytes);
+}
+
+#[test]
 fn nested_container_bytes_sum_each_retained_vector_capacity_once() {
     let mut syntax_parser = parser(
         b"[ [null null] << /A null /B null >> [<< /C null >>] ]",
@@ -958,6 +991,27 @@ fn invalid_limit_profiles_are_rejected_deterministically() {
     let error = SyntaxLimits::validate(zero).expect_err("zero budgets are invalid");
     assert_eq!(error.code(), SyntaxErrorCode::InvalidLimits);
     assert_eq!(error.diagnostic_id(), "RPE-SYNTAX-0001");
+
+    let zero_container_bytes = SyntaxLimitConfig {
+        max_container_bytes: 0,
+        ..SyntaxLimitConfig::default()
+    };
+    assert_eq!(
+        SyntaxLimits::validate(zero_container_bytes)
+            .unwrap_err()
+            .code(),
+        SyntaxErrorCode::InvalidLimits
+    );
+    let excessive_container_bytes = SyntaxLimitConfig {
+        max_container_bytes: 256 * 1_024 * 1_024 + 1,
+        ..SyntaxLimitConfig::default()
+    };
+    assert_eq!(
+        SyntaxLimits::validate(excessive_container_bytes)
+            .unwrap_err()
+            .code(),
+        SyntaxErrorCode::InvalidLimits
+    );
 
     let mut inconsistent = SyntaxLimitConfig::default();
     inconsistent.max_token_bytes = inconsistent.max_input_bytes + 1;

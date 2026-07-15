@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.37.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.37.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.38.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.38.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -1053,21 +1053,16 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("tools/quality::native_strict_open_runtime_loop"));
     assert!(xref_requirement.contains("header-to-startxref"));
     assert!(xref_requirement.contains("line-terminated comments"));
-    assert!(xref_requirement.contains("explicit caller-lent work cap"));
-    assert!(xref_requirement.contains("never a raw target"));
-    assert!(xref_requirement.contains("top-level direct indirect-reference value"));
-    assert!(xref_requirement.contains("full closing chain"));
-    assert!(
-        xref_requirement
-            .contains("job-wide object, edge, depth, path-capacity, read, and parse limits")
-    );
-    assert!(xref_requirement.contains("not a complete object-graph resolver"));
-    assert!(xref_requirement.contains("runtime inline Rust representation"));
-    assert!(xref_requirement.contains("cache-admission evidence only"));
-    assert!(xref_requirement.contains("stream payloads"));
-    assert!(xref_requirement.contains("nested semantic graph traversal"));
-    assert!(xref_requirement.contains("persistent Ready caching"));
-    assert!(xref_requirement.contains("cross-job/session aggregate work"));
+    assert!(xref_requirement.contains("caller-lent work cap"));
+    assert!(xref_requirement.contains("one-shot reopen jobs under retained profiles"));
+    assert!(xref_requirement.contains("follows only top-level whole-object aliases"));
+    assert!(xref_requirement.contains("exact cycle chains and aggregate limits"));
+    assert!(xref_requirement.contains("general graph traversal"));
+    assert!(xref_requirement.contains("value-owned footprint evidence"));
+    assert!(xref_requirement.contains("for later cache admission"));
+    assert!(xref_requirement.contains("payload containment"));
+    assert!(xref_requirement.contains("persistent reuse and coalescing"));
+    assert!(xref_requirement.contains("parent budget hierarchy"));
     assert!(xref_requirement.contains("makes public run_one the only parser entry"));
     assert!(xref_requirement.contains("queued resume or failure completion"));
     assert!(xref_requirement.contains("Host ingress never polls"));
@@ -1141,7 +1136,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "later exclusive actor turn",
         "consumes one exact failure completion",
         "without a parser poll or cancellation probe",
-        "opaque move-only Ready handoff",
+        "opaque move-only handoff",
         "same private source owner",
         "coordinator then reports zero resources",
         "consuming close returns exact owner-release evidence",

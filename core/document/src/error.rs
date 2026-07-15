@@ -245,6 +245,12 @@ pub enum DocumentErrorCode {
     IndirectLengthCycle,
     /// An indirect stream length did not resolve to one uncompressed nonnegative integer object.
     InvalidIndirectLength,
+    /// Decoded object-stream evidence does not match its effective uncompressed container.
+    InvalidObjectStreamContainer,
+    /// A compressed xref row does not match the indexed decoded object-stream entry.
+    CompressedObjectMismatch,
+    /// The effective object definition is not a compressed xref row.
+    NotCompressedObject,
 }
 
 /// Coarse document-composition failure category.
@@ -590,6 +596,21 @@ impl DocumentError {
                 DocumentErrorCategory::Syntax,
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0053",
+            ),
+            DocumentErrorCode::InvalidObjectStreamContainer => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0054",
+            ),
+            DocumentErrorCode::CompressedObjectMismatch => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0055",
+            ),
+            DocumentErrorCode::NotCompressedObject => (
+                DocumentErrorCategory::Lookup,
+                DocumentRecoverability::CorrectReference,
+                "RPE-DOCUMENT-0056",
             ),
         };
         Self {
