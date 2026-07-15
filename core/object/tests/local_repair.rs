@@ -9,7 +9,7 @@ use pdf_rs_object::{
     IndirectObjectTarget, IndirectObjectValue, LocalObjectJobContext, LocalObjectPhase,
     LocalObjectPoll, NeverCancelled, ObjectError, ObjectErrorCode, ObjectJobContext,
     ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectRepairKind, ObjectRepairLimitConfig,
-    ObjectRepairLimits, OpenLocalObjectJob,
+    ObjectRepairLimits, ObjectWorkCaps, OpenLocalObjectJob,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 
@@ -508,18 +508,9 @@ fn boundary_candidate_attempts_and_child_validation_work_are_aggregate_bounded()
         baseline_limits,
         ObjectRepairLimits::default(),
     );
-    let exact_read = baseline
-        .stats()
-        .strict()
-        .read_bytes()
-        .checked_add(baseline.stats().envelope_replay().read_bytes())
-        .unwrap();
-    let exact_parse = baseline
-        .stats()
-        .strict()
-        .parse_bytes()
-        .checked_add(baseline.stats().envelope_replay().parse_bytes())
-        .unwrap();
+    let exact_read = baseline.stats().read_bytes();
+    let exact_parse = baseline.stats().parse_bytes();
+    assert!(baseline.stats().repair_scan_bytes() > 0);
     let exact_limits = ObjectLimits::validate(ObjectLimitConfig {
         max_total_read_bytes: exact_read,
         max_total_parse_bytes: exact_parse,
@@ -541,6 +532,41 @@ fn boundary_candidate_attempts_and_child_validation_work_are_aggregate_bounded()
         exact_limits,
         ObjectRepairLimits::default(),
     );
+    let store = length.store(true);
+    let exact_caps = ObjectWorkCaps::new(exact_read, exact_parse).unwrap();
+    let mut capped = OpenLocalObjectJob::new_with_work_caps(
+        length.target(length.actual_offset),
+        context(),
+        baseline_limits,
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        exact_caps,
+    )
+    .unwrap();
+    assert_eq!(capped.work_caps(), exact_caps);
+    let capped_object = match capped.poll(&store, &NeverCancelled) {
+        LocalObjectPoll::Ready(object) => object,
+        outcome => panic!("exact parent caps must succeed: {outcome:?}"),
+    };
+    assert_eq!(capped_object.stats().read_bytes(), exact_read);
+    assert_eq!(capped_object.stats().parse_bytes(), exact_parse);
+
+    let one_less_caps = ObjectWorkCaps::new(exact_read - 1, exact_parse).unwrap();
+    let mut capped = OpenLocalObjectJob::new_with_work_caps(
+        length.target(length.actual_offset),
+        context(),
+        baseline_limits,
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        one_less_caps,
+    )
+    .unwrap();
+    assert!(matches!(
+        capped.poll(&store, &NeverCancelled),
+        LocalObjectPoll::Failed(error)
+            if error.code() == ObjectErrorCode::ResourceLimit
+                && error.limit().unwrap().kind() == ObjectLimitKind::TotalReadBytes
+    ));
     let one_less_read = ObjectLimits::validate(ObjectLimitConfig {
         max_total_read_bytes: exact_read - 1,
         ..ObjectLimitConfig {
@@ -722,7 +748,8 @@ fn unsupported_and_cancelled_strict_failures_stay_terminal_and_candidate_resourc
             if error.code() == ObjectErrorCode::ResourceLimit
                 && error.limit().unwrap().kind() == ObjectLimitKind::TotalReadBytes
     ));
-    assert!(candidate_resource.stats().repair_scan_bytes() > 0);
+    assert_eq!(candidate_resource.stats().repair_scan_bytes(), 0);
+    assert!(candidate_resource.stats().read_bytes() <= constrained.max_total_read_bytes());
 
     let fixture = direct_fixture();
     let store = fixture.store(true);

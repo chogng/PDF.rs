@@ -332,6 +332,21 @@ impl ObjectRepairStats {
     pub const fn boundary_candidates(self) -> u64 {
         self.boundary_candidates
     }
+
+    /// Returns cumulative exact source bytes charged by validation children and repair scans.
+    pub const fn read_bytes(self) -> u64 {
+        self.strict.read_bytes()
+            + self.candidate.read_bytes()
+            + self.envelope_replay.read_bytes()
+            + self.repair_scan_bytes
+    }
+
+    /// Returns cumulative parser-window bytes charged by every validation child.
+    pub const fn parse_bytes(self) -> u64 {
+        self.strict.parse_bytes()
+            + self.candidate.parse_bytes()
+            + self.envelope_replay.parse_bytes()
+    }
 }
 
 /// Proof-bearing strict or locally repaired indirect object.
@@ -520,6 +535,7 @@ pub struct OpenLocalObjectJob {
     context: LocalObjectJobContext,
     object_limits: ObjectLimits,
     repair_limits: ObjectRepairLimits,
+    work_caps: ObjectWorkCaps,
     syntax_limits: SyntaxLimits,
     stats: ObjectRepairStats,
     state: RepairState,
@@ -533,6 +549,29 @@ impl OpenLocalObjectJob {
         object_limits: ObjectLimits,
         repair_limits: ObjectRepairLimits,
         syntax_limits: SyntaxLimits,
+    ) -> Result<Self, ObjectError> {
+        Self::new_with_work_caps(
+            target,
+            context,
+            object_limits,
+            repair_limits,
+            syntax_limits,
+            ObjectWorkCaps::from_limits(object_limits),
+        )
+    }
+
+    /// Starts local repair beneath parent-supplied aggregate validation and scan work caps.
+    ///
+    /// Repair-only exact reads share the read cap with strict, candidate, and envelope-replay
+    /// children. Parse work is the sum of those validation children. The caps may be smaller
+    /// than the configured object totals but cannot exceed them.
+    pub fn new_with_work_caps(
+        target: IndirectObjectTarget,
+        context: LocalObjectJobContext,
+        object_limits: ObjectLimits,
+        repair_limits: ObjectRepairLimits,
+        syntax_limits: SyntaxLimits,
+        work_caps: ObjectWorkCaps,
     ) -> Result<Self, ObjectError> {
         let checkpoints = [
             context.strict().envelope_checkpoint(),
@@ -551,12 +590,28 @@ impl OpenLocalObjectJob {
                 ));
             }
         }
-        let strict = OpenObjectJob::new(target, context.strict(), object_limits, syntax_limits)?;
+        if work_caps.max_read_bytes() > object_limits.max_total_read_bytes()
+            || work_caps.max_parse_bytes() > object_limits.max_total_parse_bytes()
+        {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::InvalidLimits,
+                Some(target.reference()),
+                None,
+            ));
+        }
+        let strict = OpenObjectJob::new_with_work_caps(
+            target,
+            context.strict(),
+            object_limits,
+            syntax_limits,
+            work_caps,
+        )?;
         Ok(Self {
             declared_target: target,
             context,
             object_limits,
             repair_limits,
+            work_caps,
             syntax_limits,
             stats: ObjectRepairStats::default(),
             state: RepairState::Strict(strict),
@@ -581,6 +636,11 @@ impl OpenLocalObjectJob {
     /// Returns the validated local-repair ceilings.
     pub const fn repair_limits(&self) -> ObjectRepairLimits {
         self.repair_limits
+    }
+
+    /// Returns the parent-supplied aggregate read and parse caps for this local job.
+    pub const fn work_caps(&self) -> ObjectWorkCaps {
+        self.work_caps
     }
 
     /// Returns strict-child and repair-only work charged so far.
@@ -1017,13 +1077,15 @@ impl OpenLocalObjectJob {
         &self,
         target: IndirectObjectTarget,
     ) -> Result<ObjectWorkCaps, ObjectError> {
-        let max_read = self.object_limits.max_total_read_bytes();
-        let max_parse = self.object_limits.max_total_parse_bytes();
+        let max_read = self.work_caps.max_read_bytes();
+        let max_parse = self.work_caps.max_parse_bytes();
         let consumed_read = self
             .stats
             .strict
             .read_bytes()
             .checked_add(self.stats.candidate.read_bytes())
+            .and_then(|value| value.checked_add(self.stats.envelope_replay.read_bytes()))
+            .and_then(|value| value.checked_add(self.stats.repair_scan_bytes))
             .ok_or_else(|| {
                 ObjectError::for_code(
                     ObjectErrorCode::InternalState,
@@ -1036,6 +1098,7 @@ impl OpenLocalObjectJob {
             .strict
             .parse_bytes()
             .checked_add(self.stats.candidate.parse_bytes())
+            .and_then(|value| value.checked_add(self.stats.envelope_replay.parse_bytes()))
             .ok_or_else(|| {
                 ObjectError::for_code(
                     ObjectErrorCode::InternalState,
@@ -1101,6 +1164,42 @@ impl OpenLocalObjectJob {
                 offset,
             ));
         }
+        let validation_read = self
+            .stats
+            .strict
+            .read_bytes()
+            .checked_add(self.stats.candidate.read_bytes())
+            .and_then(|value| value.checked_add(self.stats.envelope_replay.read_bytes()))
+            .ok_or_else(|| {
+                ObjectError::resource(
+                    ObjectLimitKind::TotalReadBytes,
+                    self.work_caps.max_read_bytes(),
+                    self.work_caps.max_read_bytes(),
+                    amount,
+                    Some(self.declared_target.reference()),
+                    offset,
+                )
+            })?;
+        let aggregate = validation_read.checked_add(total).ok_or_else(|| {
+            ObjectError::resource(
+                ObjectLimitKind::TotalReadBytes,
+                self.work_caps.max_read_bytes(),
+                validation_read.saturating_add(self.stats.repair_scan_bytes),
+                amount,
+                Some(self.declared_target.reference()),
+                offset,
+            )
+        })?;
+        if aggregate > self.work_caps.max_read_bytes() {
+            return Err(ObjectError::resource(
+                ObjectLimitKind::TotalReadBytes,
+                self.work_caps.max_read_bytes(),
+                validation_read + self.stats.repair_scan_bytes,
+                amount,
+                Some(self.declared_target.reference()),
+                offset,
+            ));
+        }
         self.stats.repair_scan_bytes = total;
         Ok(())
     }
@@ -1137,6 +1236,7 @@ impl fmt::Debug for OpenLocalObjectJob {
             .field("context", &self.context)
             .field("object_limits", &self.object_limits)
             .field("repair_limits", &self.repair_limits)
+            .field("work_caps", &self.work_caps)
             .field("syntax_limits", &self.syntax_limits)
             .field("stats", &self.stats)
             .field("phase", &self.phase())
