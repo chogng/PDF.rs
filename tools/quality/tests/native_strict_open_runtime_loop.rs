@@ -1,7 +1,7 @@
 use pdf_rs_bytes::{
     ByteRange, ByteSlice, ByteSource, DataTicket, JobId, RangeResponse, ReadPoll, ReadRequest,
-    RequestPriority, ResumeCheckpoint, SmallRanges, SourceIdentity, SourceRevision, SourceSnapshot,
-    SourceStableId, SourceValidator, SourceValidatorKind,
+    RequestPriority, ResumeCheckpoint, SmallRanges, SourceError, SourceIdentity, SourceRevision,
+    SourceSnapshot, SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_document::{
     DocumentCancellation, DocumentLimits, NeverCancelled, OpenStrictBaseRevisionJob,
@@ -12,9 +12,11 @@ use pdf_rs_generate::generate_one_page_pdf;
 use pdf_rs_object::{ObjectLimitConfig, ObjectLimits};
 use pdf_rs_session::{
     RangeResumeArbiter, RangeResumeDispatch, RangeResumeGeneration, RangeResumePermit,
-    RangeResumePhase, RangeResumeRegistrationOutcome, RangeResumeTarget, StrictBaseOpenJobOwner,
-    StrictBaseOpenOwnerCancelOutcome, StrictBaseOpenOwnerPhase, StrictBaseOpenOwnerPoll,
-    StrictBaseOpenOwnerResume, StrictBaseOpenOwnerSourceChangeOutcome, StrictBaseOpenOwnerStart,
+    RangeResumePhase, RangeResumeRegistrationOutcome, RangeResumeTarget, StrictBaseOpenCoordinator,
+    StrictBaseOpenCoordinatorFailure, StrictBaseOpenCoordinatorPhase, StrictBaseOpenCoordinatorRun,
+    StrictBaseOpenIngress, StrictBaseOpenJobOwner, StrictBaseOpenOwnerCancelOutcome,
+    StrictBaseOpenOwnerPhase, StrictBaseOpenOwnerPoll, StrictBaseOpenOwnerResume,
+    StrictBaseOpenOwnerSourceChangeOutcome, StrictBaseOpenOwnerStart,
     StrictBaseOpenResumeDiscardReason,
 };
 use pdf_rs_syntax::SyntaxLimits;
@@ -508,5 +510,225 @@ fn native_strict_open_runtime_terminals_drop_late_permits_and_resources() {
 
     println!(
         "native_strict_open_runtime_terminal_result cancel_late_permit_dropped=true source_change_late_permit_dropped=true close_late_permit_dropped=true terminal_resources_zero=true scheduler_scope=single_strict_open_job"
+    );
+}
+
+#[test]
+fn native_strict_open_coordinator_closes_range_turns_and_failure_without_poll() {
+    let pdf = generate_one_page_pdf().expect("canonical one-page PDF generation succeeds");
+    let source_len = u64::try_from(pdf.len()).expect("generated PDF length fits u64");
+    assert_eq!(source_len, 612);
+
+    let source = snapshot(source_len, 0x95);
+    let mut coordinator =
+        StrictBaseOpenCoordinator::new(new_job(source), OPEN_GENERATION, Default::default())
+            .expect("default Range limits validate for the coordinator");
+    let mut observed_checkpoints = Vec::new();
+    let mut pending_turns = 0_u64;
+    let mut no_work_without_poll = false;
+    let mut outcome = coordinator.run_one(&NeverCancelled);
+
+    let ready = loop {
+        match outcome {
+            StrictBaseOpenCoordinatorRun::WaitingForData { missing, .. } => {
+                pending_turns += 1;
+                assert!(pending_turns < 64, "strict open must make bounded progress");
+                let checkpoint = coordinator
+                    .waiting_checkpoint()
+                    .expect("published Waiting retains its registered checkpoint");
+                if !observed_checkpoints.contains(&checkpoint) {
+                    observed_checkpoints.push(checkpoint);
+                }
+                assert_eq!(
+                    coordinator.phase(),
+                    StrictBaseOpenCoordinatorPhase::WaitingForData
+                );
+                assert_eq!(coordinator.resources().jobs(), 1);
+                assert_eq!(coordinator.resources().waiting_targets(), 1);
+                assert_eq!(coordinator.resources().registrations(), 1);
+                assert_eq!(coordinator.resources().pending_tickets(), 1);
+                assert_eq!(coordinator.resources().ready_resumes(), 0);
+                assert_eq!(coordinator.resources().queued_failures(), 0);
+
+                let stats = coordinator.stats();
+                let job_phase = coordinator.job_phase();
+                let mut lower_halves = Vec::with_capacity(missing.len());
+                for range in missing.as_slice().iter().copied() {
+                    assert!(
+                        range.len() > 1,
+                        "real strict-open requests must remain splittable"
+                    );
+                    let lower_len = range.len() / 2;
+                    let lower = ByteRange::new(range.start(), lower_len).unwrap();
+                    let upper =
+                        ByteRange::new(range.start() + lower_len, range.len() - lower_len).unwrap();
+                    assert!(matches!(
+                        coordinator.supply(response(source, &pdf, upper)),
+                        StrictBaseOpenIngress::Accepted {
+                            wake_scheduler: false,
+                            ..
+                        }
+                    ));
+                    assert_eq!(
+                        coordinator.phase(),
+                        StrictBaseOpenCoordinatorPhase::WaitingForData
+                    );
+                    assert_eq!(coordinator.stats(), stats);
+                    assert_eq!(coordinator.job_phase(), job_phase);
+                    lower_halves.push(lower);
+                }
+
+                if !no_work_without_poll {
+                    assert!(matches!(
+                        coordinator.run_one(&PanicOnCancellationProbe),
+                        StrictBaseOpenCoordinatorRun::NoWork
+                    ));
+                    assert_eq!(coordinator.stats(), stats);
+                    assert_eq!(coordinator.job_phase(), job_phase);
+                    assert_eq!(
+                        coordinator.phase(),
+                        StrictBaseOpenCoordinatorPhase::WaitingForData
+                    );
+                    no_work_without_poll = true;
+                }
+
+                let last = lower_halves.len() - 1;
+                for (index, lower) in lower_halves.into_iter().enumerate() {
+                    match coordinator.supply(response(source, &pdf, lower)) {
+                        StrictBaseOpenIngress::Accepted { wake_scheduler, .. } => {
+                            assert_eq!(wake_scheduler, index == last)
+                        }
+                        other => panic!("valid generated bytes must be accepted: {other:?}"),
+                    }
+                    let expected_phase = if index == last {
+                        StrictBaseOpenCoordinatorPhase::ResumeQueued
+                    } else {
+                        StrictBaseOpenCoordinatorPhase::WaitingForData
+                    };
+                    assert_eq!(coordinator.phase(), expected_phase);
+                    assert_eq!(coordinator.stats(), stats);
+                    assert_eq!(coordinator.job_phase(), job_phase);
+                }
+                assert_eq!(coordinator.resources().pending_tickets(), 0);
+                assert_eq!(coordinator.resources().ready_resumes(), 1);
+                assert_eq!(coordinator.resources().queued_failures(), 0);
+                outcome = coordinator.run_one(&NeverCancelled);
+            }
+            StrictBaseOpenCoordinatorRun::Ready(ready) => break ready,
+            other => panic!("coordinated generated strict open must reach Ready: {other:?}"),
+        }
+    };
+
+    assert!(no_work_without_poll);
+    assert_eq!(
+        observed_checkpoints,
+        vec![
+            TAIL_CHECKPOINT,
+            SECTION_CHECKPOINT,
+            SCAN_CHECKPOINT,
+            ENVELOPE_CHECKPOINT,
+            BOUNDARY_CHECKPOINT,
+        ]
+    );
+    assert_eq!(ready.index().snapshot(), source);
+    assert_eq!(ready.index().object_attestations().len(), 4);
+    assert_eq!(
+        coordinator.phase(),
+        StrictBaseOpenCoordinatorPhase::ReadyHandedOff
+    );
+    assert_eq!(coordinator.resources().jobs(), 0);
+    assert_eq!(coordinator.resources().waiting_targets(), 0);
+    assert_eq!(coordinator.resources().registrations(), 0);
+    assert_eq!(coordinator.resources().pending_tickets(), 0);
+    assert_eq!(coordinator.resources().ready_resumes(), 0);
+    assert_eq!(coordinator.resources().queued_failures(), 0);
+    assert_eq!(coordinator.resources().cached_bytes(), 0);
+    assert_eq!(coordinator.resources().resident_bytes(), 0);
+    assert!(matches!(
+        coordinator.run_one(&PanicOnCancellationProbe),
+        StrictBaseOpenCoordinatorRun::AlreadyTerminal {
+            phase: StrictBaseOpenCoordinatorPhase::ReadyHandedOff
+        }
+    ));
+
+    let handoff_resources = ready.source_resources();
+    assert_eq!(handoff_resources.registrations(), 0);
+    assert_eq!(handoff_resources.pending_tickets(), 0);
+    assert_eq!(handoff_resources.ready_resumes(), 0);
+    assert_eq!(handoff_resources.queued_failures(), 0);
+    assert_eq!(handoff_resources.cached_bytes(), source_len);
+    let source_release = ready.close();
+    assert_eq!(source_release.released_registrations(), 0);
+    assert_eq!(source_release.released_pending_tickets(), 0);
+    assert_eq!(source_release.released_ready_resumes(), 0);
+    assert_eq!(source_release.released_queued_failures(), 0);
+    assert_eq!(source_release.released_cached_bytes(), source_len);
+
+    let failure_source = snapshot(source_len, 0x96);
+    let mut failed = StrictBaseOpenCoordinator::new(
+        new_job(failure_source),
+        OPEN_GENERATION,
+        Default::default(),
+    )
+    .expect("default Range limits validate for the failure coordinator");
+    let ticket = match failed.run_one(&NeverCancelled) {
+        StrictBaseOpenCoordinatorRun::WaitingForData { ticket, .. } => ticket,
+        other => panic!("empty failure source must suspend first: {other:?}"),
+    };
+    assert_eq!(
+        failed.phase(),
+        StrictBaseOpenCoordinatorPhase::WaitingForData
+    );
+    assert_eq!(failed.resources().registrations(), 1);
+    assert_eq!(failed.resources().pending_tickets(), 1);
+    let stats = failed.stats();
+    let job_phase = failed.job_phase();
+    assert!(matches!(
+        failed.fail_data(ticket),
+        StrictBaseOpenIngress::Accepted {
+            wake_scheduler: true,
+            cached_bytes: 0,
+        }
+    ));
+    assert_eq!(
+        failed.phase(),
+        StrictBaseOpenCoordinatorPhase::FailureQueued
+    );
+    assert_eq!(failed.stats(), stats);
+    assert_eq!(failed.job_phase(), job_phase);
+    assert_eq!(failed.resources().jobs(), 1);
+    assert_eq!(failed.resources().waiting_targets(), 1);
+    assert_eq!(failed.resources().registrations(), 1);
+    assert_eq!(failed.resources().pending_tickets(), 0);
+    assert_eq!(failed.resources().ready_resumes(), 0);
+    assert_eq!(failed.resources().queued_failures(), 1);
+
+    let source_failure =
+        StrictBaseOpenCoordinatorFailure::Source(SourceError::source_unavailable());
+    assert!(matches!(
+        failed.run_one(&PanicOnCancellationProbe),
+        StrictBaseOpenCoordinatorRun::Failed(error) if error == source_failure
+    ));
+    assert_eq!(failed.failure(), Some(source_failure));
+    assert_eq!(failed.phase(), StrictBaseOpenCoordinatorPhase::Failed);
+    assert_eq!(failed.stats(), stats);
+    assert_eq!(failed.job_phase(), job_phase);
+    assert_eq!(failed.resources().jobs(), 0);
+    assert_eq!(failed.resources().waiting_targets(), 0);
+    assert_eq!(failed.resources().registrations(), 0);
+    assert_eq!(failed.resources().pending_tickets(), 0);
+    assert_eq!(failed.resources().ready_resumes(), 0);
+    assert_eq!(failed.resources().queued_failures(), 0);
+    assert_eq!(failed.resources().cached_bytes(), 0);
+    assert_eq!(failed.resources().resident_bytes(), 0);
+    assert!(matches!(
+        failed.run_one(&PanicOnCancellationProbe),
+        StrictBaseOpenCoordinatorRun::AlreadyTerminal {
+            phase: StrictBaseOpenCoordinatorPhase::Failed
+        }
+    ));
+
+    println!(
+        "native_strict_open_coordinator_result bytes={source_len} pending_turns={pending_turns} checkpoints=tail,section,scan,envelope,boundary upper_before_lower=true incomplete_no_work_no_poll=true ingress_non_inline=true ready_handoff=true handoff_cached_bytes={source_len} failure_queued=true failure_no_poll=true terminal_resources_zero=true scheduler_scope=single_strict_open_coordinator"
     );
 }
