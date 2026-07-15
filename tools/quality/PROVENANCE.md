@@ -17,6 +17,8 @@ synchronous idempotent close with explicit released-resource evidence. A separat
 Native Range-resume loop drives that same generated PDF through the product runtime arbiter, and a
 sibling strict-open runtime loop retains the direct single-job owner checks and also drives the real
 opening job through the public one-job coordinator into an opaque Ready source handoff.
+The quality CLI also validates the machine-readable M1 capability-profile ledger and refuses
+evidence-free REFERENCE or DIFFERENTIAL relabelling.
 
 # Semantic owner
 
@@ -43,6 +45,15 @@ Quality/Corpus workstream.
 The manifest reader intentionally accepts a canonical TOML v1 subset: root
 schema, named tables, scalar values, and single-line string arrays. It rejects
 unknown/duplicate fields before checking every required semantic group.
+
+The separate M1 maturity reader accepts a smaller canonical array-of-profile subset. Every record
+freezes requirements, supported and excluded behavior, policy, target/reference identities, and
+the evidence slots required by the architecture maturity transitions. PLANNED records may retain
+explicit REQUIRED placeholders. REFERENCE records require concrete O0/O1 cases, target/reference
+identities, and independent review. DIFFERENTIAL records additionally require O2 adjudication,
+registered fuzz and minimization, a fixed holdout manifest, eligible benchmark and differential
+reports, and a complete reference or baseline fingerprint. This check prevents a label-only
+promotion; it does not judge the semantic contents of future evidence by itself.
 
 The `m0.parser-mutation-smoke.v1` integration test binds the exact SHA-256 of
 the three existing canonical inputs. For each parser it selects seven stable
@@ -216,6 +227,8 @@ Tests cover required manifest groups, malformed syntax, duplicates, hash/oracle/
 budget validation, deterministic bundle addressing, source/render/contract
 binding, artifact completeness, mismatch diagnostics, idempotent writes, and
 rejection of product-to-tools or full-engine dependencies. The cross-tool
+M1 maturity tests validate the repository's four truthfully PLANNED profiles and prove that
+label-only REFERENCE and DIFFERENTIAL edits fail on their missing evidence fields. The cross-tool
 mutation smoke covers canonical-seed identity, bounded fixed mutations,
 repeatable success/error observations, explicit input-limit rejection, and
 synthetic secret/seed-marker redaction. The Native composition test covers the
@@ -250,6 +263,10 @@ release eligibility. Continuous parser fuzzing, automated failure bundles, and
 interrupted-write recovery remain planned before T1 inputs.
 
 # Known deviations and unsupported cases
+
+- The M1 maturity parser deliberately validates evidence presence and state-transition shape, not
+  arbitrary TOML or the future semantic contents of review, fuzz, holdout, benchmark, differential,
+  and fingerprint artifacts. Those artifacts require their own schema validators before promotion.
 
 - The manifest parser does not claim general TOML compatibility; multiline
   arrays, dotted keys, inline tables, escapes within array elements, and comments
@@ -303,6 +320,9 @@ interrupted-write recovery remain planned before T1 inputs.
   none of these loops establishes M1 exit.
 
 # History
+
+- 2026-07-15: Added the machine-readable M1 capability-profile ledger and a PR gate that retains
+  all profiles as PLANNED while rejecting evidence-free maturity relabelling.
 
 - 2026-07-15: Drove the generated PDF through the public strict-open coordinator, verifying exact
   five-checkpoint actor-turn coordination, opaque Ready source ownership and release evidence, and

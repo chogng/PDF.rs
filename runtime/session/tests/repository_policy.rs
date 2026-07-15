@@ -248,8 +248,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.32.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.32.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.33.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.33.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -544,7 +544,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "generic multi-job scheduler with queue priority, fairness, backpressure, and a job registry",
         "not a complete Session",
         "viewport generations",
-        "R0/R1 repair profiles are also absent",
+        "R0/R1 repair implementations are also absent",
         "not registered DIFFERENTIAL evidence",
         "does not claim M1 exit",
     ] {

@@ -15,6 +15,7 @@ the following array-of-table forms:
 | --- | --- |
 | `spec-map.toml` | `[[requirement]]` |
 | `feature-map.toml` | `[[feature]]` |
+| `capability-profiles.toml` | `[[profile]]` |
 | `dependency-ledger.toml` | `[[dependency]]` |
 | `data-ledger.toml` | `[[data]]` |
 | `baseline-ledger.toml` | `[[baseline]]` |
@@ -23,3 +24,11 @@ Record fields and approval rules come from the governance standard. In particula
 an empty ledger must not be interpreted as an allowlist, a release approval, or
 evidence that a requirement is covered. Increment `version` for semantic ledger
 changes and increment `schema` only for incompatible structural changes.
+
+`capability-profiles.toml` freezes the supported and excluded surface of the M1 strict,
+local-repair, page-count, and outline capabilities. The PR lane validates it before product build
+proof. A profile cannot be relabelled `REFERENCE` without O0/O1 cases, a concrete
+reference/target pair, and independent review. `DIFFERENTIAL` additionally requires O2
+adjudication, registered fuzz/minimization, a fixed holdout, eligible benchmark and differential
+reports, and a complete reference or baseline fingerprint. The initial records remain `PLANNED`
+and are not M1 exit evidence.

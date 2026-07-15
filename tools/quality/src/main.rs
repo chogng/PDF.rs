@@ -4,6 +4,7 @@
 
 mod bundle;
 mod manifest;
+mod maturity;
 mod purity;
 
 use std::collections::BTreeMap;
@@ -15,6 +16,7 @@ use std::process::ExitCode;
 
 use bundle::build_synthetic_failure_bundle;
 use manifest::validate_manifest_file;
+use maturity::validate_maturity_file;
 use purity::{check_product_build_closure, check_product_manifests, prepare_product_build_proof};
 
 struct Selection {
@@ -28,12 +30,12 @@ fn selection_for(lane: &str) -> Option<Selection> {
         "local" => Some(Selection {
             lane: "local",
             reason: "pre-submit feedback for code and deterministic T0 infrastructure",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,product-release-closure,synthetic-failure-bundle",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
         }),
         "pr" => Some(Selection {
             lane: "pr",
             reason: "merge gate for the complete required Rust quality baseline",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,product-release-closure,synthetic-failure-bundle,doc",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
         }),
         _ => None,
     }
@@ -83,6 +85,29 @@ fn main() -> ExitCode {
                 return usage();
             }
             validate_case_tree(Path::new(&root))
+        }
+        "validate-m1-maturity" => {
+            let Some(path) = arguments.next() else {
+                return usage();
+            };
+            if arguments.next().is_some() {
+                return usage();
+            }
+            match validate_maturity_file(Path::new(&path)) {
+                Ok(report) => {
+                    println!("profiles={}", report.profiles);
+                    println!("planned={}", report.planned);
+                    println!("reference={}", report.reference);
+                    println!("differential={}", report.differential);
+                    ExitCode::SUCCESS
+                }
+                Err(diagnostics) => {
+                    for diagnostic in diagnostics {
+                        eprintln!("{diagnostic}");
+                    }
+                    ExitCode::FAILURE
+                }
+            }
         }
         "check-product-purity" => {
             let root = arguments.next().unwrap_or_else(|| ".".into());
@@ -215,7 +240,7 @@ fn print_selection(selection: Selection) {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>"
+        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>"
     );
     ExitCode::from(2)
 }

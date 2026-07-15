@@ -1,0 +1,91 @@
+schema = 1
+version = "0.1.0"
+status = "active"
+
+[[profile]]
+id = "m1.r0-strict.v1"
+owner = "parser-security"
+state = "PLANNED"
+feature = "core.strict-repair-policy"
+requirements = ["RPE-ARCH-001/5.3", "RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/15.3/M1"]
+supported = ["strict syntax failure", "strict xref failure", "strict object framing failure", "no implicit recovery"]
+excluded = ["R1 local repair", "R2 object scanning", "R3 recovery refusal policy"]
+policy = "Any structural nonconformance fails without scanning nearby bytes or changing source geometry."
+target = "REQUIRED_BEFORE_REFERENCE"
+reference = "REQUIRED_BEFORE_REFERENCE"
+o0_cases = []
+o1_cases = []
+o2_adjudications = []
+independent_review = "REQUIRED_BEFORE_REFERENCE"
+fuzz_targets = []
+fuzz_minimizer = "REQUIRED_BEFORE_DIFFERENTIAL"
+holdout_manifest = "REQUIRED_BEFORE_DIFFERENTIAL"
+benchmark_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+differential_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+baseline_fingerprint = "REQUIRED_BEFORE_DIFFERENTIAL"
+
+[[profile]]
+id = "m1.r1-local-repair.v1"
+owner = "parser-security"
+state = "PLANNED"
+feature = "core.local-repair"
+requirements = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8"]
+supported = ["bounded whitespace correction", "bounded direct stream length correction", "bounded small xref offset correction", "source-located repair diagnostics"]
+excluded = ["R2 whole-object scanning", "unbounded recovery", "silent repair", "partial unmarked document success"]
+policy = "R1 may repair only whitespace, direct stream length, or a small xref offset within explicit byte, candidate, fuel, and cancellation limits; every accepted change emits a diagnostic."
+target = "REQUIRED_BEFORE_REFERENCE"
+reference = "REQUIRED_BEFORE_REFERENCE"
+o0_cases = []
+o1_cases = []
+o2_adjudications = []
+independent_review = "REQUIRED_BEFORE_REFERENCE"
+fuzz_targets = []
+fuzz_minimizer = "REQUIRED_BEFORE_DIFFERENTIAL"
+holdout_manifest = "REQUIRED_BEFORE_DIFFERENTIAL"
+benchmark_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+differential_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+baseline_fingerprint = "REQUIRED_BEFORE_DIFFERENTIAL"
+
+[[profile]]
+id = "m1.strict-page-count.v1"
+owner = "parser-security"
+state = "PLANNED"
+feature = "core.strict-page-count"
+requirements = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8", "RPE-ARCH-001/5.9", "RPE-ARCH-001/11.5", "RPE-ARCH-001/11.7", "RPE-ARCH-001/15.3/M1"]
+supported = ["attested Catalog root", "strict Page and Pages topology", "exact Parent links", "cycle and duplicate rejection", "recomputed Count equality", "bounded scalar page count"]
+excluded = ["page index", "page handles", "resource inheritance", "xref or object representations outside the attested revision profile", "repair unless an explicit repair profile is selected"]
+policy = "The service returns one scalar only after the complete selected page tree has been reopened through attested object access and validated without trusting declared Count for traversal or allocation."
+target = "core/document::AttestedRevisionIndex::count_pages"
+reference = "REQUIRED_BEFORE_REFERENCE"
+o0_cases = []
+o1_cases = []
+o2_adjudications = []
+independent_review = "REQUIRED_BEFORE_REFERENCE"
+fuzz_targets = []
+fuzz_minimizer = "REQUIRED_BEFORE_DIFFERENTIAL"
+holdout_manifest = "REQUIRED_BEFORE_DIFFERENTIAL"
+benchmark_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+differential_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+baseline_fingerprint = "REQUIRED_BEFORE_DIFFERENTIAL"
+
+[[profile]]
+id = "m1.strict-outline.v1"
+owner = "parser-security"
+state = "PLANNED"
+feature = "core.strict-outline"
+requirements = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "RPE-ARCH-001/5.8", "RPE-ARCH-001/11.5", "RPE-ARCH-001/11.7", "RPE-ARCH-001/15.3/M1"]
+supported = ["attested Catalog Outlines reference", "strict parent-owned linked lists", "cycle and duplicate rejection", "signed visible Count recomputation", "bounded preorder", "bounded direct text-string titles", "non-executing target-kind classification"]
+excluded = ["action execution", "destination resolution", "styles", "indirect semantic field values", "indirect-null equivalence", "xref or object representations outside the attested revision profile", "repair unless an explicit repair profile is selected"]
+policy = "The service publishes a bounded owned preorder only after every selected outline dictionary and link has been reopened through attested object access and validated; targets are classified but never executed."
+target = "core/document::AttestedRevisionIndex::read_outline"
+reference = "REQUIRED_BEFORE_REFERENCE"
+o0_cases = []
+o1_cases = []
+o2_adjudications = []
+independent_review = "REQUIRED_BEFORE_REFERENCE"
+fuzz_targets = []
+fuzz_minimizer = "REQUIRED_BEFORE_DIFFERENTIAL"
+holdout_manifest = "REQUIRED_BEFORE_DIFFERENTIAL"
+benchmark_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+differential_report = "REQUIRED_BEFORE_DIFFERENTIAL"
+baseline_fingerprint = "REQUIRED_BEFORE_DIFFERENTIAL"

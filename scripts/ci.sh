@@ -35,6 +35,8 @@ cargo run --quiet --package pdf-rs-benchmark -- \
     validate tests/performance/m0-synthetic-benchmark-replay-v1.toml \
     tests/corpus/manifests/t0-bootstrap-v1.toml
 cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases
+cargo run --quiet --package pdf-rs-quality -- \
+    validate-m1-maturity docs/traceability/capability-profiles.toml
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .
 
 product_build_root="$(mktemp -d "${TMPDIR:-/tmp}/pdf-rs-product-build.XXXXXX")"

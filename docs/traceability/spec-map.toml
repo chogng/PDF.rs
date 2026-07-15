@@ -1,5 +1,5 @@
 schema = 1
-version = "0.32.0"
+version = "0.33.0"
 status = "active"
 
 [[requirement]]
@@ -186,6 +186,9 @@ features = [
   "runtime.strict-base-open-coordinator",
   "core.strict-page-count",
   "core.strict-outline",
+  "core.strict-repair-policy",
+  "core.local-repair",
+  "quality.m1-maturity-gate",
   "quality.native-range-resume-loop",
   "quality.native-strict-open-runtime-loop",
 ]
@@ -205,11 +208,12 @@ tests = [
   "tools/quality::native_object_loop",
   "tools/quality::native_range_resume_loop",
   "tools/quality::native_strict_open_runtime_loop",
+  "tools/quality::maturity",
   "tools/baseline::pdfium_outline_real_adapter",
   "tools/baseline::pdfium_page_count_real_adapter",
 ]
 status = "partial"
-notes = "Current executable evidence drives one real generated 612-byte PDF through the product strict-base opening entry and the one-job strict-open coordinator, covering all five parser checkpoints and upper-half-before-lower out-of-order supply. Coordinator public run_one is the only parser entry; host ingress only mutates Range state and may queue completion, never polls parser code, and leaves progress to a later exclusive actor turn. The coordinated host-failure path consumes one exact failure completion without a parser poll or cancellation probe. Ready crosses as an opaque move-only Ready handoff containing the attested index and the same private source owner; the coordinator then reports zero resources and consuming close returns exact owner-release evidence. The sibling direct lower-owner path retains arbiter-bound move-only dispatch, exact issuer/ticket/job/checkpoint/generation validation, and stale-generation rejection without parser work. Lower component suites separately cover namespaced tickets, ordered resume/failure completion, bounded snapshot bytes, syntax, traditional xref, object framing, strict opening, foreign and duplicate ingress, cancellation before late bytes, source-change rejection, idempotent close, permit mismatch cases, page counting, and outline enumeration. This is one synchronous strict-base-open component, not a complete Session. Platform Range transport, a generic multi-job scheduler with queue priority, fairness, backpressure, and a job registry, a complete Session/request/Worker owner, viewport generations, broader lifecycle model tests, registered fuzzing, and browser/desktop E2E remain open; xref streams, hybrid and incremental revisions, object streams, and the required R0/R1 repair profiles are also absent. Strict page-count and outline features remain PLANNED, and their non-gating PDFium helpers are not registered DIFFERENTIAL evidence. This partial record therefore does not claim M1 exit."
+notes = "Current executable evidence drives one real generated 612-byte PDF through the product strict-base opening entry and the one-job strict-open coordinator, covering all five parser checkpoints and upper-half-before-lower out-of-order supply. Coordinator public run_one is the only parser entry; host ingress only mutates Range state and may queue completion, never polls parser code, and leaves progress to a later exclusive actor turn. The coordinated host-failure path consumes one exact failure completion without a parser poll or cancellation probe. Ready crosses as an opaque move-only Ready handoff containing the attested index and the same private source owner; the coordinator then reports zero resources and consuming close returns exact owner-release evidence. The sibling direct lower-owner path retains arbiter-bound move-only dispatch, exact issuer/ticket/job/checkpoint/generation validation, and stale-generation rejection without parser work. Lower component suites separately cover namespaced tickets, ordered resume/failure completion, bounded snapshot bytes, syntax, traditional xref, object framing, strict opening, foreign and duplicate ingress, cancellation before late bytes, source-change rejection, idempotent close, permit mismatch cases, page counting, and outline enumeration. The machine-readable M1 profile ledger now freezes strict R0, bounded local R1, strict page-count, and strict-outline supported/excluded surfaces while leaving all four PLANNED; its PR validator rejects paper REFERENCE or DIFFERENTIAL promotion when required cases, review, fuzz, holdout, performance, differential, or fingerprint evidence is absent. This governance gate is not implementation or maturity evidence. This is one synchronous strict-base-open component, not a complete Session. Platform Range transport, a generic multi-job scheduler with queue priority, fairness, backpressure, and a job registry, a complete Session/request/Worker owner, viewport generations, broader lifecycle model tests, registered fuzzing, and browser/desktop E2E remain open; xref streams, hybrid and incremental revisions, object streams, and the required R0/R1 repair implementations are also absent. Strict page-count and outline features remain PLANNED, and their non-gating PDFium helpers are not registered DIFFERENTIAL evidence. This partial record therefore does not claim M1 exit."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.6"
