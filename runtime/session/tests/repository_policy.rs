@@ -242,14 +242,103 @@ fn product_dependencies_are_only_bytes_cache_and_direct_signature_document_types
 }
 
 #[test]
+fn bounded_m1_session_is_one_actor_without_a_generic_scheduler_claim() {
+    let source = fs::read_to_string(crate_root().join("src/m1_session.rs"))
+        .expect("bounded M1 session source must be readable");
+    for required in [
+        "pub struct M1StrictDocumentSession",
+        "pub enum M1SessionPhase",
+        "Created",
+        "Opening",
+        "WaitingForData",
+        "Ready",
+        "Closing",
+        "Closed",
+        "Failed",
+        "pub fn run_one",
+        "pub fn request_page_count",
+        "pub fn request_outline",
+        "pub fn cancel_request",
+        "pub fn signal_source_changed",
+        "fn release_ready",
+    ] {
+        assert!(
+            source.contains(required),
+            "M1 actor must contain {required:?}"
+        );
+    }
+    assert_eq!(source.matches("pub fn run_one").count(), 1);
+    for forbidden in ["VecDeque", "BinaryHeap", "async fn", "Worker", "Pdfium"] {
+        assert!(
+            !source.contains(forbidden),
+            "bounded M1 actor must not imply generic runtime surface {forbidden:?}"
+        );
+    }
+
+    let root = repository_root();
+    let feature_map = fs::read_to_string(root.join("docs/traceability/feature-map.toml"))
+        .expect("feature map must be readable");
+    let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map must be readable");
+    let feature = record_with_id(
+        &feature_map,
+        "feature",
+        "runtime.m1-strict-document-session",
+    )
+    .expect("bounded M1 session feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.strict-document-session.v1\"",
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/9.1",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"runtime/session\"]",
+        "runtime/session::m1_strict_document_session",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "feature must contain {required:?}"
+        );
+    }
+    for requirement in [
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/9.1",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+    ] {
+        let record = record_with_id(&spec_map, "requirement", requirement)
+            .unwrap_or_else(|| panic!("{requirement} mapping must exist"));
+        assert!(record.contains("runtime.m1-strict-document-session"));
+        assert!(record.contains("runtime/session::m1_strict_document_session"));
+    }
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("M1 milestone mapping must exist");
+    for required in [
+        "one bounded `M1StrictDocumentSession`",
+        "fixed two-service selection is round-robin",
+        "polls at most one parser job",
+        "not a generic priority scheduler",
+        "remain the M1 exit blockers at this stage",
+    ] {
+        assert!(
+            milestone.contains(required),
+            "M1 actor mapping must contain {required:?}"
+        );
+    }
+}
+
+#[test]
 fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
     let root = repository_root();
     let feature_map = fs::read_to_string(root.join("docs/traceability/feature-map.toml"))
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.55.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.55.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.56.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.56.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -442,7 +531,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "consumes only identity-matching resume or failure permits",
         "stale or mismatched permits are consumed without parser work",
         "public run_one method is the only parser entry",
-        "every host ingress as queue-only work",
+        "keeps every host ingress parser-free",
         "without polling the parser or probing cancellation",
         "opaque move-only handoff",
         "same private source owner",
@@ -500,8 +589,8 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "validates every resume or failure permit's issuer, ticket, job, checkpoint, and generation",
         "Late or mismatched permits are consumed without parser work",
         "Public run_one is its only parser entry",
-        "Host supply, snapshot observation, and failure ingress only queue work",
-        "a failure turn does not poll the parser or probe cancellation",
+        "Host supply, snapshot observation, and failure ingress never poll parser code",
+        "A failure turn does not poll the parser or probe cancellation",
         "opaque move-only handoff",
         "same private source owner",
         "not one complete Session",
@@ -584,7 +673,7 @@ fn provenance_bounds_each_runtime_owner_without_a_complete_session_claim() {
         "without polling parser code or changing the saved parser phase and cumulative stats",
         "Public `run_one` is the only parser entry",
         "at most one",
-        "queue-only host ingress",
+        "parser-free host ingress",
         "StrictBaseOpenReady",
         "same private Range source",
         "one parser job",
@@ -600,7 +689,8 @@ fn provenance_bounds_each_runtime_owner_without_a_complete_session_claim() {
         "does not publish `SessionClosed`",
         "not allocator telemetry, process RSS",
         "No PDFium",
-        "registered broad Native/PDFium differential",
+        "registered bounded Native-reference differential evidence",
+        "PDFium stays an unregistered, non-gating O4 observer",
     ] {
         assert!(
             provenance.contains(required),

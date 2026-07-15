@@ -1,11 +1,12 @@
-//! Bounded Range-resume arbitration and Ready-state session ownership.
+//! Bounded Range-resume arbitration and M1 strict-document session ownership.
 //!
 //! This crate owns four deliberately small runtime slices: snapshot-bound Range
 //! subscriptions, generation-gated execution of one strict base-open job, a
 //! single-job coordinator that closes their actor-turn gap, and the lifetime of
 //! exactly one [`pdf_rs_cache::ReadyStore`] after a document has reached Ready.
-//! None performs file, network, platform, or async I/O. Together they still do
-//! not implement the complete protocol-visible Session state machine or a
+//! [`M1StrictDocumentSession`] composes those owners with one page-count slot and
+//! one outline slot for the M1 service boundary. None performs file, network,
+//! platform, or async I/O. The M1 actor is not a complete product Session or a
 //! general-purpose scheduler.
 
 #![forbid(unsafe_code)]
@@ -17,6 +18,7 @@
 )]
 
 mod error;
+mod m1_session;
 mod owner;
 mod range_resume;
 mod range_resume_error;
@@ -26,6 +28,12 @@ mod strict_base_open_owner;
 pub use error::{
     ReadySessionAdmissionError, ReadySessionError, ReadySessionErrorCategory,
     ReadySessionErrorCode, ReadySessionRecoverability,
+};
+pub use m1_session::{
+    M1RequestId, M1RequestIdentity, M1Service, M1ServiceFailure, M1SessionCancel,
+    M1SessionCancelRejectReason, M1SessionClose, M1SessionCloseReport, M1SessionFailure,
+    M1SessionIngress, M1SessionIngressRejectReason, M1SessionPhase, M1SessionRequestError,
+    M1SessionResources, M1SessionRun, M1SessionWait, M1StrictDocumentSession,
 };
 pub use owner::{
     ReadySessionCloseReport, ReadySessionOwner, ReadySessionPhase, ReadySessionResources,

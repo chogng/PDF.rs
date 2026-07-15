@@ -1,6 +1,7 @@
 # Scope
 
-`runtime/session` owns three bounded owner slices plus one one-job composition. `RangeResumeArbiter`
+`runtime/session` owns three bounded owner slices, one one-job composition, and one deliberately
+bounded M1 strict-document actor. `RangeResumeArbiter`
 privately owns one snapshot-bound `RangeStore` and turns namespaced terminal tickets into an ordered
 stream of arbiter-bound move-only resume or failure permits without running parser code inline.
 `StrictBaseOpenJobOwner` privately owns one generation-bound strict-base opening job and consumes a
@@ -10,20 +11,24 @@ poll-to-registration and completion-to-consumption inside exclusive synchronous 
 hands Ready out only with the same source owner. `ReadySessionOwner` separately owns the Ready-state
 lifetime of one bounded, session-only `ReadyStore` as its unique store owner, lends immutable warm
 values through an exclusive borrow, and synchronously drops retained values plus fixed metadata
-before returning an idempotent close report.
+before returning an idempotent close report. `M1StrictDocumentSession` composes the strict opener,
+the same Range owner after Ready, one shared attested-index root, one Ready-store owner, and exactly
+one page-count plus one outline job slot. It exposes Created, Opening, WaitingForData, Ready,
+Closing, Closed, and Failed; accepts caller-issued request/job/generation identities; and permits
+parser work only through one bounded actor turn.
 
-These slices do not yet form one complete Session. They do not implement the full Created,
-Opening, WaitingForData, WaitingForPassword, Ready, Failed, asynchronous Closing, request, job,
-surface, scheduler, transport, IPC, or event-publication state machine.
-This crate does not claim the complete protocol-visible Session state machine.
+This is the Session slice needed for the M1 page-count/outline and Range lifecycle exit, not the
+complete product Session. It has no password, viewport, rendering, save, surface, generic job
+registry, general priority scheduler, worker pool, transport, IPC, or event-publication port.
 
 # Semantic owner
 
 `runtime/session` owns the Range ticket-to-permit ownership boundary, one strict-open job execution
-boundary, their one-job coordinator turn boundary, plus one Ready-store instance and its
-Ready-to-Closed boundary. The coordinator decides when its one job may execute, but a future generic
-scheduler and registry must own generations, priority, fairness, and arbitration across all other
-jobs. The platform still owns physical source transport.
+boundary, their one-job coordinator turn boundary, one Ready-store instance and its Ready-to-Closed
+boundary, plus scheduling fairness between the two fixed M1 service slots. The bounded actor decides
+which of those two jobs may execute and validates their caller-issued identities. A future generic
+scheduler and registry still owns arbitrary job kinds, priority classes, long-lived ID allocation,
+and Worker-wide arbitration. The platform owns physical source transport.
 
 `runtime/cache` continues to own complete keys, admission, byte accounting,
 cancellation probes, borrowed hits, and deterministic eviction. A later complete
@@ -35,6 +40,10 @@ completed close.
 
 - RPE-ARCH-001 section 9.1 assigns mutable object/cache metadata to one logical
   Document actor.
+- RPE-ARCH-001 section 14.2 requires opaque generation-aware handles, out-of-order request
+  disposition, idempotent close, and cancellation of active work.
+- RPE-ARCH-001 section 15.3 requires M1 Range out-of-order, cancellation, and source-change E2E
+  plus page-count and outline foundation services.
 - RPE-ARCH-001 sections 5.1-5.2 define the synchronous parser `Pending` boundary and require data
   arrival to requeue rather than resume parser code inline.
 - RPE-STD-002 sections 2 and 5 require opaque session identity, idempotent close,
@@ -112,10 +121,10 @@ completed close.
   ordered completion and, when present, consumes the resulting resume or failure permit before
   returning, so host code cannot observe an unregistered suspension or steal a completion between
   lower-owner calls.
-- `supply`, `observe_snapshot`, and `fail_data` are queue-only host ingress. They return whether a
-  scheduler wake is needed but never receive a cancellation object or poll parser code. In
-  particular, a queued host failure reaches the exact source terminal without a parser or
-  cancellation probe.
+- `supply`, `observe_snapshot`, and `fail_data` are parser-free host ingress. Accepted bytes and
+  ticket-local failure may queue a scheduler wake without polling parser code; a snapshot-integrity
+  mismatch instead performs synchronous fail-closed teardown. In particular, a queued ticket-local
+  host failure reaches the exact source terminal without a parser or cancellation probe.
 - A successful parser result moves the `AttestedRevisionIndex` and the same private Range source
   owner into one opaque `StrictBaseOpenReady` handoff. The coordinator then reports zero current
   resources; the handoff continues to own cached bytes until it is transferred or its consuming
@@ -153,6 +162,41 @@ completed close.
   allocator-capacity accounting. They are not allocator telemetry, process RSS,
   or proof that an operating system immediately reclaimed physical pages.
 
+## M1 strict-document actor
+
+- Construction validates that the caller-issued opening job identity matches the strict-open
+  context, creates the existing coordinator, and remains in Created without polling. `run_one` is
+  the only parser entry. Opening `Pending` is registered inside the coordinator before publication;
+  source ingress only mutates Range state and may request a later actor wake.
+- Ready handoff first derives the complete cache binding from the move-only attested index, then
+  consumes that index into a private `SharedAttestedRevisionIndex`. The same Range arbiter is moved
+  from opening into Ready. Public code receives neither the arbiter, byte source, candidate index,
+  naked attested index, nor a move-only Range permit.
+- Ready admits at most one page-count and one outline job. Every request supplies its own
+  `M1RequestId`, `JobId`, and `RangeResumeGeneration`; context/job mismatch, stale generation,
+  duplicate active request/job identity, and occupied slots are rejected before job construction.
+  Exact cancellation matches all three identity fields and removes an uncollected Range
+  registration or a privately held completion without a parser poll.
+- A service `Pending` is registered with the same arbiter before publication. On later turns the
+  actor privately collects at most two terminal permits, validates issuer, ticket, job, checkpoint,
+  and generation against retained waiting state, then chooses between runnable slots by strict
+  alternating round-robin. One turn polls at most one job. A ticket-local host failure completes
+  only its service request; Range integrity or ownership failure terminates the old session.
+- `supply`, `observe_snapshot`, `fail_data`, explicit source change, cancellation, and close never
+  poll a parser inline. Close ingress only commits Closing. The following actor turn removes service
+  jobs and registrations/held permits, closes and drops the cache, drops the shared-index root, and
+  finally closes the Range arbiter. Closed and Failed resource snapshots are all zero; repeated
+  close returns the saved report.
+- Explicit source-change follows the same upper-owner-to-source release order. If the Range owner
+  itself detects a snapshot-integrity mismatch while accepting source ingress, it atomically
+  poisons and releases its source state before returning the error; the actor then releases every
+  remaining service, cache, and index owner. That fail-closed exception claims zero terminal
+  resources and no inline parser work, not the normal-path release order.
+- Resource reporting counts only true owners: opening/service jobs, waiting targets, held permits,
+  Range registrations/backing, Ready-cache entries/bytes, and the private shared-index root handle.
+  Shared index heap retained transitively by active jobs is bounded by the already-attested index
+  profile but is not allocator telemetry and is not added again to cache/Range byte totals.
+
 # Tests
 
 Range-resume component tests cover reverse response and ordered resume/failure completion, private
@@ -168,6 +212,11 @@ precedence, opaque Ready source ownership, exact close release, and zero termina
 generated quality test separately drives the public coordinator through all five checkpoints and a
 host failure without parser or cancellation polling. Ready-owner tests cover admission, borrowed
 lookup, close-first lifecycle rejection, resource release, and idempotent close.
+M1 actor E2E tests drive generated strict PDF bytes through reverse-order split Range delivery,
+page-count/outline two-slot round-robin completion, stale generation and mismatched cancellation,
+opening cancellation, source snapshot change, host ticket failure, pending-open close, active
+service close, both explicit and Range-detected Ready source change, terminal ingress rejection,
+idempotent close, and zero post-terminal resources.
 
 # External observations and dependencies
 
@@ -178,14 +227,18 @@ project-authored structural fixtures.
 
 # Known deviations
 
-- Session identity, session ID allocation, generations for jobs other than this one strict-open
-  owner, viewport generations, and the no-reuse invariant within a Worker epoch remain the
-  responsibility of a future Worker/session registry and generic scheduler.
-- The coordinator joins only one Range owner and one strict-open owner for one parser job.
-  `ReadySessionOwner` remains separate, and neither component is a complete Session actor. They do
-  not implement a generic job queue, registry, priority, fairness, backpressure, cross-job
-  arbitration, transport I/O, merged physical requests, general request drain, surface reclamation,
-  platform queue close, event publication, or a close deadline.
+- The lower `StrictBaseOpenCoordinator` remains a composition for one parser job, and
+  `ReadySessionOwner` remains separate as a reusable component even though the M1 actor owns both.
+  A future generic scheduler and registry must provide a generic job queue, registry, priority, fairness, backpressure,
+  and cross-job arbitration. This bounded actor does not claim the complete protocol-visible Session state machine.
+- Session identity and request/job ID allocation, viewport generations, and the no-reuse invariant
+  across completed requests within a Worker epoch remain the responsibility of a future
+  Worker/session registry. Opaque session ID allocation is therefore outside this crate. The M1 actor
+  validates caller identities but does not mint or persist an unbounded history of them.
+- `M1StrictDocumentSession` is intentionally limited to one opening job and two fixed services. It
+  does not implement a generic job queue, five-level priority scheduler, worker pool, backpressure,
+  cross-session arbitration, transport I/O, physical request merging, password flow, surfaces,
+  rendering, save, platform queue close, event port, or a close deadline.
 - Parent Worker-to-Session budget reservation, cross-session aggregation,
   persistent or cross-session caches, decrypted-value security domains, stable
   failure caching, in-flight resolution coalescing, concurrent shards, and the
@@ -194,14 +247,19 @@ project-authored structural fixtures.
   reports include source backing capacity and actual registration-vector capacity but exclude the
   RangeStore's internal allocator metadata and RSS. Broader registered lifecycle model tests, a
   generic multi-job generation registry and scheduler, fuzz targets, browser/desktop E2E, and
-  registered broad Native/PDFium differential
-  evidence remain open before a complete session implementation can claim
-  milestone exit.
+  registered bounded Native-reference differential evidence remain open before M1 exit, while
+  PDFium stays an unregistered, non-gating O4 observer. Broader product-Session and rendering gates
+  remain later work; they are not prerequisites for the bounded M1 byte/object actor slice itself.
 
 # History
 
+- 2026-07-15: Added `M1StrictDocumentSession` with Created-to-Failed/Closed lifecycle, caller-owned
+  request identities, strict-open-to-Ready proof handoff, the same Range arbiter, one page-count and
+  one outline slot, exact permit validation, strict two-slot round-robin, parser-free ingress, and
+  ordered explicit close/source-change release plus fail-closed Range-integrity teardown without
+  claiming a general scheduler or product Session.
 - 2026-07-15: Added the one-job strict-base open coordinator with exclusive actor-turn registration
-  and completion consumption, queue-only host ingress, opaque Ready source handoff, stable
+  and completion consumption, parser-free host ingress with queued accepted completions, opaque Ready source handoff, stable
   cancellation/source-change/close terminals, and generated-PDF success/failure evidence without
   claiming a generic scheduler, complete Session, or M1 exit.
 - 2026-07-15: Namespaced `DataTicket` values to their issuing Range store and added ordered

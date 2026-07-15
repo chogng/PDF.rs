@@ -547,6 +547,12 @@ impl StrictBaseOpenCoordinator {
             | StrictBaseOpenCoordinatorPhase::FailureQueued => {}
             phase => return StrictBaseOpenCoordinatorSourceChange::AlreadyTerminal { phase },
         }
+        if !matches!(
+            self.owner.signal_source_changed(),
+            StrictBaseOpenOwnerSourceChangeOutcome::SourceChanged { .. }
+        ) {
+            return StrictBaseOpenCoordinatorSourceChange::Failed(self.fail_invariant());
+        }
         if let Err(error) = self
             .source_owner
             .as_mut()
@@ -554,12 +560,6 @@ impl StrictBaseOpenCoordinator {
             .signal_source_changed()
         {
             return StrictBaseOpenCoordinatorSourceChange::Failed(self.fail_runtime(error));
-        }
-        if !matches!(
-            self.owner.signal_source_changed(),
-            StrictBaseOpenOwnerSourceChangeOutcome::SourceChanged { .. }
-        ) {
-            return StrictBaseOpenCoordinatorSourceChange::Failed(self.fail_invariant());
         }
         self.phase = StrictBaseOpenCoordinatorPhase::SourceChanged;
         StrictBaseOpenCoordinatorSourceChange::SourceChanged
@@ -574,8 +574,8 @@ impl StrictBaseOpenCoordinator {
             return report;
         }
         let previous_phase = self.phase;
-        let source = self.source_owner.as_mut().map(RangeResumeArbiter::close);
         let owner = self.owner.close();
+        let source = self.source_owner.as_mut().map(RangeResumeArbiter::close);
         let report = StrictBaseOpenCoordinatorCloseReport {
             previous_phase,
             owner,
@@ -846,8 +846,8 @@ impl StrictBaseOpenCoordinator {
     fn fail_runtime(&mut self, error: RangeResumeError) -> StrictBaseOpenCoordinatorFailure {
         let failure = StrictBaseOpenCoordinatorFailure::Runtime(error);
         self.failure = Some(failure);
-        self.close_source_owner();
         let _ = self.owner.close();
+        self.close_source_owner();
         self.phase = StrictBaseOpenCoordinatorPhase::Failed;
         failure
     }

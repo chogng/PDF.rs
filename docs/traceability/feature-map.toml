@@ -1,5 +1,5 @@
 schema = 1
-version = "0.55.0"
+version = "0.56.0"
 status = "active"
 
 [[feature]]
@@ -346,6 +346,18 @@ profile = "m1.strict-base-open-coordinator.v1"
 clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
 modules = ["runtime/session"]
 tests = ["runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.m1-strict-document-session"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.strict-document-session.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/9.1", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::m1_strict_document_session", "runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
