@@ -525,6 +525,31 @@ fn backward_prev_and_in_range_xrefstm_are_explicitly_unsupported() {
         failed(&hybrid, XrefLimits::default()).code(),
         XrefErrorCode::UnsupportedHybridXref
     );
+
+    let incremental_precedes_malformed_hybrid = table_pdf(
+        &[(0, 5)],
+        b" \n",
+        b"<< /Size 5 /Root 1 0 R /Prev 10 /XRefStm 500 >>",
+    );
+    assert_eq!(
+        failed(
+            &incremental_precedes_malformed_hybrid,
+            XrefLimits::default()
+        )
+        .code(),
+        XrefErrorCode::UnsupportedIncrementalRevision
+    );
+
+    let missing_root_precedes_incremental = table_pdf(&[(0, 5)], b" \n", b"<< /Size 5 /Prev 10 >>");
+    let error = failed(&missing_root_precedes_incremental, XrefLimits::default());
+    assert_eq!(error.code(), XrefErrorCode::InvalidTrailer);
+    assert_eq!(error.offset(), Some(TRAILER_START));
+
+    let malformed_root_precedes_incremental =
+        table_pdf(&[(0, 5)], b" \n", b"<< /Size 5 /Root 1 /Prev 10 >>");
+    let error = failed(&malformed_root_precedes_incremental, XrefLimits::default());
+    assert_eq!(error.code(), XrefErrorCode::InvalidTrailer);
+    assert_eq!(error.offset(), Some(TRAILER_START));
 }
 
 #[test]

@@ -2,7 +2,10 @@
 
 `core/xref` owns strict cross-reference primitives for the Native product core. Its resumable
 bootstrap discovers the final `startxref` marker of a known-length immutable source and parses one
-bounded traditional xref table and trailer. A separate synchronous primitive validates one
+bounded traditional xref table and trailer. A separate resumable anchored job parses one
+caller-selected traditional revision section, retains optional `/Prev`, `/XRefStm`, and `/Root`
+metadata, and permits sparse update rows without changing the strict base bootstrap. A separate
+synchronous primitive validates one
 complete caller-supplied unfiltered xref-stream payload against source-bound dictionary metadata.
 A third synchronous primitive validates and composes already-parsed revision candidates from
 newest to oldest. An explicit local-repair sibling first runs the unchanged strict job, then
@@ -59,9 +62,22 @@ coverage claim.
   entry count, object-number ranges, fixed-width offsets and generations, common row line endings,
   duplicate object numbers, entry status, and in-use offsets are validated before records are
   adopted. A base table must cover every object number from zero through `/Size - 1`. Trailer
-  syntax is delegated to the bounded direct-object parser and must produce a dictionary with
-  validated `/Size` and `/Root` values. `/XRefStm` and `/Prev` request unsupported hybrid or
-  incremental behavior and are rejected with stable capability errors.
+  syntax is delegated to the bounded direct-object parser. The strict base finalizer requires
+  validated `/Size` and `/Root`, complete `0..Size` coverage, a canonical object-zero row, and a
+  live same-section root; `/XRefStm` and `/Prev` remain stable unsupported failures on that path.
+- `OpenTraditionalRevisionJob` starts from an exact caller-supplied anchor and an exclusive
+  physical upper bound. It reuses the same row/trailer parser but publishes a distinct
+  `TraditionalRevisionSection`: `/Size` remains required, `/Root` is optional and never
+  fabricated, `/Prev` and `/XRefStm` are retained only after checked backward ordering, and sparse
+  rows remain sorted, unique, in-range, and physically before the current table anchor. Object zero
+  is optional for an update but retains its canonical free-generation shape when present. This
+  candidate type cannot be converted to `XrefSection`, and `OpenXrefJob` plus local R1 repair keep
+  using only the strict base finalizer.
+- The anchored job grows one section window geometrically without crossing its supplied upper
+  bound. Its exact read, rescanned parse, section-window, subsection, entry, source, and allocation
+  work reuse validated xref limits; a pending ticket retains one explicit section checkpoint and
+  does not recharge until a new larger window is installed. Snapshot mismatch, source change,
+  cancellation, and completion are stable terminal states.
 - The decoded xref-stream primitive accepts a complete payload whose physical envelope span is
   already known and whose dictionary was parsed from the same immutable snapshot. It requires a
   unique `/Type /XRef`, positive `/Size`, exactly three bounded `/W` widths, and an optional ordered
@@ -147,6 +163,15 @@ and redacted section diagnostics. A `tools/quality` integration test runs this j
 canonical generated PDF and feeds every in-use entry into the sibling object-framing job without
 adding a product dependency between the two crates.
 
+Anchored traditional-revision tests cover sparse update rows, optional older `/Root`, base and
+incremental hybrid metadata, backward `Prev < XRefStm < startxref` geometry, duplicate and invalid
+trailer fields, conditional object-zero validation, row bounds, upper-half-before-lower Range
+delivery, no duplicate pending charge, cancellation, snapshot mismatch, source change, one-shot
+completion, invalid source/anchor shapes, and equality/one-less source, subsection, `/Size`,
+section-window, cumulative-read, and cumulative-parse limits. Existing strict and local-repair
+suites separately prove that `/Prev`, `/XRefStm`, sparse bases, and repaired incremental inputs do
+not cross the strict `XrefSection` boundary.
+
 Decoded-xref-stream tests cover canonical null, free, uncompressed, and compressed rows; `/W` type
 defaults; `/Index` object-number selection; malformed widths, index geometry, row types, and exact
 payload length; unsupported filter metadata; separate source and decoded error coordinates;
@@ -178,12 +203,13 @@ slice.
 
 # Known deviations and unsupported cases
 
-- The resumable open profile supports one strict traditional xref table only. The decoded
-  xref-stream table primitive is not wired into that job: containing-object acquisition and
-  framing, direct or indirect `/Length` validation, filter decoding, pause/resume, `/XRefStm`
-  and sparse traditional-update parsing remain unimplemented. The pure composer can validate
-  already-parsed hybrid and `/Prev` candidates with latest-wins lookup, but no proof-bearing job
-  currently produces those candidates or hands them to document services.
+- The final-marker bootstrap and product strict-open profile still support one strict traditional
+  base table only. The separate anchored job now produces one source-bound, locally validated
+  sparse traditional revision candidate and retains `/Prev` and `/XRefStm`, but it does not
+  discover the final anchor, traverse `/Prev`, acquire or decode the hybrid supplement, frame an
+  xref-stream container, compose the chain, or hand it to document services. The decoded
+  xref-stream primitive remains unwired to containing-object framing, direct or indirect
+  `/Length`, filter decoding, and Range acquisition.
 - Entry offsets are structurally bounded. The separate object framing job validates all four
   supplied canonical targets in a test-only quality composition loop, but a product-owned physical
   interval index for composed candidates, object-header validation across revisions, reference
@@ -217,3 +243,6 @@ slice.
 - 2026-07-15: Added the explicit bounded local traditional-xref sibling with strict-first
   allowlisting, unique nearby-anchor selection, fixed-row whitespace canonicalization, normal
   parser revalidation, proof-bearing diagnostics, and independent repair budgets.
+- 2026-07-15: Added bounded Range-resumable parsing of one caller-anchored sparse traditional
+  revision section with explicit optional trailer metadata while preserving strict-base and R1
+  rejection behavior.

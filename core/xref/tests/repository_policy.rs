@@ -64,6 +64,45 @@ fn product_xref_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io() {
 }
 
 #[test]
+fn anchored_revision_surface_cannot_relax_the_strict_base_entry() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("xref library surface must be readable");
+    let strict_job = fs::read_to_string(crate_root.join("src/job.rs"))
+        .expect("strict xref job source must be readable");
+    let parser = fs::read_to_string(crate_root.join("src/parser.rs"))
+        .expect("xref parser source must be readable");
+    let anchored = fs::read_to_string(crate_root.join("src/traditional_revision.rs"))
+        .expect("anchored revision source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("xref provenance must be readable");
+
+    assert!(library.contains("mod traditional_revision;"));
+    assert!(library.contains("OpenTraditionalRevisionJob"));
+    assert!(library.contains("TraditionalRevisionSection"));
+    assert!(anchored.contains("parse_traditional_revision_section"));
+    assert!(anchored.contains("upper_bound"));
+    assert!(anchored.contains("TraditionalRevisionPoll::Pending"));
+    assert!(parser.contains("finalize_base_section"));
+    assert!(parser.contains("finalize_revision_section"));
+    assert!(parser.contains("UnsupportedIncrementalRevision"));
+    assert!(parser.contains("UnsupportedHybridXref"));
+    assert!(strict_job.contains("parse_section"));
+    assert!(strict_job.contains("XrefPoll::Ready"));
+    assert!(
+        !strict_job.contains("parse_traditional_revision_section"),
+        "OpenXrefJob must not adopt the sparse revision parser"
+    );
+    assert!(
+        !anchored.contains("impl From<TraditionalRevisionSection> for XrefSection"),
+        "a sparse candidate must not convert into the strict base proof"
+    );
+    assert!(provenance.contains("cannot be converted to `XrefSection`"));
+    assert!(provenance.contains("does not discover the final anchor"));
+    assert!(provenance.contains("does not recharge"));
+}
+
+#[test]
 fn traceability_maps_are_versioned_together_and_register_xref() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -76,8 +115,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.45.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.45.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.46.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.46.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -89,6 +128,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(feature.contains("profile = \"m1.traditional-xref.v1\""));
     assert!(feature.contains("modules = [\"core/xref\"]"));
     assert!(feature.contains("core/xref::traditional_xref"));
+    assert!(feature.contains("core/xref::traditional_revision"));
     assert!(feature.contains("core/xref::limit_config"));
     assert!(feature.contains("core/xref::source_error_policy"));
     assert!(feature.contains("core/xref::repository_policy"));
@@ -108,6 +148,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(chain_feature.contains("profile = \"m1.xref-revision-chain.v1\""));
     assert!(chain_feature.contains("modules = [\"core/xref\"]"));
     assert!(chain_feature.contains("core/xref::revision_chain"));
+    assert!(chain_feature.contains("core/xref::traditional_revision"));
     assert!(chain_feature.contains("fuzz_targets = []"));
     assert!(chain_feature.contains("benchmarks = []"));
 
@@ -182,6 +223,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("\"core.xref-revision-chain\""));
     assert!(requirement.contains("\"core/xref\""));
     assert!(requirement.contains("core/xref::traditional_xref"));
+    assert!(requirement.contains("core/xref::traditional_revision"));
     assert!(requirement.contains("core/xref::xref_stream"));
     assert!(requirement.contains("core/xref::revision_chain"));
     assert!(requirement.contains("core/xref::limit_config"));
@@ -236,10 +278,12 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     );
     assert!(requirement.contains("hybrid geometry, unique anchors"));
     assert!(requirement.contains("already-composed chain"));
-    assert!(requirement.contains("hybrid acquisition"));
-    assert!(
-        requirement.contains("Prev chains, stream filters, and object streams are not acquired")
-    );
+    assert!(requirement.contains("hybrid-supplement acquisition"));
+    assert!(requirement.contains("OpenTraditionalRevisionJob"));
+    assert!(requirement.contains("caller-selected traditional section"));
+    assert!(requirement.contains("strict base parser still rejects sparse incremental tables"));
+    assert!(requirement.contains("final-anchor classification"));
+    assert!(requirement.contains("`/Prev` traversal"));
     assert!(requirement.contains("object streams"));
     assert!(requirement.contains("repair"));
     assert!(requirement.contains("does not claim M1 exit"));

@@ -8,7 +8,10 @@
 //! hybrid revision candidates. An explicit local-repair sibling first exhausts the unchanged
 //! strict job, then permits only bounded fixed-row whitespace repair or a nearby unique final
 //! traditional-xref anchor, retaining source-bound diagnostics and reusing normal validation.
-//! Filter decoding, object repair, and product integration remain outside these entry points.
+//! A distinct anchored revision job accepts a caller-selected physical bound, parses sparse
+//! traditional updates, and retains optional `/Prev`, `/XRefStm`, and `/Root` metadata without
+//! relaxing the complete-base proof. Filter decoding, chain acquisition, object repair, and
+//! product integration remain outside these entry points.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -21,6 +24,7 @@ mod parser;
 mod repair;
 mod revision;
 mod stream;
+mod traditional_revision;
 
 pub use error::{
     XrefError, XrefErrorCategory, XrefErrorCode, XrefLimit, XrefLimitKind, XrefRecoverability,
@@ -44,4 +48,8 @@ pub use stream::{
     DecodedXrefSpan, XrefStream, XrefStreamEntry, XrefStreamEntryKind, XrefStreamError,
     XrefStreamErrorCategory, XrefStreamErrorCode, XrefStreamLimitConfig, XrefStreamLimitKind,
     XrefStreamLimits, XrefStreamStats, parse_unfiltered_xref_stream,
+};
+pub use traditional_revision::{
+    OpenTraditionalRevisionJob, TraditionalRevisionJobContext, TraditionalRevisionPhase,
+    TraditionalRevisionPoll, TraditionalRevisionSection, TraditionalRevisionStats,
 };

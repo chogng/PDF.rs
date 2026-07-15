@@ -95,8 +95,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.45.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.45.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.46.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.46.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.staged-stream-length-framing")
         .expect("staged stream-length feature record must exist");
@@ -138,7 +138,7 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
     assert!(object_requirement.contains("latest effective uncompressed container"));
     assert!(object_requirement.contains("object-stream scheduling and ownership"));
     assert!(milestone.contains("connects those already-composed inputs"));
-    assert!(milestone.contains("does not acquire revision sections"));
+    assert!(milestone.contains("does not discover or traverse a revision chain"));
     assert!(milestone.contains("profiles remain PLANNED"));
 
     let repair = record_with_id(&feature_map, "feature", "core.local-repair")

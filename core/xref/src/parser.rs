@@ -6,7 +6,8 @@ use pdf_rs_syntax::{
 
 use crate::job::XrefCancellation;
 use crate::{
-    XrefEntry, XrefEntryKind, XrefError, XrefErrorCode, XrefLimitKind, XrefLimits, XrefSection,
+    TraditionalRevisionSection, XrefEntry, XrefEntryKind, XrefError, XrefErrorCode, XrefLimitKind,
+    XrefLimits, XrefSection,
 };
 
 pub(crate) enum TailParse {
@@ -229,7 +230,28 @@ pub(crate) fn parse_section(
         syntax_limits,
         &mut cursor,
     ) {
-        Ok(section) => Ok(Some(section)),
+        Ok(section) => finalize_base_section(section, cancellation).map(Some),
+        Err(LocalFailure::NeedMore) => Ok(None),
+        Err(LocalFailure::Failed(error)) => Err(error),
+    }
+}
+
+pub(crate) fn parse_traditional_revision_section(
+    window: SectionWindow<'_>,
+    limits: XrefLimits,
+    syntax_limits: SyntaxLimits,
+    cancellation: &dyn XrefCancellation,
+) -> Result<Option<TraditionalRevisionSection>, XrefError> {
+    let mut cursor = Cursor::new(window.bytes, window.startxref, window.extent, cancellation);
+    match parse_section_inner(
+        window.snapshot,
+        window.startxref,
+        window.source_len,
+        limits,
+        syntax_limits,
+        &mut cursor,
+    ) {
+        Ok(section) => finalize_revision_section(section, cancellation).map(Some),
         Err(LocalFailure::NeedMore) => Ok(None),
         Err(LocalFailure::Failed(error)) => Err(error),
     }
@@ -359,7 +381,7 @@ fn parse_section_inner(
     limits: XrefLimits,
     syntax_limits: SyntaxLimits,
     cursor: &mut Cursor<'_, '_>,
-) -> LocalResult<XrefSection> {
+) -> LocalResult<ParsedTraditionalSection> {
     if cursor.bytes.len() < 4 {
         if b"xref".starts_with(cursor.bytes) && cursor.extent == InputExtent::MayContinue {
             return Err(LocalFailure::NeedMore);
@@ -513,7 +535,7 @@ fn parse_trailer(
     syntax_limits: SyntaxLimits,
     cursor: &mut Cursor<'_, '_>,
     entries: Vec<XrefEntry>,
-) -> LocalResult<XrefSection> {
+) -> LocalResult<ParsedTraditionalSection> {
     if cursor.position == cursor.bytes.len() {
         return Err(cursor.incomplete(XrefErrorCode::InvalidTrailer));
     }
@@ -585,116 +607,17 @@ fn parse_trailer(
             Some(trailer_offset),
         )));
     }
-    let root = root_value
-        .and_then(|value| value.value().as_reference())
-        .ok_or_else(|| {
+    let root = match root_value {
+        Some(value) => Some(value.value().as_reference().ok_or_else(|| {
             LocalFailure::Failed(XrefError::for_code(
                 XrefErrorCode::InvalidTrailer,
                 Some(trailer_offset),
             ))
-        })?;
-
-    if let Some(previous) = previous_value {
-        let valid = previous
-            .value()
-            .as_integer()
-            .and_then(|value| u64::try_from(value).ok())
-            .is_some_and(|value| value < startxref);
-        if !valid {
-            return Err(LocalFailure::Failed(XrefError::for_code(
-                XrefErrorCode::InvalidTrailer,
-                Some(previous.span().start()),
-            )));
-        }
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::UnsupportedIncrementalRevision,
-            Some(previous.span().start()),
-        )));
-    }
-    if let Some(xref_stream) = xref_stream_value {
-        if xref_stream
-            .value()
-            .as_integer()
-            .and_then(|value| u64::try_from(value).ok())
-            .is_none_or(|value| value >= startxref)
-        {
-            return Err(LocalFailure::Failed(XrefError::for_code(
-                XrefErrorCode::InvalidTrailer,
-                Some(xref_stream.span().start()),
-            )));
-        }
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::UnsupportedHybridXref,
-            Some(xref_stream.span().start()),
-        )));
-    }
-
-    let maximum_object = entries.last().map_or(0, |entry| entry.object_number());
-    if maximum_object >= declared_size {
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::InvalidTrailer,
-            Some(trailer_offset),
-        )));
-    }
-    let complete_entry_count =
-        usize::try_from(declared_size).is_ok_and(|declared| declared == entries.len());
-    let mut complete_object_range = true;
-    for (number, entry) in entries.iter().enumerate() {
-        if number.is_multiple_of(256) {
-            cursor.check_cancelled()?;
-        }
-        if u32::try_from(number) != Ok(entry.object_number()) {
-            complete_object_range = false;
-            break;
-        }
-    }
-    if !complete_entry_count || !complete_object_range {
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::InvalidEntry,
-            Some(startxref),
-        )));
-    }
-    let Some(object_zero) = entries.first().filter(|entry| entry.object_number() == 0) else {
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::InvalidEntry,
-            Some(startxref),
-        )));
+        })?),
+        None => None,
     };
-    if object_zero.generation() != u16::MAX
-        || !matches!(object_zero.kind(), XrefEntryKind::Free { .. })
-    {
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::InvalidEntry,
-            Some(startxref),
-        )));
-    }
-    for (index, entry) in entries.iter().enumerate() {
-        if index.is_multiple_of(256) {
-            cursor.check_cancelled()?;
-        }
-        if let XrefEntryKind::Free { next_free } = entry.kind()
-            && next_free >= declared_size
-        {
-            return Err(LocalFailure::Failed(XrefError::for_code(
-                XrefErrorCode::InvalidEntry,
-                Some(startxref),
-            )));
-        }
-    }
-    let root_entry = entries
-        .binary_search_by_key(&root.number(), |entry| entry.object_number())
-        .ok()
-        .map(|index| entries[index])
-        .filter(|entry| {
-            entry.generation() == root.generation()
-                && matches!(entry.kind(), XrefEntryKind::InUse { .. })
-        });
-    if root.number() >= declared_size || root_entry.is_none() {
-        return Err(LocalFailure::Failed(XrefError::for_code(
-            XrefErrorCode::InvalidTrailer,
-            Some(trailer_offset),
-        )));
-    }
+    let previous = parse_backward_offset(previous_value);
+    let xref_stream = parse_backward_offset(xref_stream_value);
 
     let span_len = trailer_end.checked_sub(startxref).ok_or_else(|| {
         LocalFailure::Failed(XrefError::for_code(
@@ -708,15 +631,257 @@ fn parse_trailer(
             Some(startxref),
         ))
     })?;
-    Ok(XrefSection::new(
+    Ok(ParsedTraditionalSection {
         snapshot,
         startxref,
         span,
         declared_size,
         root,
+        previous,
+        xref_stream,
         entries,
         trailer,
+    })
+}
+
+struct ParsedTraditionalSection {
+    snapshot: SourceSnapshot,
+    startxref: u64,
+    span: ByteSpan,
+    declared_size: u32,
+    root: Option<pdf_rs_syntax::ObjectRef>,
+    previous: Option<ParsedBackwardOffset>,
+    xref_stream: Option<ParsedBackwardOffset>,
+    entries: Vec<XrefEntry>,
+    trailer: Located<PdfDictionary>,
+}
+
+fn finalize_base_section(
+    section: ParsedTraditionalSection,
+    cancellation: &dyn XrefCancellation,
+) -> Result<XrefSection, XrefError> {
+    let root = section.root.ok_or_else(|| {
+        XrefError::for_code(
+            XrefErrorCode::InvalidTrailer,
+            Some(section.trailer.span().start()),
+        )
+    })?;
+    let previous = validate_backward_offset(section.previous, section.startxref)?;
+    if previous.is_some() {
+        return Err(XrefError::for_code(
+            XrefErrorCode::UnsupportedIncrementalRevision,
+            section.previous.map(|value| value.operand_offset),
+        ));
+    }
+    let xref_stream = validate_backward_offset(section.xref_stream, section.startxref)?;
+    if xref_stream.is_some() {
+        return Err(XrefError::for_code(
+            XrefErrorCode::UnsupportedHybridXref,
+            section.xref_stream.map(|value| value.operand_offset),
+        ));
+    }
+    let maximum_object = section
+        .entries
+        .last()
+        .map_or(0, |entry| entry.object_number());
+    if maximum_object >= section.declared_size {
+        return Err(XrefError::for_code(
+            XrefErrorCode::InvalidTrailer,
+            Some(section.trailer.span().start()),
+        ));
+    }
+    let complete_entry_count = usize::try_from(section.declared_size)
+        .is_ok_and(|declared| declared == section.entries.len());
+    let mut complete_object_range = true;
+    for (number, entry) in section.entries.iter().enumerate() {
+        if number.is_multiple_of(256) && cancellation.is_cancelled() {
+            return Err(XrefError::for_code(
+                XrefErrorCode::Cancelled,
+                Some(section.startxref),
+            ));
+        }
+        if u32::try_from(number) != Ok(entry.object_number()) {
+            complete_object_range = false;
+            break;
+        }
+    }
+    if !complete_entry_count || !complete_object_range {
+        return Err(XrefError::for_code(
+            XrefErrorCode::InvalidEntry,
+            Some(section.startxref),
+        ));
+    }
+    validate_object_zero(&section.entries, section.startxref, true)?;
+    validate_free_entries(
+        &section.entries,
+        section.declared_size,
+        section.startxref,
+        cancellation,
+    )?;
+    let root_entry = section
+        .entries
+        .binary_search_by_key(&root.number(), |entry| entry.object_number())
+        .ok()
+        .map(|index| section.entries[index])
+        .filter(|entry| {
+            entry.generation() == root.generation()
+                && matches!(entry.kind(), XrefEntryKind::InUse { .. })
+        });
+    if root.number() >= section.declared_size || root_entry.is_none() {
+        return Err(XrefError::for_code(
+            XrefErrorCode::InvalidTrailer,
+            Some(section.trailer.span().start()),
+        ));
+    }
+    Ok(XrefSection::new(
+        section.snapshot,
+        section.startxref,
+        section.span,
+        section.declared_size,
+        root,
+        section.entries,
+        section.trailer,
     ))
+}
+
+fn finalize_revision_section(
+    section: ParsedTraditionalSection,
+    cancellation: &dyn XrefCancellation,
+) -> Result<TraditionalRevisionSection, XrefError> {
+    let previous = validate_backward_offset(section.previous, section.startxref)?;
+    let xref_stream = validate_backward_offset(section.xref_stream, section.startxref)?;
+    if previous
+        .zip(xref_stream)
+        .is_some_and(|(previous, stream)| previous >= stream)
+    {
+        return Err(XrefError::for_code(
+            XrefErrorCode::InvalidTrailer,
+            section.xref_stream.map(|value| value.operand_offset),
+        ));
+    }
+    let maximum_object = section
+        .entries
+        .last()
+        .map_or(0, |entry| entry.object_number());
+    if maximum_object >= section.declared_size
+        || section
+            .root
+            .is_some_and(|root| root.number() >= section.declared_size)
+    {
+        return Err(XrefError::for_code(
+            XrefErrorCode::InvalidTrailer,
+            Some(section.trailer.span().start()),
+        ));
+    }
+    validate_free_entries(
+        &section.entries,
+        section.declared_size,
+        section.startxref,
+        cancellation,
+    )?;
+    validate_object_zero(&section.entries, section.startxref, false)?;
+    for (index, entry) in section.entries.iter().enumerate() {
+        if index.is_multiple_of(256) && cancellation.is_cancelled() {
+            return Err(XrefError::for_code(
+                XrefErrorCode::Cancelled,
+                Some(section.startxref),
+            ));
+        }
+        if matches!(entry.kind(), XrefEntryKind::InUse { offset } if offset == 0 || offset >= section.startxref)
+        {
+            return Err(XrefError::for_code(
+                XrefErrorCode::InvalidEntry,
+                Some(section.startxref),
+            ));
+        }
+    }
+    Ok(TraditionalRevisionSection::new(
+        section.snapshot,
+        section.startxref,
+        section.span,
+        section.declared_size,
+        section.root,
+        previous,
+        xref_stream,
+        section.entries,
+        section.trailer,
+    ))
+}
+
+fn validate_object_zero(
+    entries: &[XrefEntry],
+    startxref: u64,
+    required: bool,
+) -> Result<(), XrefError> {
+    let object_zero = entries.first().filter(|entry| entry.object_number() == 0);
+    if required && object_zero.is_none()
+        || object_zero.is_some_and(|entry| {
+            entry.generation() != u16::MAX || !matches!(entry.kind(), XrefEntryKind::Free { .. })
+        })
+    {
+        return Err(XrefError::for_code(
+            XrefErrorCode::InvalidEntry,
+            Some(startxref),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ParsedBackwardOffset {
+    value: Option<u64>,
+    operand_offset: u64,
+}
+
+fn parse_backward_offset(value: Option<&Located<SyntaxObject>>) -> Option<ParsedBackwardOffset> {
+    value.map(|value| ParsedBackwardOffset {
+        value: value
+            .value()
+            .as_integer()
+            .and_then(|value| u64::try_from(value).ok()),
+        operand_offset: value.span().start(),
+    })
+}
+
+fn validate_backward_offset(
+    value: Option<ParsedBackwardOffset>,
+    startxref: u64,
+) -> Result<Option<u64>, XrefError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    value
+        .value
+        .filter(|value| *value < startxref)
+        .map(Some)
+        .ok_or_else(|| {
+            XrefError::for_code(XrefErrorCode::InvalidTrailer, Some(value.operand_offset))
+        })
+}
+
+fn validate_free_entries(
+    entries: &[XrefEntry],
+    declared_size: u32,
+    startxref: u64,
+    cancellation: &dyn XrefCancellation,
+) -> Result<(), XrefError> {
+    for (index, entry) in entries.iter().enumerate() {
+        if index.is_multiple_of(256) && cancellation.is_cancelled() {
+            return Err(XrefError::for_code(
+                XrefErrorCode::Cancelled,
+                Some(startxref),
+            ));
+        }
+        if let XrefEntryKind::Free { next_free } = entry.kind()
+            && next_free >= declared_size
+        {
+            return Err(XrefError::for_code(
+                XrefErrorCode::InvalidEntry,
+                Some(startxref),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn unique_trailer_value<'a>(

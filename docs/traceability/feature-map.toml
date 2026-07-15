@@ -1,5 +1,5 @@
 schema = 1
-version = "0.45.0"
+version = "0.46.0"
 status = "active"
 
 [[feature]]
@@ -69,7 +69,7 @@ state = "PLANNED"
 profile = "m1.traditional-xref.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
 modules = ["core/xref"]
-tests = ["core/xref::traditional_xref", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "tools/quality::native_object_loop"]
+tests = ["core/xref::traditional_xref", "core/xref::traditional_revision", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -93,7 +93,7 @@ state = "PLANNED"
 profile = "m1.xref-revision-chain.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
 modules = ["core/xref"]
-tests = ["core/xref::revision_chain", "core/xref::xref_stream", "core/xref::repository_policy"]
+tests = ["core/xref::traditional_revision", "core/xref::revision_chain", "core/xref::xref_stream", "core/xref::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
