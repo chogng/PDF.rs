@@ -64,6 +64,37 @@ fn product_xref_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io() {
 }
 
 #[test]
+fn decoded_xref_entry_remains_an_untrusted_semantic_boundary() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest =
+        fs::read_to_string(crate_root.join("Cargo.toml")).expect("xref manifest must be readable");
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("xref library surface must be readable");
+    let stream = fs::read_to_string(crate_root.join("src/stream.rs"))
+        .expect("xref-stream parser source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("xref provenance must be readable");
+
+    assert!(library.contains("parse_decoded_xref_stream"));
+    assert!(library.contains("the decoded entry is an untrusted semantic parser"));
+    assert!(stream.contains("fn parse_xref_stream_payload("));
+    assert!(stream.contains("validate_unfiltered_source_geometry"));
+    assert!(stream.contains("PayloadCoordinates::Decoded"));
+    assert!(stream.contains("does not interpret either value or prove"));
+    assert!(stream.contains("Identity payloads must use"));
+    assert!(stream.contains("index.is_multiple_of(CANCELLATION_INTERVAL)"));
+    assert!(!manifest.contains("pdf-rs-filters"));
+    assert!(!library.contains("DecodedStreamAttestation"));
+    assert!(!stream.contains("pub struct DecodedXrefAttestation"));
+    assert!(provenance.contains("untrusted semantic parser"));
+    assert!(provenance.contains("depend on `core/filters`"));
+    assert!(provenance.contains("sealed `DecodedStream` attestation"));
+    assert!(provenance.contains("remains component-level plumbing"));
+    assert!(provenance.contains("subsequent batch of at most 256"));
+    assert!(provenance.contains("mismatch already observed in a batch wins"));
+}
+
+#[test]
 fn anchored_revision_surface_cannot_relax_the_strict_base_entry() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let library = fs::read_to_string(crate_root.join("src/lib.rs"))
@@ -178,8 +209,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.50.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.50.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.51.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.51.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -347,8 +378,16 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("general graph traversal"));
     assert!(requirement.contains("persistent reuse and coalescing"));
     assert!(requirement.contains("parent budget hierarchy"));
-    assert!(requirement.contains("caller-supplied complete unfiltered payload"));
+    assert!(
+        requirement.contains("strict unfiltered entry and an untrusted decoded semantic entry")
+    );
+    assert!(
+        requirement
+            .contains("physical encoded length to differ from caller-supplied decoded length")
+    );
     assert!(requirement.contains("relative decoded spans rather than physical source ByteSpan"));
+    assert!(requirement.contains("does not interpret the filter plan or mint decode proof"));
+    assert!(requirement.contains("sealed DecodedStream attestation"));
     assert!(requirement.contains("Filtered xref/object-stream decode"));
     assert!(requirement.contains("current traditional primary, current hybrid supplement"));
     assert!(

@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.50.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.50.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.51.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.51.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");

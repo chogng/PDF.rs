@@ -113,8 +113,8 @@ fn traceability_registers_cache_semantics_and_owner_integration_directly() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.50.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.50.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.51.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.51.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.session-ready-store")
         .expect("session Ready-store feature must exist");

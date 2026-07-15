@@ -7,8 +7,9 @@ trailer. A separate bounded anchor job classifies an exact traditional prefix or
 header without framing or trusting an xref stream. A separate resumable anchored job parses one
 caller-selected traditional revision section, retains optional `/Prev`, `/XRefStm`, and `/Root`
 metadata, and permits sparse update rows without changing the strict base bootstrap. A separate
-synchronous primitive validates one
-complete caller-supplied unfiltered xref-stream payload against source-bound dictionary metadata.
+synchronous primitive validates one complete caller-supplied unfiltered xref-stream payload
+against source-bound dictionary metadata. Its decoded sibling parses complete caller-supplied
+filter output with the same semantic kernel while remaining explicitly non-proof-bearing.
 A third synchronous primitive validates and composes already-parsed revision candidates from
 newest to oldest. An explicit local-repair sibling first runs the unchanged strict job, then
 handles only bounded fixed-width row whitespace and nearby final-anchor deviations. None performs
@@ -95,12 +96,28 @@ coverage claim.
   work reuse validated xref limits; a pending ticket retains one explicit section checkpoint and
   does not recharge until a new larger window is installed. Snapshot mismatch, source change,
   cancellation, and completion are stable terminal states.
-- The decoded xref-stream primitive accepts a complete payload whose physical envelope span is
+- The xref-stream semantic kernel accepts a complete payload whose physical envelope span is
   already known and whose dictionary was parsed from the same immutable snapshot. It requires a
   unique `/Type /XRef`, positive `/Size`, exactly three bounded `/W` widths, and an optional ordered
   non-overlapping `/Index` array inside `/Size`; absent `/Index` normalizes to `[0 /Size]`. Optional
-  `/Root` and `/Prev` values are checked and retained for later composition. `/Filter` and
-  `/DecodeParms` are rejected at this explicitly unfiltered boundary.
+  `/Root` and `/Prev` values are checked and retained for later composition. The explicitly
+  unfiltered entry rejects `/Filter` and `/DecodeParms` and requires the supplied payload length to
+  equal the physical encoded span. The decoded entry instead requires unique `/Filter` metadata,
+  permits unique `/DecodeParms` metadata without interpreting either value, and does not require
+  decoded length to equal encoded length. Identity payloads remain on the unfiltered entry.
+- Source geometry is validated before semantic dictionary fields. Unfiltered physical-length and
+  encoded-span containment failures therefore remain `SourceMismatch` even when cancellation is
+  already requested. Dictionary source/containment scanning preserves the same source-first
+  behavior for the current batch, probes cancellation before every subsequent batch of at most 256
+  entries, and probes once more after the final batch. A mismatch already observed in a batch wins;
+  cancellation prevents traversal into the next batch. This bounds cancellation latency without
+  changing ordinary small-dictionary error precedence.
+- The decoded entry is an untrusted semantic parser, not a filter-output attestation. It does not
+  depend on `core/filters`, inspect a filter plan, or mint a proof-shaped value. The owning document
+  layer must retain the sealed `DecodedStream` attestation binding snapshot, dictionary, physical
+  encoded span, filter plan, limits, and complete decoded bytes before its `XrefStream` result may
+  enter product revision composition. Until that composition is implemented and traced, this
+  primitive remains component-level plumbing rather than filtered xref-stream acquisition.
 - Xref-stream row geometry must match the complete payload exactly. Big-endian fields implement
   the type-zero default rule and preserve null, free, uncompressed, and compressed row semantics;
   an unknown future type is retained as a null row rather than reviving an older definition.
@@ -207,11 +224,14 @@ not cross the strict `XrefSection` boundary.
 
 Decoded-xref-stream tests cover canonical null, free, uncompressed, and compressed rows; `/W` type
 defaults; `/Index` object-number selection; malformed widths, index geometry, row types, and exact
-payload length; unsupported filter metadata; separate source and decoded error coordinates;
-source identity/geometry mismatch; cancellation; stable recovery policy; equality and one-less
-decoded-byte and retained-capacity limits; and invalid limit profiles. These are component tests
-over already-decoded payload bytes, not a Range, stream-framing, filter-decode, or revision-chain
-E2E.
+payload length; unfiltered rejection of filter metadata and encoded-length mismatch; filtered
+decoded success with optional `/DecodeParms` and unequal physical/decoded lengths; decoded entry
+mode mismatch, malformed rows, exact decoded limits, cancellation, and source geometry; combined
+source-mismatch/cancellation precedence, cancellation during a dictionary geometry scan, separate
+source and decoded error coordinates, stable recovery policy, and decoded exact/one-less retained
+capacity limits. Invalid limit profiles remain covered. These are component tests over
+caller-supplied decoded payload bytes, not a Range, stream-framing, filter-decode proof, or
+revision-chain E2E.
 
 Revision-chain tests cover traditional, primary-stream, and hybrid candidate layers; exact table,
 supplement, and older-revision lookup order; newer replacement, free, and null masking; stream

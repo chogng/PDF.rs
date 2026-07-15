@@ -134,7 +134,7 @@ pub enum XrefStreamErrorCode {
     SourceMismatch,
     /// `/Type`, `/Size`, `/Root`, or `/Prev` is duplicated or malformed.
     InvalidDictionary,
-    /// The unfiltered entry point received `/Filter` or `/DecodeParms`.
+    /// The selected payload entry point does not match the dictionary's filter metadata.
     UnsupportedFilter,
     /// `/W` is missing, duplicated, malformed, or outside the width profile.
     InvalidWidths,
@@ -161,7 +161,7 @@ pub enum XrefStreamErrorCategory {
     Source,
     /// Malformed PDF stream metadata or decoded rows.
     Syntax,
-    /// A filter is outside this unfiltered entry point.
+    /// The caller must select the entry point matching the dictionary's filter metadata.
     Unsupported,
     /// Deterministic resource exhaustion.
     Resource,
@@ -458,7 +458,11 @@ impl XrefStreamStats {
     }
 }
 
-/// One validated unfiltered xref-stream table.
+/// One semantically validated xref-stream table.
+///
+/// This value records source-bound dictionary and physical encoded-payload geometry plus rows
+/// parsed from caller-supplied bytes. It is not evidence that a filtered payload was decoded by an
+/// approved filter plan; product composition must retain that proof at the owning layer.
 #[derive(Clone, Eq, PartialEq)]
 pub struct XrefStream {
     snapshot: SourceSnapshot,
@@ -488,7 +492,9 @@ impl XrefStream {
         self.container
     }
 
-    /// Returns the physical source span of the unfiltered encoded payload.
+    /// Returns the physical source span of the encoded payload.
+    ///
+    /// Row spans remain relative decoded coordinates even when this span has a different length.
     pub const fn encoded_payload_span(&self) -> ByteSpan {
         self.encoded_payload_span
     }
@@ -545,7 +551,9 @@ impl fmt::Debug for XrefStream {
 ///
 /// This entry point rejects `/Filter` and `/DecodeParms`. Filtered payloads must first cross a
 /// separate proof-bearing decode boundary; decoded row coordinates are never exposed as physical
-/// source [`ByteSpan`] values.
+/// source [`ByteSpan`] values. Physical envelope failures and mismatches already observed in the
+/// current dictionary-geometry batch precede cancellation; geometry traversal probes cancellation
+/// before every additional batch of at most 256 entries.
 pub fn parse_unfiltered_xref_stream(
     snapshot: SourceSnapshot,
     container: ObjectRef,
@@ -555,7 +563,13 @@ pub fn parse_unfiltered_xref_stream(
     limits: XrefStreamLimits,
     cancellation: &(dyn XrefCancellation + '_),
 ) -> Result<XrefStream, XrefStreamError> {
-    validate_source_geometry(snapshot, dictionary, encoded_payload_span, payload)?;
+    validate_unfiltered_source_geometry(
+        snapshot,
+        dictionary,
+        encoded_payload_span,
+        payload,
+        cancellation,
+    )?;
     check_cancelled(cancellation)?;
 
     if unique_value(dictionary, b"Filter", cancellation)?.is_some()
@@ -566,6 +580,129 @@ pub fn parse_unfiltered_xref_stream(
             Some(encoded_payload_span.start()),
         ));
     }
+
+    parse_xref_stream_payload(
+        XrefStreamSemanticInput {
+            snapshot,
+            container,
+            dictionary,
+            encoded_payload_span,
+            payload,
+            payload_coordinates: PayloadCoordinates::Physical(encoded_payload_span.start()),
+        },
+        limits,
+        cancellation,
+    )
+}
+
+/// Parses one complete decoded xref-stream payload against filtered source metadata.
+///
+/// This semantic parser requires a unique `/Filter` entry and permits a unique `/DecodeParms`
+/// entry, but deliberately does not interpret either value or prove that `decoded_payload` came
+/// from them. The owning product layer must hold a sealed filter-decoder attestation bound to this
+/// snapshot, dictionary, encoded payload span, and complete decoded bytes before using the result
+/// in revision composition. Identity payloads must use [`parse_unfiltered_xref_stream`].
+///
+/// The physical `encoded_payload_span` is checked only against the immutable source geometry; its
+/// length need not equal `decoded_payload.len()`. Row and payload errors use relative decoded
+/// coordinates and never reinterpret decoded offsets as physical [`ByteSpan`] values. Geometry
+/// traversal checks cancellation before every additional batch of at most 256 dictionary entries.
+pub fn parse_decoded_xref_stream(
+    snapshot: SourceSnapshot,
+    container: ObjectRef,
+    dictionary: &PdfDictionary,
+    encoded_payload_span: ByteSpan,
+    decoded_payload: &[u8],
+    limits: XrefStreamLimits,
+    cancellation: &(dyn XrefCancellation + '_),
+) -> Result<XrefStream, XrefStreamError> {
+    validate_source_geometry(snapshot, dictionary, encoded_payload_span, cancellation)?;
+    check_cancelled(cancellation)?;
+
+    if unique_value(dictionary, b"Filter", cancellation)?.is_none() {
+        return Err(XrefStreamError::at_source(
+            XrefStreamErrorCode::UnsupportedFilter,
+            Some(encoded_payload_span.start()),
+        ));
+    }
+    let _ = unique_value(dictionary, b"DecodeParms", cancellation)?;
+
+    parse_xref_stream_payload(
+        XrefStreamSemanticInput {
+            snapshot,
+            container,
+            dictionary,
+            encoded_payload_span,
+            payload: decoded_payload,
+            payload_coordinates: PayloadCoordinates::Decoded,
+        },
+        limits,
+        cancellation,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PayloadCoordinates {
+    Physical(u64),
+    Decoded,
+}
+
+impl PayloadCoordinates {
+    fn invalid_length(self, actual: u64, expected: u64) -> XrefStreamError {
+        match self {
+            Self::Physical(source_offset) => XrefStreamError::at_source(
+                XrefStreamErrorCode::InvalidPayloadLength,
+                Some(source_offset),
+            ),
+            Self::Decoded => XrefStreamError::at_decoded(
+                XrefStreamErrorCode::InvalidPayloadLength,
+                actual.min(expected),
+            ),
+        }
+    }
+
+    fn decoded_bytes_resource(self, limit: u64, attempted: u64) -> XrefStreamError {
+        match self {
+            Self::Physical(source_offset) => XrefStreamError::resource(
+                XrefStreamLimitKind::DecodedBytes,
+                limit,
+                attempted,
+                Some(source_offset),
+            ),
+            Self::Decoded => {
+                let mut error = XrefStreamError::at_decoded(
+                    XrefStreamErrorCode::ResourceLimit,
+                    limit.min(attempted),
+                );
+                error.limit = Some((XrefStreamLimitKind::DecodedBytes, limit, attempted));
+                error
+            }
+        }
+    }
+}
+
+struct XrefStreamSemanticInput<'a> {
+    snapshot: SourceSnapshot,
+    container: ObjectRef,
+    dictionary: &'a PdfDictionary,
+    encoded_payload_span: ByteSpan,
+    payload: &'a [u8],
+    payload_coordinates: PayloadCoordinates,
+}
+
+fn parse_xref_stream_payload(
+    input: XrefStreamSemanticInput<'_>,
+    limits: XrefStreamLimits,
+    cancellation: &(dyn XrefCancellation + '_),
+) -> Result<XrefStream, XrefStreamError> {
+    let XrefStreamSemanticInput {
+        snapshot,
+        container,
+        dictionary,
+        encoded_payload_span,
+        payload,
+        payload_coordinates,
+    } = input;
     require_name(dictionary, b"Type", b"XRef", cancellation)?;
     let declared_size = require_positive_u32(dictionary, b"Size", cancellation)?;
     if u64::from(declared_size) > limits.max_entries {
@@ -610,33 +747,17 @@ pub fn parse_unfiltered_xref_stream(
     }
     let expected_len = entry_count
         .checked_mul(u64::from(row_width))
-        .ok_or_else(|| {
-            XrefStreamError::at_source(
-                XrefStreamErrorCode::InvalidPayloadLength,
-                Some(encoded_payload_span.start()),
-            )
-        })?;
+        .ok_or_else(|| payload_coordinates.invalid_length(u64::MAX, u64::MAX))?;
     let payload_len = u64::try_from(payload.len()).map_err(|_| {
-        XrefStreamError::resource(
-            XrefStreamLimitKind::DecodedBytes,
-            limits.max_decoded_bytes,
-            u64::MAX,
-            Some(encoded_payload_span.start()),
-        )
+        payload_coordinates.decoded_bytes_resource(limits.max_decoded_bytes, u64::MAX)
     })?;
     if payload_len > limits.max_decoded_bytes {
-        return Err(XrefStreamError::resource(
-            XrefStreamLimitKind::DecodedBytes,
-            limits.max_decoded_bytes,
-            payload_len,
-            Some(encoded_payload_span.start()),
-        ));
+        return Err(
+            payload_coordinates.decoded_bytes_resource(limits.max_decoded_bytes, payload_len)
+        );
     }
     if payload_len != expected_len {
-        return Err(XrefStreamError::at_source(
-            XrefStreamErrorCode::InvalidPayloadLength,
-            Some(encoded_payload_span.start()),
-        ));
+        return Err(payload_coordinates.invalid_length(payload_len, expected_len));
     }
 
     let requested_entry_bytes = entry_count
@@ -798,11 +919,12 @@ pub fn parse_unfiltered_xref_stream(
     })
 }
 
-fn validate_source_geometry(
+fn validate_unfiltered_source_geometry(
     snapshot: SourceSnapshot,
     dictionary: &PdfDictionary,
     encoded_span: ByteSpan,
     payload: &[u8],
+    cancellation: &dyn XrefCancellation,
 ) -> Result<(), XrefStreamError> {
     let payload_len = u64::try_from(payload.len()).map_err(|_| {
         XrefStreamError::at_source(
@@ -810,17 +932,34 @@ fn validate_source_geometry(
             Some(encoded_span.start()),
         )
     })?;
-    if payload_len != encoded_span.len()
-        || snapshot
-            .len()
-            .is_some_and(|source_len| encoded_span.end_exclusive() > source_len)
+    if payload_len != encoded_span.len() {
+        return Err(XrefStreamError::at_source(
+            XrefStreamErrorCode::SourceMismatch,
+            Some(encoded_span.start()),
+        ));
+    }
+    validate_source_geometry(snapshot, dictionary, encoded_span, cancellation)
+}
+
+fn validate_source_geometry(
+    snapshot: SourceSnapshot,
+    dictionary: &PdfDictionary,
+    encoded_span: ByteSpan,
+    cancellation: &dyn XrefCancellation,
+) -> Result<(), XrefStreamError> {
+    if snapshot
+        .len()
+        .is_some_and(|source_len| encoded_span.end_exclusive() > source_len)
     {
         return Err(XrefStreamError::at_source(
             XrefStreamErrorCode::SourceMismatch,
             Some(encoded_span.start()),
         ));
     }
-    for entry in dictionary.entries() {
+    for (index, entry) in dictionary.entries().iter().enumerate() {
+        if index != 0 && index.is_multiple_of(CANCELLATION_INTERVAL) {
+            check_cancelled(cancellation)?;
+        }
         for (source, span) in [
             (entry.key().source(), entry.key().span()),
             (entry.value().source(), entry.value().span()),

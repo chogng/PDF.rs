@@ -2,12 +2,13 @@
 //!
 //! The resumable bootstrap accepts a known-length immutable source, locates the final
 //! `startxref`, and parses one traditional xref table and trailer. Missing ranges remain explicit
-//! [`XrefPoll::Pending`] control flow. A separate bounded entry point validates one complete
-//! caller-supplied unfiltered xref-stream payload without treating decoded coordinates as source
-//! spans. A pure composer validates already-parsed newest-to-oldest traditional, stream, and
-//! hybrid revision candidates. An explicit local-repair sibling first exhausts the unchanged
-//! strict job, then permits only bounded fixed-row whitespace repair or a nearby unique final
-//! traditional-xref anchor, retaining source-bound diagnostics and reusing normal validation.
+//! [`XrefPoll::Pending`] control flow. Separate bounded entry points validate complete unfiltered
+//! or already-decoded xref-stream payloads without treating decoded coordinates as source spans;
+//! the decoded entry is an untrusted semantic parser and does not mint filter proof. A pure
+//! composer validates already-parsed newest-to-oldest traditional, stream, and hybrid revision
+//! candidates. An explicit local-repair sibling first exhausts the unchanged strict job, then
+//! permits only bounded fixed-row whitespace repair or a nearby unique final traditional-xref
+//! anchor, retaining source-bound diagnostics and reusing normal validation.
 //! A distinct anchored revision job accepts a caller-selected physical bound, parses sparse
 //! traditional updates, and retains optional `/Prev`, `/XRefStm`, and `/Root` metadata without
 //! relaxing the complete-base proof. Filter decoding, chain acquisition, object repair, and
@@ -57,7 +58,7 @@ pub use revision::{
 pub use stream::{
     DecodedXrefSpan, XrefStream, XrefStreamEntry, XrefStreamEntryKind, XrefStreamError,
     XrefStreamErrorCategory, XrefStreamErrorCode, XrefStreamLimitConfig, XrefStreamLimitKind,
-    XrefStreamLimits, XrefStreamStats, parse_unfiltered_xref_stream,
+    XrefStreamLimits, XrefStreamStats, parse_decoded_xref_stream, parse_unfiltered_xref_stream,
 };
 pub use traditional_revision::{
     OpenTraditionalRevisionJob, TraditionalRevisionJobContext, TraditionalRevisionPhase,
