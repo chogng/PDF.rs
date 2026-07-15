@@ -7,6 +7,10 @@ publishing the intermediate from the composition job. Attestation validates a su
 header at source offset zero, frames every in-use object in physical order, and scans the prefix
 and every gap through `startxref` for only PDF whitespace and terminated comments. Only complete
 success publishes `AttestedRevisionIndex`.
+An explicit local-repair planning surface separately retains a proof-bearing local-xref result,
+derives original candidate targets, accepts only effective offsets minted from proof-bearing local
+objects, and atomically rebuilds every physical interval before attestation. Its rebuilt wrapper is
+deliberately unauthenticated and cannot be used as an `AttestedRevisionIndex`.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
@@ -113,6 +117,36 @@ repair or publish partially attested state.
 - Every in-use offset must be below `startxref`, duplicate offsets are rejected, the next larger
   in-use offset bounds each candidate, and `startxref` bounds the last. Exact logical lookup keeps
   missing, free, and generation-mismatch outcomes distinct.
+
+## Local-repair geometry planning
+
+- `LocalRepairPlanningRevision` consumes and retains `LocallyParsedXrefSection` so xref repair
+  evidence cannot be detached while object offsets are probed. It exposes only original
+  `PhysicalObjectInterval` metadata and explicitly unattested targets bound to that exact snapshot,
+  reference, declared offset, next-object bound, and effective xref anchor; it exposes no bare
+  candidate index.
+- `EffectiveObjectOffset::from_locally_framed` is the only public constructor for one plan record.
+  It requires a `LocallyFramedObject`, rechecks header/object spans and every inseparable repair
+  diagnostic, and retains the original bound plus revision anchor. A canonical strict child mints
+  declared-equals-effective evidence without a diagnostic; an offset-repaired child must carry
+  exactly one matching source-bound object-offset diagnostic. Direct stream-length diagnostics do
+  not change physical offset geometry, but the fixed plan record validates and retains them for the
+  later attestation ledger.
+- Rebuild requires exactly one proof in original physical-interval order for every in-use object.
+  Snapshot, reference, declared offset, original upper bound, and revision anchor must all match
+  before any effective offset is installed. Incomplete, reordered, foreign, widened-bound, or
+  out-of-revision evidence fails without publishing geometry.
+- All effective offsets are installed before one second bounded cancellable sort. The sort starts
+  from the original candidate's already-consumed step count, so declared and effective sorts share
+  `max_sort_steps`; duplicate effective offsets are rejected, logical-to-physical slots are rebuilt,
+  and every next-object or `startxref` upper bound is recomputed only after the complete sort.
+  Allocator-reported plan capacity is admitted together with the candidate index under the existing
+  logical-index byte ceiling.
+- `LocallyRebuiltCandidateRevision` retains xref diagnostics, the complete original-to-effective
+  proof list, aggregate geometry stats, and the rebuilt candidate. Its API labels intervals as
+  rebuilt but unauthenticated and exposes no raw candidate or attested-object authority. Normal
+  prefix/object/gap attestation and a proof-bearing repaired document result remain a subsequent
+  required phase.
 
 ## Top-level attestation
 
@@ -499,6 +533,12 @@ Outline limit-configuration tests cover defaults, valid boundaries, zero and har
 rejection, and independent aggregate resource dimensions. Repository policy also verifies the
 strict-outline feature plus its ISO text, null, indirect-object, Catalog, outline-dictionary, and
 document-architecture requirement links and explicit partial-scope boundaries.
+Local-repair geometry tests drive a real local-xref result and every xref-derived target through the
+proof-bearing local object job, repair one shifted object header, require a complete ordered plan,
+and verify the final effective sort, logical remap, and every rebuilt upper bound. Regressions reject
+incomplete, reordered, widened-bound, and cancelled plans; exact and one-less retained-plan and
+aggregate two-sort ceilings prove pre-publication resource boundaries. The result is asserted to
+remain explicitly unauthenticated.
 
 # Known deviations and unsupported cases
 
@@ -509,6 +549,10 @@ document-architecture requirement links and explicit partial-scope boundaries.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
+- Local R1 can now retain xref/object offset evidence and rebuild complete effective candidate
+  geometry, but no public job yet runs normal top-level prefix/object/gap attestation over that
+  wrapper or returns a proof-bearing repaired document. The geometry component is therefore not a
+  repaired open, resolver, Session, or M1 exit claim.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
   chain job can follow top-level whole-object aliases, and the count job can traverse strict
   Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
@@ -573,3 +617,6 @@ document-architecture requirement links and explicit partial-scope boundaries.
   container definitions and exact compressed xref indices without fabricating physical spans.
 - 2026-07-15: Added multi-revision stale/masked/nested container regression evidence and a distinct
   generation-zero not-compressed lookup policy.
+- 2026-07-15: Added proof-bound local repair planning, complete effective-offset collection,
+  aggregate second-sort and retained-plan budgets, and atomic candidate-interval rebuild while
+  keeping the result explicitly unauthenticated.

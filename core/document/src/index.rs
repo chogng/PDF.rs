@@ -1,12 +1,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pdf_rs_syntax::ObjectRef;
-use pdf_rs_xref::{XrefEntryKind, XrefSection};
+use pdf_rs_xref::{LocallyParsedXrefSection, XrefEntry, XrefEntryKind, XrefSection};
 
 use crate::model::{LogicalEntry, LogicalEntryState};
 use crate::{
     CandidateRevisionIndex, DocumentError, DocumentErrorCode, DocumentIndexStats,
-    DocumentLimitKind, DocumentLimits, PhysicalObjectInterval, RevisionId,
+    DocumentLimitKind, DocumentLimits, EffectiveObjectOffset, PhysicalObjectInterval, RevisionId,
 };
 
 const CANCELLATION_INTERVAL: u64 = 256;
@@ -35,6 +35,49 @@ impl DocumentCancellation for AtomicBool {
     }
 }
 
+trait CandidateXrefView {
+    fn snapshot(&self) -> pdf_rs_bytes::SourceSnapshot;
+    fn startxref(&self) -> u64;
+    fn root(&self) -> ObjectRef;
+    fn entries(&self) -> &[XrefEntry];
+}
+
+impl CandidateXrefView for XrefSection {
+    fn snapshot(&self) -> pdf_rs_bytes::SourceSnapshot {
+        self.snapshot()
+    }
+
+    fn startxref(&self) -> u64 {
+        self.startxref()
+    }
+
+    fn root(&self) -> ObjectRef {
+        self.root()
+    }
+
+    fn entries(&self) -> &[XrefEntry] {
+        self.entries()
+    }
+}
+
+impl CandidateXrefView for LocallyParsedXrefSection {
+    fn snapshot(&self) -> pdf_rs_bytes::SourceSnapshot {
+        self.snapshot()
+    }
+
+    fn startxref(&self) -> u64 {
+        self.effective_startxref()
+    }
+
+    fn root(&self) -> ObjectRef {
+        self.root()
+    }
+
+    fn entries(&self) -> &[XrefEntry] {
+        self.entries()
+    }
+}
+
 impl CandidateRevisionIndex {
     /// Builds an unauthenticated candidate interval index from one parsed xref section.
     ///
@@ -44,6 +87,24 @@ impl CandidateRevisionIndex {
     /// attest that any offset begins a top-level indirect object.
     pub fn from_xref(
         section: &XrefSection,
+        revision_id: RevisionId,
+        limits: DocumentLimits,
+        cancellation: &(dyn DocumentCancellation + '_),
+    ) -> Result<Self, DocumentError> {
+        Self::from_xref_view(section, revision_id, limits, cancellation)
+    }
+
+    pub(crate) fn from_locally_parsed_xref(
+        section: &LocallyParsedXrefSection,
+        revision_id: RevisionId,
+        limits: DocumentLimits,
+        cancellation: &(dyn DocumentCancellation + '_),
+    ) -> Result<Self, DocumentError> {
+        Self::from_xref_view(section, revision_id, limits, cancellation)
+    }
+
+    fn from_xref_view(
+        section: &impl CandidateXrefView,
         revision_id: RevisionId,
         limits: DocumentLimits,
         cancellation: &(dyn DocumentCancellation + '_),
@@ -323,6 +384,132 @@ impl CandidateRevisionIndex {
             },
         })
     }
+
+    pub(crate) fn rebuild_effective_offsets(
+        mut self,
+        evidence: &[EffectiveObjectOffset],
+        limits: DocumentLimits,
+        cancellation: &(dyn DocumentCancellation + '_),
+    ) -> Result<(Self, u64, u64, u64), DocumentError> {
+        if evidence.len() != self.physical_intervals.len() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                None,
+                None,
+            ));
+        }
+        let mut repaired_offsets = 0_u64;
+        let mut object_repairs = 0_u64;
+        for (index, (interval, proof)) in self
+            .physical_intervals
+            .iter_mut()
+            .zip(evidence.iter())
+            .enumerate()
+        {
+            probe_loop(cancellation, index)?;
+            if proof.snapshot() != self.snapshot
+                || proof.reference() != interval.reference
+                || proof.declared_offset() != interval.xref_offset
+                || proof.original_upper_bound() != interval.object_upper_bound
+                || proof.revision_startxref() != self.startxref
+            {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(interval.reference),
+                    Some(interval.xref_offset),
+                ));
+            }
+            if proof.effective_offset() >= self.startxref {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPhysicalOffset,
+                    Some(interval.reference),
+                    Some(proof.effective_offset()),
+                ));
+            }
+            if proof.is_offset_repaired() {
+                repaired_offsets = repaired_offsets.checked_add(1).ok_or_else(|| {
+                    DocumentError::for_code(
+                        DocumentErrorCode::InternalState,
+                        Some(interval.reference),
+                        Some(proof.effective_offset()),
+                    )
+                })?;
+            }
+            object_repairs = object_repairs
+                .checked_add(u64::try_from(proof.diagnostics().len()).map_err(|_| {
+                    DocumentError::for_code(
+                        DocumentErrorCode::InternalState,
+                        Some(interval.reference),
+                        Some(proof.effective_offset()),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    DocumentError::for_code(
+                        DocumentErrorCode::InternalState,
+                        Some(interval.reference),
+                        Some(proof.effective_offset()),
+                    )
+                })?;
+            interval.xref_offset = proof.effective_offset();
+        }
+        check_cancelled(cancellation)?;
+
+        if self.stats.sort_steps > limits.max_sort_steps {
+            return Err(DocumentError::resource(
+                DocumentLimitKind::SortSteps,
+                limits.max_sort_steps,
+                self.stats.sort_steps,
+                1,
+                None,
+            ));
+        }
+        let initial_sort_steps = self.stats.sort_steps;
+        let mut meter = SortMeter::with_consumed(limits.max_sort_steps, initial_sort_steps);
+        cancellable_heapsort(&mut self.physical_intervals, &mut meter, cancellation)?;
+
+        for index in 0..self.physical_intervals.len() {
+            probe_loop(cancellation, index)?;
+            if index > 0
+                && self.physical_intervals[index - 1].xref_offset
+                    == self.physical_intervals[index].xref_offset
+            {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::DuplicatePhysicalOffset,
+                    Some(self.physical_intervals[index].reference),
+                    Some(self.physical_intervals[index].xref_offset),
+                ));
+            }
+            let upper_bound = self
+                .physical_intervals
+                .get(index + 1)
+                .map_or(self.startxref, |next| next.xref_offset);
+            self.physical_intervals[index].object_upper_bound = upper_bound;
+            let physical_index = u32::try_from(index).map_err(|_| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(self.physical_intervals[index].reference),
+                    Some(self.physical_intervals[index].xref_offset),
+                )
+            })?;
+            let logical_slot = self.physical_intervals[index].logical_slot as usize;
+            let logical = self.logical_entries.get_mut(logical_slot).ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(self.physical_intervals[index].reference),
+                    Some(self.physical_intervals[index].xref_offset),
+                )
+            })?;
+            logical.state = LogicalEntryState::InUse { physical_index };
+        }
+        check_cancelled(cancellation)?;
+        self.stats.sort_steps = meter.steps;
+        Ok((
+            self,
+            meter.steps - initial_sort_steps,
+            repaired_offsets,
+            object_repairs,
+        ))
+    }
 }
 
 const fn accounted_index_bytes(total_entries: u64, in_use_entries: u64) -> Option<(u64, u64, u64)> {
@@ -388,6 +575,14 @@ impl SortMeter {
         Self {
             limit,
             steps: 0,
+            steps_since_probe: 0,
+        }
+    }
+
+    const fn with_consumed(limit: u64, steps: u64) -> Self {
+        Self {
+            limit,
+            steps,
             steps_since_probe: 0,
         }
     }

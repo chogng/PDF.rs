@@ -18,6 +18,9 @@
 //! A strict base-open composition job connects traditional xref parsing,
 //! candidate indexing, and top-level attestation without exposing an
 //! unauthenticated intermediate typestate.
+//! An explicit local-repair planning surface can instead retain xref and
+//! object-offset proof, rebuild every effective interval atomically, and
+//! publish only an explicitly unauthenticated wrapper for later attestation.
 //! Successful proof-bearing values retain their resolution profile and expose
 //! checked value-owned footprint components as evidence for a future cache owner,
 //! but this crate does not cache them.
@@ -44,6 +47,7 @@ mod page_tree;
 mod page_tree_limits;
 mod reference_chain;
 mod reference_chain_limits;
+mod repair;
 mod residency;
 mod revision_resolver;
 mod strict_base_open;
@@ -83,6 +87,10 @@ pub use reference_chain::{
     ReferenceChainPoll, ReferenceChainStats, ResolveReferenceChainJob, ResolvedReference,
 };
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
+pub use repair::{
+    EffectiveObjectOffset, LocalRepairPlanningRevision, LocallyRebuiltCandidateRevision,
+    RepairGeometryStats,
+};
 pub use residency::DocumentResidentFootprint;
 pub use revision_resolver::{
     CompressedObjectLocator, EffectiveObjectLocator, ResolveObjectJob, ResolvedCompressedObject,
