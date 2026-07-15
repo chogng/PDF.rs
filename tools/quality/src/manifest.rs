@@ -84,6 +84,14 @@ const SECTION_SCHEMAS: &[(&str, &[&str])] = &[
     ("history", &["entries"]),
 ];
 
+const OPTIONAL_SECTION_FIELDS: &[(&str, &[&str])] = &[
+    ("expected", &["service", "service_sha256"]),
+    (
+        "budget",
+        &["max_pages", "max_outline_items", "max_range_resident_bytes"],
+    ),
+];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CaseManifest {
     values: BTreeMap<String, BTreeMap<String, String>>,
@@ -246,10 +254,16 @@ struct ParsedManifest {
 }
 
 fn parse(input: &str) -> Result<ParsedManifest, ManifestDiagnostic> {
-    let known: BTreeMap<&str, BTreeSet<&str>> = SECTION_SCHEMAS
+    let mut known: BTreeMap<&str, BTreeSet<&str>> = SECTION_SCHEMAS
         .iter()
         .map(|(section, keys)| (*section, keys.iter().copied().collect()))
         .collect();
+    for (section, keys) in OPTIONAL_SECTION_FIELDS {
+        let allowed = known
+            .get_mut(section)
+            .expect("optional fields extend one required manifest section");
+        allowed.extend(keys.iter().copied());
+    }
     let mut root = BTreeMap::new();
     let mut sections: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut current_section: Option<String> = None;
@@ -409,6 +423,59 @@ fn validate_value_shapes(
         }
     }
 
+    for key in ["max_pages", "max_outline_items", "max_range_resident_bytes"] {
+        if let Some(value) = optional_value(sections, "budget", key)
+            && parse_canonical_positive_integer(value).is_none()
+        {
+            diagnostics.push(ManifestDiagnostic::field(
+                "RPE-MANIFEST-0014",
+                "budget",
+                key,
+            ));
+        }
+    }
+
+    let service = optional_value(sections, "expected", "service");
+    let service_hash = optional_value(sections, "expected", "service_sha256");
+    if service.is_some() != service_hash.is_some() {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0010",
+            "expected",
+            if service.is_some() {
+                "service_sha256"
+            } else {
+                "service"
+            },
+        ));
+    }
+    if let Some(service) = service
+        && unquote(service).is_none_or(|path| !is_canonical_relative_path(path))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0011",
+            "expected",
+            "service",
+        ));
+    }
+    if let Some(service_hash) = service_hash
+        && unquote(service_hash).is_none_or(|hash| !is_sha256(hash))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0012",
+            "expected",
+            "service_sha256",
+        ));
+    }
+    for key in ["max_pages", "max_outline_items", "max_range_resident_bytes"] {
+        if optional_value(sections, "budget", key).is_some() != service.is_some() {
+            diagnostics.push(ManifestDiagnostic::field(
+                "RPE-MANIFEST-0010",
+                "budget",
+                key,
+            ));
+        }
+    }
+
     let case_id = unquote(value(sections, "identity", "id")).unwrap_or_default();
     if case_id.is_empty()
         || case_id.starts_with('/')
@@ -425,10 +492,7 @@ fn validate_value_shapes(
     }
 
     let hash = unquote(value(sections, "provenance", "sha256")).unwrap_or_default();
-    if hash.len() != 71
-        || !hash.starts_with("sha256:")
-        || !hash[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if !is_sha256(hash) {
         diagnostics.push(ManifestDiagnostic::field(
             "RPE-MANIFEST-0012",
             "provenance",
@@ -490,6 +554,35 @@ fn validate_value_shapes(
             ));
         }
     }
+}
+
+fn optional_value<'a>(
+    sections: &'a BTreeMap<String, BTreeMap<String, String>>,
+    section: &str,
+    key: &str,
+) -> Option<&'a str> {
+    sections
+        .get(section)
+        .and_then(|values| values.get(key))
+        .map(String::as_str)
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_canonical_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && !value.contains('\\')
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 fn is_canonical_date(value: &str) -> bool {
@@ -786,6 +879,70 @@ entries = ["2026-07-13: introduced"]
             let invalid_budget = VALID.replace("max_objects = 64", &format!("max_objects = {bad}"));
             assert!(
                 validate_manifest(&invalid_budget)
+                    .unwrap_err()
+                    .iter()
+                    .any(|error| error.code == "RPE-MANIFEST-0014")
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_content_addressed_document_service_expectations() {
+        let input = VALID
+            .replace(
+                "error = false",
+                "error = false\nservice = \"expected/service.json\"\nservice_sha256 = \"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"",
+            )
+            .replace(
+                "watchdog_ms = 500",
+                "watchdog_ms = 500\nmax_pages = 8\nmax_outline_items = 8\nmax_range_resident_bytes = 1048576",
+            );
+        assert!(validate_manifest(&input).is_ok());
+    }
+
+    #[test]
+    fn rejects_unpaired_or_noncanonical_document_service_evidence() {
+        let hash = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        for addition in [
+            "service = \"expected/service.json\"".to_owned(),
+            format!("service_sha256 = \"{hash}\""),
+            format!("service = \"expected/../service.json\"\nservice_sha256 = \"{hash}\""),
+            "service = \"expected/service.json\"\nservice_sha256 = \"sha256:ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"".to_owned(),
+        ] {
+            let input = VALID.replace("error = false", &format!("error = false\n{addition}"));
+            assert!(validate_manifest(&input).is_err(), "addition={addition}");
+        }
+
+        let service = format!("service = \"expected/service.json\"\nservice_sha256 = \"{hash}\"");
+        for missing in ["max_pages", "max_outline_items", "max_range_resident_bytes"] {
+            let budgets = ["max_pages", "max_outline_items", "max_range_resident_bytes"]
+                .into_iter()
+                .filter(|field| *field != missing)
+                .map(|field| format!("{field} = 8"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let input = VALID
+                .replace("error = false", &format!("error = false\n{service}"))
+                .replace(
+                    "watchdog_ms = 500",
+                    &format!("watchdog_ms = 500\n{budgets}"),
+                );
+            assert!(validate_manifest(&input).is_err(), "missing={missing}");
+        }
+
+        let input = VALID.replace("watchdog_ms = 500", "watchdog_ms = 500\nmax_pages = 8");
+        assert!(validate_manifest(&input).is_err());
+    }
+
+    #[test]
+    fn rejects_nonpositive_document_service_budgets() {
+        for field in ["max_pages", "max_outline_items", "max_range_resident_bytes"] {
+            let input = VALID.replace(
+                "watchdog_ms = 500",
+                &format!("watchdog_ms = 500\n{field} = 0"),
+            );
+            assert!(
+                validate_manifest(&input)
                     .unwrap_err()
                     .iter()
                     .any(|error| error.code == "RPE-MANIFEST-0014")

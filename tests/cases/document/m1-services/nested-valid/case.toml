@@ -1,0 +1,85 @@
+schema = 1
+
+[identity]
+id = "document/m1-services/nested-valid"
+title = "Nested strict page tree and three-item outline"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["7.7.2", "7.7.3", "12.3.3", "RPE-ARCH-001/15.3/M1"]
+interpretation = "Postorder page counting and preorder outline traversal independently recompute every declared Count and linked-list relationship."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tools/quality/tests/m1_document_service_support/mod.rs"
+sha256 = "sha256:ccfb1b1deb755ace8a2b59d9e4f006d0686d89b69b0ea74b1544873b3fb9629f"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.strict-page-count", "core.strict-outline", "runtime.m1-strict-document-session"]
+requirements = ["m1.strict-page-count.v1", "m1.strict-outline.v1", "m1.strict-document-session.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = false
+capability = false
+error = false
+service = "expected/service.json"
+service_sha256 = "sha256:6f7b5c2cff17f10e3aa8e86c48868477428a4e8af1f9037d98ffab88cca5a002"
+
+[oracle]
+level = "O1"
+derivation = "Independent finite graph evaluation over three page leaves and a two-level outline list."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-15"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 16
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 1
+max_group_depth = 1
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+max_pages = 8
+max_outline_items = 8
+max_range_resident_bytes = 1048576
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "document-services-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m1_document_service_differential"]
+external_observation = []
+
+[history]
+entries = ["2026-07-15: activated as the O1 bounded M1 service graph"]

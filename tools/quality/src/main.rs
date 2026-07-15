@@ -3,9 +3,10 @@
 //! Repository-local quality lane, case validation, purity, and synthetic bundle CLI.
 
 mod bundle;
-mod manifest;
 mod maturity;
 mod purity;
+
+pub(crate) use pdf_rs_quality::manifest;
 
 use std::collections::BTreeMap;
 use std::env;

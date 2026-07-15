@@ -21,6 +21,10 @@ The quality CLI also validates the machine-readable M1 capability-profile ledger
 REFERENCE or DIFFERENTIAL promotion unless every required artifact is repository-relative,
 content-addressed, ledger-bound, eligible, registered, gating, and connected through the required
 evidence graph.
+A separate four-case document-service suite binds each self-authored PDF and canonical expected JSON
+by SHA-256, drives the bounded `M1StrictDocumentSession` through reverse Range delivery, page-count
+and outline requests, deterministic replay, and explicit close, and compares the complete declared
+Native service projection with an independently encoded finite O0/O1 case model.
 
 # Semantic owner
 
@@ -38,6 +42,9 @@ Quality/Corpus workstream.
   release evidence checked by the public coordinator path.
 - RPE-ARCH-001 sections 5.8-5.9 define the strict Catalog and protected
   Page/Pages traversal exercised by the loop.
+- RPE-ARCH-001 section 15.3/M1 requires Range disorder, cancellation and source-change E2E plus
+  DIFFERENTIAL-level page-count and outline services; the service suite is the hash-bound Native
+  case and bounded-actor comparison foundation for that gate.
 - RPE-STD-001 sections 2, 5, 6, and 9.
 - RPE-STD-003 sections 4-8, 19, and 20.
 - RPE-STD-004 sections 4, 11, 12, and 15.
@@ -47,6 +54,10 @@ Quality/Corpus workstream.
 The manifest reader intentionally accepts a canonical TOML v1 subset: root
 schema, named tables, scalar values, and single-line string arrays. It rejects
 unknown/duplicate fields before checking every required semantic group.
+An optional document-service extension requires `expected.service` and its lowercase SHA-256
+together with positive page, outline-item, and Range-resident budgets. The extension is all-or-none:
+service expectations without every service budget, or service budgets without a service artifact,
+are rejected. Canonical paths cannot be absolute, empty, traversing, aliased, or backslash-based.
 
 The separate M1 maturity reader accepts canonical root records, profile records, and string arrays,
 including the multiline arrays used by the companion traceability maps. Every profile freezes
@@ -241,6 +252,18 @@ in-memory strict-path medians of 0.360-0.378 ms and PDFium schema-2 cold-child b
 not engine-kernel parity and the local machine is not a fixed performance pool. This measurement
 does not alter the synthetic benchmark-report contract or this Native object loop.
 
+The document-service suite contains one direct O0 single-page/absent-outline case and three finite
+O1 analytic graphs covering valid nesting, mismatched page Count, and wrong outline Prev. The test
+regenerates each PDF byte-for-byte, verifies both input and expected-output hashes, and consumes the
+canonical manifest validator's identity, oracle, runner, service artifact, and budget fields. Those
+parsed budgets construct the Range, xref, document index, revision attestation, object, syntax,
+page-tree, and outline limits used by Native. It runs Native twice through the fixed M1 actor,
+supplies every Pending range in descending split order, enforces the declared source, object,
+resolve-depth, page, outline-item, and resident-byte limits, compares the complete declared typed
+projection with the independent case model, compares canonical JSON with the repository expectation,
+and closes to zero jobs and resident resources. No PDFium process or external baseline participates
+in this suite.
+
 # Dependencies and generated data
 
 - Rust standard library.
@@ -291,6 +314,13 @@ without parser work, all five checkpoints, and final zero job/target resources. 
 also covers pre-publication Pending registration, partial-ingress and NoWork non-execution, queue-only
 resume ingress, exact five-checkpoint ordering, opaque Ready source ownership and close release, and
 queued host failure without parser or cancellation polling.
+The document-service differential test additionally covers four content-addressed O0/O1 cases,
+byte-identical regeneration, exact expected-JSON identity, two deterministic actor replays, reverse
+Range delivery, concurrent fixed page/outline slots, valid and strict-error terminals, case-bound
+resource ceilings, exact object-count and traversal-depth success followed by one-less rejection,
+explicit Closing, and zero terminal resources. The independent direct-dictionary parser represents
+optional null, valid, and ill-typed fields separately; integer-as-reference mutations cover Catalog
+Outlines, page Parent, and outline First/Last/Prev/Next, with separate Count and target-shape checks.
 
 This is not a registered fuzz target. It has no coverage guidance, randomness,
 dictionary, corpus growth, sanitizer, watchdog, minimizer, nightly campaign, or
@@ -304,6 +334,11 @@ interrupted-write recovery remain planned before T1 inputs.
   review, fuzz campaign, holdout execution, benchmark samples, differential run, or reference build.
   Those substantive claims remain owned by their registered producers and domain-specific gates.
   The reader is intentionally a strict repository schema subset rather than a general TOML parser.
+- The document-service suite is project-authored Native/reference evidence and does not register or
+  promote either service by itself. Promotion still requires the complete content-addressed
+  maturity graph, runnable fuzz/minimizer registration, disjoint holdout, eligible benchmark,
+  independent review, reference fingerprint, and trace/ledger state transition. The existing O4
+  PDFium probes remain unregistered and non-gating.
 
 - The manifest parser does not claim general TOML compatibility; multiline
   arrays, dotted keys, inline tables, escapes within array elements, and comments
@@ -358,6 +393,10 @@ interrupted-write recovery remain planned before T1 inputs.
 
 # History
 
+- 2026-07-15: Added four content-addressed strict document-service cases and a budget-bound
+  comparison through `M1StrictDocumentSession` against independent O0/O1 finite models, with reverse
+  Range delivery, validator-owned product limits, object/depth boundary rejection, tri-state optional
+  reference semantics, deterministic replay, canonical service JSON, and zero-resource close.
 - 2026-07-15: Bound REFERENCE and DIFFERENTIAL maturity evidence to repository-relative SHA-256
   references, exact artifact metadata and cross-reference graphs, feature/spec registrations, and
   data-ledger hashes; added role-specific content-addressed subjects and executed-test registration

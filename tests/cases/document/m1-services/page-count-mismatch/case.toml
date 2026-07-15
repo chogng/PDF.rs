@@ -1,0 +1,85 @@
+schema = 1
+
+[identity]
+id = "document/m1-services/page-count-mismatch"
+title = "Root Pages Count disagrees with three validated leaves"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M1"]
+interpretation = "The root declares Count 4 but its complete Kids graph contains three Page leaves; strict Native rejects rather than trusting Count."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tools/quality/tests/m1_document_service_support/mod.rs"
+sha256 = "sha256:02a49fa31d16a840af09e6845929d7d6271e82d2b77f58b2645fb6e5fd3319be"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.strict-page-count", "runtime.m1-strict-document-session"]
+requirements = ["m1.strict-page-count.v1", "m1.strict-document-session.v1"]
+
+[validity]
+class = "invalid"
+strict_expected = "RPE-DOCUMENT-0033"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+service = "expected/service.json"
+service_sha256 = "sha256:470be81c4e3a22d4151c8a2650178978b1480e390723888811a5cfc0be7dc42c"
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic graph evaluation: the complete reachable leaf set has cardinality three, so declared Count 4 is inconsistent."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-15"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 16
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 1
+max_group_depth = 1
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+max_pages = 8
+max_outline_items = 8
+max_range_resident_bytes = 1048576
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "document-services-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m1_document_service_differential"]
+external_observation = []
+
+[history]
+entries = ["2026-07-15: activated as an O1 analytic strict Count mismatch case"]

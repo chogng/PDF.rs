@@ -1,0 +1,85 @@
+schema = 1
+
+[identity]
+id = "document/m1-services/outline-wrong-prev"
+title = "Second top-level outline item names the wrong Prev sibling"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["12.3.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M1"]
+interpretation = "The second top-level item names the first item's child as Prev; strict Native requires the exact preceding sibling and rejects."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tools/quality/tests/m1_document_service_support/mod.rs"
+sha256 = "sha256:58eee303b4483387c057fe0ae663b213c0543db1d180317151b744d5f9d26a35"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.strict-outline", "runtime.m1-strict-document-session"]
+requirements = ["m1.strict-outline.v1", "m1.strict-document-session.v1"]
+
+[validity]
+class = "invalid"
+strict_expected = "RPE-DOCUMENT-0041"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+service = "expected/service.json"
+service_sha256 = "sha256:13ad30c6a13fd9598aa9b2a58a21fb6cbc9d10a6f9efc3f8d3363c3feb19618c"
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic linked-list evaluation: the second top-level item's exact preceding sibling is object 8, not object 9."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-15"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 16
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 1
+max_group_depth = 1
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+max_pages = 8
+max_outline_items = 8
+max_range_resident_bytes = 1048576
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "document-services-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m1_document_service_differential"]
+external_observation = []
+
+[history]
+entries = ["2026-07-15: activated as an O1 analytic strict Prev mismatch case"]
