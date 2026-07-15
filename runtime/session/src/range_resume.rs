@@ -122,7 +122,25 @@ pub enum RangeResumeCancelOutcome {
 pub enum RangeResumeDispatch {
     /// The completed ticket produced this one-shot resume permit.
     Requeue(RangeResumePermit),
-    /// No completed target remains queued.
+    /// No data-ready target is dispatchable through this compatibility API.
+    ///
+    /// This also applies when an earlier host failure is waiting in the unified
+    /// completion stream; use [`RangeResumeArbiter::take_completion`] to consume it.
+    Empty,
+}
+
+/// One ordered, one-shot completion taken from the Range-resume arbiter.
+///
+/// Data readiness and host failure share one sequence so a scheduler can
+/// consume terminal ticket outcomes without treating a source failure as a
+/// parser-resume permit. Taking a completion never executes parser code.
+#[derive(Debug, Eq, PartialEq)]
+pub enum RangeResumeCompletion {
+    /// Immutable bytes completed the ticket and parser work may be considered.
+    Resume(RangeResumePermit),
+    /// The host failed the ticket without changing the immutable snapshot.
+    Failed(RangeResumeFailurePermit),
+    /// No terminal registration remains queued.
     Empty,
 }
 
@@ -156,12 +174,67 @@ impl RangeResumePermit {
     }
 }
 
+/// Move-only evidence that one host failure completed an exact Range ticket.
+///
+/// Only [`RangeResumeArbiter`] can create this permit. It binds the lower
+/// source error to the issuing arbiter, completed ticket, and captured resume
+/// target, but it never authorizes parser execution.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RangeResumeFailurePermit {
+    arbiter_id: RangeResumeArbiterId,
+    ticket: DataTicket,
+    target: RangeResumeTarget,
+    error: SourceError,
+}
+
+impl RangeResumeFailurePermit {
+    /// Returns the opaque arbiter identity that issued this failure permit.
+    pub const fn arbiter_id(&self) -> RangeResumeArbiterId {
+        self.arbiter_id
+    }
+
+    /// Returns the host-failed byte ticket.
+    pub const fn ticket(&self) -> DataTicket {
+        self.ticket
+    }
+
+    /// Returns the complete job, checkpoint, and generation target that failed.
+    pub const fn target(&self) -> RangeResumeTarget {
+        self.target
+    }
+
+    /// Returns the complete source-redacted lower host failure.
+    pub const fn error(&self) -> SourceError {
+        self.error
+    }
+}
+
+/// Summary of one non-integrity host ticket failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RangeResumeFailureOutcome {
+    ticket: DataTicket,
+    queued_failures: usize,
+}
+
+impl RangeResumeFailureOutcome {
+    /// Returns the exact ticket transitioned by the host failure.
+    pub const fn ticket(self) -> DataTicket {
+        self.ticket
+    }
+
+    /// Returns scheduler failure permits newly queued by the transition.
+    pub const fn queued_failures(self) -> usize {
+        self.queued_failures
+    }
+}
+
 /// Current source and scheduler resources owned exclusively by one arbiter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RangeResumeResources {
     registrations: usize,
     pending_tickets: usize,
     ready_requeues: usize,
+    queued_failures: usize,
     cached_bytes: u64,
     registration_metadata_bytes: u64,
     source_resident_bytes: u64,
@@ -173,6 +246,7 @@ impl RangeResumeResources {
         registrations: 0,
         pending_tickets: 0,
         ready_requeues: 0,
+        queued_failures: 0,
         cached_bytes: 0,
         registration_metadata_bytes: 0,
         source_resident_bytes: 0,
@@ -189,9 +263,20 @@ impl RangeResumeResources {
         self.pending_tickets
     }
 
-    /// Returns completed targets not yet consumed by [`RangeResumeArbiter::take_requeue`].
+    /// Returns completed data-ready targets not yet consumed by
+    /// [`RangeResumeArbiter::take_requeue`] or [`RangeResumeArbiter::take_completion`].
     pub const fn ready_requeues(self) -> usize {
         self.ready_requeues
+    }
+
+    /// Returns completed data-ready targets awaiting resume-permit consumption.
+    pub const fn ready_resumes(self) -> usize {
+        self.ready_requeues
+    }
+
+    /// Returns host-failed targets awaiting failure-permit consumption.
+    pub const fn queued_failures(self) -> usize {
+        self.queued_failures
     }
 
     /// Returns unique immutable source bytes retained by the Range store.
@@ -221,6 +306,7 @@ pub struct RangeResumeReleaseReport {
     released_registrations: usize,
     released_pending_tickets: usize,
     released_ready_requeues: usize,
+    released_queued_failures: usize,
     released_cached_bytes: u64,
     released_registration_metadata_bytes: u64,
     released_source_resident_bytes: u64,
@@ -233,6 +319,7 @@ impl RangeResumeReleaseReport {
             released_registrations: resources.registrations,
             released_pending_tickets: resources.pending_tickets,
             released_ready_requeues: resources.ready_requeues,
+            released_queued_failures: resources.queued_failures,
             released_cached_bytes: resources.cached_bytes,
             released_registration_metadata_bytes: resources.registration_metadata_bytes,
             released_source_resident_bytes: resources.source_resident_bytes,
@@ -253,6 +340,16 @@ impl RangeResumeReleaseReport {
     /// Returns completed scheduler targets discarded by the transition.
     pub const fn released_ready_requeues(self) -> usize {
         self.released_ready_requeues
+    }
+
+    /// Returns completed data-ready targets discarded by the transition.
+    pub const fn released_ready_resumes(self) -> usize {
+        self.released_ready_requeues
+    }
+
+    /// Returns queued host-failure permits discarded by the transition.
+    pub const fn released_queued_failures(self) -> usize {
+        self.released_queued_failures
     }
 
     /// Returns unique cached source bytes dropped with the store.
@@ -307,7 +404,8 @@ impl RangeResumeSupplyOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RegistrationPhase {
     Pending,
-    Ready { sequence: u64 },
+    ResumeReady { sequence: u64 },
+    FailureReady { sequence: u64, error: SourceError },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -324,6 +422,7 @@ struct ActiveRangeResume {
     registration_metadata_bytes: u64,
     pending_tickets: usize,
     ready_requeues: usize,
+    queued_failures: usize,
     next_ready_sequence: u64,
     cached_bytes: u64,
 }
@@ -338,6 +437,7 @@ impl ActiveRangeResume {
             registrations: self.registrations.len(),
             pending_tickets: self.pending_tickets,
             ready_requeues: self.ready_requeues,
+            queued_failures: self.queued_failures,
             cached_bytes: self.cached_bytes,
             registration_metadata_bytes: self.registration_metadata_bytes,
             source_resident_bytes,
@@ -351,65 +451,111 @@ impl ActiveRangeResume {
     ) -> Result<usize, RangeResumeError> {
         let mut queued = 0_usize;
         for &ticket in ready_tickets {
-            let subscriptions = self
-                .store
-                .take_subscriptions(ticket)
-                .map_err(RangeResumeError::from_source)?;
-            if subscriptions.is_empty()
-                || subscriptions.iter().any(|subscription| {
-                    !self.registrations.iter().any(|registration| {
-                        registration.ticket == ticket
-                            && registration.target.job() == subscription.job()
-                            && registration.target.checkpoint() == subscription.checkpoint()
-                            && registration.phase == RegistrationPhase::Pending
-                    })
-                })
-            {
-                return Err(RangeResumeError::unregistered_subscription());
-            }
-            let next_sequence = self
-                .next_ready_sequence
-                .checked_add(
-                    u64::try_from(subscriptions.len())
-                        .map_err(|_| RangeResumeError::arbiter_failed())?,
-                )
+            let completed = self.process_terminal_ticket(ticket, None)?;
+            queued = queued
+                .checked_add(completed)
                 .ok_or_else(RangeResumeError::arbiter_failed)?;
-            let next_ready_requeues = self
-                .ready_requeues
-                .checked_add(subscriptions.len())
-                .ok_or_else(RangeResumeError::arbiter_failed)?;
-            let next_queued = queued
-                .checked_add(subscriptions.len())
-                .ok_or_else(RangeResumeError::arbiter_failed)?;
-            let mut sequence = self.next_ready_sequence;
-            for subscription in subscriptions {
-                let registration = self
-                    .registrations
-                    .iter_mut()
-                    .find(|registration| {
-                        registration.ticket == ticket
-                            && registration.target.job() == subscription.job()
-                            && registration.target.checkpoint() == subscription.checkpoint()
-                            && registration.phase == RegistrationPhase::Pending
-                    })
-                    .expect("subscriptions were validated before mutation");
-                registration.phase = RegistrationPhase::Ready { sequence };
-                sequence = sequence
-                    .checked_add(1)
-                    .ok_or_else(RangeResumeError::arbiter_failed)?;
-            }
-            self.pending_tickets = self
-                .pending_tickets
-                .checked_sub(1)
-                .ok_or_else(RangeResumeError::arbiter_failed)?;
-            self.ready_requeues = next_ready_requeues;
-            self.next_ready_sequence = next_sequence;
-            queued = next_queued;
-            self.store
-                .release_ticket(ticket)
-                .map_err(RangeResumeError::from_source)?;
         }
         Ok(queued)
+    }
+
+    fn process_failed_ticket(
+        &mut self,
+        ticket: DataTicket,
+        error: SourceError,
+    ) -> Result<usize, RangeResumeError> {
+        self.process_terminal_ticket(ticket, Some(error))
+    }
+
+    fn process_terminal_ticket(
+        &mut self,
+        ticket: DataTicket,
+        failure: Option<SourceError>,
+    ) -> Result<usize, RangeResumeError> {
+        let subscriptions = self
+            .store
+            .take_subscriptions(ticket)
+            .map_err(RangeResumeError::from_source)?;
+        let pending_registration_count = self
+            .registrations
+            .iter()
+            .filter(|registration| {
+                registration.ticket == ticket && registration.phase == RegistrationPhase::Pending
+            })
+            .count();
+        if subscriptions.is_empty()
+            || pending_registration_count != subscriptions.len()
+            || subscriptions.iter().any(|subscription| {
+                !self.registrations.iter().any(|registration| {
+                    registration.ticket == ticket
+                        && registration.target.job() == subscription.job()
+                        && registration.target.checkpoint() == subscription.checkpoint()
+                        && registration.phase == RegistrationPhase::Pending
+                })
+            })
+            || self.registrations.iter().any(|registration| {
+                registration.ticket == ticket
+                    && registration.phase == RegistrationPhase::Pending
+                    && !subscriptions.iter().any(|subscription| {
+                        registration.target.job() == subscription.job()
+                            && registration.target.checkpoint() == subscription.checkpoint()
+                    })
+            })
+        {
+            return Err(RangeResumeError::unregistered_subscription());
+        }
+        let completed = subscriptions.len();
+        let completed_u64 =
+            u64::try_from(completed).map_err(|_| RangeResumeError::arbiter_failed())?;
+        let next_sequence = self
+            .next_ready_sequence
+            .checked_add(completed_u64)
+            .ok_or_else(RangeResumeError::arbiter_failed)?;
+        let next_ready_requeues = match failure {
+            Some(_) => self.ready_requeues,
+            None => self
+                .ready_requeues
+                .checked_add(completed)
+                .ok_or_else(RangeResumeError::arbiter_failed)?,
+        };
+        let next_queued_failures = match failure {
+            Some(_) => self
+                .queued_failures
+                .checked_add(completed)
+                .ok_or_else(RangeResumeError::arbiter_failed)?,
+            None => self.queued_failures,
+        };
+        let mut sequence = self.next_ready_sequence;
+        for subscription in subscriptions {
+            let registration = self
+                .registrations
+                .iter_mut()
+                .find(|registration| {
+                    registration.ticket == ticket
+                        && registration.target.job() == subscription.job()
+                        && registration.target.checkpoint() == subscription.checkpoint()
+                        && registration.phase == RegistrationPhase::Pending
+                })
+                .expect("subscriptions were validated before mutation");
+            registration.phase = match failure {
+                Some(error) => RegistrationPhase::FailureReady { sequence, error },
+                None => RegistrationPhase::ResumeReady { sequence },
+            };
+            sequence = sequence
+                .checked_add(1)
+                .ok_or_else(RangeResumeError::arbiter_failed)?;
+        }
+        self.pending_tickets = self
+            .pending_tickets
+            .checked_sub(1)
+            .ok_or_else(RangeResumeError::arbiter_failed)?;
+        self.ready_requeues = next_ready_requeues;
+        self.queued_failures = next_queued_failures;
+        self.next_ready_sequence = next_sequence;
+        self.store
+            .release_ticket(ticket)
+            .map_err(RangeResumeError::from_source)?;
+        Ok(completed)
     }
 
     fn rollback_subscription(
@@ -507,6 +653,7 @@ impl RangeResumeArbiter {
                 registration_metadata_bytes,
                 pending_tickets: 0,
                 ready_requeues: 0,
+                queued_failures: 0,
                 next_ready_sequence: 1,
                 cached_bytes: 0,
             }),
@@ -645,6 +792,48 @@ impl RangeResumeArbiter {
         self.finish_store_update(result)
     }
 
+    /// Completes one pending ticket after host source availability failed.
+    ///
+    /// The transition queues one ordered, move-only failure permit per matching
+    /// registration without polling parser code. Snapshot integrity changes use
+    /// [`Self::signal_source_changed`] instead of this ticket-local operation.
+    pub fn fail_ticket(
+        &mut self,
+        ticket: DataTicket,
+    ) -> Result<RangeResumeFailureOutcome, RangeResumeError> {
+        let error = SourceError::source_unavailable();
+        let result = match &self.state {
+            RangeResumeState::Active(active) => active.store.fail_ticket(ticket, error),
+            _ => return Err(self.terminal_error()),
+        };
+        match result {
+            Err(lower) if lower.category() == SourceErrorCategory::Integrity => {
+                self.transition_source_changed(Some(lower));
+                Err(RangeResumeError::source_changed(Some(lower)))
+            }
+            Err(lower) => Err(RangeResumeError::from_source(lower)),
+            Ok(()) => {
+                let queued = {
+                    let active = match &mut self.state {
+                        RangeResumeState::Active(active) => active,
+                        _ => unreachable!("host failure began only in the active phase"),
+                    };
+                    active.process_failed_ticket(ticket, error)
+                };
+                match queued {
+                    Ok(queued_failures) => Ok(RangeResumeFailureOutcome {
+                        ticket,
+                        queued_failures,
+                    }),
+                    Err(failure) => {
+                        self.transition_failed();
+                        Err(failure)
+                    }
+                }
+            }
+        }
+    }
+
     /// Atomically terminates the arbiter for an externally detected source change.
     ///
     /// Repeating the signal returns the same release report. A prior close or
@@ -701,12 +890,19 @@ impl RangeResumeArbiter {
                     return Err(error);
                 }
             }
-            RegistrationPhase::Ready { .. } => {
+            RegistrationPhase::ResumeReady { .. } => {
                 let Some(remaining) = active.ready_requeues.checked_sub(1) else {
                     self.transition_failed();
                     return Err(RangeResumeError::arbiter_failed());
                 };
                 active.ready_requeues = remaining;
+            }
+            RegistrationPhase::FailureReady { .. } => {
+                let Some(remaining) = active.queued_failures.checked_sub(1) else {
+                    self.transition_failed();
+                    return Err(RangeResumeError::arbiter_failed());
+                };
+                active.queued_failures = remaining;
             }
         }
         Ok(RangeResumeCancelOutcome::Cancelled {
@@ -714,11 +910,67 @@ impl RangeResumeArbiter {
         })
     }
 
-    /// Takes the earliest completed target as a move-only permit exactly once.
+    /// Takes the earliest terminal registration exactly once.
+    ///
+    /// Resume and host-failure permits share one monotonically ordered stream.
+    /// Taking either outcome never invokes parser, scheduler, or host code.
+    pub fn take_completion(&mut self) -> Result<RangeResumeCompletion, RangeResumeError> {
+        let active = match &mut self.state {
+            RangeResumeState::Active(active) => active,
+            _ => return Err(self.terminal_error()),
+        };
+        let next = active
+            .registrations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, registration)| match registration.phase {
+                RegistrationPhase::Pending => None,
+                RegistrationPhase::ResumeReady { sequence }
+                | RegistrationPhase::FailureReady { sequence, .. } => Some((index, sequence)),
+            })
+            .min_by_key(|(_, sequence)| *sequence);
+        let Some((index, _)) = next else {
+            return Ok(RangeResumeCompletion::Empty);
+        };
+        let registration = active.registrations.remove(index);
+        match registration.phase {
+            RegistrationPhase::Pending => unreachable!("only terminal registrations are selected"),
+            RegistrationPhase::ResumeReady { .. } => {
+                let Some(remaining) = active.ready_requeues.checked_sub(1) else {
+                    self.transition_failed();
+                    return Err(RangeResumeError::arbiter_failed());
+                };
+                active.ready_requeues = remaining;
+                Ok(RangeResumeCompletion::Resume(RangeResumePermit {
+                    arbiter_id: self.arbiter_id,
+                    ticket: registration.ticket,
+                    target: registration.target,
+                }))
+            }
+            RegistrationPhase::FailureReady { error, .. } => {
+                let Some(remaining) = active.queued_failures.checked_sub(1) else {
+                    self.transition_failed();
+                    return Err(RangeResumeError::arbiter_failed());
+                };
+                active.queued_failures = remaining;
+                Ok(RangeResumeCompletion::Failed(RangeResumeFailurePermit {
+                    arbiter_id: self.arbiter_id,
+                    ticket: registration.ticket,
+                    target: registration.target,
+                    error,
+                }))
+            }
+        }
+    }
+
+    /// Takes the earliest data-ready target as a move-only permit exactly once.
     ///
     /// The returned permit carries the completed ticket and captured target. The
     /// execution owner must compare all identities with current job state before
-    /// polling parser code; a stale permit is simply consumed and dropped.
+    /// polling parser code; a stale permit is simply consumed and dropped. If an
+    /// earlier host failure is queued, this compatibility method returns `Empty`
+    /// so it cannot reorder the unified completion stream. New scheduler code
+    /// should use [`Self::take_completion`].
     pub fn take_requeue(&mut self) -> Result<RangeResumeDispatch, RangeResumeError> {
         let active = match &mut self.state {
             RangeResumeState::Active(active) => active,
@@ -730,18 +982,29 @@ impl RangeResumeArbiter {
             .enumerate()
             .filter_map(|(index, registration)| match registration.phase {
                 RegistrationPhase::Pending => None,
-                RegistrationPhase::Ready { sequence } => Some((index, sequence)),
+                RegistrationPhase::ResumeReady { sequence }
+                | RegistrationPhase::FailureReady { sequence, .. } => Some((index, sequence)),
             })
             .min_by_key(|(_, sequence)| *sequence);
         let Some((index, _)) = next else {
             return Ok(RangeResumeDispatch::Empty);
         };
+        if matches!(
+            active.registrations[index].phase,
+            RegistrationPhase::FailureReady { .. }
+        ) {
+            return Ok(RangeResumeDispatch::Empty);
+        }
         let registration = active.registrations.remove(index);
         let Some(remaining) = active.ready_requeues.checked_sub(1) else {
             self.transition_failed();
             return Err(RangeResumeError::arbiter_failed());
         };
         active.ready_requeues = remaining;
+        debug_assert!(matches!(
+            registration.phase,
+            RegistrationPhase::ResumeReady { .. }
+        ));
         Ok(RangeResumeDispatch::Requeue(RangeResumePermit {
             arbiter_id: self.arbiter_id,
             ticket: registration.ticket,

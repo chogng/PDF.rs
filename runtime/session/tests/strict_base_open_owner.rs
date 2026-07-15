@@ -6,7 +6,7 @@ mod support;
 
 use pdf_rs_bytes::{
     ByteRange, ByteSlice, ByteSource, JobId, RangeResponse, ReadPoll, ReadRequest, RequestPriority,
-    ResumeCheckpoint, SourceSnapshot,
+    ResumeCheckpoint, SourceError, SourceSnapshot,
 };
 use pdf_rs_document::{
     DocumentCancellation, DocumentErrorCode, DocumentLimits, NeverCancelled,
@@ -15,11 +15,11 @@ use pdf_rs_document::{
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_session::{
-    RangeResumeArbiter, RangeResumeDispatch, RangeResumeGeneration, RangeResumePermit,
-    RangeResumeRegistrationOutcome, RangeResumeTarget, StrictBaseOpenJobOwner,
-    StrictBaseOpenOwnerCancelOutcome, StrictBaseOpenOwnerPhase, StrictBaseOpenOwnerPoll,
-    StrictBaseOpenOwnerResume, StrictBaseOpenOwnerSourceChangeOutcome, StrictBaseOpenOwnerStart,
-    StrictBaseOpenResumeDiscardReason,
+    RangeResumeArbiter, RangeResumeCompletion, RangeResumeDispatch, RangeResumeGeneration,
+    RangeResumePermit, RangeResumeRegistrationOutcome, RangeResumeTarget, StrictBaseOpenJobOwner,
+    StrictBaseOpenOwnerCancelOutcome, StrictBaseOpenOwnerFail, StrictBaseOpenOwnerPhase,
+    StrictBaseOpenOwnerPoll, StrictBaseOpenOwnerResume, StrictBaseOpenOwnerSourceChangeOutcome,
+    StrictBaseOpenOwnerStart, StrictBaseOpenResumeDiscardReason,
 };
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{XrefJobContext, XrefLimits};
@@ -288,7 +288,8 @@ fn invalid_permit_identities_and_repeated_start_never_poll_or_mutate_the_owner()
         StrictBaseOpenOwnerPoll::WaitingForData { ticket, target, .. } => (ticket, target),
         other => panic!("an empty source must suspend strict open: {other:?}"),
     };
-    assert_eq!(foreign_collision.ticket(), ticket);
+    assert_eq!(foreign_collision.ticket().value(), ticket.value());
+    assert_ne!(foreign_collision.ticket(), ticket);
     assert_eq!(foreign_collision.target(), target);
     assert_ne!(foreign_collision.arbiter_id(), owner.arbiter_id());
     let phase = owner.phase();
@@ -436,6 +437,115 @@ fn parser_failure_is_retained_until_close_without_terminal_overwrite() {
     assert_eq!(report.released_waiting_targets(), 0);
     assert_eq!(failed.phase(), StrictBaseOpenOwnerPhase::Closed);
     assert_eq!(failed.close(), report);
+}
+
+#[test]
+fn host_ticket_failure_terminates_the_exact_wait_without_repolling() {
+    let fixture = fixture(0x87);
+    let mut arbiter = RangeResumeArbiter::new(fixture.snapshot(), Default::default()).unwrap();
+    let mut failed = owner(&fixture, &arbiter);
+    let (ticket, target) = match start(&mut failed, arbiter.byte_source().unwrap()) {
+        StrictBaseOpenOwnerPoll::WaitingForData { ticket, target, .. } => (ticket, target),
+        other => panic!("an empty source must suspend strict open: {other:?}"),
+    };
+    assert_eq!(
+        arbiter.register_pending(ticket, target).unwrap(),
+        RangeResumeRegistrationOutcome::Registered
+    );
+    let phase_before = failed.job_phase();
+    let stats_before = failed.stats();
+    let source_failure = SourceError::source_unavailable();
+
+    let outcome = arbiter.fail_ticket(ticket).unwrap();
+    assert_eq!(outcome.ticket(), ticket);
+    assert_eq!(outcome.queued_failures(), 1);
+    assert_eq!(failed.phase(), StrictBaseOpenOwnerPhase::WaitingForData);
+    assert_eq!(failed.job_phase(), phase_before);
+    assert_eq!(failed.stats(), stats_before);
+
+    let permit = match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Failed(permit) => permit,
+        other => panic!("host failure must produce one failure permit: {other:?}"),
+    };
+    assert_eq!(
+        failed.fail_waiting(permit),
+        StrictBaseOpenOwnerFail::Failed {
+            ticket,
+            target,
+            error: source_failure,
+        }
+    );
+    assert_eq!(
+        arbiter.take_completion().unwrap(),
+        RangeResumeCompletion::Empty
+    );
+    assert_eq!(failed.phase(), StrictBaseOpenOwnerPhase::Failed);
+    assert_eq!(failed.job_phase(), phase_before);
+    assert_eq!(failed.stats(), stats_before);
+    assert_eq!(failed.failure(), None);
+    assert_eq!(failed.source_failure(), Some(source_failure));
+    assert_eq!(failed.cancellation_error(), None);
+    assert_eq!(failed.resources().jobs(), 0);
+    assert_eq!(failed.resources().waiting_targets(), 0);
+    assert_eq!(arbiter.resources().registrations(), 0);
+    assert_eq!(arbiter.resources().queued_failures(), 0);
+
+    let report = failed.close();
+    assert_eq!(report.previous_phase(), StrictBaseOpenOwnerPhase::Failed);
+    assert_eq!(report.released_jobs(), 0);
+    assert_eq!(report.released_waiting_targets(), 0);
+    assert_eq!(failed.close(), report);
+}
+
+#[test]
+fn stale_failure_permit_is_consumed_without_mutating_the_waiting_job() {
+    let fixture = fixture(0x88);
+    let mut arbiter = RangeResumeArbiter::new(fixture.snapshot(), Default::default()).unwrap();
+    let mut waiting = owner(&fixture, &arbiter);
+    let (ticket, target) = match start(&mut waiting, arbiter.byte_source().unwrap()) {
+        StrictBaseOpenOwnerPoll::WaitingForData { ticket, target, .. } => (ticket, target),
+        other => panic!("an empty source must suspend strict open: {other:?}"),
+    };
+    let stale_target = RangeResumeTarget::new(
+        target.job(),
+        target.checkpoint(),
+        RangeResumeGeneration::new(GENERATION.value() + 1),
+    );
+    assert_eq!(
+        arbiter.register_pending(ticket, stale_target).unwrap(),
+        RangeResumeRegistrationOutcome::Registered
+    );
+    let owner_phase = waiting.phase();
+    let job_phase = waiting.job_phase();
+    let stats = waiting.stats();
+    arbiter.fail_ticket(ticket).unwrap();
+    let permit = match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Failed(permit) => permit,
+        other => panic!("host failure must produce one failure permit: {other:?}"),
+    };
+    match waiting.fail_waiting(permit) {
+        StrictBaseOpenOwnerFail::Discarded { reason, .. } => {
+            assert_eq!(reason, StrictBaseOpenResumeDiscardReason::StaleGeneration)
+        }
+        StrictBaseOpenOwnerFail::Failed { .. } => {
+            panic!("a stale failure permit must not terminate current work")
+        }
+    }
+    assert_eq!(waiting.phase(), owner_phase);
+    assert_eq!(waiting.job_phase(), job_phase);
+    assert_eq!(waiting.stats(), stats);
+    assert_eq!(waiting.failure(), None);
+    assert_eq!(waiting.source_failure(), None);
+    assert_eq!(waiting.resources().jobs(), 1);
+    assert_eq!(waiting.resources().waiting_targets(), 1);
+
+    let report = waiting.close();
+    assert_eq!(
+        report.previous_phase(),
+        StrictBaseOpenOwnerPhase::WaitingForData
+    );
+    assert_eq!(report.released_jobs(), 1);
+    assert_eq!(report.released_waiting_targets(), 1);
 }
 
 #[test]

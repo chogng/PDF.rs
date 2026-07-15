@@ -40,6 +40,38 @@ fn record_with_id<'a>(document: &'a str, kind: &str, id: &str) -> Option<&'a str
         .find(|record| record.starts_with(&header) && record.lines().any(|line| line == id_line))
 }
 
+fn assert_opaque_move_only_permit(source: &str, name: &str, expected_fields: &[&str]) {
+    let struct_marker = format!("pub struct {name} {{");
+    let implementation_marker = format!("impl {name}");
+    let struct_start = source
+        .find(&struct_marker)
+        .unwrap_or_else(|| panic!("{name} declaration must remain present"));
+    let declaration_start = source[..struct_start]
+        .rfind("#[derive(")
+        .unwrap_or_else(|| panic!("{name} declaration must retain an explicit derive policy"));
+    let declaration_end = source[struct_start..]
+        .find(&implementation_marker)
+        .map(|offset| struct_start + offset)
+        .unwrap_or_else(|| panic!("{name} implementation must follow its declaration"));
+    let declaration = &source[declaration_start..declaration_end];
+    let fields = declaration
+        .split(&struct_marker)
+        .nth(1)
+        .and_then(|body| body.split('}').next())
+        .unwrap_or_else(|| panic!("{name} fields must remain inspectable by repository policy"));
+
+    assert!(declaration.contains("#[derive(Debug, Eq, PartialEq)]"));
+    assert!(!declaration.contains("Clone"));
+    assert!(!declaration.contains("Copy"));
+    for private_field in expected_fields {
+        assert!(fields.lines().any(|line| line.trim() == *private_field));
+    }
+    assert!(!fields.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("pub ") || line.starts_with("pub(")
+    }));
+}
+
 #[test]
 fn product_source_remains_exclusive_runtime_owner_code_without_io_or_async() {
     let mut sources = Vec::new();
@@ -98,40 +130,28 @@ fn product_source_remains_exclusive_runtime_owner_code_without_io_or_async() {
 }
 
 #[test]
-fn range_resume_permit_remains_opaque_and_move_only() {
+fn range_resume_permits_remain_opaque_and_move_only() {
     let source = fs::read_to_string(crate_root().join("src/range_resume.rs"))
         .expect("Range-resume source must be readable");
-    let struct_start = source
-        .find("pub struct RangeResumePermit {")
-        .expect("permit declaration must remain present");
-    let declaration_start = source[..struct_start]
-        .rfind("#[derive(")
-        .expect("permit declaration must retain an explicit derive policy");
-    let declaration_end = source[struct_start..]
-        .find("impl RangeResumePermit")
-        .map(|offset| struct_start + offset)
-        .expect("permit implementation must follow its declaration");
-    let declaration = &source[declaration_start..declaration_end];
-    let fields = declaration
-        .split("pub struct RangeResumePermit {")
-        .nth(1)
-        .and_then(|body| body.split('}').next())
-        .expect("permit fields must remain directly inspectable by repository policy");
-
-    assert!(declaration.contains("#[derive(Debug, Eq, PartialEq)]"));
-    assert!(!declaration.contains("Clone"));
-    assert!(!declaration.contains("Copy"));
-    for private_field in [
-        "arbiter_id: RangeResumeArbiterId,",
-        "ticket: DataTicket,",
-        "target: RangeResumeTarget,",
-    ] {
-        assert!(fields.lines().any(|line| line.trim() == private_field));
-    }
-    assert!(!fields.lines().any(|line| {
-        let line = line.trim_start();
-        line.starts_with("pub ") || line.starts_with("pub(")
-    }));
+    assert_opaque_move_only_permit(
+        &source,
+        "RangeResumePermit",
+        &[
+            "arbiter_id: RangeResumeArbiterId,",
+            "ticket: DataTicket,",
+            "target: RangeResumeTarget,",
+        ],
+    );
+    assert_opaque_move_only_permit(
+        &source,
+        "RangeResumeFailurePermit",
+        &[
+            "arbiter_id: RangeResumeArbiterId,",
+            "ticket: DataTicket,",
+            "target: RangeResumeTarget,",
+            "error: SourceError,",
+        ],
+    );
 }
 
 #[test]

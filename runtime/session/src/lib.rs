@@ -29,7 +29,8 @@ pub use owner::{
     ReadySessionCloseReport, ReadySessionOwner, ReadySessionPhase, ReadySessionResources,
 };
 pub use range_resume::{
-    RangeResumeArbiter, RangeResumeArbiterId, RangeResumeCancelOutcome, RangeResumeDispatch,
+    RangeResumeArbiter, RangeResumeArbiterId, RangeResumeCancelOutcome, RangeResumeCompletion,
+    RangeResumeDispatch, RangeResumeFailureOutcome, RangeResumeFailurePermit,
     RangeResumeGeneration, RangeResumePermit, RangeResumePhase, RangeResumeRegistrationOutcome,
     RangeResumeReleaseReport, RangeResumeResources, RangeResumeSupplyOutcome, RangeResumeTarget,
 };
@@ -39,7 +40,8 @@ pub use range_resume_error::{
 };
 pub use strict_base_open_owner::{
     StrictBaseOpenJobOwner, StrictBaseOpenOwnerCancelOutcome, StrictBaseOpenOwnerCloseReport,
-    StrictBaseOpenOwnerPhase, StrictBaseOpenOwnerPoll, StrictBaseOpenOwnerResources,
-    StrictBaseOpenOwnerResume, StrictBaseOpenOwnerSourceChangeOutcome, StrictBaseOpenOwnerStart,
+    StrictBaseOpenOwnerFail, StrictBaseOpenOwnerPhase, StrictBaseOpenOwnerPoll,
+    StrictBaseOpenOwnerResources, StrictBaseOpenOwnerResume,
+    StrictBaseOpenOwnerSourceChangeOutcome, StrictBaseOpenOwnerStart,
     StrictBaseOpenResumeDiscardReason,
 };

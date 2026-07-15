@@ -1,12 +1,12 @@
 use pdf_rs_bytes::{
     ByteRange, JobId, RangeResponse, RangeStoreLimitConfig, RangeStoreLimits, ReadPoll,
-    ReadRequest, RequestPriority, ResumeCheckpoint, SourceErrorCode, SourceIdentity,
+    ReadRequest, RequestPriority, ResumeCheckpoint, SourceError, SourceErrorCode, SourceIdentity,
     SourceRevision, SourceSnapshot, SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_session::{
-    RangeResumeArbiter, RangeResumeCancelOutcome, RangeResumeDispatch, RangeResumeErrorCategory,
-    RangeResumeErrorCode, RangeResumeGeneration, RangeResumePermit, RangeResumePhase,
-    RangeResumeRecoverability, RangeResumeRegistrationOutcome, RangeResumeTarget,
+    RangeResumeArbiter, RangeResumeCancelOutcome, RangeResumeCompletion, RangeResumeDispatch,
+    RangeResumeErrorCategory, RangeResumeErrorCode, RangeResumeGeneration, RangeResumePermit,
+    RangeResumePhase, RangeResumeRecoverability, RangeResumeRegistrationOutcome, RangeResumeTarget,
 };
 
 fn snapshot(seed: u8, len: Option<u64>) -> SourceSnapshot {
@@ -278,6 +278,390 @@ fn sole_cancel_releases_abandoned_ticket_and_ready_cancel_consumes_queue() {
     );
     assert_eq!(arbiter.resources().registrations(), 0);
     assert_eq!(arbiter.take_requeue().unwrap(), RangeResumeDispatch::Empty);
+}
+
+#[test]
+fn shared_host_failure_queues_ordered_move_only_failures_without_resume() {
+    let bound = snapshot(0x44, Some(4));
+    let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let first = target(1, 10, 3);
+    let second = target(2, 20, 4);
+    let third = target(3, 30, 5);
+    let ticket = pending(&arbiter, request(0, 4, 1, 10));
+    let shared = pending(&arbiter, request(0, 4, 2, 20));
+    let also_shared = pending(&arbiter, request(0, 4, 3, 30));
+    assert_eq!(shared, ticket);
+    assert_eq!(also_shared, ticket);
+    arbiter.register_pending(ticket, first).unwrap();
+    arbiter.register_pending(shared, second).unwrap();
+    arbiter.register_pending(also_shared, third).unwrap();
+
+    let phase_before = arbiter.phase();
+    let failure = SourceError::source_unavailable();
+    let outcome = arbiter.fail_ticket(ticket).unwrap();
+    assert_eq!(outcome.ticket(), ticket);
+    assert_eq!(outcome.queued_failures(), 3);
+    assert_eq!(arbiter.phase(), phase_before);
+    assert_eq!(arbiter.resources().pending_tickets(), 0);
+    assert_eq!(arbiter.resources().ready_resumes(), 0);
+    assert_eq!(arbiter.resources().ready_requeues(), 0);
+    assert_eq!(arbiter.resources().queued_failures(), 3);
+    let duplicate = arbiter
+        .fail_ticket(ticket)
+        .expect_err("a released failed ticket cannot complete twice");
+    assert_eq!(
+        duplicate.code(),
+        RangeResumeErrorCode::Source(SourceErrorCode::UnknownTicket)
+    );
+    assert_eq!(
+        duplicate.source_error().map(SourceError::code),
+        Some(SourceErrorCode::UnknownTicket)
+    );
+    assert_eq!(arbiter.phase(), RangeResumePhase::Active);
+    assert_eq!(arbiter.resources().queued_failures(), 3);
+    assert_eq!(
+        arbiter.take_requeue().unwrap(),
+        RangeResumeDispatch::Empty,
+        "host failure must never be converted into parser-resume authority"
+    );
+
+    for expected in [first, second, third] {
+        match arbiter.take_completion().unwrap() {
+            RangeResumeCompletion::Failed(permit) => {
+                assert_eq!(permit.arbiter_id(), arbiter.arbiter_id());
+                assert_eq!(permit.ticket(), ticket);
+                assert_eq!(permit.target(), expected);
+                assert_eq!(permit.error(), failure);
+            }
+            other => panic!("shared host failure must preserve subscription order: {other:?}"),
+        }
+    }
+    assert_eq!(
+        arbiter.take_completion().unwrap(),
+        RangeResumeCompletion::Empty
+    );
+    assert_eq!(arbiter.resources().registrations(), 0);
+    assert_eq!(arbiter.resources().queued_failures(), 0);
+}
+
+#[test]
+fn foreign_store_ticket_collision_cannot_fail_local_work() {
+    let bound = snapshot(0x4e, Some(4));
+    let mut local = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let foreign = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let local_ticket = pending(&local, request(0, 4, 1, 10));
+    let foreign_ticket = pending(&foreign, request(0, 4, 1, 10));
+    assert_eq!(local_ticket.value(), foreign_ticket.value());
+    assert_ne!(local_ticket, foreign_ticket);
+    local
+        .register_pending(local_ticket, target(1, 10, 1))
+        .unwrap();
+
+    let error = local
+        .fail_ticket(foreign_ticket)
+        .expect_err("a foreign store ticket cannot terminate a numeric collision");
+    assert_eq!(
+        error.code(),
+        RangeResumeErrorCode::Source(SourceErrorCode::UnknownTicket)
+    );
+    assert_eq!(local.phase(), RangeResumePhase::Active);
+    assert_eq!(local.resources().registrations(), 1);
+    assert_eq!(local.resources().pending_tickets(), 1);
+    assert_eq!(local.resources().queued_failures(), 0);
+
+    assert_eq!(
+        local.fail_ticket(local_ticket).unwrap().queued_failures(),
+        1
+    );
+    match local.take_completion().unwrap() {
+        RangeResumeCompletion::Failed(permit) => {
+            assert_eq!(permit.ticket(), local_ticket);
+            assert_eq!(permit.error(), SourceError::source_unavailable());
+        }
+        other => panic!("the exact local ticket must fail once: {other:?}"),
+    }
+}
+
+#[test]
+fn unified_completion_order_covers_data_ready_then_host_failure() {
+    let bound = snapshot(0x45, Some(8));
+    let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let resume_target = target(1, 10, 1);
+    let failure_target = target(2, 20, 1);
+    let resume_ticket = pending(&arbiter, request(0, 4, 1, 10));
+    arbiter
+        .register_pending(resume_ticket, resume_target)
+        .unwrap();
+    let failure_ticket = pending(&arbiter, request(4, 4, 2, 20));
+    arbiter
+        .register_pending(failure_ticket, failure_target)
+        .unwrap();
+
+    arbiter.supply(response(bound, 0, b"ABCD")).unwrap();
+    let failure = SourceError::source_unavailable();
+    arbiter.fail_ticket(failure_ticket).unwrap();
+    assert_eq!(arbiter.resources().ready_resumes(), 1);
+    assert_eq!(arbiter.resources().queued_failures(), 1);
+
+    match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Resume(permit) => {
+            assert_eq!(permit.ticket(), resume_ticket);
+            assert_eq!(permit.target(), resume_target);
+        }
+        other => panic!("data-ready completion was sequenced first: {other:?}"),
+    }
+    match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Failed(permit) => {
+            assert_eq!(permit.ticket(), failure_ticket);
+            assert_eq!(permit.target(), failure_target);
+            assert_eq!(permit.error(), failure);
+        }
+        other => panic!("host failure was sequenced second: {other:?}"),
+    }
+    assert_eq!(
+        arbiter.take_completion().unwrap(),
+        RangeResumeCompletion::Empty
+    );
+}
+
+#[test]
+fn unified_completion_order_covers_host_failure_then_data_ready() {
+    let bound = snapshot(0x4b, Some(8));
+    let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let failure_target = target(1, 10, 1);
+    let resume_target = target(2, 20, 1);
+    let failure_ticket = pending(&arbiter, request(0, 4, 1, 10));
+    arbiter
+        .register_pending(failure_ticket, failure_target)
+        .unwrap();
+    let resume_ticket = pending(&arbiter, request(4, 4, 2, 20));
+    arbiter
+        .register_pending(resume_ticket, resume_target)
+        .unwrap();
+
+    let failure = SourceError::source_unavailable();
+    arbiter.fail_ticket(failure_ticket).unwrap();
+    arbiter.supply(response(bound, 4, b"EFGH")).unwrap();
+
+    match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Failed(permit) => {
+            assert_eq!(permit.ticket(), failure_ticket);
+            assert_eq!(permit.target(), failure_target);
+            assert_eq!(permit.error(), failure);
+        }
+        other => panic!("host failure was sequenced first: {other:?}"),
+    }
+    match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Resume(permit) => {
+            assert_eq!(permit.ticket(), resume_ticket);
+            assert_eq!(permit.target(), resume_target);
+        }
+        other => panic!("data-ready completion was sequenced second: {other:?}"),
+    }
+    assert_eq!(
+        arbiter.take_completion().unwrap(),
+        RangeResumeCompletion::Empty
+    );
+}
+
+#[test]
+fn cancel_before_failure_preserves_shared_survivor_and_taken_permit() {
+    let bound = snapshot(0x4c, Some(4));
+    let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let cancelled = target(1, 10, 9);
+    let survivor = target(2, 20, 9);
+    let ticket = pending(&arbiter, request(0, 4, 1, 10));
+    let shared = pending(&arbiter, request(0, 4, 2, 20));
+    arbiter.register_pending(ticket, cancelled).unwrap();
+    arbiter.register_pending(shared, survivor).unwrap();
+
+    assert_eq!(
+        arbiter
+            .cancel(JobId::new(1), RangeResumeGeneration::new(9))
+            .unwrap(),
+        RangeResumeCancelOutcome::Cancelled { target: cancelled }
+    );
+    let failure = SourceError::source_unavailable();
+    let outcome = arbiter.fail_ticket(ticket).unwrap();
+    assert_eq!(outcome.queued_failures(), 1);
+    let permit = match arbiter.take_completion().unwrap() {
+        RangeResumeCompletion::Failed(permit) => permit,
+        other => panic!("the shared survivor must receive the failure: {other:?}"),
+    };
+    assert_eq!(permit.target(), survivor);
+    assert_eq!(permit.error(), failure);
+    assert_eq!(
+        arbiter
+            .cancel(JobId::new(2), RangeResumeGeneration::new(9))
+            .unwrap(),
+        RangeResumeCancelOutcome::NotPending,
+        "a taken move-only permit is already outside arbiter ownership"
+    );
+    assert_eq!(permit.ticket(), ticket);
+    assert_eq!(arbiter.resources().registrations(), 0);
+    assert_eq!(arbiter.resources().queued_failures(), 0);
+}
+
+#[test]
+fn exact_cancel_removes_one_queued_failure_and_close_releases_the_rest() {
+    let bound = snapshot(0x46, Some(4));
+    let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let first = target(1, 10, 7);
+    let second = target(2, 20, 7);
+    let ticket = pending(&arbiter, request(0, 4, 1, 10));
+    let shared = pending(&arbiter, request(0, 4, 2, 20));
+    arbiter.register_pending(ticket, first).unwrap();
+    arbiter.register_pending(shared, second).unwrap();
+    arbiter.fail_ticket(ticket).unwrap();
+    assert_eq!(arbiter.resources().queued_failures(), 2);
+
+    assert_eq!(
+        arbiter
+            .cancel(JobId::new(1), RangeResumeGeneration::new(7))
+            .unwrap(),
+        RangeResumeCancelOutcome::Cancelled { target: first }
+    );
+    assert_eq!(arbiter.resources().registrations(), 1);
+    assert_eq!(arbiter.resources().queued_failures(), 1);
+    assert_eq!(
+        arbiter
+            .cancel(JobId::new(1), RangeResumeGeneration::new(7))
+            .unwrap(),
+        RangeResumeCancelOutcome::NotPending
+    );
+
+    let report = arbiter.close();
+    assert_eq!(report.released_registrations(), 1);
+    assert_eq!(report.released_pending_tickets(), 0);
+    assert_eq!(report.released_ready_resumes(), 0);
+    assert_eq!(report.released_ready_requeues(), 0);
+    assert_eq!(report.released_queued_failures(), 1);
+    assert_eq!(arbiter.resources().queued_failures(), 0);
+    assert_eq!(arbiter.resources().resident_bytes(), 0);
+    assert_eq!(arbiter.close(), report);
+    assert_eq!(
+        arbiter.take_completion().unwrap_err().code(),
+        RangeResumeErrorCode::Closed
+    );
+}
+
+#[test]
+fn surplus_runtime_registration_fails_closed_for_data_and_host_failure() {
+    let bound = snapshot(0x4d, Some(4));
+    for host_failure in [false, true] {
+        let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+        let ticket = pending(&arbiter, request(0, 4, 1, 10));
+        arbiter.register_pending(ticket, target(1, 10, 1)).unwrap();
+        arbiter
+            .register_pending(ticket, target(2, 20, 1))
+            .expect("the surplus registration exposes the terminal bijection guard");
+
+        let error = if host_failure {
+            arbiter
+                .fail_ticket(ticket)
+                .expect_err("host failure must reject a surplus runtime registration")
+        } else {
+            arbiter
+                .supply(response(bound, 0, b"ABCD"))
+                .expect_err("data readiness must reject a surplus runtime registration")
+        };
+        assert_eq!(error.code(), RangeResumeErrorCode::UnregisteredSubscription);
+        assert_eq!(error.category(), RangeResumeErrorCategory::Internal);
+        assert_eq!(arbiter.phase(), RangeResumePhase::Failed);
+        assert_eq!(arbiter.resources().registrations(), 0);
+        assert_eq!(arbiter.resources().pending_tickets(), 0);
+        assert_eq!(arbiter.resources().ready_resumes(), 0);
+        assert_eq!(arbiter.resources().queued_failures(), 0);
+        assert_eq!(arbiter.resources().resident_bytes(), 0);
+        let report = arbiter.release_report().unwrap();
+        assert_eq!(report.released_registrations(), 2);
+        assert_eq!(report.released_pending_tickets(), 1);
+        assert_eq!(report.released_ready_resumes(), 0);
+        assert_eq!(report.released_queued_failures(), 0);
+    }
+}
+
+#[test]
+fn source_change_signal_poisoning_wins_without_failure_permit() {
+    let bound = snapshot(0x47, Some(4));
+    let mut arbiter = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let ticket = pending(&arbiter, request(0, 4, 1, 10));
+    arbiter.register_pending(ticket, target(1, 10, 1)).unwrap();
+    arbiter.supply(response(bound, 0, b"AB")).unwrap();
+
+    let report = arbiter
+        .signal_source_changed()
+        .expect("the source-wide signal poisons the complete arbiter");
+    assert_eq!(arbiter.phase(), RangeResumePhase::SourceChanged);
+    assert_eq!(arbiter.resources().registrations(), 0);
+    assert_eq!(arbiter.resources().ready_resumes(), 0);
+    assert_eq!(arbiter.resources().queued_failures(), 0);
+    assert_eq!(arbiter.resources().resident_bytes(), 0);
+
+    assert_eq!(arbiter.release_report(), Some(report));
+    assert_eq!(report.released_registrations(), 1);
+    assert_eq!(report.released_pending_tickets(), 1);
+    assert_eq!(report.released_ready_resumes(), 0);
+    assert_eq!(report.released_queued_failures(), 0);
+    assert_eq!(report.released_cached_bytes(), 2);
+    assert_eq!(
+        arbiter.take_completion().unwrap_err().code(),
+        RangeResumeErrorCode::SourceChanged
+    );
+    assert_eq!(arbiter.close(), report);
+    assert_eq!(arbiter.phase(), RangeResumePhase::SourceChanged);
+}
+
+#[test]
+fn late_source_change_wins_after_resume_failure_or_ticket_release() {
+    let bound = snapshot(0x49, Some(4));
+
+    let mut resume_ready = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let resume_ticket = pending(&resume_ready, request(0, 4, 1, 10));
+    resume_ready
+        .register_pending(resume_ticket, target(1, 10, 1))
+        .unwrap();
+    resume_ready.supply(response(bound, 0, b"ABCD")).unwrap();
+    assert_eq!(resume_ready.resources().ready_resumes(), 1);
+    let resume_report = resume_ready.signal_source_changed().unwrap();
+    assert_eq!(resume_report.released_ready_resumes(), 1);
+    assert_eq!(resume_report.released_queued_failures(), 0);
+
+    let mut failure_ready = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let failure_ticket = pending(&failure_ready, request(0, 4, 2, 20));
+    failure_ready
+        .register_pending(failure_ticket, target(2, 20, 1))
+        .unwrap();
+    failure_ready.fail_ticket(failure_ticket).unwrap();
+    assert_eq!(failure_ready.resources().queued_failures(), 1);
+    let failure_report = failure_ready.signal_source_changed().unwrap();
+    assert_eq!(failure_report.released_ready_resumes(), 0);
+    assert_eq!(failure_report.released_queued_failures(), 1);
+
+    let mut released = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    let released_ticket = pending(&released, request(0, 4, 3, 30));
+    released
+        .register_pending(released_ticket, target(3, 30, 1))
+        .unwrap();
+    released.supply(response(bound, 0, b"ABCD")).unwrap();
+    assert!(matches!(
+        released.take_completion().unwrap(),
+        RangeResumeCompletion::Resume(_)
+    ));
+    assert_eq!(released.resources().registrations(), 0);
+    let released_report = released.signal_source_changed().unwrap();
+    assert_eq!(released_report.released_registrations(), 0);
+    assert_eq!(released_report.released_ready_resumes(), 0);
+    assert_eq!(released_report.released_queued_failures(), 0);
+    assert_eq!(released_report.released_cached_bytes(), 4);
+
+    let mut closed = RangeResumeArbiter::new(bound, limits(8)).unwrap();
+    closed.close();
+    assert_eq!(
+        closed.signal_source_changed().unwrap_err().code(),
+        RangeResumeErrorCode::Closed
+    );
+    assert_eq!(closed.phase(), RangeResumePhase::Closed);
 }
 
 #[test]

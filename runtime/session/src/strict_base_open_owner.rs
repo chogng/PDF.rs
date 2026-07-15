@@ -1,13 +1,16 @@
 use std::fmt;
 use std::mem;
 
-use pdf_rs_bytes::{ByteSource, DataTicket, JobId, SmallRanges};
+use pdf_rs_bytes::{ByteSource, DataTicket, JobId, SmallRanges, SourceError};
 use pdf_rs_document::{
     AttestedRevisionIndex, DocumentCancellation, OpenStrictBaseRevisionJob, StrictBaseOpenError,
     StrictBaseOpenPhase, StrictBaseOpenPoll, StrictBaseOpenStats,
 };
 
-use crate::{RangeResumeArbiterId, RangeResumeGeneration, RangeResumePermit, RangeResumeTarget};
+use crate::{
+    RangeResumeArbiterId, RangeResumeFailurePermit, RangeResumeGeneration, RangeResumePermit,
+    RangeResumeTarget,
+};
 
 /// Public lifecycle phase of one runtime-owned strict base-open job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,6 +179,31 @@ impl fmt::Debug for StrictBaseOpenOwnerResume {
     }
 }
 
+/// Result of consuming one move-only Range failure permit.
+#[derive(Debug, Eq, PartialEq)]
+pub enum StrictBaseOpenOwnerFail {
+    /// Every permit identity matched and the waiting job became terminal.
+    Failed {
+        /// The failed Range ticket carried by the consumed permit.
+        ticket: DataTicket,
+        /// The exact target whose source operation failed.
+        target: RangeResumeTarget,
+        /// Complete source-redacted host failure evidence.
+        error: SourceError,
+    },
+    /// The permit was consumed without changing the owned job.
+    Discarded {
+        /// The failed Range ticket carried by the consumed permit.
+        ticket: DataTicket,
+        /// The scheduler target carried by the consumed permit.
+        target: RangeResumeTarget,
+        /// Complete source-redacted host failure evidence.
+        error: SourceError,
+        /// The identity or lifecycle check that rejected the failure.
+        reason: StrictBaseOpenResumeDiscardReason,
+    },
+}
+
 /// Result of requesting cancellation between synchronous actor turns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StrictBaseOpenOwnerCancelOutcome {
@@ -244,6 +272,7 @@ enum OwnerState {
     },
     Ready,
     Failed(StrictBaseOpenError),
+    SourceFailed(SourceError),
     Cancelled(Option<StrictBaseOpenError>),
     SourceChanged,
     Closed(StrictBaseOpenOwnerCloseReport),
@@ -256,7 +285,9 @@ impl OwnerState {
             Self::Queued(_) => StrictBaseOpenOwnerPhase::Queued,
             Self::Waiting { .. } => StrictBaseOpenOwnerPhase::WaitingForData,
             Self::Ready => StrictBaseOpenOwnerPhase::Ready,
-            Self::Failed(_) | Self::Transition => StrictBaseOpenOwnerPhase::Failed,
+            Self::Failed(_) | Self::SourceFailed(_) | Self::Transition => {
+                StrictBaseOpenOwnerPhase::Failed
+            }
             Self::Cancelled(_) => StrictBaseOpenOwnerPhase::Cancelled,
             Self::SourceChanged => StrictBaseOpenOwnerPhase::SourceChanged,
             Self::Closed(_) => StrictBaseOpenOwnerPhase::Closed,
@@ -275,6 +306,7 @@ impl OwnerState {
             },
             Self::Ready
             | Self::Failed(_)
+            | Self::SourceFailed(_)
             | Self::Cancelled(_)
             | Self::SourceChanged
             | Self::Closed(_)
@@ -361,6 +393,16 @@ impl StrictBaseOpenJobOwner {
         }
     }
 
+    /// Returns the host source failure that terminated a waiting ticket.
+    ///
+    /// Parser-produced failures remain available through [`Self::failure`].
+    pub fn source_failure(&self) -> Option<SourceError> {
+        match &self.state {
+            OwnerState::SourceFailed(error) => Some(*error),
+            _ => None,
+        }
+    }
+
     /// Returns lower cancellation evidence when a token stopped a permitted poll.
     ///
     /// Explicit cancellation between turns has no lower error and returns `None`.
@@ -418,30 +460,7 @@ impl StrictBaseOpenJobOwner {
     ) -> StrictBaseOpenOwnerResume {
         let ticket = permit.ticket();
         let target = permit.target();
-        let reason = if permit.arbiter_id() != self.arbiter_id {
-            Some(StrictBaseOpenResumeDiscardReason::ArbiterMismatch)
-        } else if target.generation() != self.generation {
-            Some(StrictBaseOpenResumeDiscardReason::StaleGeneration)
-        } else if target.job() != self.job_id {
-            Some(StrictBaseOpenResumeDiscardReason::JobMismatch)
-        } else {
-            match &self.state {
-                OwnerState::Waiting {
-                    target: expected_target,
-                    ..
-                } if target.checkpoint() != expected_target.checkpoint() => {
-                    Some(StrictBaseOpenResumeDiscardReason::CheckpointMismatch)
-                }
-                OwnerState::Waiting {
-                    ticket: expected_ticket,
-                    ..
-                } if ticket != *expected_ticket => {
-                    Some(StrictBaseOpenResumeDiscardReason::TicketMismatch)
-                }
-                OwnerState::Waiting { .. } => None,
-                _ => Some(StrictBaseOpenResumeDiscardReason::NotWaiting(self.phase())),
-            }
-        };
+        let reason = self.discard_reason(permit.arbiter_id(), ticket, target);
         if let Some(reason) = reason {
             return StrictBaseOpenOwnerResume::Discarded {
                 ticket,
@@ -455,6 +474,37 @@ impl StrictBaseOpenJobOwner {
             unreachable!("an exact permit requires the validated waiting state")
         };
         StrictBaseOpenOwnerResume::Polled(self.poll_job(job, source, cancellation))
+    }
+
+    /// Consumes one host-failure permit without polling parser code.
+    ///
+    /// An exact permit drops the waiting job and retains the lower byte-layer
+    /// failure. A stale or mismatched permit is consumed while preserving the
+    /// waiting job, parser phase, and cumulative statistics.
+    pub fn fail_waiting(&mut self, permit: RangeResumeFailurePermit) -> StrictBaseOpenOwnerFail {
+        let ticket = permit.ticket();
+        let target = permit.target();
+        let error = permit.error();
+        if let Some(reason) = self.discard_reason(permit.arbiter_id(), ticket, target) {
+            return StrictBaseOpenOwnerFail::Discarded {
+                ticket,
+                target,
+                error,
+                reason,
+            };
+        }
+
+        let previous = mem::replace(&mut self.state, OwnerState::Transition);
+        let OwnerState::Waiting { job, .. } = previous else {
+            unreachable!("an exact failure permit requires the validated waiting state")
+        };
+        drop(job);
+        self.state = OwnerState::SourceFailed(error);
+        StrictBaseOpenOwnerFail::Failed {
+            ticket,
+            target,
+            error,
+        }
     }
 
     /// Cancels the active job between actor turns and returns its waiting target.
@@ -542,6 +592,39 @@ impl StrictBaseOpenJobOwner {
             }
         }
     }
+
+    fn discard_reason(
+        &self,
+        arbiter_id: RangeResumeArbiterId,
+        ticket: DataTicket,
+        target: RangeResumeTarget,
+    ) -> Option<StrictBaseOpenResumeDiscardReason> {
+        if arbiter_id != self.arbiter_id {
+            return Some(StrictBaseOpenResumeDiscardReason::ArbiterMismatch);
+        }
+        if target.generation() != self.generation {
+            return Some(StrictBaseOpenResumeDiscardReason::StaleGeneration);
+        }
+        if target.job() != self.job_id {
+            return Some(StrictBaseOpenResumeDiscardReason::JobMismatch);
+        }
+        match &self.state {
+            OwnerState::Waiting {
+                target: expected_target,
+                ..
+            } if target.checkpoint() != expected_target.checkpoint() => {
+                Some(StrictBaseOpenResumeDiscardReason::CheckpointMismatch)
+            }
+            OwnerState::Waiting {
+                ticket: expected_ticket,
+                ..
+            } if ticket != *expected_ticket => {
+                Some(StrictBaseOpenResumeDiscardReason::TicketMismatch)
+            }
+            OwnerState::Waiting { .. } => None,
+            _ => Some(StrictBaseOpenResumeDiscardReason::NotWaiting(self.phase())),
+        }
+    }
 }
 
 impl fmt::Debug for StrictBaseOpenJobOwner {
@@ -557,6 +640,7 @@ impl fmt::Debug for StrictBaseOpenJobOwner {
             .field("waiting_target", &self.waiting_target())
             .field("resources", &self.resources())
             .field("failure", &self.failure())
+            .field("source_failure", &self.source_failure())
             .field("cancellation_error", &self.cancellation_error())
             .finish()
     }
