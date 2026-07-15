@@ -209,8 +209,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.57.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.57.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.58.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.58.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -403,9 +403,10 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("m1.source-xref-stream-acquisition.v1"));
     assert!(requirement.contains("single active Pending ticket"));
     assert!(requirement.contains("Indirect Length remains unsupported"));
-    assert!(requirement.contains(
-        "filtered payloads require the explicit foundational-filter constructor"
-    ));
+    assert!(
+        requirement
+            .contains("filtered payloads require the explicit foundational-filter constructor")
+    );
     assert!(requirement.contains("strict base parser still rejects sparse incremental tables"));
     assert!(requirement.contains("m1.source-xref-anchor.v1"));
     assert!(requirement.contains("line-terminated traditional table header"));

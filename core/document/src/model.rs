@@ -8,7 +8,10 @@ use pdf_rs_object::{
 };
 use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfHeader, SyntaxLimits};
 
-use crate::{DocumentError, DocumentErrorCode, RevisionAttestationStats};
+use crate::{
+    DocumentError, DocumentErrorCode, LocallyRepairedRevisionIndex, RevisionAttestationStats,
+    SharedLocallyRepairedRevisionIndex,
+};
 
 /// Stable caller-assigned identity of one candidate PDF revision.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -428,6 +431,8 @@ impl fmt::Debug for SharedAttestedRevisionIndex {
 pub(crate) enum AttestedRevisionIndexOwner<'index> {
     Borrowed(&'index AttestedRevisionIndex),
     Shared(SharedAttestedRevisionIndex),
+    RepairedBorrowed(&'index LocallyRepairedRevisionIndex),
+    RepairedShared(SharedLocallyRepairedRevisionIndex),
 }
 
 impl AttestedRevisionIndexOwner<'_> {
@@ -435,6 +440,8 @@ impl AttestedRevisionIndexOwner<'_> {
         match self {
             Self::Borrowed(index) => index,
             Self::Shared(index) => index.as_attested(),
+            Self::RepairedBorrowed(index) => index.as_attested(),
+            Self::RepairedShared(index) => index.as_repaired().as_attested(),
         }
     }
 }

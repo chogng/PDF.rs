@@ -309,7 +309,7 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
     assert!(milestone.contains("status = \"partial\""));
     assert!(milestone.contains("indirect-Length xref streams"));
     assert!(milestone.contains("filtered object-stream integration"));
-    assert!(milestone.contains("complete Session ownership remain open"));
+    assert!(milestone.contains("acquired-chain service integration remains open"));
 }
 
 #[test]
@@ -456,6 +456,12 @@ fn traceability_registers_core_repaired_open_without_claiming_a_session() {
         fs::read_to_string(crate_root.join("src/index.rs")).expect("index source must be readable");
     let repair_source = fs::read_to_string(crate_root.join("src/repair.rs"))
         .expect("repair source must be readable");
+    let model_source =
+        fs::read_to_string(crate_root.join("src/model.rs")).expect("model source must be readable");
+    let page_tree_source = fs::read_to_string(crate_root.join("src/page_tree.rs"))
+        .expect("page-tree source must be readable");
+    let outline_source = fs::read_to_string(crate_root.join("src/outline.rs"))
+        .expect("outline source must be readable");
     let open_source = fs::read_to_string(crate_root.join("src/local_repair_open.rs"))
         .expect("local repaired-open source must be readable");
     assert!(index_source.contains("pub(crate) fn from_locally_parsed_xref"));
@@ -466,6 +472,16 @@ fn traceability_registers_core_repaired_open_without_claiming_a_session() {
     assert!(!repair_source.contains("pub fn attested("));
     assert!(!repair_source.contains("Deref for LocallyRepairedRevisionIndex"));
     assert!(!repair_source.contains("AsRef<AttestedRevisionIndex>"));
+    assert!(!repair_source.contains("pub fn as_attested"));
+    assert!(repair_source.contains("pub struct SharedLocallyRepairedRevisionIndex"));
+    assert!(repair_source.contains("pub fn as_repaired"));
+    assert!(repair_source.contains("pub fn into_shared"));
+    assert!(model_source.contains("RepairedBorrowed"));
+    assert!(model_source.contains("RepairedShared"));
+    assert!(page_tree_source.contains("AttestedRevisionIndexOwner::RepairedBorrowed"));
+    assert!(page_tree_source.contains("AttestedRevisionIndexOwner::RepairedShared"));
+    assert!(outline_source.contains("AttestedRevisionIndexOwner::RepairedBorrowed"));
+    assert!(outline_source.contains("AttestedRevisionIndexOwner::RepairedShared"));
     assert!(open_source.contains("OpenLocallyRepairedBaseRevisionJob"));
     assert!(open_source.contains("new_with_parent_caps"));
     assert!(!open_source.contains("pub fn plan("));
@@ -501,7 +517,8 @@ fn traceability_registers_core_repaired_open_without_claiming_a_session() {
         "single core repaired-open coordinator",
         "seventeen globally distinct checkpoints",
         "first-pass aggregate",
-        "complete Session ownership remain open",
+        "repaired proof separately owns core page-count/outline jobs without losing R1 provenance",
+        "acquired-chain service integration remains open",
         "does not claim M1 exit",
         "status = \"partial\"",
     ] {
@@ -524,8 +541,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.57.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.57.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.58.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.58.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -581,15 +598,16 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "RPE-DOCUMENT-0033",
         "PDFium page_count=4",
         "expected strictness difference",
-        "revision-chain",
+        "not acquired revision chains",
         "lazy PageIndex",
         "page_count=1",
         "pages_processed=1",
         "not a registered page-count differential",
         "not a registered baseline or correctness oracle",
         "feature state remains PLANNED",
-        "sealed cloneable handle",
-        "not a Session, scheduler, cache, request lifecycle, or alternate proof source",
+        "sealed cloneable strict or locally repaired handles",
+        "repaired ownership retains the complete xref/object diagnostic ledger",
+        "bounded M1 Session continues to select strict base opening",
         "do not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {

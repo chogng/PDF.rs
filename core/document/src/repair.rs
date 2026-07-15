@@ -1,5 +1,6 @@
 use std::fmt;
 use std::mem;
+use std::sync::Arc;
 
 use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_object::{
@@ -670,7 +671,36 @@ pub struct LocallyRepairedRevisionIndex {
     repair_limits: ObjectRepairLimits,
 }
 
+/// Cloneable ownership handle for one fully attested locally repaired revision.
+///
+/// The private `Arc` retains the inseparable xref and object repair ledger while
+/// page-count and outline jobs borrow the strict-shaped attestation internally.
+/// It exposes no conversion to [`AttestedRevisionIndex`].
+#[derive(Clone)]
+pub struct SharedLocallyRepairedRevisionIndex(Arc<LocallyRepairedRevisionIndex>);
+
+impl SharedLocallyRepairedRevisionIndex {
+    /// Borrows the repaired proof and its complete diagnostic ledger.
+    pub fn as_repaired(&self) -> &LocallyRepairedRevisionIndex {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SharedLocallyRepairedRevisionIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("SharedLocallyRepairedRevisionIndex")
+            .field(&self.0)
+            .finish()
+    }
+}
+
 impl LocallyRepairedRevisionIndex {
+    /// Consumes this proof into a cloneable handle for repaired document services.
+    pub fn into_shared(self) -> SharedLocallyRepairedRevisionIndex {
+        SharedLocallyRepairedRevisionIndex(Arc::new(self))
+    }
+
     /// Returns the immutable source snapshot covered by every retained proof.
     pub const fn snapshot(&self) -> SourceSnapshot {
         self.attested.snapshot()
@@ -744,6 +774,10 @@ impl LocallyRepairedRevisionIndex {
     /// Returns the complete original-to-effective object repair ledger.
     pub fn object_repair_evidence(&self) -> &[EffectiveObjectOffset] {
         &self.evidence
+    }
+
+    pub(crate) const fn as_attested(&self) -> &AttestedRevisionIndex {
+        &self.attested
     }
 }
 

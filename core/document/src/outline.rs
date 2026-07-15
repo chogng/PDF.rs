@@ -17,7 +17,8 @@ use crate::text_string::{TextStringMeasurement, decode_measured_text_string, mea
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     DecodedTextString, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    OpenAttestedObjectJob, OutlineLimits, SharedAttestedRevisionIndex, StrictCatalog,
+    LocallyRepairedRevisionIndex, OpenAttestedObjectJob, OutlineLimits,
+    SharedAttestedRevisionIndex, SharedLocallyRepairedRevisionIndex, StrictCatalog,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -1877,6 +1878,36 @@ impl SharedAttestedRevisionIndex {
     ) -> Result<ReadOutlineJob<'static>, DocumentError> {
         read_outline_with_owner(
             AttestedRevisionIndexOwner::Shared(self.clone()),
+            context,
+            limits,
+        )
+    }
+}
+
+impl LocallyRepairedRevisionIndex {
+    /// Creates a bounded outline job that retains this repaired proof by borrow.
+    pub fn read_outline(
+        &self,
+        context: OutlineJobContext,
+        limits: OutlineLimits,
+    ) -> Result<ReadOutlineJob<'_>, DocumentError> {
+        read_outline_with_owner(
+            AttestedRevisionIndexOwner::RepairedBorrowed(self),
+            context,
+            limits,
+        )
+    }
+}
+
+impl SharedLocallyRepairedRevisionIndex {
+    /// Creates an outline job that owns a clone of this repaired proof handle.
+    pub fn read_outline_owned(
+        &self,
+        context: OutlineJobContext,
+        limits: OutlineLimits,
+    ) -> Result<ReadOutlineJob<'static>, DocumentError> {
+        read_outline_with_owner(
+            AttestedRevisionIndexOwner::RepairedShared(self.clone()),
             context,
             limits,
         )

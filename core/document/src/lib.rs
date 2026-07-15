@@ -114,6 +114,7 @@ pub use repair::{
     AttestLocalRepairRevisionJob, EffectiveObjectOffset, LocalRepairPlanningRevision,
     LocalRevisionAttestationJobContext, LocalRevisionAttestationPoll,
     LocallyRebuiltCandidateRevision, LocallyRepairedRevisionIndex, RepairGeometryStats,
+    SharedLocallyRepairedRevisionIndex,
 };
 pub use residency::DocumentResidentFootprint;
 pub use revision_resolver::{

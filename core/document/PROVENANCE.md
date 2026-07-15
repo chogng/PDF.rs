@@ -298,8 +298,10 @@ repair or publish partially attested state.
   offset or unplanned length repair may appear during publication.
 - `LocallyRepairedRevisionIndex` privately owns the complete top-level proof while exposing only a
   repaired typestate, fixed-size object attestations, xref diagnostics, the original repair plan,
-  and geometry/attestation stats. It provides no `Deref`, `AsRef`, consuming conversion, strict
-  object reopen, or raw candidate access.
+  and geometry/attestation stats. It provides no `Deref`, `AsRef`, consuming conversion to the
+  strict typestate, public raw-object reopen, or raw candidate access. Borrowed service factories
+  and `SharedLocallyRepairedRevisionIndex` retain the repaired owner while lending only the private
+  strict-shaped proof required by the existing page-count and outline state machines.
 - `OpenLocallyRepairedBaseRevisionJob` validates one shared `JobId`, equal first/final object
   priority, and seventeen globally distinct xref, first-pass, and final-attestation checkpoints.
   It sequentially drives local xref discovery, converts every original physical interval through
@@ -474,7 +476,9 @@ repair or publish partially attested state.
 
 - `AttestedRevisionIndex::count_pages` remains the borrowed factory for the one-shot page-count job,
   while `SharedAttestedRevisionIndex::count_pages_owned` clones the proof handle into an otherwise
-  identical job suitable for later registry ownership. The job first reopens the trailer root
+  identical job suitable for later registry ownership. `LocallyRepairedRevisionIndex` and its
+  cloneable repaired handle expose parallel factories without erasing the xref/object repair
+  ledger or exposing the internal strict-shaped attestation. The job first reopens the trailer root
   through the proof-preserving object-access API and accepts
   only a direct dictionary with one structural `/Type /Catalog` and one exact `/Pages` reference.
   It neither follows a whole-object Catalog alias nor accepts a stream as the Catalog. The pure
@@ -509,7 +513,8 @@ repair or publish partially attested state.
 - Outline enumeration lazily interprets the shared strict Catalog parser's optional `Outlines`
   service field. A missing or null field yields an empty outline. A present field must be unique
   and contain an exact indirect reference; page counting never inspects or validates it.
-- The outline root and every item are reopened through the proof-preserving attested-object API and
+- The outline root and every item are reopened through the proof-preserving attested-object API;
+  the owner may be a strict attested handle or a repaired handle retaining its full ledger. Values
   must be direct dictionaries rather than streams or whole-object aliases. The root and each item
   require paired `First` and `Last` child boundaries when either is present. Each sibling chain is
   traversed from `First` through `Next` to the exact `Last`, with exact `Parent` and `Prev` links,
@@ -740,6 +745,9 @@ one-less boundaries, nested candidate read/parse exhaustion with retained lower 
 zero-repair strict success, pre-probe evidence admission, seventeen-checkpoint context validation,
 stable cancellation/source mismatch, and sparse upper-before-lower Range delivery through xref,
 first-pass, and final-attestation phases without repeated charging.
+An additional three-object service fixture requires final-anchor, traditional-whitespace, and
+object-offset repair, consumes the result into a cloneable repaired owner, then runs the real
+page-count and absent-outline jobs to completion while proving the diagnostic ledger remains owned.
 
 # Known deviations and unsupported cases
 
@@ -754,8 +762,9 @@ first-pass, and final-attestation phases without repeated charging.
 - Local R1 now has one aggregate-bounded core repaired-open coordinator and returns a proof-bearing
   repaired document only after complete top-level attestation. The coordinator remains a
   synchronous injected-`ByteSource` job: it does not own Range permits, transport, runtime queues,
-  request/generation lifecycle, page-count/outline service jobs, or a complete Session, and does
-  not establish M1 exit.
+  request/generation lifecycle, or a complete Session. Its proof now directly owns bounded
+  page-count and outline jobs, but no runtime actor currently selects R1 as an opening policy; this
+  core service integration alone does not establish M1 exit.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
   chain job can follow top-level whole-object aliases, and the count job can traverse strict
   Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
@@ -837,3 +846,6 @@ first-pass, and final-attestation phases without repeated charging.
   errors, and parent-chain decode/output/retention pre-admission while preserving unfiltered APIs.
 - 2026-07-15: Closed filtered xref-stream plan-retention accounting with actual-capacity evidence,
   checked parent pre-admission, and an explicit unsupported policy for empty physical payloads.
+- 2026-07-15: Added borrowed and cloneable repaired-proof page-count/outline factories that retain
+  the complete R1 ledger while reusing the bounded service state machines without a strict-typestate
+  conversion.

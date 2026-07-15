@@ -8,7 +8,8 @@ use pdf_rs_document::{
     DocumentErrorCode, DocumentLimitKind, DocumentLimits, LocalRepairOpenContext,
     LocalRepairOpenError, LocalRepairOpenLimits, LocalRepairOpenPhase, LocalRepairOpenPoll,
     LocalRepairOpenStats, LocalRepairProbeLimitConfig, LocalRepairProbeLimits,
-    LocalRevisionAttestationJobContext, OpenLocallyRepairedBaseRevisionJob,
+    LocalRevisionAttestationJobContext, OpenLocallyRepairedBaseRevisionJob, OutlineJobContext,
+    OutlineLimits, OutlinePoll, PageCountPoll, PageTreeJobContext, PageTreeLimits,
     RevisionAttestationLimits, RevisionId,
 };
 use pdf_rs_object::{
@@ -29,6 +30,23 @@ struct Fixture {
     actual_offsets: [u64; 4],
     declared_offsets: [u64; 4],
     startxref: u64,
+}
+
+struct ServiceFixture {
+    bytes: Vec<u8>,
+    snapshot: SourceSnapshot,
+    startxref: u64,
+}
+
+impl ServiceFixture {
+    fn store(&self) -> RangeStore {
+        let store = RangeStore::new(self.snapshot, Default::default()).unwrap();
+        let range = ByteRange::new(0, u64::try_from(self.bytes.len()).unwrap()).unwrap();
+        store
+            .supply(RangeResponse::new(self.snapshot, range, self.bytes.clone()).unwrap())
+            .unwrap();
+        store
+    }
 }
 
 impl Fixture {
@@ -107,6 +125,53 @@ fn fixture_with_prefix(repaired: bool, tag: u8, prefix_bytes: usize) -> Fixture 
         snapshot,
         actual_offsets,
         declared_offsets,
+        startxref,
+    }
+}
+
+fn repaired_service_fixture(tag: u8) -> ServiceFixture {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = [0_u64; 3];
+    for (index, body) in [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".as_slice(),
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".as_slice(),
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n".as_slice(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        offsets[index] = u64::try_from(bytes.len()).unwrap();
+        bytes.extend_from_slice(body);
+    }
+    let startxref = u64::try_from(bytes.len()).unwrap();
+    let declared_page_tree_offset = offsets[1] + 1;
+    let mut xref = format!(
+        "xref\n0 4\n0000000000 65535 f \n{:010} 00000 n \n{declared_page_tree_offset:010} 00000 n \n{:010} 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\n",
+        offsets[0], offsets[2]
+    )
+    .into_bytes();
+    let free_separator = xref
+        .windows(b"0000000000 65535 f \n".len())
+        .position(|window| window == b"0000000000 65535 f \n")
+        .unwrap()
+        + 10;
+    xref[free_separator] = b'\t';
+    bytes.extend_from_slice(&xref);
+    bytes.extend_from_slice(format!("startxref\n{}\n%%EOF\n", startxref - 1).as_bytes());
+    let snapshot = SourceSnapshot::new(
+        SourceIdentity::new(
+            SourceStableId::new([tag; 32]),
+            SourceRevision::new(u64::from(tag)),
+        ),
+        Some(u64::try_from(bytes.len()).unwrap()),
+        SourceValidator::new(
+            SourceValidatorKind::FrozenResponse,
+            [tag.wrapping_add(1); 32],
+        ),
+    );
+    ServiceFixture {
+        bytes,
+        snapshot,
         startxref,
     }
 }
@@ -308,6 +373,95 @@ fn one_job_publishes_the_complete_repaired_ledger_after_a_strict_trailing_object
     assert_eq!(stats.geometry().unwrap().repaired_offsets(), 1);
     assert_eq!(stats.geometry().unwrap().object_repairs(), 2);
     assert_eq!(stats.final_attestation().objects_attested(), 4);
+}
+
+#[test]
+fn repaired_proof_owns_page_count_and_outline_service_jobs() {
+    let fixture = repaired_service_fixture(0xca);
+    let store = fixture.store();
+    let mut open = OpenLocallyRepairedBaseRevisionJob::new(
+        fixture.snapshot,
+        RevisionId::new(1),
+        context(),
+        limits(LocalRepairProbeLimits::default()),
+    )
+    .unwrap();
+    let repaired = match open.poll(&store, &pdf_rs_document::NeverCancelled) {
+        LocalRepairOpenPoll::Ready(index) => index,
+        LocalRepairOpenPoll::Pending { .. } => panic!("complete fixture must not remain pending"),
+        LocalRepairOpenPoll::Failed(error) => panic!("local repair open failed: {error}"),
+    };
+    assert_eq!(repaired.startxref(), fixture.startxref);
+    assert_eq!(repaired.xref_diagnostics().len(), 2);
+    assert_eq!(
+        repaired
+            .object_repair_evidence()
+            .iter()
+            .filter(|evidence| !evidence.diagnostics().is_empty())
+            .count(),
+        1
+    );
+
+    let mut borrowed_pages = repaired
+        .count_pages(
+            PageTreeJobContext::new(
+                JobId::new(1250),
+                ResumeCheckpoint::new(1251),
+                ResumeCheckpoint::new(1252),
+                RequestPriority::VisiblePage,
+            ),
+            PageTreeLimits::default(),
+        )
+        .unwrap();
+    match borrowed_pages.poll(&store, &pdf_rs_document::NeverCancelled) {
+        PageCountPoll::Ready(result) => assert_eq!(result.page_count(), 1),
+        PageCountPoll::Pending { .. } => {
+            panic!("resident borrowed page service must not remain pending")
+        }
+        PageCountPoll::Failed(error) => panic!("borrowed repaired page service failed: {error}"),
+    }
+
+    let shared = repaired.into_shared();
+    assert_eq!(shared.as_repaired().xref_diagnostics().len(), 2);
+    assert_eq!(shared.as_repaired().object_repair_evidence().len(), 3);
+    let mut pages = shared
+        .count_pages_owned(
+            PageTreeJobContext::new(
+                JobId::new(1300),
+                ResumeCheckpoint::new(1301),
+                ResumeCheckpoint::new(1302),
+                RequestPriority::VisiblePage,
+            ),
+            PageTreeLimits::default(),
+        )
+        .unwrap();
+    let mut outline = shared
+        .read_outline_owned(
+            OutlineJobContext::new(
+                JobId::new(1400),
+                ResumeCheckpoint::new(1401),
+                ResumeCheckpoint::new(1402),
+                RequestPriority::Metadata,
+            ),
+            OutlineLimits::default(),
+        )
+        .unwrap();
+    drop(shared);
+
+    match pages.poll(&store, &pdf_rs_document::NeverCancelled) {
+        PageCountPoll::Ready(result) => assert_eq!(result.page_count(), 1),
+        PageCountPoll::Pending { .. } => panic!("resident page service must not remain pending"),
+        PageCountPoll::Failed(error) => panic!("repaired page service failed: {error}"),
+    }
+    match outline.poll(&store, &pdf_rs_document::NeverCancelled) {
+        OutlinePoll::Ready(result) => {
+            assert!(result.root().is_none());
+            assert!(result.items().is_empty());
+            assert_eq!(result.visible_items(), 0);
+        }
+        OutlinePoll::Pending { .. } => panic!("resident outline service must not remain pending"),
+        OutlinePoll::Failed(error) => panic!("repaired outline service failed: {error}"),
+    }
 }
 
 #[test]

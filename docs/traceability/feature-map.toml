@@ -1,5 +1,5 @@
 schema = 1
-version = "0.57.0"
+version = "0.58.0"
 status = "active"
 
 [[feature]]
@@ -285,7 +285,7 @@ state = "PLANNED"
 profile = "m1.strict-outline.v1"
 clauses = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::repository_policy", "tools/baseline::pdfium_outline_real_adapter", "tools/baseline::repository_pdfium_outline_probe"]
+tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::local_repair_open", "core/document::repository_policy", "tools/baseline::pdfium_outline_real_adapter", "tools/baseline::repository_pdfium_outline_probe"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -297,7 +297,7 @@ state = "PLANNED"
 profile = "m1.strict-page-count.v1"
 clauses = ["RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::repository_policy", "tools/baseline::pdfium_page_count_real_adapter", "tools/baseline::pdfium_page_count_performance", "tools/baseline::repository_pdfium_page_count_probe", "tools/baseline::repository_pdfium_page_count_performance_probe", "tools/quality::native_object_loop"]
+tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::local_repair_open", "core/document::repository_policy", "tools/baseline::pdfium_page_count_real_adapter", "tools/baseline::pdfium_page_count_performance", "tools/baseline::repository_pdfium_page_count_probe", "tools/baseline::repository_pdfium_page_count_performance_probe", "tools/quality::native_object_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -309,7 +309,7 @@ state = "PLANNED"
 profile = "m1.shared-attested-service-jobs.v1"
 clauses = ["RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/9.1", "RPE-ARCH-001/15.3/M1"]
 modules = ["core/document"]
-tests = ["core/document::page_tree_count", "core/document::outline", "core/document::repository_policy"]
+tests = ["core/document::page_tree_count", "core/document::outline", "core/document::local_repair_open", "core/document::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

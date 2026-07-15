@@ -16,7 +16,8 @@ use crate::model::AttestedRevisionIndexOwner;
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    OpenAttestedObjectJob, PageTreeLimits, SharedAttestedRevisionIndex, StrictCatalog,
+    LocallyRepairedRevisionIndex, OpenAttestedObjectJob, PageTreeLimits,
+    SharedAttestedRevisionIndex, SharedLocallyRepairedRevisionIndex, StrictCatalog,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -1160,6 +1161,36 @@ impl SharedAttestedRevisionIndex {
     ) -> Result<CountPagesJob<'static>, DocumentError> {
         count_pages_with_owner(
             AttestedRevisionIndexOwner::Shared(self.clone()),
+            context,
+            limits,
+        )
+    }
+}
+
+impl LocallyRepairedRevisionIndex {
+    /// Creates a bounded page-count job that retains this repaired proof by borrow.
+    pub fn count_pages(
+        &self,
+        context: PageTreeJobContext,
+        limits: PageTreeLimits,
+    ) -> Result<CountPagesJob<'_>, DocumentError> {
+        count_pages_with_owner(
+            AttestedRevisionIndexOwner::RepairedBorrowed(self),
+            context,
+            limits,
+        )
+    }
+}
+
+impl SharedLocallyRepairedRevisionIndex {
+    /// Creates a page-count job that owns a clone of this repaired proof handle.
+    pub fn count_pages_owned(
+        &self,
+        context: PageTreeJobContext,
+        limits: PageTreeLimits,
+    ) -> Result<CountPagesJob<'static>, DocumentError> {
+        count_pages_with_owner(
+            AttestedRevisionIndexOwner::RepairedShared(self.clone()),
             context,
             limits,
         )
