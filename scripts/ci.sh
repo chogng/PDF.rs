@@ -36,6 +36,34 @@ cargo run --quiet --package pdf-rs-benchmark -- \
     tests/corpus/manifests/t0-bootstrap-v1.toml
 cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .
+
+product_build_root="$(mktemp -d "${TMPDIR:-/tmp}/pdf-rs-product-build.XXXXXX")"
+product_target="$product_build_root/target"
+product_proof_id="${product_build_root##*/}"
+cleanup_product_build() {
+    rm -rf -- "$product_build_root"
+}
+trap cleanup_product_build EXIT
+
+cargo run --quiet --package pdf-rs-quality -- \
+    prepare-product-build-proof . "$product_target" "$product_proof_id"
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
+    --locked \
+    --release \
+    --lib \
+    --package pdf-rs-bytes \
+    --package pdf-rs-syntax \
+    --package pdf-rs-xref \
+    --package pdf-rs-object \
+    --package pdf-rs-document \
+    --package pdf-rs-cache \
+    --package pdf-rs-session
+cargo run --quiet --package pdf-rs-quality -- \
+    check-product-build-closure . "$product_target" "$product_proof_id"
+
+cleanup_product_build
+trap - EXIT
+
 cargo run --quiet --package pdf-rs-quality -- \
     synthetic-bundle \
     tests/cases/infrastructure/synthetic-failure-bundle-001/case.toml \

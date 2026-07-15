@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use bundle::build_synthetic_failure_bundle;
 use manifest::validate_manifest_file;
-use purity::check_product_manifests;
+use purity::{check_product_build_closure, check_product_manifests, prepare_product_build_proof};
 
 struct Selection {
     lane: &'static str,
@@ -28,12 +28,12 @@ fn selection_for(lane: &str) -> Option<Selection> {
         "local" => Some(Selection {
             lane: "local",
             reason: "pre-submit feedback for code and deterministic T0 infrastructure",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,synthetic-failure-bundle",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,product-release-closure,synthetic-failure-bundle",
         }),
         "pr" => Some(Selection {
             lane: "pr",
             reason: "merge gate for the complete required Rust quality baseline",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,synthetic-failure-bundle,doc",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,product-purity,product-release-closure,synthetic-failure-bundle,doc",
         }),
         _ => None,
     }
@@ -90,8 +90,9 @@ fn main() -> ExitCode {
                 return usage();
             }
             match check_product_manifests(Path::new(&root)) {
-                Ok(count) => {
-                    println!("scanned_cargo_manifests={count}");
+                Ok(report) => {
+                    println!("scanned_cargo_manifests={}", report.scanned_cargo_manifests);
+                    println!("allowlisted_product_packages={}", report.product_packages);
                     println!("forbidden_manifest_tokens=0");
                     println!("scope=direct-manifest-preflight-not-resolved-release-proof");
                     ExitCode::SUCCESS
@@ -105,6 +106,75 @@ fn main() -> ExitCode {
                             violation.token
                         );
                     }
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "prepare-product-build-proof" => {
+            let Some(root) = arguments.next() else {
+                return usage();
+            };
+            let Some(target) = arguments.next() else {
+                return usage();
+            };
+            let Some(proof_id) = arguments.next() else {
+                return usage();
+            };
+            if arguments.next().is_some() {
+                return usage();
+            }
+            match prepare_product_build_proof(Path::new(&root), Path::new(&target), &proof_id) {
+                Ok(preparation) => {
+                    println!("proof_id={}", preparation.proof_id);
+                    println!(
+                        "allowlisted_product_packages={}",
+                        preparation.product_packages
+                    );
+                    println!("target_was_absent=true");
+                    println!("build_profile=release");
+                    println!("scope=fresh-release-product-build-preparation");
+                    ExitCode::SUCCESS
+                }
+                Err(violations) => {
+                    print_build_closure_violations(violations);
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "check-product-build-closure" => {
+            let Some(root) = arguments.next() else {
+                return usage();
+            };
+            let Some(target) = arguments.next() else {
+                return usage();
+            };
+            let Some(proof_id) = arguments.next() else {
+                return usage();
+            };
+            if arguments.next().is_some() {
+                return usage();
+            }
+            match check_product_build_closure(Path::new(&root), Path::new(&target), &proof_id) {
+                Ok(report) => {
+                    println!("proof_id={proof_id}");
+                    println!("release_product_packages={}", report.product_packages);
+                    println!("release_depfiles={}", report.depfiles);
+                    println!("release_artifact_files={}", report.artifact_files);
+                    println!(
+                        "release_fingerprint_directories={}",
+                        report.fingerprint_directories
+                    );
+                    println!(
+                        "release_build_script_artifacts={}",
+                        report.build_script_artifacts
+                    );
+                    println!("release_native_artifacts={}", report.native_artifacts);
+                    println!("release_unknown_artifacts={}", report.unknown_artifacts);
+                    println!("scope=fresh-release-product-build-closure");
+                    ExitCode::SUCCESS
+                }
+                Err(violations) => {
+                    print_build_closure_violations(violations);
                     ExitCode::FAILURE
                 }
             }
@@ -145,9 +215,20 @@ fn print_selection(selection: Selection) {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|check-product-purity [ROOT]|synthetic-bundle CASE.toml OUTPUT_DIR>"
+        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>"
     );
     ExitCode::from(2)
+}
+
+fn print_build_closure_violations(violations: Vec<purity::BuildClosureViolation>) {
+    for violation in violations {
+        eprintln!(
+            "{} path={} token={}",
+            violation.code,
+            violation.path.display(),
+            violation.token
+        );
+    }
 }
 
 fn validate_case_tree(root: &Path) -> ExitCode {
