@@ -17,6 +17,11 @@ without exposing or converting to the internal strict-shaped proof.
 `OpenLocallyRepairedBaseRevisionJob` is the formal core R1 composition: it alone owns local xref
 discovery, every declared-geometry object probe, complete proof-plan allocation, atomic rebuild,
 and final attestation without publishing any intermediate typestate.
+`OpenSourceXrefStreamJob` is a separate partial M1 acquisition primitive for an already-classified
+stream-object anchor. It frames that exact indirect object, accepts only direct `/Length`, requests
+the exact encoded payload from the same immutable snapshot, validates the declared terminal
+boundary, and publishes the existing unfiltered `XrefStream` only inside a non-cloneable wrapper
+that also retains the complete framed container.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
@@ -75,6 +80,12 @@ semantic responsibilities.
   entry boundaries. The revision-aware slice binds already-validated unfiltered object streams but
   does not acquire or filter-decode their payloads. The same authorized snapshot and SHA-256 above
   apply.
+- [ISO 32000-1:2008, 7.5.8](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines cross-reference stream dictionaries, entries, and the requirement that a primary stream
+  identify its own uncompressed container. The source-acquisition slice implements exact unfiltered
+  direct-Length framing and primary self-entry validation; hybrid ownership may instead be proved by
+  its traditional primary during later composition. The same authorized snapshot and SHA-256 above
+  apply.
 - [ISO 32000-1:2008, 7.7.2 and 12.3.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines the Catalog's optional indirect `Outlines` entry and the outline root/item dictionaries,
   linked-list topology, text titles, targets, and signed visible-item counts used by the strict
@@ -93,6 +104,49 @@ xref-derived target remains `ObjectAttestationFailure`; the composition job does
 repair or publish partially attested state.
 
 # Algorithms and derivations
+
+## Source-framed unfiltered xref streams
+
+- The constructor receives the complete classified anchor geometry rather than caller payload
+  bytes. `IndirectObjectTarget::at_xref_stream_anchor` distinguishes primary geometry from a hybrid
+  supplement whose exclusive object bound is the owning traditional primary anchor.
+  `OpenObjectEnvelopeJob` then proves the exact object number, generation, `obj` header, dictionary,
+  stream line ending, and payload start without crossing that physical bound.
+- Only a direct nonnegative `/Length` may continue. An indirect declaration returns
+  `UnsupportedIndirectLength` with the exact dependency and operand offset because resolving it
+  would require revision precedence that this bootstrap is still acquiring. The direct claim is
+  consumed by `OpenStreamBoundaryJob`, while one exact `ByteSource` request acquires the payload.
+  Boundary and payload bytes may arrive in any physical order, but the state machine exposes only
+  one active `Pending` ticket at a time: payload is completed first and boundary validation second.
+  Re-polling an unresolved request preserves its job, checkpoint, ticket, missing ranges, and work
+  charge, so it remains compatible with the single-waiting-target Range arbiter contract.
+- The final transition defensively rechecks snapshot, explicit xref-stream target kind, container
+  reference, anchor, upper bound, owning revision anchor, header/object/end-object containment,
+  direct claim, dictionary source, and exact payload span. It passes only that source-owned
+  `ByteSlice` to `parse_unfiltered_xref_stream`; caller-provided payload bytes never become proof.
+- A primary stream must contain one matching uncompressed self row at its exact anchor and
+  generation. A hybrid supplement may omit that row because the owning traditional primary can
+  define it, but any self row it does contain must still be exact. The non-cloneable
+  `SourceAcquiredXrefStream` retains the complete framed container, parsed table, object work,
+  exact payload-read accounting, combined retained-proof bytes, and xref-stream stats. Public
+  queries expose only scalar metadata and borrowed rows.
+  The wrapper does not publicly lend the cloneable naked `XrefStream`; a crate-private borrow
+  remains available to the future proof-preserving mixed-revision coordinator.
+- Unfiltered decoded length is capped before the exact payload Range request by both the object
+  stream-byte ceiling and the xref decoded-byte ceiling. The payload `ByteSlice` is transient and
+  is dropped before publication. Ready retained proof has no variable child fan-out: it is exactly
+  one framed dictionary plus one xref entry vector, each already independently bounded. Their
+  checked actual sum is retained in stats and rechecked against the derived sum of syntax-owned,
+  syntax-container, and xref-entry ceilings, so this fixed two-child composition needs no separate
+  caller-supplied aggregate profile.
+- `SourceXrefStreamError` does not route failures through `DocumentError`. It preserves complete
+  lower `ObjectError`, `XrefStreamError`, or `SourceError` values and has stable policy for the
+  acquisition-only checks. Cancellation and source change are terminal, a successful one-shot job
+  rejects replay, and no source bytes appear in diagnostics or debug output.
+- This slice does not decode filters, resolve indirect `/Length`, discover or follow `/Prev`, acquire
+  a traditional primary or `/XRefStm` partner, compose revision precedence, publish a revision
+  chain, integrate strict-open or repaired services, schedule object streams, or provide Session
+  ownership. It is therefore partial M1 evidence rather than a source revision or M1 exit.
 
 ## Strict base-revision opening
 
@@ -532,6 +586,11 @@ Strict-base-open tests cover complete product-entry publication, all five distin
 same-job context validation, reverse physical Range delivery, unchanged `Pending` replay and
 charging, xref and document error preservation, cancellation in both xref and attestation phases,
 snapshot mismatch, cumulative stats, and stable successful and failed terminals.
+Source-xref-stream tests cover primary and hybrid geometry, exact direct Length and caller bounds,
+indirect-Length and filtered-stream Unsupported policy, malformed Type/container/self evidence,
+single-ticket Pending replay with boundary bytes delivered before payload bytes, cancellation,
+source change, lower byte-source failure preservation, stable terminal replay, and object/xref
+size and work limits.
 Revision-resolver tests cover nearest cross-revision anchors, primary and hybrid-supplement
 provenance, primary target plus supplement-only indirect Length, supplement self-container bounds,
 older effective revision bounds, latest free/null/compressed/generation terminal states, primary

@@ -18,6 +18,10 @@
 //! A strict base-open composition job connects traditional xref parsing,
 //! candidate indexing, and top-level attestation without exposing an
 //! unauthenticated intermediate typestate.
+//! A separate source xref-stream job frames an already-classified primary or
+//! hybrid stream anchor, acquires its exact direct-Length payload, and retains
+//! the framed container with an unfiltered table proof. It does not traverse
+//! revisions, resolve indirect Length, or decode filters.
 //! An explicit local-repair planning surface can instead retain xref and
 //! object-offset proof, rebuild every effective interval atomically, and
 //! publish only an explicitly unauthenticated wrapper. A consuming sibling
@@ -57,6 +61,7 @@ mod reference_chain_limits;
 mod repair;
 mod residency;
 mod revision_resolver;
+mod source_xref_stream;
 mod strict_base_open;
 mod text_string;
 
@@ -110,6 +115,13 @@ pub use revision_resolver::{
     ResolvedObject, RevisionObjectIndex, RevisionObjectIndexStats, RevisionResolverJobContext,
     RevisionResolverLimits, RevisionResolverPhase, RevisionResolverPoll, RevisionResolverStats,
     UncompressedObjectLocator,
+};
+pub use source_xref_stream::{
+    NeverCancelSourceXrefStream, OpenSourceXrefStreamJob, SourceAcquiredXrefStream,
+    SourceXrefStreamCancellation, SourceXrefStreamError, SourceXrefStreamErrorCategory,
+    SourceXrefStreamErrorCode, SourceXrefStreamJobContext, SourceXrefStreamLimit,
+    SourceXrefStreamLimitKind, SourceXrefStreamPhase, SourceXrefStreamPoll,
+    SourceXrefStreamRecoverability, SourceXrefStreamStats,
 };
 pub use strict_base_open::{
     OpenStrictBaseRevisionJob, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,

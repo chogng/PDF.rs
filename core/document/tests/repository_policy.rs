@@ -112,6 +112,90 @@ fn shared_service_ownership_preserves_the_attestation_proof_boundary() {
 }
 
 #[test]
+fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let source = fs::read_to_string(crate_root.join("src/source_xref_stream.rs"))
+        .expect("source xref-stream acquisition source must be readable");
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("document library source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("document provenance must be readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+
+    for required in [
+        "IndirectObjectTarget::at_xref_stream_anchor",
+        "OpenObjectEnvelopeJob",
+        "OpenStreamBoundaryJob",
+        "parse_unfiltered_xref_stream",
+        "PayloadState::Missing",
+        "ReadRequest::new",
+        "SourceAcquiredXrefStream",
+        "SourceXrefStreamErrorDetail::Object",
+        "SourceXrefStreamErrorDetail::XrefStream",
+        "SourceXrefStreamErrorDetail::Source",
+        "SourceXrefStreamErrorCode::UnsupportedIndirectLength",
+        "IndirectObjectTargetKind::XrefStreamAnchor",
+        "pub(crate) const fn xref_stream(&self) -> &XrefStream",
+        "pub fn entries(&self) -> &[XrefStreamEntry]",
+        "SourceXrefStreamLimitKind::PayloadBytes",
+        "retained_proof_bytes",
+    ] {
+        assert!(
+            source.contains(required),
+            "source xref-stream acquisition must retain {required:?}"
+        );
+    }
+    assert!(!source.contains("DocumentError"));
+    assert!(!source.contains("pdf_rs_filters"));
+    assert!(!source.contains("Vec<u8>"));
+    assert!(!source.contains("pub const fn xref_stream(&self) -> &XrefStream"));
+    assert!(!source.contains("pub fn xref_stream(&self) -> &XrefStream"));
+    assert!(library.contains("OpenSourceXrefStreamJob"));
+    for required in [
+        "one active `Pending` ticket at a time",
+        "single-waiting-target Range arbiter contract",
+        "caller-provided payload bytes never become proof",
+        "does not publicly lend the cloneable naked `XrefStream`",
+        "combined retained-proof bytes",
+        "does not decode filters",
+        "discover or follow `/Prev`",
+        "compose revision precedence",
+        "partial M1 evidence",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "source xref-stream provenance must state {required:?}"
+        );
+    }
+    let feature = record_with_id(
+        &feature_map,
+        "feature",
+        "core.source-xref-stream-acquisition",
+    )
+    .expect("source xref-stream acquisition feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.source-xref-stream-acquisition.v1\"",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"core/document\", \"core/object\", \"core/xref\"]",
+        "core/document::source_xref_stream",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "source xref-stream feature must contain {required:?}"
+        );
+    }
+}
+
+#[test]
 fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -323,8 +407,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.51.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.51.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.52.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.52.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
