@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.33.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.33.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.34.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.34.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -92,6 +92,15 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(feature.contains("core/xref::limit_config"));
     assert!(feature.contains("core/xref::source_error_policy"));
     assert!(feature.contains("core/xref::repository_policy"));
+
+    let stream_feature = record_with_id(&feature_map, "feature", "core.decoded-xref-stream-table")
+        .expect("the decoded xref-stream table feature record must exist");
+    assert!(stream_feature.contains("state = \"PLANNED\""));
+    assert!(stream_feature.contains("profile = \"m1.decoded-xref-stream-table.v1\""));
+    assert!(stream_feature.contains("modules = [\"core/xref\"]"));
+    assert!(stream_feature.contains("core/xref::xref_stream"));
+    assert!(stream_feature.contains("fuzz_targets = []"));
+    assert!(stream_feature.contains("benchmarks = []"));
 
     let attestation = record_with_id(
         &feature_map,
@@ -160,8 +169,10 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
         .expect("the traditional-xref architecture requirement record must exist");
     assert!(requirement.contains("\"core.traditional-xref\""));
+    assert!(requirement.contains("\"core.decoded-xref-stream-table\""));
     assert!(requirement.contains("\"core/xref\""));
     assert!(requirement.contains("core/xref::traditional_xref"));
+    assert!(requirement.contains("core/xref::xref_stream"));
     assert!(requirement.contains("core/xref::limit_config"));
     assert!(requirement.contains("core/xref::source_error_policy"));
     assert!(requirement.contains("core/xref::repository_policy"));
@@ -203,7 +214,9 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("nested semantic graph traversal"));
     assert!(requirement.contains("persistent Ready caching"));
     assert!(requirement.contains("cross-job/session aggregate work"));
-    assert!(requirement.contains("Xref streams"));
+    assert!(requirement.contains("caller-supplied complete unfiltered payload"));
+    assert!(requirement.contains("relative decoded spans rather than physical source ByteSpan"));
+    assert!(requirement.contains("Filtered xref-stream acquisition and decode"));
     assert!(requirement.contains("hybrid files"));
     assert!(requirement.contains("Prev chains"));
     assert!(requirement.contains("object streams"));

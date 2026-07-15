@@ -1,8 +1,10 @@
 # Scope
 
-`core/xref` is the strict traditional cross-reference bootstrap for the Native product core. It
-discovers the final `startxref` marker of a known-length immutable source and parses one bounded
-traditional xref table and trailer. It performs no file, network, callback, or async-runtime I/O.
+`core/xref` owns strict cross-reference primitives for the Native product core. Its resumable
+bootstrap discovers the final `startxref` marker of a known-length immutable source and parses one
+bounded traditional xref table and trailer. A separate synchronous primitive validates one
+complete caller-supplied unfiltered xref-stream payload against source-bound dictionary metadata.
+Neither primitive performs file, network, callback, filter-decoder, or async-runtime I/O.
 
 # Semantic owner
 
@@ -53,6 +55,18 @@ coverage claim.
   syntax is delegated to the bounded direct-object parser and must produce a dictionary with
   validated `/Size` and `/Root` values. `/XRefStm` and `/Prev` request unsupported hybrid or
   incremental behavior and are rejected with stable capability errors.
+- The decoded xref-stream primitive accepts a complete payload whose physical envelope span is
+  already known and whose dictionary was parsed from the same immutable snapshot. It requires a
+  unique `/Type /XRef`, positive `/Size`, exactly three bounded `/W` widths, and an optional ordered
+  non-overlapping `/Index` array inside `/Size`; absent `/Index` normalizes to `[0 /Size]`. Optional
+  `/Root` and `/Prev` values are checked and retained for later composition. `/Filter` and
+  `/DecodeParms` are rejected at this explicitly unfiltered boundary.
+- Xref-stream row geometry must match the complete payload exactly. Big-endian fields implement
+  the type-zero default rule and preserve free, uncompressed, and compressed row semantics.
+  Physical payload geometry remains a source `ByteSpan`, but each row records only a relative
+  `DecodedXrefSpan`; a decoded byte offset is never published as a physical source offset. Decoded
+  bytes, entries, `/Index` pairs, field widths, and allocator-reported retained entry capacity are
+  independently bounded with fallible allocation and cooperative cancellation.
 - Missing bytes are parser control flow. Byte acquisition is expressed through the synchronous
   `ByteSource` polling contract; Pending returns the ticket, canonical missing ranges, and caller
   checkpoint without charging parse work. Retryable work restarts only from explicit tail or table
@@ -61,10 +75,11 @@ coverage claim.
   polling, and reverse discovery and table parsing check it at bounded loop intervals; cancellation
   is a stable terminal job result distinct from malformed input and resource exhaustion. Runtime
   still owns subscription removal and the completion/cancel/close race.
-- Tail/window bytes, retry work, subsection and entry counts, and retained records are subject to
-  validated limits with checked size conversions and fallible allocation. Xref-stream targets are
-  rejected with a stable unsupported-feature error. Diagnostics expose stable codes and offsets
-  without logging source bytes.
+- Tail/window bytes, retry work, subsection and entry counts, decoded xref-stream payloads and
+  records, and retained records are subject to validated limits with checked size conversions and
+  fallible allocation. The traditional resumable job still rejects xref-stream targets because it
+  does not yet own stream acquisition or decoding. Diagnostics expose stable codes, recovery
+  policies, and distinct source/decoded offsets without logging source bytes.
 
 # External observations
 
@@ -96,6 +111,14 @@ and redacted section diagnostics. A `tools/quality` integration test runs this j
 canonical generated PDF and feeds every in-use entry into the sibling object-framing job without
 adding a product dependency between the two crates.
 
+Decoded-xref-stream tests cover canonical free, uncompressed, and compressed rows; `/W` type
+defaults; `/Index` object-number selection; malformed widths, index geometry, row types, and exact
+payload length; unsupported filter metadata; separate source and decoded error coordinates;
+source identity/geometry mismatch; cancellation; stable recovery policy; equality and one-less
+decoded-byte and retained-capacity limits; and invalid limit profiles. These are component tests
+over already-decoded payload bytes, not a Range, stream-framing, filter-decode, or revision-chain
+E2E.
+
 `core/xref::repository_policy` scans product source for forbidden filesystem, network,
 async-runtime, and external-engine tokens and verifies that the crate depends only on
 `core/bytes` and `core/syntax`. No registered coverage-guided fuzz target, pinned conformance
@@ -104,9 +127,11 @@ slice.
 
 # Known deviations and unsupported cases
 
-- This profile supports one strict traditional xref table only. Xref streams and `/XRefStm`,
-  hybrid-reference files, `/Prev` revision traversal, object streams, multiple incremental
-  updates, and revision precedence remain unimplemented.
+- The resumable open profile supports one strict traditional xref table only. The decoded
+  xref-stream table primitive is not wired into that job: containing-object acquisition and
+  framing, direct or indirect `/Length` validation, filter decoding, pause/resume, `/XRefStm`
+  hybrid composition, `/Prev` traversal, object streams, multiple incremental updates, and
+  latest-wins revision precedence remain unimplemented.
 - Entry offsets are structurally bounded. The separate object framing job validates all four
   supplied canonical targets in a test-only quality composition loop, but a product-owned physical
   interval index, revision composition, reference resolution, and caching remain future
@@ -128,3 +153,6 @@ slice.
   suite, governance record, and repository purity contract.
 - 2026-07-13: Bound the canonical generated section to the sibling object job in a test-only
   quality integration loop.
+- 2026-07-15: Added bounded validation for complete caller-supplied unfiltered decoded
+  xref-stream tables with distinct decoded coordinates and stable recovery policy; acquisition,
+  decoding, and revision composition remain outside this slice.
