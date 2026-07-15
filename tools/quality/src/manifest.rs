@@ -468,6 +468,58 @@ fn validate_value_shapes(
             "error",
         ));
     }
+
+    if unquote(value(sections, "identity", "status")) == Some("active") {
+        if parse_string_array(value(sections, "oracle", "reviewers")).is_some_and(|reviewers| {
+            reviewers
+                .iter()
+                .any(|reviewer| reviewer.to_ascii_lowercase().contains("pending"))
+        }) {
+            diagnostics.push(ManifestDiagnostic::field(
+                "RPE-MANIFEST-0022",
+                "oracle",
+                "reviewers",
+            ));
+        }
+        let last_reviewed = unquote(value(sections, "oracle", "last_reviewed")).unwrap_or_default();
+        if !is_canonical_date(last_reviewed) {
+            diagnostics.push(ManifestDiagnostic::field(
+                "RPE-MANIFEST-0023",
+                "oracle",
+                "last_reviewed",
+            ));
+        }
+    }
+}
+
+fn is_canonical_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let year = value[..4].parse::<u32>().ok();
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..].parse::<u32>().ok();
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        return false;
+    };
+    let leap_year =
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
 }
 
 fn validate_enum(
@@ -819,5 +871,44 @@ entries = ["2026-07-13: introduced"]
                 .iter()
                 .any(|error| error.code == "RPE-MANIFEST-0021")
         );
+    }
+
+    #[test]
+    fn requires_completed_oracle_review_for_active_cases() {
+        let pending_reviewer = VALID.replace(
+            "reviewers = [\"spec-conformance\"]",
+            "reviewers = [\"pending-independent-review\"]",
+        );
+        assert!(
+            validate_manifest(&pending_reviewer)
+                .unwrap_err()
+                .iter()
+                .any(|error| error.code == "RPE-MANIFEST-0022")
+        );
+
+        for date in ["pending", "2026-02-30", "2026-7-15"] {
+            let pending_date = VALID.replace(
+                "last_reviewed = \"2026-07-13\"",
+                &format!("last_reviewed = \"{date}\""),
+            );
+            assert!(
+                validate_manifest(&pending_date)
+                    .unwrap_err()
+                    .iter()
+                    .any(|error| error.code == "RPE-MANIFEST-0023")
+            );
+        }
+
+        let draft = VALID
+            .replace("status = \"active\"", "status = \"draft\"")
+            .replace(
+                "reviewers = [\"spec-conformance\"]",
+                "reviewers = [\"pending-independent-review\"]",
+            )
+            .replace(
+                "last_reviewed = \"2026-07-13\"",
+                "last_reviewed = \"pending\"",
+            );
+        assert!(validate_manifest(&draft).is_ok());
     }
 }

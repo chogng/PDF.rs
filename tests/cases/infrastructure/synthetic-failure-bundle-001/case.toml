@@ -4,7 +4,7 @@ schema = 1
 id = "infrastructure/synthetic-failure-bundle-001"
 title = "Synthetic parse, Scene, Text, and Pixel failure bundle"
 owner = "quality-corpus"
-status = "draft"
+status = "active"
 introduced_in = "0.1.0"
 
 [specification]
@@ -42,9 +42,9 @@ error = false
 [oracle]
 level = "O1"
 derivation = "expected/oracle.md"
-reviewers = ["pending-independent-review"]
+reviewers = ["spec-conformance"]
 reference_may_generate = false
-last_reviewed = "pending"
+last_reviewed = "2026-07-15"
 
 [budget]
 max_input_bytes = 65536
@@ -77,4 +77,4 @@ native = ["synthetic-m0"]
 external_observation = []
 
 [history]
-entries = ["2026-07-13: introduced as a draft pending independent oracle review", "2026-07-13: bound the generated input to executable DSL schema 1 and generator schema 2", "2026-07-13: aligned generated-local storage with the corpus repository access boundary"]
+entries = ["2026-07-13: introduced as a draft pending independent oracle review", "2026-07-13: bound the generated input to executable DSL schema 1 and generator schema 2", "2026-07-13: aligned generated-local storage with the corpus repository access boundary", "2026-07-15: activated after independent spec-conformance review of all four exact channel derivations"]

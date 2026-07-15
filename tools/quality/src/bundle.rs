@@ -449,6 +449,7 @@ fn validate_synthetic_case_contract(
     .into_iter()
     .all(|key| manifest.boolean("expected", key) == Some(true));
     let contract_matches = all_artifacts_expected
+        && manifest.string("identity", "status") == Some("active")
         && manifest.boolean("expected", "error") == Some(false)
         && manifest.string("oracle", "level") == Some("O1")
         && manifest.boolean("oracle", "reference_may_generate") == Some(false)
@@ -519,13 +520,8 @@ mod tests {
         let first = build_synthetic_failure_bundle(&manifest_path, &output).unwrap();
         let second = build_synthetic_failure_bundle(&manifest_path, &output).unwrap();
         assert_eq!(first, second);
-        assert!(
-            first
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("sha256-")
-        );
+        let content_address = first.file_name().unwrap().to_string_lossy();
+        assert!(content_address.starts_with("sha256-"));
 
         for name in [
             "manifest.toml",
@@ -549,14 +545,95 @@ mod tests {
         ] {
             assert!(first.join(name).is_file(), "missing {name}");
         }
-        let diagnostics = fs::read_to_string(first.join("diagnostics.json")).unwrap();
-        assert!(diagnostics.contains("\"parse\":{\"artifact\":\"parse\",\"exact\":true"));
-        assert!(diagnostics.contains("\"scene\":{\"artifact\":\"scene\",\"exact\":false"));
-        assert!(diagnostics.contains("\"text\":{\"artifact\":\"text\",\"exact\":false"));
-        assert!(diagnostics.contains("\"different_pixels\":1"));
+        assert_text(
+            &first,
+            "manifest.toml",
+            &format!(
+                "schema = 1\ncase_id = \"infrastructure/synthetic-failure-bundle-001\"\ncontent_address = \"{content_address}\"\nprivacy = \"self-authored-synthetic\"\nartifacts = [\n  \"baseline.png\",\n  \"capability-decision.json\",\n  \"case-manifest.toml\",\n  \"diagnostics.json\",\n  \"diff.png\",\n  \"environment.json\",\n  \"feature-report.json\",\n  \"minimized.pdf\",\n  \"native.png\",\n  \"parse-diff.json\",\n  \"parse-native.json\",\n  \"parse-reference.json\",\n  \"protocol-trace.json\",\n  \"scene-native.json\",\n  \"scene-reference.json\",\n  \"text-baseline.json\",\n  \"text-native.json\",\n]\n"
+            ),
+        );
+        assert_text(
+            &first,
+            "diagnostics.json",
+            "{\"parse\":{\"artifact\":\"parse\",\"exact\":true,\"metadata_differences\":0,\"sections\":[{\"actual_records\":0,\"changed_records\":0,\"exact\":true,\"expected_records\":0,\"first_difference\":null,\"missing_records\":0,\"name\":\"diagnostics\",\"unexpected_records\":0},{\"actual_records\":4,\"changed_records\":0,\"exact\":true,\"expected_records\":4,\"first_difference\":null,\"missing_records\":0,\"name\":\"objects\",\"unexpected_records\":0}]},\"pixel\":{\"different_channels\":2,\"different_pixels\":1,\"exact\":false,\"height\":4,\"max_channel_delta\":[255,191,0,0],\"total_absolute_delta\":446,\"width\":4},\"scene\":{\"artifact\":\"scene\",\"exact\":false,\"metadata_differences\":0,\"sections\":[{\"actual_records\":1,\"changed_records\":1,\"exact\":false,\"expected_records\":2,\"first_difference\":0,\"missing_records\":1,\"name\":\"commands\",\"unexpected_records\":0}]},\"schema\":1,\"text\":{\"artifact\":\"text\",\"exact\":false,\"metadata_differences\":0,\"sections\":[{\"actual_records\":1,\"changed_records\":1,\"exact\":false,\"expected_records\":1,\"first_difference\":0,\"missing_records\":0,\"name\":\"runs\",\"unexpected_records\":0}]}}",
+        );
+        assert_text(
+            &first,
+            "parse-native.json",
+            "{\"diagnostics\":[],\"objects\":[{\"generation\":0,\"kind\":\"catalog\",\"object_number\":1,\"semantic_hash\":\"synthetic-catalog-v1\"},{\"generation\":0,\"kind\":\"pages\",\"object_number\":2,\"semantic_hash\":\"synthetic-pages-v1\"},{\"generation\":0,\"kind\":\"page\",\"object_number\":3,\"semantic_hash\":\"synthetic-page-v1\"},{\"generation\":0,\"kind\":\"stream\",\"object_number\":4,\"semantic_hash\":\"synthetic-stream-v1\"}],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "parse-reference.json",
+            "{\"diagnostics\":[],\"objects\":[{\"generation\":0,\"kind\":\"catalog\",\"object_number\":1,\"semantic_hash\":\"synthetic-catalog-v1\"},{\"generation\":0,\"kind\":\"pages\",\"object_number\":2,\"semantic_hash\":\"synthetic-pages-v1\"},{\"generation\":0,\"kind\":\"page\",\"object_number\":3,\"semantic_hash\":\"synthetic-page-v1\"},{\"generation\":0,\"kind\":\"stream\",\"object_number\":4,\"semantic_hash\":\"synthetic-stream-v1\"}],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "parse-diff.json",
+            "{\"artifact\":\"parse\",\"exact\":true,\"metadata_differences\":0,\"sections\":[{\"actual_records\":0,\"changed_records\":0,\"exact\":true,\"expected_records\":0,\"first_difference\":null,\"missing_records\":0,\"name\":\"diagnostics\",\"unexpected_records\":0},{\"actual_records\":4,\"changed_records\":0,\"exact\":true,\"expected_records\":4,\"first_difference\":null,\"missing_records\":0,\"name\":\"objects\",\"unexpected_records\":0}]}",
+        );
+        assert_text(
+            &first,
+            "scene-reference.json",
+            "{\"commands\":[{\"kind\":\"save\",\"semantic_hash\":\"q\",\"source_object\":4,\"transform_microunits\":[1000000,0,0,1000000,0,0]},{\"kind\":\"restore\",\"semantic_hash\":\"Q\",\"source_object\":4,\"transform_microunits\":[1000000,0,0,1000000,0,0]}],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "scene-native.json",
+            "{\"commands\":[{\"kind\":\"save\",\"semantic_hash\":\"synthetic-intentional-mismatch\",\"source_object\":4,\"transform_microunits\":[1000000,0,0,1000000,0,0]}],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "text-baseline.json",
+            "{\"runs\":[{\"glyph_ids\":[80,68,70],\"quad_micropoints\":[0,0,3000000,0,3000000,1000000,0,1000000],\"unicode\":\"PDF\",\"writing_mode\":\"horizontal-ltr\"}],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "text-native.json",
+            "{\"runs\":[{\"glyph_ids\":[80,66,70],\"quad_micropoints\":[0,0,3000000,0,3000000,1000000,0,1000000],\"unicode\":\"PBF\",\"writing_mode\":\"horizontal-ltr\"}],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "feature-report.json",
+            "{\"case_id\":\"infrastructure/synthetic-failure-bundle-001\",\"features\":[\"quality.canonical-diff\",\"quality.failure-bundle\",\"quality.minimal-pdf-generator\"],\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "capability-decision.json",
+            "{\"policy_version\":1,\"profile\":\"m0.synthetic-artifacts.v1\",\"status\":\"supported\"}",
+        );
+        assert_text(
+            &first,
+            "protocol-trace.json",
+            "{\"events\":[],\"privacy\":\"no-document-content\",\"schema\":1}",
+        );
+        assert_text(
+            &first,
+            "environment.json",
+            "{\"environment\":\"deterministic-synthetic\",\"schema\":1}",
+        );
         assert_eq!(
-            fs::read_to_string(first.join("feature-report.json")).unwrap(),
-            "{\"case_id\":\"infrastructure/synthetic-failure-bundle-001\",\"features\":[\"quality.canonical-diff\",\"quality.failure-bundle\",\"quality.minimal-pdf-generator\"],\"schema\":1}"
+            fs::read(first.join("minimized.pdf")).unwrap(),
+            generate_one_page_pdf().unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(first.join("case-manifest.toml")).unwrap(),
+            manifest_for_generated_pdf()
+        );
+        assert_file_hash(
+            &first,
+            "native.png",
+            "eebf305bcd6f6025af49e2f13f3c5c3033636f2358091005de61fc318bacf83d",
+        );
+        assert_file_hash(
+            &first,
+            "baseline.png",
+            "4a514c8de8924da394f88a6ec52297c15b8c1fa5303edb75130aee371ff97ee3",
+        );
+        assert_file_hash(
+            &first,
+            "diff.png",
+            "1a69541068c050febd6ec90b0ddb75b78184c592e05831839b44cdcc67926a83",
         );
 
         fs::remove_dir_all(root).unwrap();
@@ -648,6 +725,15 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(contract.code, BundleErrorCode::CaseContractMismatch);
+
+        write_case(
+            &manifest_path,
+            &canonical.replace("status = \"active\"", "status = \"draft\""),
+        );
+        let draft = build_synthetic_failure_bundle(&manifest_path, &root.join("draft"))
+            .err()
+            .unwrap();
+        assert_eq!(draft.code, BundleErrorCode::CaseContractMismatch);
 
         write_case(
             &manifest_path,
@@ -755,5 +841,14 @@ entries = ["2026-07-13: introduced"]
             generate_one_page_pdf().unwrap(),
         )
         .unwrap();
+    }
+
+    fn assert_text(bundle: &Path, name: &str, expected: &str) {
+        assert_eq!(fs::read_to_string(bundle.join(name)).unwrap(), expected);
+    }
+
+    fn assert_file_hash(bundle: &Path, name: &str, expected: &str) {
+        let bytes = fs::read(bundle.join(name)).unwrap();
+        assert_eq!(hex_digest(&sha256(&bytes).unwrap()), expected);
     }
 }
