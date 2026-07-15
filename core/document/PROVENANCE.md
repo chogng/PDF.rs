@@ -78,6 +78,9 @@ semantic responsibilities.
   deterministic entry, memory, scan, and child-work budgets before processing untrusted structure.
 
 This slice does not claim an ISO 32000 conformance profile or R0 resolver coverage.
+An executable strict-base regression also proves that a valid object header one byte away from the
+xref-derived target remains `ObjectAttestationFailure`; the composition job does not silently enter
+repair or publish partially attested state.
 
 # Algorithms and derivations
 

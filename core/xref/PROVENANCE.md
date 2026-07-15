@@ -167,7 +167,9 @@ slice.
   completion/cancel/close arbitration, and browser/desktop E2E remain future runtime/platform
   work. The crate implements only the parser-side cooperative cancellation probe and terminal
   classification.
-- No R0/R1 repair behavior is implemented or claimed. Strict failure in this project bootstrap is
+- No R1 repair behavior is implemented or claimed. Executable strict-policy regressions prove that
+  noncanonical fixed-row whitespace and a nearby correct `xref` keyword remain failures instead of
+  triggering an implicit scan. Strict failure in this project bootstrap is
   not a standards-conformance statement.
 - Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or
   `ReleaseProfile` decision.

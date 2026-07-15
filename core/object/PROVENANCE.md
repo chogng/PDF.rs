@@ -221,7 +221,9 @@ Native/external-engine differential is claimed in this bootstrap slice.
   indexed physical offset but does not authenticate the offset's lexical context. Top-level
   attestation remains a security-relevant gate before treating this bootstrap as a complete
   resolver.
-- Only known-length immutable snapshots and strict behavior are accepted. R1/R2 repair, unknown
+- Only known-length immutable snapshots and strict behavior are accepted. Executable strict-policy
+  regressions prove that neither a correct object header one byte away nor a correct stream
+  boundary one byte beyond a wrong direct `/Length` is searched automatically. R1/R2 repair, unknown
   length, platform Range scheduling/coalescing, cancellation delivery and ticket unsubscription,
   terminal completion/cancel/close arbitration, and browser/desktop E2E remain future work.
 - Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or

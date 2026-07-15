@@ -415,6 +415,28 @@ fn malformed_and_logically_truncated_rows_fail_at_stable_offsets() {
 }
 
 #[test]
+fn strict_open_never_repairs_local_xref_whitespace_or_startxref_offsets() {
+    let mut noncanonical_whitespace = canonical_pdf();
+    noncanonical_whitespace[478 + 10] = b'\t';
+    let whitespace_error = failed(&noncanonical_whitespace, compact_limits(|_| {}));
+    assert_eq!(whitespace_error.code(), XrefErrorCode::InvalidEntry);
+    assert_eq!(whitespace_error.offset(), Some(478));
+
+    let mut nearby_startxref = canonical_pdf();
+    let tail_value = nearby_startxref
+        .windows(b"startxref\n449".len())
+        .position(|window| window == b"startxref\n449")
+        .expect("canonical fixture contains its final startxref value")
+        + b"startxref\n".len();
+    nearby_startxref[tail_value..tail_value + 3].copy_from_slice(b"448");
+    assert_eq!(&nearby_startxref[449..453], b"xref");
+
+    let offset_error = failed(&nearby_startxref, compact_limits(|_| {}));
+    assert_eq!(offset_error.code(), XrefErrorCode::InvalidXrefKeyword);
+    assert_eq!(offset_error.offset(), Some(448));
+}
+
+#[test]
 fn final_startxref_requires_line_boundaries() {
     let mut pdf = canonical_pdf();
     let tail_start = pdf

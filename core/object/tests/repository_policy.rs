@@ -95,8 +95,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.38.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.38.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.39.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.39.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.staged-stream-length-framing")
         .expect("staged stream-length feature record must exist");

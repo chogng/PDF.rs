@@ -1,5 +1,5 @@
 schema = 1
-version = "0.38.0"
+version = "0.39.0"
 status = "active"
 
 [[feature]]
@@ -7,9 +7,9 @@ id = "core.strict-repair-policy"
 owner = "parser-security"
 state = "PLANNED"
 profile = "m1.r0-strict.v1"
-clauses = ["RPE-ARCH-001/5.3-5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8"]
+clauses = ["RPE-ARCH-001/5.3-5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
 modules = ["core/xref", "core/object", "core/document"]
-tests = ["tools/quality::maturity"]
+tests = ["core/xref::traditional_xref", "core/object::object_behavior", "core/document::strict_base_open", "tools/quality::maturity"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -19,7 +19,7 @@ id = "core.local-repair"
 owner = "parser-security"
 state = "PLANNED"
 profile = "m1.r1-local-repair.v1"
-clauses = ["RPE-ARCH-001/5.4-5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8"]
+clauses = ["RPE-ARCH-001/5.4-5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
 modules = ["core/xref", "core/object", "core/document"]
 tests = ["tools/quality::maturity"]
 fuzz_targets = []

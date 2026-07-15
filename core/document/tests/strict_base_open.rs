@@ -93,6 +93,19 @@ fn invalid_header_fixture() -> Fixture {
     fixture(b"%PDF-1.x\n1 0 obj\n<<>>\nendobj\n", 2, &[(1, 9)], 0x63)
 }
 
+fn nearby_object_offset_fixture() -> Fixture {
+    let prexref = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n2 0 obj\nnull\nendobj\n";
+    let second_offset = prexref
+        .windows(b"2 0 obj".len())
+        .position(|window| window == b"2 0 obj")
+        .and_then(|offset| u64::try_from(offset).ok())
+        .expect("fixture contains its second object header");
+    let result = fixture(prexref, 3, &[(1, 9), (2, second_offset - 1)], 0x65);
+    let second = usize::try_from(second_offset).unwrap();
+    assert_eq!(&result.bytes[second..second + 7], b"2 0 obj");
+    result
+}
+
 fn duplicate_offset_fixture() -> Fixture {
     fixture(
         b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n",
@@ -456,6 +469,32 @@ fn constructor_and_poll_preserve_the_complete_failing_child_layer() {
     let display = invalid_error.to_string();
     assert!(!debug.contains("%PDF-1.x"));
     assert!(!display.contains("%PDF-1.x"));
+}
+
+#[test]
+fn strict_base_open_does_not_repair_a_nearby_object_offset() {
+    let fixture = nearby_object_offset_fixture();
+    let store = supplied_store(&fixture);
+    let mut job = new_job(&fixture, limits(&fixture));
+
+    let error = match job.poll(&store, &DocumentNeverCancelled) {
+        StrictBaseOpenPoll::Failed(error) => error,
+        other => panic!("strict open must reject the wrong physical offset: {other:?}"),
+    };
+    let document = error
+        .document()
+        .expect("object attestation failures remain document-layer failures");
+    assert_eq!(document.code(), DocumentErrorCode::ObjectAttestationFailure);
+    assert_eq!(
+        document.object_error_code(),
+        Some(pdf_rs_object::ObjectErrorCode::ObjectCrossesPhysicalBound)
+    );
+    assert_eq!(document.offset(), Some(28));
+    assert_eq!(job.phase(), StrictBaseOpenPhase::Failed);
+    assert!(matches!(
+        job.poll(&store, &DocumentNeverCancelled),
+        StrictBaseOpenPoll::Failed(repeated) if repeated == error
+    ));
 }
 
 #[test]

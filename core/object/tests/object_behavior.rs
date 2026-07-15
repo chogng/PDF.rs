@@ -883,6 +883,24 @@ fn exact_header_checks_reject_number_generation_whitespace_and_token_middle_offs
 }
 
 #[test]
+fn strict_open_never_searches_for_a_nearby_object_header() {
+    let (bytes, startxref) = standalone(b" 1 0 obj\nnull\nendobj\n");
+    let error = failed_at(
+        &bytes,
+        object_ref(1, 0),
+        0,
+        startxref,
+        ObjectLimits::default(),
+    );
+    assert_eq!(error.code(), ObjectErrorCode::InvalidObjectHeader);
+    assert_eq!(error.offset(), Some(1));
+
+    let (object, _) = ready_at(&bytes, object_ref(1, 0), 1, startxref);
+    assert_eq!(object.reference(), object_ref(1, 0));
+    assert_eq!(object.object_span().start(), 1);
+}
+
+#[test]
 fn object_envelope_rejects_wrong_keywords_and_non_dictionary_streams() {
     for (body, expected) in [
         (
@@ -1036,6 +1054,25 @@ fn exact_stream_boundary_rejects_wrong_lengths_trivia_and_keywords_without_scann
             ObjectErrorCode::InvalidStreamBoundary
         );
     }
+}
+
+#[test]
+fn strict_open_never_searches_for_a_nearby_stream_boundary() {
+    let wrong = stream_body(b"<< /Length 2 >>", b"ABC", b"\n");
+    let (wrong_bytes, wrong_startxref) = standalone(&wrong);
+    let error = failed_at(
+        &wrong_bytes,
+        object_ref(1, 0),
+        0,
+        wrong_startxref,
+        ObjectLimits::default(),
+    );
+    assert_eq!(error.code(), ObjectErrorCode::InvalidStreamBoundary);
+
+    let corrected = stream_body(b"<< /Length 3 >>", b"ABC", b"\n");
+    let (corrected_bytes, corrected_startxref) = standalone(&corrected);
+    let (object, _) = ready_at(&corrected_bytes, object_ref(1, 0), 0, corrected_startxref);
+    assert!(matches!(object.value(), IndirectObjectValue::Stream(_)));
 }
 
 #[test]
