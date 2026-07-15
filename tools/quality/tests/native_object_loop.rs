@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.30.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.30.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.31.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.31.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -947,6 +947,33 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(ready_owner_feature.contains("fuzz_targets = []"));
     assert!(ready_owner_feature.contains("benchmarks = []"));
 
+    let coordinator_feature = record_with_id(
+        FEATURE_MAP,
+        "feature",
+        "runtime.strict-base-open-coordinator",
+    )
+    .expect("the strict-base open coordinator feature record must exist");
+    assert!(coordinator_feature.contains("owner = \"runtime-platform\""));
+    assert!(coordinator_feature.contains("state = \"PLANNED\""));
+    assert!(coordinator_feature.contains("profile = \"m1.strict-base-open-coordinator.v1\""));
+    for clause in [
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+        "RPE-STD-002/5-7",
+        "RPE-STD-005/5",
+        "RPE-STD-005/8",
+    ] {
+        assert!(coordinator_feature.contains(clause));
+    }
+    assert!(coordinator_feature.contains("modules = [\"runtime/session\"]"));
+    assert!(coordinator_feature.contains("runtime/session::strict_base_open_coordinator"));
+    assert!(coordinator_feature.contains("runtime/session::repository_policy"));
+    assert!(coordinator_feature.contains("tools/quality::native_strict_open_runtime_loop"));
+    assert!(coordinator_feature.contains("fuzz_targets = []"));
+    assert!(coordinator_feature.contains("benchmarks = []"));
+
     for requirement_id in [
         "RPE-ARCH-001/5.3",
         "RPE-ARCH-001/5.4",
@@ -1020,7 +1047,10 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("\"core.attested-object-access\""));
     assert!(xref_requirement.contains("\"core.attested-reference-chain-resolution\""));
     assert!(xref_requirement.contains("\"core.attested-resident-footprint\""));
+    assert!(xref_requirement.contains("\"runtime.strict-base-open-coordinator\""));
     assert!(xref_requirement.contains("\"core/document\""));
+    assert!(xref_requirement.contains("runtime/session::strict_base_open_coordinator"));
+    assert!(xref_requirement.contains("tools/quality::native_strict_open_runtime_loop"));
     assert!(xref_requirement.contains("header-to-startxref"));
     assert!(xref_requirement.contains("line-terminated comments"));
     assert!(xref_requirement.contains("explicit caller-lent work cap"));
@@ -1038,6 +1068,101 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("nested semantic graph traversal"));
     assert!(xref_requirement.contains("persistent Ready caching"));
     assert!(xref_requirement.contains("cross-job/session aggregate work"));
+    assert!(xref_requirement.contains("makes public run_one the only parser entry"));
+    assert!(xref_requirement.contains("queued resume or failure completion"));
+    assert!(xref_requirement.contains("Host ingress never polls"));
+    assert!(xref_requirement.contains("failure completion without parser or cancellation polling"));
+    assert!(xref_requirement.contains("opaque move-only handoff"));
+    assert!(xref_requirement.contains("same private source owner"));
+    assert!(
+        xref_requirement.contains("generic multi-job scheduler and complete Session lifecycle")
+    );
     assert!(xref_requirement.contains("Native/PDFium semantic or pixel differential"));
     assert!(xref_requirement.contains("does not claim M1 exit"));
+
+    let byte_access_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.1-5.2")
+        .expect("the byte-access architecture requirement must exist");
+    for required in [
+        "runtime.strict-base-open-coordinator",
+        "runtime/session::strict_base_open_coordinator",
+        "runtime/session::repository_policy",
+        "tools/quality::native_strict_open_runtime_loop",
+        "Host supply",
+        "snapshot observation",
+        "ticket failure",
+        "never invoke parser code inline",
+        "public run_one method is the only parser entry",
+        "every host ingress as queue-only work",
+        "without polling the parser or probing cancellation",
+        "opaque move-only handoff",
+        "same private source owner",
+        "generic multi-job scheduler",
+        "complete Session/request/Worker ownership",
+        "does not claim M1 exit",
+    ] {
+        assert!(
+            byte_access_requirement.contains(required),
+            "byte-access mapping must contain {required:?}"
+        );
+    }
+
+    let lifecycle_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/14.2")
+        .expect("the lifecycle architecture requirement must exist");
+    for required in [
+        "runtime.strict-base-open-coordinator",
+        "runtime/session::strict_base_open_coordinator",
+        "runtime/session::repository_policy",
+        "tools/quality::native_strict_open_runtime_loop",
+        "Public run_one is its only parser entry",
+        "Host supply, snapshot observation, and failure ingress only queue work",
+        "a failure turn does not poll the parser or probe cancellation",
+        "opaque move-only handoff",
+        "same private source owner",
+        "not one complete Session",
+        "generic job queue and scheduler",
+    ] {
+        assert!(
+            lifecycle_requirement.contains(required),
+            "lifecycle mapping must contain {required:?}"
+        );
+    }
+
+    let m1_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("the M1 architecture requirement must exist");
+    for required in [
+        "runtime.strict-base-open-coordinator",
+        "runtime/session::strict_base_open_coordinator",
+        "runtime/session::repository_policy",
+        "tools/quality::native_strict_open_runtime_loop",
+        "one-job strict-open coordinator",
+        "Coordinator public run_one is the only parser entry",
+        "host ingress only mutates Range state and may queue completion",
+        "never polls parser code",
+        "later exclusive actor turn",
+        "consumes one exact failure completion",
+        "without a parser poll or cancellation probe",
+        "opaque move-only Ready handoff",
+        "same private source owner",
+        "coordinator then reports zero resources",
+        "consuming close returns exact owner-release evidence",
+        "not a complete Session",
+        "generic multi-job scheduler",
+        "does not claim M1 exit",
+    ] {
+        assert!(
+            m1_requirement.contains(required),
+            "M1 mapping must contain {required:?}"
+        );
+    }
+    for required in [
+        "The sibling direct lower-owner path",
+        "arbiter-bound move-only dispatch",
+        "exact issuer/ticket/job/checkpoint/generation validation",
+        "stale-generation rejection without parser work",
+    ] {
+        assert!(
+            m1_requirement.contains(required),
+            "M1 direct-owner evidence must contain {required:?}"
+        );
+    }
 }

@@ -15,7 +15,8 @@ published by those successful document results, then passes the resolved catalog
 through the product Ready-session owner for admission, borrowed lookup, and
 synchronous idempotent close with explicit released-resource evidence. A separate
 Native Range-resume loop drives that same generated PDF through the product runtime arbiter, and a
-sibling strict-open runtime loop places the real opening job behind its single-job execution owner.
+sibling strict-open runtime loop retains the direct single-job owner checks and also drives the real
+opening job through the public one-job coordinator into an opaque Ready source handoff.
 
 # Semantic owner
 
@@ -28,7 +29,9 @@ Quality/Corpus workstream.
   single-owner Ready-cache and session-close integration exercised by the loop.
 - RPE-ARCH-001 sections 5.1-5.2 and RPE-STD-002 sections 6-7 define the explicit
   Pending-registration, arbiter-bound move-only permit, and generation-gated non-inline execution
-  boundaries exercised by the Range and strict-open runtime loops.
+  boundaries exercised by the Range and strict-open runtime loops. RPE-ARCH-001 section 14.2 and
+  RPE-STD-005 sections 5 and 8 define the coordinator turn closure, source ownership, and terminal
+  release evidence checked by the public coordinator path.
 - RPE-ARCH-001 sections 5.8-5.9 define the strict Catalog and protected
   Page/Pages traversal exercised by the loop.
 - RPE-STD-001 sections 2, 5, 6, and 9.
@@ -90,6 +93,19 @@ may poll the parser. The loop injects a completed stale-generation permit, obser
 consumed without parser phase or stats changes, then delivers the exact current permit and proceeds
 through upper-half-before-lower supply to the attested result. This is executable generation gating
 for one strict-open job, not a generic multi-job scheduler or complete Session.
+
+The same test binary separately gives a fresh opening job to `StrictBaseOpenCoordinator`. Each
+`WaitingForData` result is already registered before it becomes visible. Upper halves and
+incomplete lower delivery leave parser phase and stats unchanged; `run_one` returns `NoWork`
+under a cancellation implementation that would panic if probed. The final lower ingress only queues
+one wake, and later actor turns traverse the exact tail, xref-section, prefix-scan,
+object-envelope, and stream-boundary checkpoints before returning an opaque `StrictBaseOpenReady`
+with four attestations and the same 612 cached source bytes. The coordinator itself then owns zero
+resources, while the consuming close report records exactly those released owner bytes. A separate
+fresh coordinator queues one ticket-local host failure and reaches `SourceUnavailable` from
+`FailureQueued` under the same panic-on-cancellation probe, proving that path performs neither a
+parser poll nor a cancellation check. This is one synchronous component actor and source owner, not
+platform Range transport, a generic scheduler, or complete Session orchestration.
 
 The same attested index mints one bounded strict page-count job. The canonical
 Catalog must point to the exact Pages root; the job then reopens only the Catalog,
@@ -223,7 +239,10 @@ The Native Range-resume loop additionally covers upper-before-lower delivery of 
 requests, non-inline move-only permits, complete issuer/ticket/target evidence, exact cancellation
 before late supply, source-change terminal stability, and zero terminal resources. The strict-open
 runtime loop separately covers owner-mediated exact permit execution, stale-generation discard
-without parser work, all five checkpoints, and final zero job/target resources.
+without parser work, all five checkpoints, and final zero job/target resources. Its coordinator path
+also covers pre-publication Pending registration, partial-ingress and NoWork non-execution, queue-only
+resume ingress, exact five-checkpoint ordering, opaque Ready source ownership and close release, and
+queued host failure without parser or cancellation polling.
 
 This is not a registered fuzz target. It has no coverage guidance, randomness,
 dictionary, corpus growth, sanitizer, watchdog, minimizer, nightly campaign, or
@@ -274,15 +293,21 @@ interrupted-write recovery remain planned before T1 inputs.
 - Passing the Native Range-resume loop proves only the in-memory permit handoff among one generated
   PDF, one strict-base job, and one actor-style arbiter. The strict-open runtime loop adds real
   issuer/ticket/job/checkpoint/generation validation and stale-permit discard for one privately
-  owned strict-open job. Together they still do not supply a platform Range transport, generic
-  multi-job queue, priority, fairness, backpressure, Session/request/Worker registry, viewport
-  generations, IPC, event publication, broad lifecycle model evidence, or a registered
-  differential. The arbiter API reports RangeStore backing and registration capacity separately,
-  while the store's internal allocator metadata remains only indirectly bounded. The relevant
-  features remain `PLANNED`, and none of these loops establishes M1 exit.
+  owned strict-open job. The coordinator path closes only that one job's parser/registration turns,
+  preserves the same source owner in Ready, and proves one exact host-failure path is non-polling.
+  Together they still do not supply a platform Range transport, generic multi-job queue or registry,
+  priority, fairness, backpressure, complete Session/request/Worker lifecycle, viewport generations,
+  IPC, event publication, broad lifecycle model evidence, or a registered differential. The arbiter
+  API reports RangeStore backing and registration capacity separately, while the store's internal
+  allocator metadata remains only indirectly bounded. The relevant features remain `PLANNED`, and
+  none of these loops establishes M1 exit.
 
 # History
 
+- 2026-07-15: Drove the generated PDF through the public strict-open coordinator, verifying exact
+  five-checkpoint actor-turn coordination, opaque Ready source ownership and release evidence, and
+  a queued host failure without parser or cancellation polling while retaining the complete-Session
+  and M1 gaps.
 - 2026-07-14: Added the strict-open runtime loop that consumes arbiter-bound move-only permits
   through the single-job owner, rejects a stale generation without parser work, and retains the
   explicit generic-scheduler, complete-Session, and M1 gaps.

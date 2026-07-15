@@ -248,8 +248,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.30.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.30.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.31.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.31.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -298,7 +298,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         "same close report",
         "drops the complete Ready store before returning",
         "Created/Opening/Waiting/Failed orchestration",
-        "before publishing `SessionClosed`",
+        "before publishing",
+        "SessionClosed",
         "partial",
     ] {
         assert!(
@@ -364,6 +365,36 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         );
     }
 
+    let coordinator = record_with_id(
+        &feature_map,
+        "feature",
+        "runtime.strict-base-open-coordinator",
+    )
+    .expect("strict-base open coordinator feature must exist");
+    for required in [
+        "owner = \"runtime-platform\"",
+        "state = \"PLANNED\"",
+        "profile = \"m1.strict-base-open-coordinator.v1\"",
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+        "RPE-STD-002/5-7",
+        "RPE-STD-005/5",
+        "RPE-STD-005/8",
+        "modules = [\"runtime/session\"]",
+        "runtime/session::strict_base_open_coordinator",
+        "runtime/session::repository_policy",
+        "tools/quality::native_strict_open_runtime_loop",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "strict-base open coordinator feature must contain {required:?}"
+        );
+    }
+
     let quality = record_with_id(
         &feature_map,
         "feature",
@@ -391,22 +422,34 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
     for required in [
         "runtime.range-resume-arbiter",
         "runtime.strict-base-open-job-owner",
+        "runtime.strict-base-open-coordinator",
         "quality.native-strict-open-runtime-loop",
         "runtime/session::range_resume",
         "runtime/session::strict_base_open_owner",
+        "runtime/session::strict_base_open_coordinator",
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
         "tools/quality::native_strict_open_runtime_loop",
         "status = \"partial\"",
         "runtime caller registers each returned Pending ticket with its job, checkpoint, and generation",
-        "converts terminal tickets into arbiter-bound move-only permits only after the store call returns",
-        "releasing exact subscriptions on cancellation without disturbing shared waiters",
-        "validating the issuing arbiter, ticket, job, checkpoint, and current owner generation",
-        "consumed without polling parser code or changing its parser phase and cumulative stats",
-        "tail, xref-section, prefix-scan, object-envelope, and stream-boundary checkpoints",
+        "unified ordered completion stream",
+        "arbiter-bound move-only resume permit",
+        "exact ticket-local source-failure permit",
+        "Host supply",
+        "snapshot observation",
+        "ticket failure",
+        "never invoke parser code inline",
+        "consumes only identity-matching resume or failure permits",
+        "stale or mismatched permits are consumed without parser work",
+        "public run_one method is the only parser entry",
+        "every host ingress as queue-only work",
+        "without polling the parser or probing cancellation",
+        "opaque move-only handoff",
+        "same private source owner",
+        "exact five checkpoints",
         "upper-half-before-lower out-of-order delivery",
-        "stale-generation rejection",
         "generic multi-job scheduler with priority, fairness, backpressure, and generation registry",
+        "complete Session/request/Worker ownership",
         "all features stay PLANNED",
         "does not claim M1 exit",
     ] {
@@ -416,23 +459,52 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         );
     }
 
+    let xref = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
+        .expect("strict base-revision architecture requirement must exist");
+    for required in [
+        "runtime.strict-base-open-coordinator",
+        "runtime/session::strict_base_open_coordinator",
+        "runtime/session::repository_policy",
+        "tools/quality::native_strict_open_runtime_loop",
+        "makes public run_one the only parser entry",
+        "queued resume or failure completion",
+        "Host ingress never polls",
+        "failure completion without parser or cancellation polling",
+        "opaque move-only handoff",
+        "same private source owner",
+        "generic multi-job scheduler and complete Session lifecycle",
+        "does not claim M1 exit",
+    ] {
+        assert!(
+            xref.contains(required),
+            "strict base-revision mapping must contain {required:?}"
+        );
+    }
+
     let lifecycle = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/14.2")
         .expect("handle lifecycle requirement must exist");
     for required in [
         "runtime.range-resume-arbiter",
         "runtime.strict-base-open-job-owner",
+        "runtime.strict-base-open-coordinator",
         "runtime/session::range_resume",
         "runtime/session::strict_base_open_owner",
+        "runtime/session::strict_base_open_coordinator",
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
         "tools/quality::native_strict_open_runtime_loop",
         "status = \"partial\"",
         "exact job/checkpoint/generation registrations",
-        "arbiter-bound move-only completion permits",
+        "arbiter-bound move-only resume or failure permits",
         "Data arrival only queues a permit; it does not run parser code",
-        "validates every resume permit's issuer, ticket, job, checkpoint, and generation before polling",
-        "late permits are consumed without parser work",
-        "three isolated synchronous owners, not one complete Session",
+        "validates every resume or failure permit's issuer, ticket, job, checkpoint, and generation",
+        "Late or mismatched permits are consumed without parser work",
+        "Public run_one is its only parser entry",
+        "Host supply, snapshot observation, and failure ingress only queue work",
+        "a failure turn does not poll the parser or probe cancellation",
+        "opaque move-only handoff",
+        "same private source owner",
+        "not one complete Session",
         "generic job queue and scheduler",
     ] {
         assert!(
@@ -446,18 +518,31 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
     for required in [
         "runtime.range-resume-arbiter",
         "runtime.strict-base-open-job-owner",
+        "runtime.strict-base-open-coordinator",
         "quality.native-range-resume-loop",
         "quality.native-strict-open-runtime-loop",
         "runtime/session::range_resume",
         "runtime/session::strict_base_open_owner",
+        "runtime/session::strict_base_open_coordinator",
+        "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
         "tools/quality::native_strict_open_runtime_loop",
         "status = \"partial\"",
+        "one-job strict-open coordinator",
+        "Coordinator public run_one is the only parser entry",
+        "host ingress only mutates Range state and may queue completion",
+        "never polls parser code",
+        "later exclusive actor turn",
+        "consumes one exact failure completion",
+        "without a parser poll or cancellation probe",
+        "opaque move-only Ready handoff",
+        "same private source owner",
+        "coordinator then reports zero resources",
+        "consuming close returns exact owner-release evidence",
         "all five parser checkpoints",
         "upper-half-before-lower out-of-order supply",
-        "arbiter-bound move-only dispatch",
-        "stale-generation rejection without parser work",
         "generic multi-job scheduler with queue priority, fairness, backpressure, and a job registry",
+        "not a complete Session",
         "viewport generations",
         "R0/R1 repair profiles are also absent",
         "not registered DIFFERENTIAL evidence",
@@ -466,6 +551,17 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         assert!(
             milestone.contains(required),
             "M1 mapping must contain {required:?}"
+        );
+    }
+    for required in [
+        "The sibling direct lower-owner path",
+        "arbiter-bound move-only dispatch",
+        "exact issuer/ticket/job/checkpoint/generation validation",
+        "stale-generation rejection without parser work",
+    ] {
+        assert!(
+            milestone.contains(required),
+            "M1 direct-owner evidence must contain {required:?}"
         );
     }
 }
@@ -483,8 +579,19 @@ fn provenance_bounds_each_runtime_owner_without_a_complete_session_claim() {
         "completed ticket, job, checkpoint",
         "A stale or mismatched permit is discarded",
         "without polling parser code or changing the saved parser phase and cumulative stats",
+        "Public `run_one` is the only parser entry",
+        "at most one",
+        "queue-only host ingress",
+        "StrictBaseOpenReady",
+        "same private Range source",
+        "one parser job",
+        "`ReadySessionOwner` remains separate",
+        "future generic",
+        "scheduler and registry",
         "generic job",
-        "queue, priority, fairness, backpressure, cross-job arbitration",
+        "queue, registry, priority, fairness, backpressure",
+        "cross-job",
+        "arbitration",
         "does not claim the complete protocol-visible Session state machine",
         "session ID allocation",
         "does not publish `SessionClosed`",

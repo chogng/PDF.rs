@@ -1,5 +1,5 @@
 schema = 1
-version = "0.30.0"
+version = "0.31.0"
 status = "active"
 
 [[feature]]
@@ -9,7 +9,7 @@ state = "PLANNED"
 profile = "m1.range-store.v1"
 clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-STD-002/7", "RPE-STD-005/8"]
 modules = ["core/bytes"]
-tests = ["core/bytes::range_store", "core/bytes::repository_policy", "runtime/session::range_resume", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
+tests = ["core/bytes::range_store", "core/bytes::repository_policy", "runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -81,7 +81,7 @@ state = "PLANNED"
 profile = "m1.strict-base-open.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::strict_base_open", "core/document::repository_policy", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
+tests = ["core/document::strict_base_open", "core/document::repository_policy", "runtime/session::strict_base_open_coordinator", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -165,7 +165,7 @@ state = "PLANNED"
 profile = "m1.range-resume-arbiter.v1"
 clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
 modules = ["runtime/session"]
-tests = ["runtime/session::range_resume", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
+tests = ["runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -177,7 +177,19 @@ state = "PLANNED"
 profile = "m1.strict-base-open-job-owner.v1"
 clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
 modules = ["runtime/session"]
-tests = ["runtime/session::strict_base_open_owner", "runtime/session::repository_policy", "tools/quality::native_strict_open_runtime_loop"]
+tests = ["runtime/session::strict_base_open_owner", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.strict-base-open-coordinator"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.strict-base-open-coordinator.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_strict_open_runtime_loop"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
