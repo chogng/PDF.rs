@@ -29,11 +29,15 @@ fn root() -> ObjectRef {
 }
 
 fn base(snapshot: SourceSnapshot) -> RevisionCandidate {
+    base_with_root(snapshot, Some(root()))
+}
+
+fn base_with_root(snapshot: SourceSnapshot, root: Option<ObjectRef>) -> RevisionCandidate {
     RevisionCandidate::traditional(
         snapshot,
         300,
         5,
-        root(),
+        root,
         None,
         vec![
             RevisionEntry::free(0, 0, u16::MAX),
@@ -62,7 +66,7 @@ fn hybrid_update(snapshot: SourceSnapshot) -> RevisionCandidate {
         snapshot,
         700,
         8,
-        root(),
+        Some(root()),
         Some(300),
         vec![
             RevisionEntry::uncompressed(2, 420, 0),
@@ -71,6 +75,7 @@ fn hybrid_update(snapshot: SourceSnapshot) -> RevisionCandidate {
             RevisionEntry::uncompressed(6, 540, 0),
         ],
     )
+    .with_xref_stream(620)
     .with_hybrid_supplement(supplement)
 }
 
@@ -141,7 +146,7 @@ fn newest_null_entry_hides_an_older_live_definition() {
         snapshot,
         700,
         5,
-        root(),
+        Some(root()),
         Some(300),
         vec![RevisionEntry::null(2, 9)],
     );
@@ -160,6 +165,87 @@ fn newest_null_entry_hides_an_older_live_definition() {
 }
 
 #[test]
+fn effective_root_is_the_first_explicit_newest_to_oldest_value() {
+    let snapshot = snapshot_for(identity(0x7b));
+    let middle = RevisionCandidate::traditional(
+        snapshot,
+        700,
+        5,
+        None,
+        Some(300),
+        vec![RevisionEntry::uncompressed(2, 500, 0)],
+    );
+    let newest = RevisionCandidate::traditional(
+        snapshot,
+        900,
+        5,
+        None,
+        Some(700),
+        vec![RevisionEntry::uncompressed(3, 800, 0)],
+    );
+    let inherited = compose_revision_chain(
+        vec![newest, middle, base(snapshot)],
+        RevisionLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap();
+    assert_eq!(inherited.root(), root());
+    assert_eq!(inherited.revisions()[0].root(), None);
+    assert_eq!(inherited.revisions()[1].root(), None);
+    assert_eq!(inherited.revisions()[2].root(), Some(root()));
+
+    let replacement = ObjectRef::new(2, 0).unwrap();
+    let newest =
+        RevisionCandidate::traditional(snapshot, 700, 5, Some(replacement), Some(300), Vec::new());
+    let replaced = compose_revision_chain(
+        vec![newest, base(snapshot)],
+        RevisionLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap();
+    assert_eq!(replaced.root(), replacement);
+
+    let error = compose_revision_chain(
+        vec![base_with_root(snapshot, None)],
+        RevisionLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), RevisionErrorCode::InvalidRoot);
+    assert_eq!(error.object_number(), None);
+    assert_eq!(error.startxref(), Some(300));
+
+    let newest_with_root =
+        RevisionCandidate::traditional(snapshot, 700, 5, Some(root()), Some(300), Vec::new());
+    let error = compose_revision_chain(
+        vec![newest_with_root, base_with_root(snapshot, None)],
+        RevisionLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), RevisionErrorCode::InvalidRoot);
+    assert_eq!(error.startxref(), Some(300));
+
+    let rootless_stream_base = RevisionCandidate::xref_stream(
+        snapshot,
+        300,
+        ObjectRef::new(4, 0).unwrap(),
+        5,
+        None,
+        None,
+        vec![RevisionEntry::uncompressed(4, 300, 0)],
+    );
+    let error = compose_revision_chain(
+        vec![rootless_stream_base],
+        RevisionLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), RevisionErrorCode::InvalidRoot);
+    assert_eq!(error.startxref(), Some(300));
+}
+
+#[test]
 fn a_primary_stream_can_be_the_newest_incremental_revision() {
     let snapshot = snapshot_for(identity(0x73));
     let stream = RevisionCandidate::xref_stream(
@@ -167,7 +253,7 @@ fn a_primary_stream_can_be_the_newest_incremental_revision() {
         900,
         ObjectRef::new(7, 0).unwrap(),
         9,
-        root(),
+        Some(root()),
         Some(300),
         vec![
             RevisionEntry::compressed(1, 8, 0),
@@ -205,7 +291,7 @@ fn prev_chain_order_size_and_terminal_shape_are_strict() {
                 snapshot,
                 700,
                 8,
-                root(),
+                Some(root()),
                 Some(301),
                 vec![RevisionEntry::uncompressed(1, 500, 0)],
             ),
@@ -216,7 +302,7 @@ fn prev_chain_order_size_and_terminal_shape_are_strict() {
                 snapshot,
                 700,
                 4,
-                root(),
+                Some(root()),
                 Some(300),
                 vec![RevisionEntry::uncompressed(1, 500, 0)],
             ),
@@ -226,7 +312,7 @@ fn prev_chain_order_size_and_terminal_shape_are_strict() {
             snapshot,
             300,
             8,
-            root(),
+            Some(root()),
             Some(100),
             vec![RevisionEntry::uncompressed(1, 40, 0)],
         )],
@@ -287,14 +373,16 @@ fn hybrid_metadata_and_placement_are_strict() {
         ),
     ];
     for supplement in invalid_supplements {
+        let xref_stream = supplement.startxref();
         let revision = RevisionCandidate::traditional(
             snapshot,
             700,
             8,
-            root(),
+            Some(root()),
             Some(300),
             vec![RevisionEntry::uncompressed(1, 500, 0)],
         )
+        .with_xref_stream(xref_stream)
         .with_hybrid_supplement(supplement);
         assert_eq!(
             compose_revision_chain(
@@ -313,13 +401,14 @@ fn hybrid_metadata_and_placement_are_strict() {
         700,
         ObjectRef::new(7, 0).unwrap(),
         8,
-        root(),
+        Some(root()),
         Some(300),
         vec![
             RevisionEntry::uncompressed(1, 500, 0),
             RevisionEntry::uncompressed(7, 700, 0),
         ],
     )
+    .with_xref_stream(620)
     .with_hybrid_supplement(HybridSupplement::new(
         snapshot,
         620,
@@ -355,13 +444,14 @@ fn hybrid_metadata_and_placement_are_strict() {
         snapshot,
         700,
         8,
-        root(),
+        Some(root()),
         Some(300),
         vec![
             RevisionEntry::uncompressed(1, 500, 0),
             RevisionEntry::uncompressed(6, 540, 0),
         ],
     )
+    .with_xref_stream(620)
     .with_hybrid_supplement(ignored_supplement_prev);
     compose_revision_chain(
         vec![update, base(snapshot)],
@@ -369,6 +459,93 @@ fn hybrid_metadata_and_placement_are_strict() {
         &NeverCancelled,
     )
     .unwrap();
+}
+
+#[test]
+fn traditional_base_hybrid_uses_explicit_xrefstm_and_combined_coverage() {
+    let snapshot = snapshot_for(identity(0x7c));
+    let supplement = HybridSupplement::new(
+        snapshot,
+        620,
+        ObjectRef::new(4, 0).unwrap(),
+        5,
+        None,
+        vec![
+            RevisionEntry::compressed(3, 2, 0),
+            RevisionEntry::uncompressed(4, 620, 0),
+        ],
+    );
+    let candidate = RevisionCandidate::traditional(
+        snapshot,
+        700,
+        5,
+        Some(root()),
+        None,
+        vec![
+            RevisionEntry::free(0, 0, u16::MAX),
+            RevisionEntry::uncompressed(1, 40, 0),
+            RevisionEntry::uncompressed(2, 80, 0),
+        ],
+    )
+    .with_xref_stream(620)
+    .with_hybrid_supplement(supplement);
+    let chain = compose_revision_chain(
+        vec![candidate.clone()],
+        RevisionLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap();
+    assert_eq!(chain.root(), root());
+    assert_eq!(chain.stats().revisions(), 1);
+    assert_eq!(chain.stats().sections(), 2);
+    assert_eq!(chain.stats().entries(), 5);
+    assert_eq!(
+        chain.entry(3).unwrap().origin(),
+        RevisionEntryOrigin::HybridSupplement
+    );
+    assert_eq!(chain.revisions()[0].previous(), None);
+    assert_eq!(chain.revisions()[0].xref_stream_anchor(), Some(620));
+
+    let mismatch = candidate.clone().with_xref_stream(619);
+    assert_eq!(
+        compose_revision_chain(vec![mismatch], RevisionLimits::default(), &NeverCancelled)
+            .unwrap_err()
+            .code(),
+        RevisionErrorCode::InvalidHybrid
+    );
+    let missing_supplement = base(snapshot).with_xref_stream(200);
+    assert_eq!(
+        compose_revision_chain(
+            vec![missing_supplement],
+            RevisionLimits::default(),
+            &NeverCancelled,
+        )
+        .unwrap_err()
+        .code(),
+        RevisionErrorCode::InvalidHybrid
+    );
+
+    let invalid_object_zero = RevisionCandidate::traditional(
+        snapshot,
+        300,
+        2,
+        Some(root()),
+        None,
+        vec![
+            RevisionEntry::free(0, 0, 0),
+            RevisionEntry::uncompressed(1, 40, 0),
+        ],
+    );
+    assert_eq!(
+        compose_revision_chain(
+            vec![invalid_object_zero],
+            RevisionLimits::default(),
+            &NeverCancelled,
+        )
+        .unwrap_err()
+        .code(),
+        RevisionErrorCode::InvalidRevision
+    );
 }
 
 #[test]
@@ -390,7 +567,8 @@ fn entries_require_ordered_in_range_semantics_and_source_offsets() {
         vec![RevisionEntry::compressed(2, 2, 0)],
         vec![RevisionEntry::compressed(2, 8, 0)],
     ] {
-        let revision = RevisionCandidate::traditional(snapshot, 300, 8, root(), None, entries);
+        let revision =
+            RevisionCandidate::traditional(snapshot, 300, 8, Some(root()), None, entries);
         assert_eq!(
             compose_revision_chain(vec![revision], RevisionLimits::default(), &NeverCancelled,)
                 .unwrap_err()
@@ -407,7 +585,7 @@ fn root_and_source_snapshot_are_validated_after_latest_wins() {
         snapshot,
         700,
         8,
-        root(),
+        None,
         Some(300),
         vec![RevisionEntry::free(1, 0, 1)],
     );

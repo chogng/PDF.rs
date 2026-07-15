@@ -94,15 +94,22 @@ coverage claim.
 - The pure revision composer consumes primary candidates from newest to oldest. It binds every
   primary and supplement to one complete `SourceSnapshot`, requires exact backward `/Prev` links,
   nondecreasing `/Size`, unique in-range anchors, a complete traditional base but sparse updates,
-  and `Prev < XRefStm < current startxref` for traditional hybrid updates. Primary xref-stream
+  and an attached supplement whose anchor exactly matches the traditional trailer's explicit
+  `/XRefStm`. A base hybrid permits `XRefStm < current startxref`; an incremental hybrid additionally
+  requires `Prev < XRefStm`. Traditional-base completeness is the union of its primary table and
+  validated supplement, while object zero remains a generation-65535 free primary-table entry.
+  Primary xref-stream
   candidates prove a typed self entry at their own anchor; hybrid anchors may be defined by the
   current table or supplement. Supplemental `/Prev` is retained but never drives the primary chain.
 - Lookup checks the current primary before its hybrid supplement and only then visits the older
-  revision. A free or null winning row hides every older definition. A newest trailer root must
-  resolve to a live generation-compatible row and cannot become visible only through the current
-  hybrid supplement. Composition bounds revisions, primary-plus-supplement sections, total rows,
-  retained vector capacity, and cancellation loops. These are candidate invariants, not proof of
-  source acquisition, filter output, object headers, object-stream contents, or resolver state.
+  revision. A free or null winning row hides every older definition. Each candidate retains an
+  optional explicit `/Root`; the oldest base must provide one, while updates may omit it and inherit
+  the first explicit value found from newest to oldest. The effective root must resolve through
+  latest-wins lookup to a live generation-compatible row and cannot become visible only through the
+  current hybrid supplement. Composition bounds revisions,
+  primary-plus-supplement sections, total rows, retained vector capacity, and cancellation loops.
+  These are candidate invariants, not proof of source acquisition, filter output, object headers,
+  object-stream contents, or resolver state.
 - Missing bytes are parser control flow. Byte acquisition is expressed through the synchronous
   `ByteSource` polling contract; Pending returns the ticket, canonical missing ranges, and caller
   checkpoint without charging parse work. Retryable work restarts only from explicit tail or table
@@ -182,10 +189,13 @@ E2E.
 
 Revision-chain tests cover traditional, primary-stream, and hybrid candidate layers; exact table,
 supplement, and older-revision lookup order; newer replacement, free, and null masking; stream
-self anchors; ignored supplemental `/Prev`; strict primary `/Prev`, anchor, `/Size`, entry, source,
-and root geometry; complete traditional-base versus sparse-update shape; equality and one-less
-revision/section/entry/retained-capacity limits; cancellation; and stable recovery policy. They do
-not acquire or decode any xref section and are not a strict-open or document-service E2E.
+self anchors; ignored supplemental `/Prev`; update-root inheritance; missing traditional and stream
+base-root rejection; base-hybrid combined coverage; strict primary `/Prev`, `/XRefStm`, anchor,
+`/Size`, entry, source, and effective-root geometry; complete traditional-base versus sparse-update
+shape; equality and
+one-less revision/section/entry/retained-capacity limits; cancellation; and stable recovery policy.
+They consume only already-parsed candidates and do not acquire or decode an xref chain, establish a
+strict-open E2E, or reach a document service.
 
 Local-repair tests pair canonical, whitespace-only, final-offset, and combined inputs; require an
 empty diagnostic ledger for strict success and one source-bound record per accepted repair; reject
@@ -246,3 +256,7 @@ slice.
 - 2026-07-15: Added bounded Range-resumable parsing of one caller-anchored sparse traditional
   revision section with explicit optional trailer metadata while preserving strict-base and R1
   rejection behavior.
+- 2026-07-15: Preserved optional traditional `/Root` and `/XRefStm` metadata through candidate
+  construction, added newest-to-oldest root inheritance for updates with an explicit base root,
+  and admitted validated base hybrids without weakening incremental hybrid geometry or latest-wins
+  masking.

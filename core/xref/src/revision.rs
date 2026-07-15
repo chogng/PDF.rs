@@ -5,8 +5,8 @@ use pdf_rs_bytes::{SourceIdentity, SourceSnapshot};
 use pdf_rs_syntax::ObjectRef;
 
 use crate::{
-    XrefCancellation, XrefEntry, XrefEntryKind, XrefRecoverability, XrefStreamEntry,
-    XrefStreamEntryKind,
+    TraditionalRevisionSection, XrefCancellation, XrefEntry, XrefEntryKind, XrefRecoverability,
+    XrefStreamEntry, XrefStreamEntryKind,
 };
 
 const HARD_MAX_REVISIONS: u32 = 1024;
@@ -130,7 +130,7 @@ pub enum RevisionErrorCode {
     InvalidRevision,
     /// A hybrid supplement is misplaced or conflicts with its primary table.
     InvalidHybrid,
-    /// The newest trailer root is missing, free, or has the wrong generation.
+    /// The effective inherited trailer root is missing, free, or has the wrong generation.
     InvalidRoot,
     /// A deterministic entry or retained-memory budget was exceeded.
     ResourceLimit,
@@ -514,8 +514,9 @@ pub struct RevisionCandidate {
     snapshot: SourceSnapshot,
     startxref: u64,
     declared_size: u32,
-    root: ObjectRef,
+    root: Option<ObjectRef>,
     previous: Option<u64>,
+    xref_stream: Option<u64>,
     primary_kind: RevisionPrimaryKind,
     primary_container: Option<ObjectRef>,
     primary_entries: Vec<RevisionEntry>,
@@ -528,7 +529,7 @@ impl RevisionCandidate {
         snapshot: SourceSnapshot,
         startxref: u64,
         declared_size: u32,
-        root: ObjectRef,
+        root: impl Into<Option<ObjectRef>>,
         previous: Option<u64>,
         primary_entries: Vec<RevisionEntry>,
     ) -> Self {
@@ -536,8 +537,9 @@ impl RevisionCandidate {
             snapshot,
             startxref,
             declared_size,
-            root,
+            root: root.into(),
             previous,
+            xref_stream: None,
             primary_kind: RevisionPrimaryKind::Traditional,
             primary_container: None,
             primary_entries,
@@ -551,7 +553,7 @@ impl RevisionCandidate {
         startxref: u64,
         container: ObjectRef,
         declared_size: u32,
-        root: ObjectRef,
+        root: impl Into<Option<ObjectRef>>,
         previous: Option<u64>,
         primary_entries: Vec<RevisionEntry>,
     ) -> Self {
@@ -559,13 +561,23 @@ impl RevisionCandidate {
             snapshot,
             startxref,
             declared_size,
-            root,
+            root: root.into(),
             previous,
+            xref_stream: None,
             primary_kind: RevisionPrimaryKind::Stream,
             primary_container: Some(container),
             primary_entries,
             supplement: None,
         }
+    }
+
+    /// Retains the `/XRefStm` anchor parsed from a traditional trailer.
+    ///
+    /// Composition still requires an attached supplement at exactly this anchor and rejects this
+    /// metadata on a primary xref-stream candidate.
+    pub fn with_xref_stream(mut self, startxref: u64) -> Self {
+        self.xref_stream = Some(startxref);
+        self
     }
 
     /// Attaches one parsed hybrid supplement; composition validates its placement and metadata.
@@ -589,14 +601,19 @@ impl RevisionCandidate {
         self.declared_size
     }
 
-    /// Returns the trailer root selected by this revision.
-    pub const fn root(&self) -> ObjectRef {
+    /// Returns the explicit trailer root, or `None` when this revision inherits an older root.
+    pub const fn root(&self) -> Option<ObjectRef> {
         self.root
     }
 
     /// Returns the older primary offset named by `/Prev`.
     pub const fn previous(&self) -> Option<u64> {
         self.previous
+    }
+
+    /// Returns the hybrid supplement anchor named by `/XRefStm`.
+    pub const fn xref_stream_anchor(&self) -> Option<u64> {
+        self.xref_stream
     }
 
     /// Returns the primary table representation.
@@ -617,6 +634,36 @@ impl RevisionCandidate {
     /// Returns an optional validated-after-composition hybrid supplement.
     pub const fn hybrid_supplement(&self) -> Option<&HybridSupplement> {
         self.supplement.as_ref()
+    }
+}
+
+/// Consumes a parsed traditional section into an untrusted composition candidate.
+///
+/// This conversion preserves optional trailer metadata and entry semantics, but it does not attach
+/// an `/XRefStm` supplement or bypass any [`compose_revision_chain`] validation.
+impl From<TraditionalRevisionSection> for RevisionCandidate {
+    fn from(section: TraditionalRevisionSection) -> Self {
+        let snapshot = section.snapshot();
+        let startxref = section.startxref();
+        let declared_size = section.declared_size();
+        let root = section.root();
+        let previous = section.previous();
+        let xref_stream = section.xref_stream();
+        let primary_entries = section
+            .into_entries()
+            .into_iter()
+            .map(RevisionEntry::from)
+            .collect();
+        let mut candidate = Self::traditional(
+            snapshot,
+            startxref,
+            declared_size,
+            root,
+            previous,
+            primary_entries,
+        );
+        candidate.xref_stream = xref_stream;
+        candidate
     }
 }
 
@@ -728,7 +775,7 @@ impl RevisionChain {
         self.snapshot
     }
 
-    /// Returns the newest trailer root after its winning xref entry was validated.
+    /// Returns the first explicit newest-to-oldest trailer root after latest-wins validation.
     pub const fn root(&self) -> ObjectRef {
         self.root
     }
@@ -841,11 +888,19 @@ pub fn compose_revision_chain(
             check_cancelled(cancellation)?;
         }
         validate_revision_source(revision, snapshot, source_len)?;
-        if revision.declared_size == 0 || revision.root.number() >= revision.declared_size {
+        if revision.declared_size == 0 {
+            return Err(RevisionError::for_code(
+                RevisionErrorCode::InvalidRevision,
+                Some(revision.startxref),
+            ));
+        }
+        if let Some(root) = revision.root
+            && root.number() >= revision.declared_size
+        {
             return Err(RevisionError::for_object(
                 RevisionErrorCode::InvalidRevision,
                 revision.startxref,
-                revision.root.number(),
+                root.number(),
             ));
         }
         if revision
@@ -900,10 +955,11 @@ pub fn compose_revision_chain(
             limits,
         )?;
 
-        if revision_index + 1 == revisions.len()
-            && revision.primary_kind == RevisionPrimaryKind::Traditional
-        {
-            validate_complete_traditional_base(revision)?;
+        if revision.xref_stream.is_some() != revision.supplement.is_some() {
+            return Err(RevisionError::for_code(
+                RevisionErrorCode::InvalidHybrid,
+                revision.xref_stream.or(Some(revision.startxref)),
+            ));
         }
 
         if let Some(supplement) = &revision.supplement {
@@ -946,6 +1002,12 @@ pub fn compose_revision_chain(
                 limits,
             )?;
         }
+
+        if revision_index + 1 == revisions.len()
+            && revision.primary_kind == RevisionPrimaryKind::Traditional
+        {
+            validate_complete_traditional_base(revision, cancellation)?;
+        }
     }
     check_cancelled(cancellation)?;
     if retained_bytes > limits.max_retained_bytes {
@@ -956,7 +1018,21 @@ pub fn compose_revision_chain(
         ));
     }
 
-    let root = revisions[0].root;
+    let base = revisions
+        .last()
+        .ok_or_else(|| RevisionError::for_code(RevisionErrorCode::EmptyChain, None))?;
+    if base.root.is_none() {
+        return Err(RevisionError::for_code(
+            RevisionErrorCode::InvalidRoot,
+            Some(base.startxref),
+        ));
+    }
+    let root = revisions
+        .iter()
+        .find_map(|revision| revision.root)
+        .ok_or_else(|| {
+            RevisionError::for_code(RevisionErrorCode::InvalidRoot, Some(revisions[0].startxref))
+        })?;
     let chain = RevisionChain {
         snapshot,
         root,
@@ -995,7 +1071,7 @@ fn validate_hybrid(
     source_len: u64,
 ) -> Result<(), RevisionError> {
     if revision.primary_kind != RevisionPrimaryKind::Traditional
-        || revision.previous.is_none()
+        || revision.xref_stream != Some(supplement.startxref)
         || supplement.snapshot != snapshot
         || supplement.startxref == 0
         || supplement.startxref >= revision.startxref
@@ -1003,7 +1079,7 @@ fn validate_hybrid(
         || supplement.declared_size != revision.declared_size
         || revision
             .previous
-            .is_none_or(|previous| supplement.startxref <= previous)
+            .is_some_and(|previous| supplement.startxref <= previous)
         || supplement.container.number() >= supplement.declared_size
     {
         return Err(RevisionError::for_code(
@@ -1140,27 +1216,55 @@ fn validate_stream_anchor(
     Ok(())
 }
 
-fn validate_complete_traditional_base(revision: &RevisionCandidate) -> Result<(), RevisionError> {
-    let expected_len = usize::try_from(revision.declared_size).map_err(|_| {
-        RevisionError::for_code(RevisionErrorCode::InternalState, Some(revision.startxref))
-    })?;
-    let complete = revision.primary_entries.len() == expected_len
-        && revision
-            .primary_entries
-            .iter()
-            .enumerate()
-            .all(|(index, entry)| {
-                u32::try_from(index).is_ok_and(|object_number| object_number == entry.object_number)
-            })
-        && revision
-            .primary_entries
-            .first()
-            .is_some_and(|entry| matches!(entry.kind, RevisionEntryKind::Free { .. }));
-    if !complete {
+fn validate_complete_traditional_base(
+    revision: &RevisionCandidate,
+    cancellation: &dyn XrefCancellation,
+) -> Result<(), RevisionError> {
+    let canonical_zero = revision.primary_entries.first().is_some_and(|entry| {
+        entry.object_number == 0
+            && matches!(
+                entry.kind,
+                RevisionEntryKind::Free {
+                    generation: u16::MAX,
+                    ..
+                }
+            )
+    });
+    if !canonical_zero {
         return Err(RevisionError::for_code(
             RevisionErrorCode::InvalidRevision,
             Some(revision.startxref),
         ));
+    }
+
+    let supplement_entries = revision
+        .supplement
+        .as_ref()
+        .map_or(&[][..], |supplement| supplement.entries.as_slice());
+    let mut primary_index = 0_usize;
+    let mut supplement_index = 0_usize;
+    for object_number in 0..revision.declared_size {
+        if usize::try_from(object_number)
+            .is_ok_and(|index| index.is_multiple_of(CANCELLATION_INTERVAL))
+        {
+            check_cancelled(cancellation)?;
+        }
+        let in_primary = revision
+            .primary_entries
+            .get(primary_index)
+            .is_some_and(|entry| entry.object_number == object_number);
+        let in_supplement = supplement_entries
+            .get(supplement_index)
+            .is_some_and(|entry| entry.object_number == object_number);
+        if !in_primary && !in_supplement {
+            return Err(RevisionError::for_object(
+                RevisionErrorCode::InvalidRevision,
+                revision.startxref,
+                object_number,
+            ));
+        }
+        primary_index += usize::from(in_primary);
+        supplement_index += usize::from(in_supplement);
     }
     Ok(())
 }

@@ -1,5 +1,5 @@
 schema = 1
-version = "0.46.0"
+version = "0.47.0"
 status = "active"
 
 [[requirement]]
@@ -85,7 +85,7 @@ notes = "The m1.syntax-core.v1 bootstrap strictly parses bounded contiguous wind
 [[requirement]]
 id = "RPE-ARCH-001/5.4"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
-summary = "Native xref primitives validate strict-base and caller-anchored sparse traditional tables, decoded unfiltered xref-stream tables, and bounded already-parsed revision candidates; product opening still attests only the traditional base profile."
+summary = "Native xref primitives validate strict-base and caller-anchored sparse traditional tables, decoded unfiltered xref-stream tables, and bounded already-parsed revision candidates with explicit base roots, update inheritance, and validated base hybrids; product opening still attests only the traditional base profile."
 features = ["core.traditional-xref", "core.decoded-xref-stream-table", "core.xref-revision-chain", "core.indirect-object-framing", "core.staged-stream-length-framing", "core.revision-aware-object-resolver", "core.object-stream-resolution", "core.base-revision-candidate-index", "core.strict-base-revision-attestation", "core.strict-base-open", "core.attested-object-access", "core.attested-reference-chain-resolution", "core.attested-resident-footprint", "runtime.strict-base-open-job-owner", "runtime.strict-base-open-coordinator", "quality.native-range-resume-loop", "quality.native-strict-open-runtime-loop"]
 implementation = ["core/xref", "core/object", "core/document", "runtime/session", "tools/quality"]
 tests = ["core/xref::traditional_xref", "core/xref::traditional_revision", "core/xref::xref_stream", "core/xref::revision_chain", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "core/object::object_behavior", "core/object::framing_matrix", "core/object::staged_length", "core/object::object_stream", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "core/document::revision_resolver", "core/document::compressed_resolver", "core/document::revision_index", "core/document::revision_attestation", "core/document::revision_attestation_limit_config", "core/document::strict_base_open", "core/document::attested_object_access", "core/document::reference_chain_resolution", "core/document::reference_chain_limit_config", "core/document::limit_config", "core/document::repository_policy", "runtime/session::strict_base_open_owner", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]

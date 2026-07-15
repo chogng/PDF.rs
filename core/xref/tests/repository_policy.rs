@@ -74,6 +74,8 @@ fn anchored_revision_surface_cannot_relax_the_strict_base_entry() {
         .expect("xref parser source must be readable");
     let anchored = fs::read_to_string(crate_root.join("src/traditional_revision.rs"))
         .expect("anchored revision source must be readable");
+    let revision = fs::read_to_string(crate_root.join("src/revision.rs"))
+        .expect("revision composer source must be readable");
     let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
         .expect("xref provenance must be readable");
 
@@ -87,6 +89,13 @@ fn anchored_revision_surface_cannot_relax_the_strict_base_entry() {
     assert!(parser.contains("finalize_revision_section"));
     assert!(parser.contains("UnsupportedIncrementalRevision"));
     assert!(parser.contains("UnsupportedHybridXref"));
+    assert!(revision.contains("root: Option<ObjectRef>"));
+    assert!(revision.contains("xref_stream: Option<u64>"));
+    assert!(revision.contains("impl From<TraditionalRevisionSection> for RevisionCandidate"));
+    assert!(revision.contains("if base.root.is_none()"));
+    assert!(revision.contains(".find_map(|revision| revision.root)"));
+    assert!(revision.contains("revision.xref_stream != Some(supplement.startxref)"));
+    assert!(revision.contains(".is_some_and(|previous| supplement.startxref <= previous)"));
     assert!(strict_job.contains("parse_section"));
     assert!(strict_job.contains("XrefPoll::Ready"));
     assert!(
@@ -98,8 +107,13 @@ fn anchored_revision_surface_cannot_relax_the_strict_base_entry() {
         "a sparse candidate must not convert into the strict base proof"
     );
     assert!(provenance.contains("cannot be converted to `XrefSection`"));
-    assert!(provenance.contains("does not discover the final anchor"));
+    assert!(provenance.contains("but it does not"));
+    assert!(provenance.contains("discover the final anchor"));
     assert!(provenance.contains("does not recharge"));
+    assert!(provenance.contains("the oldest base must provide one"));
+    assert!(provenance.contains("first explicit value found from newest to oldest"));
+    assert!(provenance.contains("A base hybrid permits `XRefStm < current startxref`"));
+    assert!(provenance.contains("only already-parsed candidates"));
 }
 
 #[test]
@@ -115,8 +129,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.46.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.46.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.47.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.47.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -222,6 +236,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("\"core.decoded-xref-stream-table\""));
     assert!(requirement.contains("\"core.xref-revision-chain\""));
     assert!(requirement.contains("\"core/xref\""));
+    assert!(requirement.contains("explicit base roots, update inheritance"));
+    assert!(requirement.contains("validated base hybrids"));
     assert!(requirement.contains("core/xref::traditional_xref"));
     assert!(requirement.contains("core/xref::traditional_revision"));
     assert!(requirement.contains("core/xref::xref_stream"));

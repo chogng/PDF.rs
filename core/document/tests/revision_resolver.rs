@@ -496,6 +496,7 @@ fn hybrid_update_resolves_supplement_length_and_preserves_revision_local_bounds(
         Some(base_startxref),
         vec![RevisionEntry::uncompressed(1, new_target_offset, 0)],
     )
+    .with_xref_stream(supplement_startxref)
     .with_hybrid_supplement(supplement);
     let chain = compose_revision_chain(
         vec![update, base],

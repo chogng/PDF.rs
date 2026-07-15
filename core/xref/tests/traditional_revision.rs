@@ -7,9 +7,10 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 use pdf_rs_xref::{
-    NeverCancelled, OpenTraditionalRevisionJob, TraditionalRevisionJobContext,
-    TraditionalRevisionPhase, TraditionalRevisionPoll, TraditionalRevisionSection, XrefError,
-    XrefErrorCode, XrefLimitConfig, XrefLimitKind, XrefLimits, XrefRecoverability,
+    NeverCancelled, OpenTraditionalRevisionJob, RevisionCandidate, RevisionErrorCode,
+    RevisionLimits, TraditionalRevisionJobContext, TraditionalRevisionPhase,
+    TraditionalRevisionPoll, TraditionalRevisionSection, XrefError, XrefErrorCode, XrefLimitConfig,
+    XrefLimitKind, XrefLimits, XrefRecoverability, compose_revision_chain,
 };
 
 const STARTXREF: u64 = 128;
@@ -194,6 +195,11 @@ fn older_rootless_and_base_hybrid_metadata_remain_explicit_candidates() {
     assert_eq!(rootless.root(), None);
     assert_eq!(rootless.previous(), Some(20));
     assert_eq!(rootless.xref_stream(), None);
+    let rootless_candidate = RevisionCandidate::from(rootless);
+    assert_eq!(rootless_candidate.root(), None);
+    assert_eq!(rootless_candidate.previous(), Some(20));
+    assert_eq!(rootless_candidate.xref_stream_anchor(), None);
+    assert_eq!(rootless_candidate.primary_entries().len(), 1);
 
     let hybrid_base = fixture(
         &[("0 1", &["0000000000 65535 f"])],
@@ -203,6 +209,20 @@ fn older_rootless_and_base_hybrid_metadata_remain_explicit_candidates() {
     assert_eq!(hybrid_base.root(), Some(ObjectRef::new(1, 0).unwrap()));
     assert_eq!(hybrid_base.previous(), None);
     assert_eq!(hybrid_base.xref_stream(), Some(80));
+    let hybrid_candidate = RevisionCandidate::from(hybrid_base);
+    assert_eq!(hybrid_candidate.root(), Some(ObjectRef::new(1, 0).unwrap()));
+    assert_eq!(hybrid_candidate.previous(), None);
+    assert_eq!(hybrid_candidate.xref_stream_anchor(), Some(80));
+    assert_eq!(
+        compose_revision_chain(
+            vec![hybrid_candidate],
+            RevisionLimits::default(),
+            &NeverCancelled,
+        )
+        .unwrap_err()
+        .code(),
+        RevisionErrorCode::InvalidHybrid
+    );
 }
 
 #[test]
