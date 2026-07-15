@@ -13,10 +13,13 @@ unsupported and produces exact-size, top-down, straight-alpha RGBA8 pixels. It
 does not draw form/widget overlays. The Outline and page-count profiles each produce one bounded
 canonical JSON parse artifact and report Scene, Text, and Pixel as unsupported.
 
-The helper is not an approved sandbox. `runner_executable`, invocation and
-complete build/runtime fingerprints, and isolation metadata remain M0-blocking
-until a reviewed build and adapter environment are entered in
-`docs/traceability/baseline-ledger.toml`. A real adapter must add platform
+The helper is not an approved sandbox. For M0, protocol v2 and the generic
+supervisor provide only a process-level black box for fixed, self-authored,
+hash-bound inputs; this closes the external-runner infrastructure boundary but
+does not register PDFium as a baseline. `runner_executable`, invocation and
+complete build/runtime fingerprints, reviewed isolation metadata, and a
+`docs/traceability/baseline-ledger.toml` entry remain blocking for registered
+DIFFERENTIAL CI or untrusted inputs. Such an adapter must add platform
 enforcement for descendants, CPU, memory, private per-invocation filesystem and
 temporary storage, syscalls, and network access around the direct-child harness.
 Any eventual output has O4 observational authority only and cannot create or

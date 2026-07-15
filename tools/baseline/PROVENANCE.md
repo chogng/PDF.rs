@@ -187,10 +187,13 @@ non-fixed PDF input.
 
 The local PDFium source checkout is not built or distributed by this crate. The
 recorded helper executable was built only in a disposable checkout and remains
-probe-only. A platform containment wrapper, complete runtime and license
-fingerprints, replacement protection, and baseline-ledger entry are required
-before differential CI. Until then this is a tested partial process boundary,
-not the M0 external baseline runner exit condition.
+probe-only. For the bounded M0 infrastructure gate, protocol v2 and the generic
+supervisor provide a tested process-level black box over fixed, self-authored,
+hash-bound inputs, while product release closure is proved independently by the
+quality CI. That satisfies the M0 external-runner and build-isolation scope; it
+does not register PDFium as a baseline. A platform containment wrapper,
+complete runtime and license fingerprints, replacement protection, and a
+baseline-ledger entry remain required before registered DIFFERENTIAL CI.
 
 PDFium's public bookmark API normalizes titles, returns the raw item Count, may
 resolve destination names or GoTo actions into an effective destination, and
@@ -225,3 +228,5 @@ algorithm parity or used as a performance gate.
   comparison with exact repeatable valid counts and an expected root-Count strictness difference.
 - 2026-07-14: Recorded two raw-sample 128-page page-count boundary-performance trials with exact
   behavior agreement and explicit `performance_eligible=false` scope separation.
+- 2026-07-15: Accepted the fixed-input process boundary as the M0 external-runner scope while
+  retaining platform containment, complete closure, and ledger registration as DIFFERENTIAL gates.

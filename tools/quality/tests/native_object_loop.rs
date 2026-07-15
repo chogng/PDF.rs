@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.31.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.31.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.32.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.32.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -981,7 +981,6 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "RPE-ARCH-001/9.1",
         "RPE-ARCH-001/14.2",
         "RPE-ARCH-001/12.6",
-        "RPE-ARCH-001/15.3/M0",
         "RPE-ARCH-001/15.3/M1",
     ] {
         let requirement = record_with_id(SPEC_MAP, "requirement", requirement_id)
@@ -997,6 +996,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
 
     let m0_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/15.3/M0")
         .expect("the M0 quality-infrastructure requirement must exist");
+    assert!(m0_requirement.contains("status = \"covered\""));
     assert!(m0_requirement.contains("\"quality.native-object-loop\""));
     assert!(m0_requirement.contains("formal-strict-base-open"));
     assert!(m0_requirement.contains("ReadySessionOwner"));

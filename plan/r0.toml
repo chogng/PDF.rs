@@ -1,9 +1,9 @@
 schema = 1
 id = "r0-development-plan"
-version = "0.1.0"
-status = "draft"
+version = "0.2.0"
+status = "active"
 planning_basis = "RPE-ARCH-001 v0.3, sections 2.6 and 15.3"
-last_updated = 2026-07-13
+last_updated = 2026-07-15
 max_parallel_milestones = 2
 max_parallel_work_items_per_milestone = 3
 
@@ -50,6 +50,22 @@ deliverables = [
   "process-isolated external baseline runner",
 ]
 exit_gate = "Synthetic parse, Scene, text, and pixel outputs produce a complete failure bundle; baseline and product build dependencies are isolated."
+status = "complete"
+completed_at = 2026-07-15
+reviewed_by_roles = ["spec-conformance", "baseline-release"]
+evidence = [
+  "active independently reviewed O1 case: tests/cases/infrastructure/synthetic-failure-bundle-001/case.toml",
+  "exact content-addressed parse/Scene/Text/Pixel bundle replay: cargo test -p pdf-rs-quality --test m0_exit and ./scripts/ci.sh pr",
+  "protocol-v2 direct-child external runner contract: cargo test -p pdf-rs-baseline --test process_harness --test pdfium_adapter_contract",
+  "fixed-input PDFium O4 observations: tools/baseline/pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-pixel-adapter-probe-v1.toml",
+  "fresh release product dependency closure: scripts/ci.sh prepare-product-build-proof and check-product-build-closure steps",
+  "canonical corpus and benchmark replay: cargo run --quiet --package pdf-rs-corpus -- validate tests/corpus/manifests/t0-bootstrap-v1.toml . and cargo run --quiet --package pdf-rs-benchmark -- validate tests/performance/m0-synthetic-benchmark-replay-v1.toml tests/corpus/manifests/t0-bootstrap-v1.toml",
+]
+remaining_non_blocking = [
+  "platform containment and complete runtime, license, font, and color closure before registered DIFFERENTIAL CI or untrusted inputs",
+  "baseline-ledger registration and executable replacement protection before an external observation may become gating",
+  "registered fuzzing, broad corpus differential coverage, fixed-pool performance evidence, and M1 product-service gates",
+]
 
 [[milestone]]
 id = "M1"

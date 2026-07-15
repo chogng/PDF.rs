@@ -283,7 +283,6 @@ fn mutation_profile_remains_test_only_and_not_fuzz_evidence() {
 
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
     for requirement_id in [
-        "RPE-ARCH-001/15.3/M0",
         "RPE-ARCH-001/12.6",
         "RPE-ARCH-001/12.19",
         "RPE-ARCH-001/12.21",
@@ -299,6 +298,14 @@ fn mutation_profile_remains_test_only_and_not_fuzz_evidence() {
         );
     }
     let milestone = array_record(spec_map, "[[requirement]]", "RPE-ARCH-001/15.3/M0");
+    assert!(
+        milestone.lines().any(|line| line == "status = \"covered\""),
+        "profile={PROFILE} invariant=m0-covered-status"
+    );
+    assert!(
+        milestone.contains("tools/quality/tests/parser_mutation_smoke.rs"),
+        "profile={PROFILE} invariant=m0-spec-test-trace"
+    );
     assert!(
         milestone.contains("registered coverage-guided and continuous fuzzing")
             && milestone.contains("remain open"),
