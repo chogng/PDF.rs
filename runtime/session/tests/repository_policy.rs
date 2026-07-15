@@ -155,6 +155,70 @@ fn range_resume_permits_remain_opaque_and_move_only() {
 }
 
 #[test]
+fn strict_open_coordinator_keeps_execution_owners_private_and_ready_move_only() {
+    let source = fs::read_to_string(crate_root().join("src/strict_base_open_coordinator.rs"))
+        .expect("strict-open coordinator source must be readable");
+    let public_signatures = source
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("pub fn ") || line.starts_with("pub const fn "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for forbidden in [
+        "ByteSource",
+        "RangeResumeArbiter",
+        "RangeResumePermit",
+        "RangeResumeFailurePermit",
+        "StrictBaseOpenJobOwner",
+        "register_pending",
+        "take_completion",
+    ] {
+        assert!(
+            !public_signatures.contains(forbidden),
+            "coordinator public API must not expose {forbidden:?}"
+        );
+    }
+    for callback in [
+        "pub fn supply(&mut self, response: RangeResponse)",
+        "pub fn observe_snapshot(&mut self, observed: SourceSnapshot)",
+        "pub fn fail_data(&mut self, ticket: DataTicket)",
+    ] {
+        assert!(source.contains(callback));
+    }
+    assert_eq!(
+        source.matches("pub fn run_one(").count(),
+        1,
+        "exactly one public coordinator method may enter parser execution"
+    );
+
+    let ready_start = source
+        .find("pub struct StrictBaseOpenReady {")
+        .expect("Ready handoff declaration must remain present");
+    let ready_end = source[ready_start..]
+        .find("impl StrictBaseOpenReady")
+        .map(|offset| ready_start + offset)
+        .expect("Ready handoff implementation must follow its declaration");
+    let declaration = &source[ready_start..ready_end];
+    assert!(!declaration.contains("Clone"));
+    assert!(!declaration.contains("Copy"));
+    let fields = declaration
+        .split("pub struct StrictBaseOpenReady {")
+        .nth(1)
+        .and_then(|body| body.split('}').next())
+        .expect("Ready handoff fields must remain inspectable");
+    for private_field in [
+        "index: AttestedRevisionIndex,",
+        "source_owner: RangeResumeArbiter,",
+    ] {
+        assert!(fields.lines().any(|line| line.trim() == private_field));
+    }
+    assert!(!fields.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("pub ") || line.starts_with("pub(")
+    }));
+}
+
+#[test]
 fn product_dependencies_are_only_bytes_cache_and_direct_signature_document_types() {
     let manifest = fs::read_to_string(crate_root().join("Cargo.toml"))
         .expect("session manifest must be readable");
