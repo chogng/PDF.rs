@@ -1,13 +1,14 @@
 //! Bounded Range-resume arbitration and M1 strict-document session ownership.
 //!
-//! This crate owns four deliberately small runtime slices: snapshot-bound Range
-//! subscriptions, generation-gated execution of one strict base-open job, a
-//! single-job coordinator that closes their actor-turn gap, and the lifetime of
-//! exactly one [`pdf_rs_cache::ReadyStore`] after a document has reached Ready.
-//! [`M1StrictDocumentSession`] composes those owners with one page-count slot and
-//! one outline slot for the M1 service boundary. None performs file, network,
-//! platform, or async I/O. The M1 actor is not a complete product Session or a
-//! general-purpose scheduler.
+//! This crate owns five deliberately small runtime slices: deterministic
+//! snapshot-bound Range grouping, snapshot-bound Range subscriptions,
+//! generation-gated execution of one strict base-open job, a single-job
+//! coordinator that closes their actor-turn gap, and the lifetime of exactly one
+//! [`pdf_rs_cache::ReadyStore`] after a document has reached Ready.
+//! [`M1StrictDocumentSession`] composes the execution owners with one page-count
+//! slot and one outline slot for the M1 service boundary. None performs file,
+//! network, platform, or async I/O. The M1 actor is not a complete product
+//! Session or a general-purpose scheduler.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -20,6 +21,7 @@
 mod error;
 mod m1_session;
 mod owner;
+mod range_coalescer;
 mod range_resume;
 mod range_resume_error;
 mod strict_base_open_coordinator;
@@ -37,6 +39,13 @@ pub use m1_session::{
 };
 pub use owner::{
     ReadySessionCloseReport, ReadySessionOwner, ReadySessionPhase, ReadySessionResources,
+};
+pub use range_coalescer::{
+    CoalescedRangeGroup, NeverCancelledRangeCoalescer, RangeCoalescerCancellation,
+    RangeCoalescerError, RangeCoalescerErrorCategory, RangeCoalescerErrorCode, RangeCoalescerLimit,
+    RangeCoalescerLimitConfig, RangeCoalescerLimitKind, RangeCoalescerLimits,
+    RangeCoalescerRecoverability, RangeCoalescerRequest, RangeCoalescingPlan,
+    RangeRequestCoalescer, RangeRequestId,
 };
 pub use range_resume::{
     RangeResumeArbiter, RangeResumeArbiterId, RangeResumeCancelOutcome, RangeResumeCompletion,

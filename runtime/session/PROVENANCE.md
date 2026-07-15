@@ -1,7 +1,9 @@
 # Scope
 
-`runtime/session` owns three bounded owner slices, one one-job composition, and one deliberately
-bounded M1 strict-document actor. `RangeResumeArbiter`
+`runtime/session` owns one pure bounded Range-request coalescer, three bounded owner slices, one
+one-job composition, and one deliberately bounded M1 strict-document actor. `RangeRequestCoalescer`
+binds exact resumable requests to one immutable source snapshot and emits deterministic merged host
+ranges without performing transport or scheduling. `RangeResumeArbiter`
 privately owns one snapshot-bound `RangeStore` and turns namespaced terminal tickets into an ordered
 stream of arbiter-bound move-only resume or failure permits without running parser code inline.
 `StrictBaseOpenJobOwner` privately owns one generation-bound strict-base opening job and consumes a
@@ -23,9 +25,11 @@ registry, general priority scheduler, worker pool, transport, IPC, or event-publ
 
 # Semantic owner
 
-`runtime/session` owns the Range ticket-to-permit ownership boundary, one strict-open job execution
-boundary, their one-job coordinator turn boundary, one Ready-store instance and its Ready-to-Closed
-boundary, plus scheduling fairness between the two fixed M1 service slots. The bounded actor decides
+`runtime/session` owns the Range request-to-host-group planning boundary, the Range ticket-to-permit
+ownership boundary, one strict-open job execution boundary, their one-job coordinator turn boundary,
+one Ready-store instance and its Ready-to-Closed boundary, plus scheduling fairness between the two
+fixed M1 service slots. The coalescer decides only deterministic grouping under a caller-supplied gap
+threshold and budgets. The bounded actor decides
 which of those two jobs may execute and validates their caller-issued identities. A future generic
 scheduler and registry still owns arbitrary job kinds, priority classes, long-lived ID allocation,
 and Worker-wide arbitration. The platform owns physical source transport.
@@ -57,6 +61,23 @@ completed close.
   close/cancellation behavior.
 
 # Algorithms and ownership
+
+## Range request coalescer
+
+- `RangeRequestCoalescer` is bound to one complete `SourceSnapshot`. Every submitted member carries
+  that same snapshot, one opaque runtime request ID, and its complete `ReadRequest`; snapshot
+  mismatch fails as `SourceChanged`, known-length overrun and duplicate IDs fail as caller input.
+- Planning first admits the request-count and requested-byte budgets, then sorts by checked source
+  geometry, descending urgency, and request ID. Output therefore does not depend on arrival order.
+  Overlapping ranges always merge. Non-overlapping ranges merge only when their gap is strictly less
+  than the caller-supplied threshold; adjacency therefore remains separate at threshold zero.
+- Each group retains every exact member request for later ticket/request routing and publishes the
+  highest member priority. Groups and members remain in deterministic source order. The planner does
+  not issue a host request, complete a `DataTicket`, wake a job, or execute parser work.
+- Fixed implementation ceilings bound request, group, and per-group member metadata. Caller budgets
+  additionally bound checked aggregate requested bytes and merged bytes, including filled gaps.
+  All vectors use fallible reservation, all byte sums and merged lengths are checked in `u64`, and
+  cooperative cancellation is probed before admission, per member, after sorting, and per group.
 
 ## Range-resume arbiter
 
@@ -199,6 +220,9 @@ completed close.
 
 # Tests
 
+Range-coalescer tests cover arrival-order independence, overlap, strict gap-threshold boundaries,
+priority promotion, retained request identities, checked geometry and aggregate overflow, cooperative
+cancellation, count/member/byte budgets, known-length bounds, duplicate IDs, and snapshot isolation.
 Range-resume component tests cover reverse response and ordered resume/failure completion, private
 ticket namespaces, exact idempotent registration, move-only one-shot permits, issuer and
 captured-generation evidence, cancellation before and after ticket completion, shared-ticket
@@ -237,8 +261,10 @@ project-authored structural fixtures.
   validates caller identities but does not mint or persist an unbounded history of them.
 - `M1StrictDocumentSession` is intentionally limited to one opening job and two fixed services. It
   does not implement a generic job queue, five-level priority scheduler, worker pool, backpressure,
-  cross-session arbitration, transport I/O, physical request merging, password flow, surfaces,
-  rendering, save, platform queue close, event port, or a close deadline.
+  cross-session arbitration, transport I/O, host-request submission or cancellation, password flow,
+  surfaces, rendering, save, platform queue close, event port, or a close deadline. Its sibling
+  coalescer computes bounded host-range groups but does not integrate a transport or become a
+  scheduler.
 - Parent Worker-to-Session budget reservation, cross-session aggregation,
   persistent or cross-session caches, decrypted-value security domains, stable
   failure caching, in-flight resolution coalescing, concurrent shards, and the
@@ -252,6 +278,11 @@ project-authored structural fixtures.
   remain later work; they are not prerequisites for the bounded M1 byte/object actor slice itself.
 
 # History
+
+- 2026-07-15: Added a pure snapshot-bound Range request coalescer with strict gap-threshold merging,
+  deterministic source ordering, highest-member priority, exact request-ID retention, checked byte
+  accounting, fallible bounded metadata, and cooperative cancellation without transport or generic
+  scheduling claims.
 
 - 2026-07-15: Added `M1StrictDocumentSession` with Created-to-Failed/Closed lifecycle, caller-owned
   request identities, strict-open-to-Ready proof handoff, the same Range arbiter, one page-count and

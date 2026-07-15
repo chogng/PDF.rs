@@ -267,6 +267,7 @@ fn bounded_m1_session_is_one_actor_without_a_generic_scheduler_claim() {
             "M1 actor must contain {required:?}"
         );
     }
+
     assert_eq!(source.matches("pub fn run_one").count(), 1);
     for forbidden in ["VecDeque", "BinaryHeap", "async fn", "Worker", "Pdfium"] {
         assert!(
@@ -337,8 +338,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.59.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.59.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.60.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.60.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -405,6 +406,25 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
+
+    let coalescer = record_with_id(&feature_map, "feature", "runtime.range-request-coalescer")
+        .expect("Range-request coalescer feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.range-request-coalescer.v1\"",
+        "RPE-ARCH-001/5.2",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"runtime/session\"]",
+        "runtime/session::range_coalescer",
+        "runtime/session::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            coalescer.contains(required),
+            "Range-request coalescer feature must contain {required:?}"
+        );
+    }
 
     let feature = record_with_id(&feature_map, "feature", "runtime.range-resume-arbiter")
         .expect("Range-resume arbiter feature must exist");
@@ -509,6 +529,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
     let byte_access = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.1-5.2")
         .expect("Native byte-access requirement must exist");
     for required in [
+        "runtime.range-request-coalescer",
         "runtime.range-resume-arbiter",
         "runtime.strict-base-open-job-owner",
         "runtime.strict-base-open-coordinator",
@@ -519,6 +540,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
         "tools/quality::native_strict_open_runtime_loop",
+        "runtime/session::range_coalescer",
         "status = \"partial\"",
         "runtime caller registers each returned Pending ticket with its job, checkpoint, and generation",
         "unified ordered completion stream",
@@ -537,6 +559,9 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "same private source owner",
         "exact five checkpoints",
         "upper-half-before-lower out-of-order delivery",
+        "gap strictly below a caller threshold",
+        "without issuing transport or completing tickets",
+        "host submission/cancellation",
         "generic multi-job scheduler with priority, fairness, backpressure, and generation registry",
         "complete Session/request/Worker ownership",
         "all features stay PLANNED",
@@ -590,7 +615,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "Late or mismatched permits are consumed without parser work",
         "Public run_one is its only parser entry",
         "Host supply, snapshot observation, and failure ingress never poll parser code",
-        "A failure turn does not poll the parser or probe cancellation",
+        "a failure turn does not poll the parser or probe cancellation",
         "opaque move-only handoff",
         "same private source owner",
         "not one complete Session",
