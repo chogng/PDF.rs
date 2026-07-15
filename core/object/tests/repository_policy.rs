@@ -195,8 +195,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.61.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.61.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
 
     let anchor_feature = record_with_id(&feature_map, "feature", "core.source-xref-anchor")
         .expect("source xref-anchor feature record must exist");
@@ -255,7 +255,7 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
     assert!(object_requirement.contains("m1.unfiltered-object-stream-resolution.v1"));
     assert!(object_requirement.contains("DecodedObjectSpan"));
     assert!(object_requirement.contains("latest effective uncompressed container"));
-    assert!(object_requirement.contains("object-stream scheduling and ownership"));
+    assert!(object_requirement.contains("resolves effective direct or compressed values"));
     assert!(milestone.contains(
         "A bounded document resolver connects the already-composed revision and staged-object components"
     ));
@@ -263,8 +263,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
         "proof-bound filtered or unfiltered primary-stream, hybrid, and incremental chains"
     ));
     assert!(milestone.contains("indirect-Length xref streams"));
-    assert!(milestone.contains("filtered object-stream source scheduling"));
-    assert!(milestone.contains("all affected profiles remain truthfully unpromoted"));
+    assert!(milestone.contains("source-acquired document owner now closes"));
+    assert!(milestone.contains("all affected profiles remain unpromoted"));
 
     let repair = record_with_id(&feature_map, "feature", "core.local-repair")
         .expect("local-repair feature record must exist");

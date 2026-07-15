@@ -6,9 +6,9 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_object::{
     DeclaredStreamLength, IndirectObject, IndirectObjectTarget, ObjectCancellation,
-    ObjectEnvelopePoll, ObjectJobContext, ObjectLimits, ObjectPoll, ObjectStats, ObjectStream,
-    ObjectStreamEntry, OpenObjectEnvelopeJob, OpenStreamBoundaryJob, ResolvedStreamLength,
-    StreamEnvelope,
+    ObjectEnvelopePoll, ObjectError, ObjectJobContext, ObjectLimitKind, ObjectLimits, ObjectPoll,
+    ObjectStats, ObjectStream, ObjectStreamEntry, ObjectWorkCaps, OpenObjectEnvelopeJob,
+    OpenStreamBoundaryJob, ResolvedStreamLength, StreamEnvelope,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 use pdf_rs_xref::{ResolvedXrefEntry, RevisionChain, RevisionEntryKind};
@@ -717,6 +717,56 @@ impl Default for RevisionResolverLimits {
     }
 }
 
+/// Parent-supplied cumulative caps across the target and optional indirect-Length child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RevisionResolverWorkCaps {
+    max_read_bytes: u64,
+    max_parse_bytes: u64,
+}
+
+impl RevisionResolverWorkCaps {
+    /// Validates positive caps no larger than the resolver profile.
+    pub fn new(
+        max_read_bytes: u64,
+        max_parse_bytes: u64,
+        limits: RevisionResolverLimits,
+    ) -> Result<Self, DocumentError> {
+        if max_read_bytes == 0
+            || max_parse_bytes == 0
+            || max_read_bytes > limits.max_total_object_read_bytes()
+            || max_parse_bytes > limits.max_total_object_parse_bytes()
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidLimits,
+                None,
+                None,
+            ));
+        }
+        Ok(Self {
+            max_read_bytes,
+            max_parse_bytes,
+        })
+    }
+
+    /// Uses the complete aggregate work profile.
+    pub const fn from_limits(limits: RevisionResolverLimits) -> Self {
+        Self {
+            max_read_bytes: limits.max_total_object_read_bytes(),
+            max_parse_bytes: limits.max_total_object_parse_bytes(),
+        }
+    }
+
+    /// Returns the cumulative exact-read cap.
+    pub const fn max_read_bytes(self) -> u64 {
+        self.max_read_bytes
+    }
+
+    /// Returns the cumulative parser-window cap.
+    pub const fn max_parse_bytes(self) -> u64 {
+        self.max_parse_bytes
+    }
+}
+
 /// Coarse resumable phase of one revision-aware object-resolution job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RevisionResolverPhase {
@@ -825,6 +875,10 @@ impl ResolvedObject {
     pub const fn object(&self) -> &IndirectObject {
         &self.object
     }
+
+    pub(crate) fn into_parts(self) -> (UncompressedObjectLocator, IndirectObject) {
+        (self.locator, self.object)
+    }
 }
 
 impl fmt::Debug for ResolvedObject {
@@ -868,10 +922,12 @@ enum ResolverState {
         locator: UncompressedObjectLocator,
         envelope: StreamEnvelope,
         job: OpenObjectEnvelopeJob,
+        work_caps: ObjectWorkCaps,
     },
     ObjectBoundary {
         locator: UncompressedObjectLocator,
         job: OpenStreamBoundaryJob,
+        work_caps: ObjectWorkCaps,
     },
     Complete,
     Failed(DocumentError),
@@ -887,6 +943,8 @@ pub struct ResolveObjectJob<'index> {
     reference: ObjectRef,
     context: RevisionResolverJobContext,
     limits: RevisionResolverLimits,
+    work_caps: RevisionResolverWorkCaps,
+    target_work_caps: ObjectWorkCaps,
     syntax_limits: SyntaxLimits,
     stats: RevisionResolverStats,
     state: ResolverState,
@@ -901,6 +959,25 @@ impl<'index> ResolveObjectJob<'index> {
         limits: RevisionResolverLimits,
         syntax_limits: SyntaxLimits,
     ) -> Result<Self, DocumentError> {
+        Self::new_with_work_caps(
+            index,
+            reference,
+            context,
+            limits,
+            syntax_limits,
+            RevisionResolverWorkCaps::from_limits(limits),
+        )
+    }
+
+    /// Binds one exact reference under parent-supplied aggregate target/dependency work caps.
+    pub fn new_with_work_caps(
+        index: &'index RevisionObjectIndex,
+        reference: ObjectRef,
+        context: RevisionResolverJobContext,
+        limits: RevisionResolverLimits,
+        syntax_limits: SyntaxLimits,
+        work_caps: RevisionResolverWorkCaps,
+    ) -> Result<Self, DocumentError> {
         if !context.is_valid() {
             return Err(DocumentError::for_code(
                 DocumentErrorCode::InvalidRevisionResolverJobContext,
@@ -908,12 +985,33 @@ impl<'index> ResolveObjectJob<'index> {
                 None,
             ));
         }
+        if work_caps.max_read_bytes > limits.max_total_object_read_bytes
+            || work_caps.max_parse_bytes > limits.max_total_object_parse_bytes
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidLimits,
+                Some(reference),
+                None,
+            ));
+        }
         let (locator, target) = index.target(reference)?;
-        let job = OpenObjectEnvelopeJob::new(
+        let object_caps = ObjectWorkCaps::new(
+            work_caps
+                .max_read_bytes
+                .min(limits.object().max_total_read_bytes()),
+            work_caps
+                .max_parse_bytes
+                .min(limits.object().max_total_parse_bytes()),
+        )
+        .map_err(|error| {
+            DocumentError::from_revision_resolver_object(error, reference, locator.offset, true)
+        })?;
+        let job = OpenObjectEnvelopeJob::new_with_work_caps(
             target,
             context.object_context(),
             limits.object(),
             syntax_limits,
+            object_caps,
         )
         .map_err(|error| {
             DocumentError::from_revision_resolver_object(error, reference, locator.offset, true)
@@ -923,6 +1021,8 @@ impl<'index> ResolveObjectJob<'index> {
             reference,
             context,
             limits,
+            work_caps,
+            target_work_caps: object_caps,
             syntax_limits,
             stats: RevisionResolverStats::default(),
             state: ResolverState::ObjectEnvelope { locator, job },
@@ -947,6 +1047,11 @@ impl<'index> ResolveObjectJob<'index> {
     /// Returns the per-child and resolver-wide aggregate work profile.
     pub const fn limits(&self) -> RevisionResolverLimits {
         self.limits
+    }
+
+    /// Returns parent-supplied cumulative target/dependency work caps.
+    pub const fn work_caps(&self) -> RevisionResolverWorkCaps {
+        self.work_caps
     }
 
     /// Returns child framing work through the latest poll.
@@ -998,6 +1103,7 @@ impl<'index> ResolveObjectJob<'index> {
                                 self.state = ResolverState::ObjectBoundary {
                                     locator,
                                     job: boundary,
+                                    work_caps: self.target_work_caps,
                                 };
                             }
                             DeclaredStreamLength::Indirect { reference, .. } => {
@@ -1012,11 +1118,58 @@ impl<'index> ResolveObjectJob<'index> {
                                     Ok(target) => target,
                                     Err(error) => return self.fail(error),
                                 };
-                                let length_job = match OpenObjectEnvelopeJob::new(
+                                let read_remaining = match self
+                                    .work_caps
+                                    .max_read_bytes
+                                    .checked_sub(self.stats.object.read_bytes())
+                                {
+                                    Some(value) if value > 0 => value,
+                                    _ => {
+                                        return self.fail(DocumentError::resource(
+                                            DocumentLimitKind::RevisionResolverObjectReadBytes,
+                                            self.work_caps.max_read_bytes,
+                                            self.stats.object.read_bytes(),
+                                            1,
+                                            Some(length_locator.offset),
+                                        ));
+                                    }
+                                };
+                                let parse_remaining = match self
+                                    .work_caps
+                                    .max_parse_bytes
+                                    .checked_sub(self.stats.object.parse_bytes())
+                                {
+                                    Some(value) if value > 0 => value,
+                                    _ => {
+                                        return self.fail(DocumentError::resource(
+                                            DocumentLimitKind::RevisionResolverObjectParseBytes,
+                                            self.work_caps.max_parse_bytes,
+                                            self.stats.object.parse_bytes(),
+                                            1,
+                                            Some(length_locator.offset),
+                                        ));
+                                    }
+                                };
+                                let length_caps = match ObjectWorkCaps::new(
+                                    read_remaining.min(self.limits.object().max_total_read_bytes()),
+                                    parse_remaining
+                                        .min(self.limits.object().max_total_parse_bytes()),
+                                ) {
+                                    Ok(caps) => caps,
+                                    Err(error) => {
+                                        return self.fail_object(
+                                            error,
+                                            length_locator.offset,
+                                            true,
+                                        );
+                                    }
+                                };
+                                let length_job = match OpenObjectEnvelopeJob::new_with_work_caps(
                                     target,
                                     self.context.length_context(),
                                     self.limits.object(),
                                     self.syntax_limits,
+                                    length_caps,
                                 ) {
                                     Ok(job) => job,
                                     Err(error) => {
@@ -1031,6 +1184,7 @@ impl<'index> ResolveObjectJob<'index> {
                                     locator,
                                     envelope,
                                     job: length_job,
+                                    work_caps: length_caps,
                                 };
                             }
                         },
@@ -1047,7 +1201,13 @@ impl<'index> ResolveObjectJob<'index> {
                             };
                         }
                         ObjectEnvelopePoll::Failed(error) => {
-                            return self.fail_object(error, locator.offset, false);
+                            return self.fail_child_object(
+                                error,
+                                locator.offset,
+                                false,
+                                ObjectStats::default(),
+                                self.target_work_caps,
+                            );
                         }
                     }
                 }
@@ -1055,6 +1215,7 @@ impl<'index> ResolveObjectJob<'index> {
                     locator,
                     envelope,
                     mut job,
+                    work_caps: length_work_caps,
                 } => {
                     let length_offset = job.target().xref_offset();
                     let poll = job.poll(source, cancellation);
@@ -1074,7 +1235,16 @@ impl<'index> ResolveObjectJob<'index> {
                                     return self.fail_object(error, length_offset, false);
                                 }
                             };
-                            let boundary = match OpenStreamBoundaryJob::new(envelope, claim) {
+                            let continuation_caps =
+                                match self.boundary_continuation_caps(locator.offset) {
+                                    Ok(caps) => caps,
+                                    Err(error) => return self.fail(error),
+                                };
+                            let boundary = match OpenStreamBoundaryJob::new_with_work_caps(
+                                envelope,
+                                claim,
+                                continuation_caps,
+                            ) {
                                 Ok(job) => job,
                                 Err(error) => {
                                     return self.fail_object(error, locator.offset, true);
@@ -1083,6 +1253,7 @@ impl<'index> ResolveObjectJob<'index> {
                             self.state = ResolverState::ObjectBoundary {
                                 locator,
                                 job: boundary,
+                                work_caps: continuation_caps,
                             };
                         }
                         ObjectEnvelopePoll::Stream(_) => {
@@ -1101,6 +1272,7 @@ impl<'index> ResolveObjectJob<'index> {
                                 locator,
                                 envelope,
                                 job,
+                                work_caps: length_work_caps,
                             };
                             return RevisionResolverPoll::Pending {
                                 ticket,
@@ -1109,11 +1281,21 @@ impl<'index> ResolveObjectJob<'index> {
                             };
                         }
                         ObjectEnvelopePoll::Failed(error) => {
-                            return self.fail_object(error, length_offset, false);
+                            return self.fail_child_object(
+                                error,
+                                length_offset,
+                                false,
+                                self.stats.object,
+                                length_work_caps,
+                            );
                         }
                     }
                 }
-                ResolverState::ObjectBoundary { locator, mut job } => {
+                ResolverState::ObjectBoundary {
+                    locator,
+                    mut job,
+                    work_caps: boundary_work_caps,
+                } => {
                     let poll = job.poll(source, cancellation);
                     self.stats.object = job.stats();
                     match poll {
@@ -1123,7 +1305,11 @@ impl<'index> ResolveObjectJob<'index> {
                             missing,
                             checkpoint,
                         } => {
-                            self.state = ResolverState::ObjectBoundary { locator, job };
+                            self.state = ResolverState::ObjectBoundary {
+                                locator,
+                                job,
+                                work_caps: boundary_work_caps,
+                            };
                             return RevisionResolverPoll::Pending {
                                 ticket,
                                 missing,
@@ -1131,7 +1317,13 @@ impl<'index> ResolveObjectJob<'index> {
                             };
                         }
                         ObjectPoll::Failed(error) => {
-                            return self.fail_object(error, locator.offset, false);
+                            return self.fail_child_object(
+                                error,
+                                locator.offset,
+                                false,
+                                self.stats.length_dependency,
+                                boundary_work_caps,
+                            );
                         }
                     }
                 }
@@ -1160,6 +1352,46 @@ impl<'index> ResolveObjectJob<'index> {
         RevisionResolverPoll::Ready(ResolvedObject { locator, object })
     }
 
+    fn boundary_continuation_caps(&self, offset: u64) -> Result<ObjectWorkCaps, DocumentError> {
+        let read_cap = self
+            .work_caps
+            .max_read_bytes
+            .checked_sub(self.stats.length_dependency.read_bytes())
+            .filter(|cap| *cap >= self.stats.object.read_bytes())
+            .ok_or_else(|| {
+                DocumentError::resource(
+                    DocumentLimitKind::RevisionResolverObjectReadBytes,
+                    self.work_caps.max_read_bytes,
+                    self.stats.total_read_bytes(),
+                    1,
+                    Some(offset),
+                )
+            })?
+            .min(self.target_work_caps.max_read_bytes());
+        let parse_cap = self
+            .work_caps
+            .max_parse_bytes
+            .checked_sub(self.stats.length_dependency.parse_bytes())
+            .filter(|cap| *cap >= self.stats.object.parse_bytes())
+            .ok_or_else(|| {
+                DocumentError::resource(
+                    DocumentLimitKind::RevisionResolverObjectParseBytes,
+                    self.work_caps.max_parse_bytes,
+                    self.stats.total_parse_bytes(),
+                    1,
+                    Some(offset),
+                )
+            })?
+            .min(self.target_work_caps.max_parse_bytes());
+        ObjectWorkCaps::new(read_cap, parse_cap).map_err(|_| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(self.reference),
+                Some(offset),
+            )
+        })
+    }
+
     fn fail_object(
         &mut self,
         error: pdf_rs_object::ObjectError,
@@ -1172,6 +1404,66 @@ impl<'index> ResolveObjectJob<'index> {
             offset,
             constructor,
         ))
+    }
+
+    fn fail_child_object(
+        &mut self,
+        error: ObjectError,
+        offset: u64,
+        constructor: bool,
+        aggregate_before: ObjectStats,
+        child_caps: ObjectWorkCaps,
+    ) -> RevisionResolverPoll {
+        let aggregate = error.limit().and_then(|limit| match limit.kind() {
+            ObjectLimitKind::TotalReadBytes
+                if child_caps.max_read_bytes() < self.limits.object().max_total_read_bytes() =>
+            {
+                Some((
+                    DocumentLimitKind::RevisionResolverObjectReadBytes,
+                    self.work_caps.max_read_bytes,
+                    aggregate_before.read_bytes(),
+                    limit,
+                ))
+            }
+            ObjectLimitKind::TotalParseBytes
+                if child_caps.max_parse_bytes() < self.limits.object().max_total_parse_bytes() =>
+            {
+                Some((
+                    DocumentLimitKind::RevisionResolverObjectParseBytes,
+                    self.work_caps.max_parse_bytes,
+                    aggregate_before.parse_bytes(),
+                    limit,
+                ))
+            }
+            ObjectLimitKind::SourceBytes
+            | ObjectLimitKind::EnvelopeBytes
+            | ObjectLimitKind::BoundaryBytes
+            | ObjectLimitKind::StreamBytes
+            | ObjectLimitKind::TotalReadBytes
+            | ObjectLimitKind::TotalParseBytes
+            | ObjectLimitKind::RepairScanBytes
+            | ObjectLimitKind::RepairHeaderCandidates
+            | ObjectLimitKind::RepairBoundaryCandidates => None,
+        });
+        if let Some((kind, ceiling, before, limit)) = aggregate {
+            let Some(consumed) = before.checked_add(limit.consumed()) else {
+                return self.fail(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(self.reference),
+                    Some(offset),
+                ));
+            };
+            return self.fail(DocumentError::aggregate_object_resource(
+                kind,
+                ceiling,
+                consumed,
+                limit.attempted(),
+                error,
+                self.reference,
+                offset,
+            ));
+        }
+        self.fail_object(error, offset, constructor)
     }
 
     fn fail(&mut self, error: DocumentError) -> RevisionResolverPoll {
@@ -1188,6 +1480,8 @@ impl fmt::Debug for ResolveObjectJob<'_> {
             .field("reference", &self.reference)
             .field("context", &self.context)
             .field("limits", &self.limits)
+            .field("work_caps", &self.work_caps)
+            .field("target_work_caps", &self.target_work_caps)
             .field("syntax_limits", &self.syntax_limits)
             .field("stats", &self.stats)
             .field("phase", &self.phase())

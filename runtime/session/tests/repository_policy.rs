@@ -323,7 +323,7 @@ fn bounded_m1_session_is_one_actor_without_a_generic_scheduler_claim() {
         "fixed two-service selection is round-robin",
         "polls at most one parser job",
         "not a generic priority scheduler",
-        "remain the M1 exit blockers at this stage",
+        "remains the M1 exit blocker at this stage",
     ] {
         assert!(
             milestone.contains(required),
@@ -339,8 +339,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.61.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.61.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -614,7 +614,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "failure completion without parser or cancellation polling",
         "opaque move-only handoff",
         "same private source owner",
-        "generic multi-job scheduler and complete Session lifecycle",
+        "generic scheduler and complete Session",
         "does not claim M1 exit",
     ] {
         assert!(
@@ -694,7 +694,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "The explicit object R1 sibling likewise exhausts the unchanged strict framer",
         "LocallyRepairedRevisionIndex",
         "single core repaired-open coordinator",
-        "not registered DIFFERENTIAL evidence",
+        "Truthful registered page-count and outline DIFFERENTIAL evidence remains",
         "does not claim M1 exit",
     ] {
         assert!(

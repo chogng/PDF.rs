@@ -48,6 +48,8 @@
 )]
 
 mod access;
+mod acquired_object;
+mod acquired_services;
 mod attestation;
 mod attestation_limits;
 mod catalog;
@@ -74,6 +76,17 @@ mod text_string;
 pub use access::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPhase, AttestedObjectPoll,
     OpenAttestedObjectJob,
+};
+pub use acquired_object::{
+    AcquiredObject, AcquiredObjectCoordinate, AcquiredObjectJobContext, AcquiredObjectPhase,
+    AcquiredObjectPoll, AcquiredObjectStats, AcquiredObjectValue, AcquiredObjectWorkCaps,
+    OpenAcquiredObjectJob, SourceAcquiredDocument, SourceAcquiredDocumentLimitConfig,
+    SourceAcquiredDocumentLimits, SourceAcquiredDocumentStats,
+};
+pub use acquired_services::{
+    AcquiredCatalog, AcquiredOutline, AcquiredOutlineItem, AcquiredOutlinePoll,
+    AcquiredOutlineStats, AcquiredPageCount, AcquiredPageCountPoll, AcquiredPageTreeStats,
+    CountAcquiredPagesJob, ReadAcquiredOutlineJob,
 };
 pub use attestation::{
     AttestRevisionJob, RevisionAttestationJobContext, RevisionAttestationPhase,
@@ -121,7 +134,7 @@ pub use revision_resolver::{
     CompressedObjectLocator, EffectiveObjectLocator, ResolveObjectJob, ResolvedCompressedObject,
     ResolvedObject, RevisionObjectIndex, RevisionObjectIndexStats, RevisionResolverJobContext,
     RevisionResolverLimits, RevisionResolverPhase, RevisionResolverPoll, RevisionResolverStats,
-    UncompressedObjectLocator,
+    RevisionResolverWorkCaps, UncompressedObjectLocator,
 };
 pub use source_revision_chain::{
     NeverCancelSourceRevisionChain, OpenSourceRevisionChainJob, SourceAcquiredRevisionChain,

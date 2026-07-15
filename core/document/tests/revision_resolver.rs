@@ -5,10 +5,10 @@ use pdf_rs_bytes::{
     SourceRevision, SourceSnapshot, SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_document::{
-    DocumentErrorCode, DocumentLimits, EffectiveObjectLocator,
+    DocumentErrorCode, DocumentLimitKind, DocumentLimits, EffectiveObjectLocator,
     NeverCancelled as DocumentNeverCancelled, ResolveObjectJob, RevisionObjectIndex,
     RevisionResolverJobContext, RevisionResolverLimits, RevisionResolverPhase,
-    RevisionResolverPoll,
+    RevisionResolverPoll, RevisionResolverWorkCaps,
 };
 use pdf_rs_object::{DeclaredStreamLength, NeverCancelled as ObjectNeverCancelled};
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
@@ -197,6 +197,136 @@ fn indirect_length_resolves_effective_integer_and_frames_exact_stream() {
     );
     assert!(job.stats().total_read_bytes() <= job.limits().max_total_object_read_bytes());
     assert!(job.stats().total_parse_bytes() <= job.limits().max_total_object_parse_bytes());
+}
+
+#[test]
+fn resolver_aggregate_caps_cover_first_envelope_and_post_length_boundary() {
+    let fixture = stream_fixture();
+    let index = index(&fixture);
+    let store = supplied_store(&fixture);
+    let limits = RevisionResolverLimits::default();
+
+    let mut baseline = ResolveObjectJob::new(
+        &index,
+        ObjectRef::new(1, 0).unwrap(),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        baseline.poll(&store, &ObjectNeverCancelled),
+        RevisionResolverPoll::Ready(_)
+    ));
+    let complete = baseline.stats();
+    assert!(complete.object().boundary_attempts() > 0);
+
+    let exact_caps = RevisionResolverWorkCaps::new(
+        complete.total_read_bytes(),
+        complete.total_parse_bytes(),
+        limits,
+    )
+    .unwrap();
+    let mut exact = ResolveObjectJob::new_with_work_caps(
+        &index,
+        ObjectRef::new(1, 0).unwrap(),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+        exact_caps,
+    )
+    .unwrap();
+    assert!(matches!(
+        exact.poll(&store, &ObjectNeverCancelled),
+        RevisionResolverPoll::Ready(_)
+    ));
+    assert_eq!(
+        exact.stats().total_read_bytes(),
+        complete.total_read_bytes()
+    );
+    assert_eq!(
+        exact.stats().total_parse_bytes(),
+        complete.total_parse_bytes()
+    );
+
+    let one_less_caps = RevisionResolverWorkCaps::new(
+        complete.total_read_bytes() - 1,
+        complete.total_parse_bytes(),
+        limits,
+    )
+    .unwrap();
+    let mut one_less = ResolveObjectJob::new_with_work_caps(
+        &index,
+        ObjectRef::new(1, 0).unwrap(),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+        one_less_caps,
+    )
+    .unwrap();
+    let error = match one_less.poll(&store, &ObjectNeverCancelled) {
+        RevisionResolverPoll::Failed(error) => error,
+        other => panic!("one-less post-Length boundary must fail: {other:?}"),
+    };
+    let detail = error.limit().unwrap();
+    assert_eq!(
+        detail.kind(),
+        DocumentLimitKind::RevisionResolverObjectReadBytes
+    );
+    assert_eq!(detail.limit(), complete.total_read_bytes() - 1);
+    assert_eq!(
+        detail.consumed(),
+        one_less.stats().object().read_bytes() + one_less.stats().length_dependency().read_bytes()
+    );
+    assert_eq!(
+        detail.attempted(),
+        complete.object().read_bytes() - one_less.stats().object().read_bytes()
+    );
+    assert_eq!(
+        one_less.stats().object().boundary_attempts(),
+        0,
+        "the re-bound child cap rejects before boundary source work"
+    );
+    let repeated = match one_less.poll(&store, &ObjectNeverCancelled) {
+        RevisionResolverPoll::Failed(error) => error,
+        other => panic!("resolver aggregate failure must be stable: {other:?}"),
+    };
+    assert_eq!(repeated, error);
+
+    let first_caps =
+        RevisionResolverWorkCaps::new(1, limits.max_total_object_parse_bytes(), limits).unwrap();
+    let mut first = ResolveObjectJob::new_with_work_caps(
+        &index,
+        ObjectRef::new(1, 0).unwrap(),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+        first_caps,
+    )
+    .unwrap();
+    let error = match first.poll(&store, &ObjectNeverCancelled) {
+        RevisionResolverPoll::Failed(error) => error,
+        other => panic!("first envelope cap must fail before source polling: {other:?}"),
+    };
+    let detail = error.limit().unwrap();
+    assert_eq!(
+        detail.kind(),
+        DocumentLimitKind::RevisionResolverObjectReadBytes
+    );
+    assert_eq!(detail.limit(), 1);
+    assert_eq!(detail.consumed(), 0);
+    let EffectiveObjectLocator::Uncompressed(locator) = index.locator(1).unwrap() else {
+        panic!("stream target must be uncompressed");
+    };
+    let expected_attempt = limits.object().initial_envelope_bytes().min(
+        locator
+            .object_upper_bound()
+            .checked_sub(locator.offset())
+            .unwrap()
+            + 1,
+    );
+    assert_eq!(detail.attempted(), expected_attempt);
+    assert_eq!(first.stats().object().read_bytes(), 0);
 }
 
 #[test]

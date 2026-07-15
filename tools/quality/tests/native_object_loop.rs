@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.61.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.61.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.62.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.62.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -1038,7 +1038,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(page_tree_requirement.contains("non-gating smoke observation"));
     assert!(page_tree_requirement.contains("not a registered page-count differential"));
     assert!(page_tree_requirement.contains("feature state remains PLANNED"));
-    assert!(page_tree_requirement.contains("do not claim M1 or M2 exit"));
+    assert!(page_tree_requirement.contains("does not claim M1 or M2 exit"));
 
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")
         .expect("the xref architecture requirement must exist");
@@ -1061,17 +1061,15 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("value-owned footprint evidence"));
     assert!(xref_requirement.contains("for later cache admission"));
     assert!(xref_requirement.contains("payload containment"));
-    assert!(xref_requirement.contains("persistent reuse and coalescing"));
-    assert!(xref_requirement.contains("parent budget hierarchy"));
+    assert!(xref_requirement.contains("persistent reuse or coalescing"));
+    assert!(xref_requirement.contains("aggregate reads and parses remain capped"));
     assert!(xref_requirement.contains("makes public run_one the only parser entry"));
     assert!(xref_requirement.contains("queued resume or failure completion"));
     assert!(xref_requirement.contains("Host ingress never polls"));
     assert!(xref_requirement.contains("failure completion without parser or cancellation polling"));
     assert!(xref_requirement.contains("opaque move-only handoff"));
     assert!(xref_requirement.contains("same private source owner"));
-    assert!(
-        xref_requirement.contains("generic multi-job scheduler and complete Session lifecycle")
-    );
+    assert!(xref_requirement.contains("generic scheduler and complete Session"));
     assert!(xref_requirement.contains("Native/PDFium semantic or pixel differential"));
     assert!(xref_requirement.contains("does not claim M1 exit"));
 

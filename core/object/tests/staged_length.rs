@@ -293,6 +293,96 @@ fn boundary_phase_continues_the_envelope_cumulative_work_cap() {
 }
 
 #[test]
+fn boundary_continuation_caps_can_only_tighten_unspent_envelope_work() {
+    let fixture = indirect_fixture(3);
+    let store = supplied_store(&fixture.bytes, 0x4a);
+    let limits = ObjectLimits::default();
+
+    let baseline_envelope = open_envelope(&store, &fixture);
+    let envelope_stats = baseline_envelope.stats();
+    let baseline_claim = baseline_envelope
+        .resolved_length_claim(resolved_length(&store, &fixture))
+        .unwrap();
+    let mut baseline = OpenStreamBoundaryJob::new(baseline_envelope, baseline_claim).unwrap();
+    assert!(matches!(
+        baseline.poll(&store, &NeverCancelled),
+        ObjectPoll::Ready(_)
+    ));
+    let complete = baseline.stats();
+
+    let exact_envelope = open_envelope(&store, &fixture);
+    let exact_claim = exact_envelope
+        .resolved_length_claim(resolved_length(&store, &fixture))
+        .unwrap();
+    let exact_caps = ObjectWorkCaps::new(complete.read_bytes(), complete.parse_bytes()).unwrap();
+    let mut exact =
+        OpenStreamBoundaryJob::new_with_work_caps(exact_envelope, exact_claim, exact_caps).unwrap();
+    assert!(matches!(
+        exact.poll(&store, &NeverCancelled),
+        ObjectPoll::Ready(_)
+    ));
+
+    let one_less_envelope = open_envelope(&store, &fixture);
+    let one_less_claim = one_less_envelope
+        .resolved_length_claim(resolved_length(&store, &fixture))
+        .unwrap();
+    let one_less_caps =
+        ObjectWorkCaps::new(complete.read_bytes() - 1, complete.parse_bytes()).unwrap();
+    let mut one_less =
+        OpenStreamBoundaryJob::new_with_work_caps(one_less_envelope, one_less_claim, one_less_caps)
+            .unwrap();
+    let error = match one_less.poll(&store, &NeverCancelled) {
+        ObjectPoll::Failed(error) => error,
+        other => panic!("one-less continuation must fail before boundary work: {other:?}"),
+    };
+    let detail = error.limit().unwrap();
+    assert_eq!(detail.kind(), ObjectLimitKind::TotalReadBytes);
+    assert_eq!(detail.limit(), complete.read_bytes() - 1);
+    assert_eq!(detail.consumed(), envelope_stats.read_bytes());
+    assert_eq!(
+        detail.attempted(),
+        complete.read_bytes() - envelope_stats.read_bytes()
+    );
+    assert_eq!(one_less.stats().boundary_attempts(), 0);
+
+    let below_consumed_envelope = open_envelope(&store, &fixture);
+    let below_consumed_claim = below_consumed_envelope
+        .resolved_length_claim(resolved_length(&store, &fixture))
+        .unwrap();
+    let below_consumed_caps = ObjectWorkCaps::new(
+        envelope_stats.read_bytes() - 1,
+        envelope_stats.parse_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        OpenStreamBoundaryJob::new_with_work_caps(
+            below_consumed_envelope,
+            below_consumed_claim,
+            below_consumed_caps,
+        )
+        .unwrap_err()
+        .code(),
+        ObjectErrorCode::InvalidLimits
+    );
+
+    let wider_envelope = open_envelope(&store, &fixture);
+    let wider_claim = wider_envelope
+        .resolved_length_claim(resolved_length(&store, &fixture))
+        .unwrap();
+    let wider_caps = ObjectWorkCaps::new(
+        limits.max_total_read_bytes() + 1,
+        limits.max_total_parse_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        OpenStreamBoundaryJob::new_with_work_caps(wider_envelope, wider_claim, wider_caps)
+            .unwrap_err()
+            .code(),
+        ObjectErrorCode::InvalidLimits
+    );
+}
+
+#[test]
 fn mismatched_resolution_reference_or_snapshot_is_rejected_before_reads() {
     let fixture = indirect_fixture_with_reference(3, 3);
     let store = supplied_store(&fixture.bytes, 0x42);

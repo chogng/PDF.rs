@@ -33,21 +33,20 @@ backward `/Prev` links, and calls the existing pure newest-to-oldest composer on
 source and optional decode proof is retained.
 Its move-only result keeps the final marker, every classified anchor, every original parsed
 section, and the composed chain without publicly lending the cloneable naked `RevisionChain`.
-That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
-iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
-complete page tree or enumerate its bounded strict outline while preserving the attested-object
-access boundary.
+`SourceAcquiredDocument` consumes that result, retains the original acquisition proofs beside a
+private revision-aware lookup index, and becomes the only owner that can open source-acquired
+objects or run acquired-chain Catalog, page-count, and outline services.
 
 The crate performs no file, network, data callback, async-runtime, general object graph traversal,
-or caching. Its only owned stream-decoding composition is the opt-in source xref-stream boundary;
-other document streams remain opaque. Its first resolver slice follows only whole-object reference
-aliases; an independent revision-aware slice can frame one effective uncompressed definition,
-resolve an uncompressed direct-integer stream `/Length` dependency, and bind one predecoded
-object-stream entry to its latest-wins compressed xref row from an already-composed revision chain;
-the separate page-count slice interprets only Catalog and Page/Pages structural fields, while the
-outline slice interprets only the optional Catalog `Outlines` reference and strict linked outline
-dictionaries reachable from it. Neither publishes page handles, inherited resources, a reusable
-object graph, resolved destinations, or executable actions. All source access is
+or caching. Its source-acquired object boundary frames effective uncompressed definitions,
+resolves direct or effective-uncompressed indirect stream `/Length`, and decodes filtered or
+unfiltered object streams before binding the exact decoded entry back to the latest-wins compressed
+xref row. A compressed indirect `/Length` dependency remains explicitly unsupported because it
+would recursively require another object-stream acquisition inside the container-framing phase.
+The acquired page-count slice interprets only Catalog and Page/Pages structural fields, while the
+acquired outline slice interprets only the optional Catalog `Outlines` reference and strict linked
+outline dictionaries reachable from it. Neither publishes page handles, inherited resources, a
+reusable object graph, resolved destinations, or executable actions. All source access is
 synchronous polling through an injected `ByteSource`; all long-running CPU work uses an injected
 cooperative cancellation probe. A separate pure document-semantic helper decodes already lexical
 PDF strings under the bounded ISO 32000-1 text-string rules used by the outline slice and available
@@ -66,7 +65,7 @@ semantic responsibilities.
 
 # Normative sources
 
-- [RPE-ARCH-001, sections 4.3-4.5 and 5.4](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
+- [RPE-ARCH-001, sections 4.3-4.5 and 5.3-5.4](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires one-way core dependencies, revision identity, reverse xref composition, and validation
   of offset, generation, object number, and object header before use.
 - [RPE-ARCH-001, section 5.6](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
@@ -92,9 +91,10 @@ semantic responsibilities.
   The same authorized snapshot and SHA-256 above apply.
 - [ISO 32000-1:2008, 7.5.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines generation-zero compressed entries, object-stream container/index lookup, and decoded
-  entry boundaries. The revision-aware slice binds already-validated unfiltered object streams but
-  does not acquire or filter-decode their payloads. The same authorized snapshot and SHA-256 above
-  apply.
+  entry boundaries. The source-acquired object slice frames the effective container, acquires its
+  exact payload, applies strict foundational filters when declared, parses the object-stream header
+  and entry boundaries in decoded coordinates, and revalidates the exact row-to-entry binding at
+  every value publication. The same authorized snapshot and SHA-256 above apply.
 - [ISO 32000-1:2008, 7.4 and 7.5.8](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines cross-reference stream dictionaries, entries, and the requirement that a primary stream
   identify its own uncompressed container, together with filter arrays and per-filter decode
@@ -111,7 +111,7 @@ semantic responsibilities.
   structured errors, checked arithmetic, fallible bounded allocation, and redacted diagnostics.
 - [RPE-STD-002, sections 6-7](../../docs/standards/lifecycle-and-concurrency.md) requires cooperative
   cancellation and stable terminal state for resumable core jobs.
-- [RPE-STD-005, sections 4-9](../../docs/standards/security-and-resource-budget.md) requires
+- [RPE-STD-005, sections 4-10](../../docs/standards/security-and-resource-budget.md) requires
   deterministic entry, memory, scan, and child-work budgets before processing untrusted structure.
 
 This slice does not claim an ISO 32000 conformance profile or R0 resolver coverage.
@@ -226,6 +226,81 @@ repair or publish partially attested state.
   constructor. It does not resolve indirect xref-stream Length, invoke R1 repair, attest the
   resulting object geometry, schedule object-stream decoding, provide page or outline services, or
   own a Range store, scheduler, or Session. It is a source-acquisition component and does not establish M1 exit.
+
+## Source-acquired objects and basic document services
+
+- `SourceAcquiredDocument` consumes one complete `SourceAcquiredRevisionChain` and retains that original move-only proof while building a separate private `RevisionObjectIndex` from the chain's
+  crate-private semantic clone. It exposes neither the cloned `RevisionChain` nor an
+  `AttestedRevisionIndex`; source acquisition and top-level attestation remain distinct proof
+  claims. Owner construction pre-admits the original proof bound, cloned revision semantics, and
+  an input-derived `entries + sections` physical-anchor upper bound under
+  `AcquiredDocumentRetainedBytes` before cloning the chain or constructing the index. The
+  allocator-reported anchor capacity is checked against that admitted bound after construction as
+  an internal lower-contract invariant.
+- One `OpenAcquiredObjectJob` accepts five pairwise-distinct checkpoints for target envelope,
+  target boundary, indirect-Length envelope, indirect-Length boundary, and exact object-stream
+  payload. Effective uncompressed objects retain their framed source value. A compressed target
+  first resolves its latest-wins generation-zero object-stream container, accepts direct or
+  effective-uncompressed indirect `/Length`, requests the exact payload, and either parses it
+  directly or passes it through the strict `pdf-rs-filters` boundary. A compressed indirect
+  Length target returns `UnsupportedCompressedObject`; it never falls back to an older definition.
+- Object-stream syntax and semantic values use decoded-relative coordinates. The public object
+  coordinate identifies the physical container separately, and source diagnostics anchor to the
+  effective top-level definition or container offset rather than presenting decoded positions as
+  physical `ByteSpan`s. Each `AcquiredObject::value` publication reruns the exact
+  row/container/index/reference binding through `RevisionObjectIndex::resolve_compressed`; the
+  wrapper retains the acquisition owner, framed container, optional sealed decode proof, parsed
+  object-stream proof, and aggregate accounting.
+- Parent-supplied resolver and acquired-object work caps are propagated into every framing,
+  indirect-Length, payload, decode, and decoded-syntax child before that work begins. Read and
+  parse deltas from successful phases are accumulated exactly across sequential phases; when a
+  lower decoder or semantic phase fails before publishing stats, its exact consumed/attempted work
+  remains in the terminal structured limit and is included by a promoting parent. After an
+  indirect-Length child completes, the target stream boundary is re-bound to the resolver
+  remainder before its first source poll, so the dependency and continuation cannot each spend the
+  same parent budget. Lower object TotalRead/TotalParse errors are promoted only when that resolver
+  remainder actually
+  tightened the child; resolver, payload, decoder-output, and object-stream syntax errors are
+  promoted to acquired aggregates only when the effective acquired ceiling is tighter than the
+  corresponding intrinsic child ceiling. Before any source poll, direct
+  targets admit two framed syntax-owned/container ceilings because a target stream envelope and
+  its uncompressed indirect-`Length` child may coexist; compressed targets additionally admit the
+  canonical filter-plan upper bound, simultaneous decoder output capacity, and decoded
+  object-stream parser workspace plus entry/value capacities. Those branch-specific reservations
+  are conservative bounds, not allocations: the default 384 MiB parent ceiling allocates no such
+  buffer. The admitted remainder is passed into decoder and object-stream child limits, while
+  actual retained proof capacity is checked against the already-admitted aggregate as a
+  lower-contract invariant.
+  Unchanged missing ranges replay the same ticket/checkpoint without charging work twice;
+  cancellation, source change, failure, and successful one-shot replay are stable.
+- `CountAcquiredPagesJob` and `ReadAcquiredOutlineJob` borrow only the complete acquired owner and
+  open every Catalog, Page/Pages, outline-root, and outline-item definition through that same
+  resolver. They therefore share latest-wins behavior across traditional, primary xref-stream,
+  hybrid, and incremental revisions, including filtered and unfiltered object streams. Page-tree
+  Parent/Kids/Count, cycle, duplicate, depth, and page ceilings retain their existing strict
+  formulas. An absent or direct-null page-tree Parent is the same omitted value, an indirect
+  reference is the only accepted present value, and every other direct type is
+  `InvalidPageTreeNode` in both physical and decoded object-stream coordinates. Outline
+  sibling/parent topology, signed Count formulas, direct target shapes, and bounded text decoding
+  likewise remain unchanged across physical and decoded dictionaries.
+- Both services reserve traversal/result containers from validated limits before publication and
+  lend each sequential object child only the remaining aggregate read/parse budget. Page Kids are
+  validated and scheduled in two passes over the retained parsed array, avoiding an unaccounted
+  temporary child vector. Outline title capacity is preflighted before decode and then charged from
+  allocator-reported capacity. A shared read-only target classifier returns missing, free, null,
+  generation-mismatch, invalid object-stream-container, and unsupported xref-stream-container
+  states before node/depth/work remainders; object and service constructors use the same rules.
+  Service errors remap exhausted child work to the corresponding page-tree or outline aggregate
+  only when the service remainder tightened that exact lower layer. Intrinsic object, resolver,
+  encoded-input, decode fuel/retention, and semantic limits remain lower failures. Promoted
+  consumed work includes lower decoder or semantic work not yet published in child stats and uses
+  checked arithmetic without discarding the exact source reference and anchor.
+  All five acquired-object checkpoints are validated before a page job reserves any traversal
+  container, matching the outline constructor's admission order.
+- These services publish only a source-bound Catalog summary, scalar page count, and bounded
+  outline model. They do not claim top-level attestation, page handles, inherited resources,
+  destination resolution, action execution, cache ownership, a general Session scheduler, or M1
+  exit by themselves.
 
 ## Strict base-revision opening
 
@@ -849,3 +924,13 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
 - 2026-07-15: Added borrowed and cloneable repaired-proof page-count/outline factories that retain
   the complete R1 ledger while reusing the bounded service state machines without a strict-typestate
   conversion.
+- 2026-07-15: Moved source-acquired owner and object retained-byte admission ahead of chain/index or
+  child/source work, added branch-specific framing/filter/decode/semantic reservations, validated
+  page-job checkpoints before allocation, and aligned physical/decoded page Parent null/type
+  semantics.
+- 2026-07-15: Extended acquired-object admission to the simultaneous target plus indirect-Length
+  syntax peak and completed locator terminal classification before retained-plan rejection.
+- 2026-07-15: Re-bound target boundary work after indirect-Length resolution, made resolver,
+  acquired-object, and page/outline limit promotion conditional on the actual binding ceiling,
+  centralized exact target classification before service budgets, and added latest-wins indirect
+  Length plus exact decoder/payload/service accounting regressions.

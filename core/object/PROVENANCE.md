@@ -100,7 +100,11 @@ makes no ISO or R0 semantic coverage claim.
   stream budget, checked payload-end arithmetic, and physical object bound before any source poll.
   The envelope seals the original job context, object and syntax profiles, cumulative work caps,
   and already-consumed stats; the boundary phase must inherit them and continues charging from the
-  envelope totals rather than resetting a second per-object budget.
+  envelope totals rather than resetting a second per-object budget. A consuming continuation
+  constructor may replace the sealed work caps only with equal or smaller nonzero caps that still
+  cover all envelope work already consumed. This lets a document composition parent subtract an
+  intervening indirect-`/Length` child's work before boundary polling without widening authority or
+  retroactively revoking charged work.
 - The framing algorithm never creates a request proportional to the declared `/Length` and never
   requires the complete payload to be resident or contiguous. A bounded envelope window can
   opportunistically overlap a payload prefix (or all of a small payload) because `data_start` is
@@ -365,3 +369,5 @@ Native/external-engine differential is claimed in this bootstrap slice.
   decoded-coordinate parser, strict geometry and dictionary-to-attestation authority checks,
   retained proof ownership, and Flate/predictor adversaries without adding decode scheduling or
   claiming M1 exit.
+- 2026-07-15: Added a consuming equal-or-tighter staged-boundary work-cap transition with exact,
+  one-less, cannot-widen, and cannot-revoke-consumed-work regressions for indirect-Length parents.

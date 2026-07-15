@@ -308,8 +308,132 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
         .expect("M1 requirement record must exist");
     assert!(milestone.contains("status = \"partial\""));
     assert!(milestone.contains("indirect-Length xref streams"));
-    assert!(milestone.contains("filtered object-stream source scheduling"));
-    assert!(milestone.contains("acquired-chain service integration remains open"));
+    assert!(milestone.contains("source-acquired document owner now closes"));
+    assert!(milestone.contains("acquired-chain page-count/outline integration"));
+    assert!(milestone.contains("Strict page-count and outline features remain PLANNED"));
+}
+
+#[test]
+fn source_acquired_document_services_stay_proof_bound_and_planned() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let object_source = fs::read_to_string(crate_root.join("src/acquired_object.rs"))
+        .expect("source-acquired object source must be readable");
+    let service_source = fs::read_to_string(crate_root.join("src/acquired_services.rs"))
+        .expect("source-acquired service source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("document provenance must be readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+
+    for required in [
+        "pub struct SourceAcquiredDocument",
+        "pub struct OpenAcquiredObjectJob",
+        "pub enum AcquiredObjectCoordinate",
+        "pub enum AcquiredObjectPoll",
+    ] {
+        assert!(
+            object_source.contains(required),
+            "source-acquired object boundary must retain {required:?}"
+        );
+    }
+    for required in [
+        "pub struct CountAcquiredPagesJob",
+        "pub struct ReadAcquiredOutlineJob",
+        "pub struct AcquiredPageCount",
+        "pub struct AcquiredOutline",
+    ] {
+        assert!(
+            service_source.contains(required),
+            "source-acquired service boundary must retain {required:?}"
+        );
+    }
+    for required in [
+        "retains that original move-only proof",
+        "input-derived `entries + sections` physical-anchor upper bound",
+        "effective-uncompressed indirect `/Length`",
+        "Before any source poll",
+        "are conservative bounds, not allocations",
+        "latest-wins behavior across traditional, primary xref-stream",
+        "do not claim top-level attestation",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "source-acquired provenance must state {required:?}"
+        );
+    }
+
+    let feature = record_with_id(
+        &feature_map,
+        "feature",
+        "core.source-acquired-document-services",
+    )
+    .expect("source-acquired document-services feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.source-acquired-document-services.v1\"",
+        "RPE-ARCH-001/5.3-5.4",
+        "RPE-ARCH-001/5.6",
+        "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"core/document\"]",
+        "core/document::acquired_object",
+        "core/document::acquired_services",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "source-acquired feature must contain {required:?}"
+        );
+    }
+
+    for requirement_id in [
+        "RPE-ARCH-001/5.3",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/5.6",
+        "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/15.3/M1",
+    ] {
+        let requirement = record_with_id(&spec_map, "requirement", requirement_id)
+            .expect("source-acquired requirement record must exist");
+        for required in [
+            "core.source-acquired-document-services",
+            "core/document::acquired_services",
+        ] {
+            assert!(
+                requirement.contains(required),
+                "{requirement_id} must trace source-acquired evidence {required:?}"
+            );
+        }
+    }
+    for requirement_id in [
+        "RPE-ARCH-001/5.3",
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/5.6",
+        "RPE-ARCH-001/15.3/M1",
+    ] {
+        let requirement = record_with_id(&spec_map, "requirement", requirement_id)
+            .expect("source-acquired object requirement record must exist");
+        assert!(
+            requirement.contains("core/document::acquired_object"),
+            "{requirement_id} must trace the acquired-object implementation"
+        );
+    }
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("M1 requirement record must exist");
+    assert!(milestone.contains("status = \"partial\""));
+    assert!(milestone.contains("source-acquired document owner now closes"));
+    assert!(milestone.contains("Strict page-count and outline features remain PLANNED"));
+    assert!(milestone.contains("does not claim M1 exit"));
 }
 
 #[test]
@@ -369,7 +493,7 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
         "Ready crosses the boundary only as an opaque move-only handoff",
         "cancellation in both child layers",
         "Resume execution and source-failure disposition require exact arbiter",
-        "generic multi-job scheduler and complete Session lifecycle",
+        "generic scheduler and complete Session",
         "does not claim M1 exit",
     ] {
         assert!(
@@ -429,7 +553,7 @@ fn traceability_registers_revision_resolution_without_claiming_complete_m1_suppo
         "core.object-stream-resolution",
         "m1.unfiltered-object-stream-resolution.v1",
         "latest effective uncompressed container",
-        "object-stream scheduling and ownership",
+        "schedules exact filtered or unfiltered object-stream payload reads",
         "does not claim M1 exit",
         "status = \"partial\"",
     ] {
@@ -518,7 +642,7 @@ fn traceability_registers_core_repaired_open_without_claiming_a_session() {
         "seventeen globally distinct checkpoints",
         "first-pass aggregate",
         "repaired proof separately owns core page-count/outline jobs without losing R1 provenance",
-        "acquired-chain service integration remains open",
+        "source-acquired document owner now closes",
         "does not claim M1 exit",
         "status = \"partial\"",
     ] {
@@ -541,8 +665,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.61.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.61.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -598,7 +722,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "RPE-DOCUMENT-0033",
         "PDFium page_count=4",
         "expected strictness difference",
-        "not acquired revision chains",
+        "source-acquired document owner now lends",
+        "traditional, primary xref-stream",
         "lazy PageIndex",
         "page_count=1",
         "pages_processed=1",
@@ -608,7 +733,7 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "sealed cloneable strict or locally repaired handles",
         "repaired ownership retains the complete xref/object diagnostic ledger",
         "bounded M1 Session continues to select strict base opening",
-        "do not claim M1 or M2 exit",
+        "does not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {
         assert!(
@@ -838,7 +963,7 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "pinned, non-gating O4 PDFium public-bookmark comparison matches Native exactly",
         "expected wrong-Prev strictness difference",
         "not a registered baseline or correctness oracle",
-        "do not claim M1 or M2 exit",
+        "does not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {
         assert!(

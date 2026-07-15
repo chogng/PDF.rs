@@ -27,6 +27,18 @@ pub enum DocumentLimitKind {
     RevisionResolverIndexBytes,
     /// Comparisons and swaps performed while sorting revision-aware physical anchors.
     RevisionResolverSortSteps,
+    /// Cumulative exact source bytes across target and indirect-Length resolver children.
+    RevisionResolverObjectReadBytes,
+    /// Cumulative parser-window bytes across target and indirect-Length resolver children.
+    RevisionResolverObjectParseBytes,
+    /// Complete source-acquisition proof, cloned revision semantics, and resolver anchors.
+    AcquiredDocumentRetainedBytes,
+    /// Cumulative exact source bytes used to resolve one acquired-chain object.
+    AcquiredObjectReadBytes,
+    /// Cumulative framing, decoding, and direct-syntax bytes for one acquired-chain object.
+    AcquiredObjectParseBytes,
+    /// Framing, decode, and object-stream proof storage retained by one resolved object.
+    AcquiredObjectRetainedBytes,
     /// Fallible bounded index-capacity reservation using conservative byte accounting.
     Allocation,
     /// Immutable source bytes addressable by the revision-attestation profile.

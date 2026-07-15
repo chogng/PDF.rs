@@ -220,8 +220,8 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml")).unwrap();
     let spec_map =
         fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml")).unwrap();
-    assert_eq!(top_level_version(&feature_map), Some("0.61.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.61.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.stream-filter-decode")
         .expect("basic stream-filter feature must exist");
@@ -257,7 +257,7 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         "The opt-in `OpenSourceXrefStreamJob` and `OpenSourceRevisionChainJob` paths now construct",
         "`parse_filtered_object_stream` now re-canonicalizes the exact source dictionary",
         "LZW, non-predictor decode parameters",
-        "filtered object-stream source acquisition and scheduling",
+        "source-acquired document owner now binds exact filtered object-stream payload acquisition",
         "Every affected feature remains PLANNED",
         "does not claim general stream support or M1 exit",
         "status = \"partial\"",

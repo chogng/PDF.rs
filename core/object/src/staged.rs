@@ -443,11 +443,37 @@ impl OpenStreamBoundaryJob {
         envelope: StreamEnvelope,
         length_claim: StreamLengthClaim,
     ) -> Result<Self, ObjectError> {
+        let work_caps = envelope.work_caps();
+        Self::new_with_work_caps(envelope, length_claim, work_caps)
+    }
+
+    /// Continues one envelope under equal or tighter cumulative parent work caps.
+    ///
+    /// The replacement caps may not exceed the caps sealed by the envelope and may not revoke
+    /// work already consumed while framing it. This consuming transition lets a composition
+    /// parent subtract intervening dependency work before any boundary source poll or parse.
+    pub fn new_with_work_caps(
+        envelope: StreamEnvelope,
+        length_claim: StreamLengthClaim,
+        work_caps: ObjectWorkCaps,
+    ) -> Result<Self, ObjectError> {
         let target = envelope.target();
         let context = envelope.context();
         let limits = envelope.limits();
         let syntax_limits = envelope.syntax_limits();
-        let work_caps = envelope.work_caps();
+        let sealed_caps = envelope.work_caps();
+        let envelope_stats = envelope.stats();
+        if work_caps.max_read_bytes() > sealed_caps.max_read_bytes()
+            || work_caps.max_parse_bytes() > sealed_caps.max_parse_bytes()
+            || work_caps.max_read_bytes() < envelope_stats.read_bytes()
+            || work_caps.max_parse_bytes() < envelope_stats.parse_bytes()
+        {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::InvalidLimits,
+                Some(target.reference()),
+                Some(target.xref_offset()),
+            ));
+        }
         validate_common(target, context, limits, syntax_limits, work_caps)?;
         if length_claim.snapshot() != envelope.snapshot()
             || length_claim.owner() != target.reference()

@@ -209,8 +209,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.61.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.61.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -376,8 +376,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("for later cache admission"));
     assert!(requirement.contains("payload containment"));
     assert!(requirement.contains("general graph traversal"));
-    assert!(requirement.contains("persistent reuse and coalescing"));
-    assert!(requirement.contains("parent budget hierarchy"));
+    assert!(requirement.contains("persistent reuse or coalescing"));
+    assert!(requirement.contains("aggregate reads and parses remain capped"));
     assert!(
         requirement.contains("strict unfiltered entry and an untrusted decoded semantic entry")
     );
@@ -388,7 +388,7 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("relative decoded spans rather than physical source ByteSpan"));
     assert!(requirement.contains("does not interpret the filter plan or mint decode proof"));
     assert!(requirement.contains("sealed DecodedStream attestation"));
-    assert!(requirement.contains("Filtered object-stream decoding"));
+    assert!(requirement.contains("Proof-bound filtered object-stream decoding"));
     assert!(requirement.contains("current traditional primary, current hybrid supplement"));
     assert!(
         requirement
@@ -419,10 +419,10 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
         )
     );
     assert!(requirement.contains("`/Prev` traversal"));
-    assert!(requirement.contains("object-stream scheduling and ownership"));
+    assert!(requirement.contains("schedules exact filtered or unfiltered object-stream payload reads"));
     assert!(requirement.contains("repair"));
     assert!(requirement.contains("does not claim M1 exit"));
-    assert!(requirement.contains("ISO clause coverage"));
+    assert!(requirement.contains("ISO conformance"));
     assert!(requirement.contains("R0 conformance"));
     assert!(requirement.contains("Native/PDFium semantic or pixel differential"));
 
