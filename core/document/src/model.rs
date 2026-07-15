@@ -1,7 +1,9 @@
 use std::fmt;
 
 use pdf_rs_bytes::SourceSnapshot;
-use pdf_rs_object::{IndirectObject, IndirectObjectTarget, IndirectObjectValue, ObjectLimits};
+use pdf_rs_object::{
+    IndirectObject, IndirectObjectTarget, IndirectObjectValue, LocallyFramedObject, ObjectLimits,
+};
 use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfHeader, SyntaxLimits};
 
 use crate::{DocumentError, DocumentErrorCode, RevisionAttestationStats};
@@ -154,6 +156,39 @@ impl ObjectAttestation {
             revision_id,
             reference: object.reference(),
             xref_offset: object.xref_offset(),
+            object_upper_bound: object.object_upper_bound(),
+            header_span: object.header_span(),
+            object_span: object.object_span(),
+            endobj_span: object.endobj_span(),
+            kind,
+        }
+    }
+
+    pub(crate) fn from_locally_framed(
+        revision_id: RevisionId,
+        object: &LocallyFramedObject,
+    ) -> Self {
+        let kind = match object.value() {
+            IndirectObjectValue::Direct(value) => match value.value() {
+                pdf_rs_syntax::SyntaxObject::Null => ObjectAttestationKind::Null,
+                pdf_rs_syntax::SyntaxObject::Boolean(_) => ObjectAttestationKind::Boolean,
+                pdf_rs_syntax::SyntaxObject::Integer(_) => ObjectAttestationKind::Integer,
+                pdf_rs_syntax::SyntaxObject::Real(_) => ObjectAttestationKind::Real,
+                pdf_rs_syntax::SyntaxObject::Name(_) => ObjectAttestationKind::Name,
+                pdf_rs_syntax::SyntaxObject::String(_) => ObjectAttestationKind::String,
+                pdf_rs_syntax::SyntaxObject::Array(_) => ObjectAttestationKind::Array,
+                pdf_rs_syntax::SyntaxObject::Dictionary(_) => ObjectAttestationKind::Dictionary,
+                pdf_rs_syntax::SyntaxObject::Reference(_) => ObjectAttestationKind::Reference,
+            },
+            IndirectObjectValue::Stream(stream) => ObjectAttestationKind::Stream {
+                data_span: stream.data_span(),
+                endstream_span: stream.endstream_span(),
+            },
+        };
+        Self {
+            revision_id,
+            reference: object.reference(),
+            xref_offset: object.effective_xref_offset(),
             object_upper_bound: object.object_upper_bound(),
             header_span: object.header_span(),
             object_span: object.object_span(),

@@ -387,7 +387,7 @@ impl CandidateRevisionIndex {
 
     pub(crate) fn rebuild_effective_offsets(
         mut self,
-        evidence: &[EffectiveObjectOffset],
+        evidence: &mut [EffectiveObjectOffset],
         limits: DocumentLimits,
         cancellation: &(dyn DocumentCancellation + '_),
     ) -> Result<(Self, u64, u64, u64), DocumentError> {
@@ -465,7 +465,12 @@ impl CandidateRevisionIndex {
         }
         let initial_sort_steps = self.stats.sort_steps;
         let mut meter = SortMeter::with_consumed(limits.max_sort_steps, initial_sort_steps);
-        cancellable_heapsort(&mut self.physical_intervals, &mut meter, cancellation)?;
+        cancellable_paired_heapsort(
+            &mut self.physical_intervals,
+            evidence,
+            &mut meter,
+            cancellation,
+        )?;
 
         for index in 0..self.physical_intervals.len() {
             probe_loop(cancellation, index)?;
@@ -674,6 +679,75 @@ fn sift_down(
         }
         meter.step(cancellation)?;
         values.swap(root, greatest);
+        root = greatest;
+    }
+}
+
+fn cancellable_paired_heapsort(
+    values: &mut [PhysicalObjectInterval],
+    evidence: &mut [EffectiveObjectOffset],
+    meter: &mut SortMeter,
+    cancellation: &(dyn DocumentCancellation + '_),
+) -> Result<(), DocumentError> {
+    if values.len() != evidence.len() {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            None,
+            None,
+        ));
+    }
+    if values.len() < 2 {
+        return meter.finish(cancellation);
+    }
+    for root in (0..(values.len() / 2)).rev() {
+        paired_sift_down(values, evidence, root, values.len(), meter, cancellation)?;
+    }
+    for end in (1..values.len()).rev() {
+        meter.step(cancellation)?;
+        values.swap(0, end);
+        evidence.swap(0, end);
+        paired_sift_down(values, evidence, 0, end, meter, cancellation)?;
+    }
+    meter.finish(cancellation)
+}
+
+fn paired_sift_down(
+    values: &mut [PhysicalObjectInterval],
+    evidence: &mut [EffectiveObjectOffset],
+    mut root: usize,
+    end: usize,
+    meter: &mut SortMeter,
+    cancellation: &(dyn DocumentCancellation + '_),
+) -> Result<(), DocumentError> {
+    loop {
+        let Some(left) = root.checked_mul(2).and_then(|value| value.checked_add(1)) else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                None,
+                None,
+            ));
+        };
+        if left >= end {
+            return Ok(());
+        }
+        let mut greatest = root;
+        meter.step(cancellation)?;
+        if values[greatest].xref_offset < values[left].xref_offset {
+            greatest = left;
+        }
+        let right = left + 1;
+        if right < end {
+            meter.step(cancellation)?;
+            if values[greatest].xref_offset < values[right].xref_offset {
+                greatest = right;
+            }
+        }
+        if greatest == root {
+            return Ok(());
+        }
+        meter.step(cancellation)?;
+        values.swap(root, greatest);
+        evidence.swap(root, greatest);
         root = greatest;
     }
 }

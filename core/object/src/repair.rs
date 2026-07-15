@@ -638,6 +638,11 @@ impl OpenLocalObjectJob {
         self.repair_limits
     }
 
+    /// Returns the validated per-object framing limits inherited by every validation child.
+    pub const fn object_limits(&self) -> ObjectLimits {
+        self.object_limits
+    }
+
     /// Returns the parent-supplied aggregate read and parse caps for this local job.
     pub const fn work_caps(&self) -> ObjectWorkCaps {
         self.work_caps

@@ -20,7 +20,10 @@
 //! unauthenticated intermediate typestate.
 //! An explicit local-repair planning surface can instead retain xref and
 //! object-offset proof, rebuild every effective interval atomically, and
-//! publish only an explicitly unauthenticated wrapper for later attestation.
+//! publish only an explicitly unauthenticated wrapper. A consuming sibling
+//! then reruns complete header/object/gap attestation over that rebuilt geometry,
+//! revalidates planned direct-length repairs under aggregate work caps, and
+//! publishes a distinct repaired typestate retaining the full repair ledger.
 //! Successful proof-bearing values retain their resolution profile and expose
 //! checked value-owned footprint components as evidence for a future cache owner,
 //! but this crate does not cache them.
@@ -88,8 +91,9 @@ pub use reference_chain::{
 };
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
 pub use repair::{
-    EffectiveObjectOffset, LocalRepairPlanningRevision, LocallyRebuiltCandidateRevision,
-    RepairGeometryStats,
+    AttestLocalRepairRevisionJob, EffectiveObjectOffset, LocalRepairPlanningRevision,
+    LocalRevisionAttestationJobContext, LocalRevisionAttestationPoll,
+    LocallyRebuiltCandidateRevision, LocallyRepairedRevisionIndex, RepairGeometryStats,
 };
 pub use residency::DocumentResidentFootprint;
 pub use revision_resolver::{

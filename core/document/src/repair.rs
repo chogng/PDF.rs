@@ -1,17 +1,20 @@
 use std::fmt;
 use std::mem;
 
-use pdf_rs_bytes::SourceSnapshot;
+use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_object::{
-    IndirectObjectTarget, IndirectObjectValue, LocallyFramedObject, ObjectRepairDiagnostic,
-    ObjectRepairKind,
+    IndirectObjectTarget, IndirectObjectValue, LocalObjectJobContext, LocallyFramedObject,
+    ObjectLimits, ObjectRepairDiagnostic, ObjectRepairKind, ObjectRepairLimits,
 };
-use pdf_rs_syntax::ObjectRef;
+use pdf_rs_syntax::{Located, ObjectRef, PdfHeader, SyntaxLimits};
 use pdf_rs_xref::{LocallyParsedXrefSection, XrefRepairDiagnostic};
 
 use crate::{
-    CandidateRevisionIndex, DocumentCancellation, DocumentError, DocumentErrorCode,
-    DocumentIndexStats, DocumentLimitKind, DocumentLimits, PhysicalObjectInterval, RevisionId,
+    AttestRevisionJob, AttestedRevisionIndex, CandidateRevisionIndex, DocumentCancellation,
+    DocumentError, DocumentErrorCode, DocumentIndexStats, DocumentLimitKind, DocumentLimits,
+    ObjectAttestation, PhysicalObjectInterval, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPhase, RevisionAttestationPoll,
+    RevisionAttestationStats, RevisionId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,7 +322,7 @@ pub struct LocallyRebuiltCandidateRevision {
 impl LocallyRebuiltCandidateRevision {
     fn from_plan(
         plan: LocalRepairPlanningRevision,
-        evidence: Vec<EffectiveObjectOffset>,
+        mut evidence: Vec<EffectiveObjectOffset>,
         cancellation: &(dyn DocumentCancellation + '_),
     ) -> Result<Self, DocumentError> {
         let plan_bytes = u64::try_from(evidence.capacity())
@@ -361,7 +364,7 @@ impl LocallyRebuiltCandidateRevision {
         }
         let (candidate, additional_sort_steps, repaired_offsets, object_repairs) =
             plan.candidate
-                .rebuild_effective_offsets(&evidence, plan.limits, cancellation)?;
+                .rebuild_effective_offsets(&mut evidence, plan.limits, cancellation)?;
         Ok(Self {
             xref: plan.xref,
             candidate,
@@ -423,6 +426,343 @@ impl LocallyRebuiltCandidateRevision {
     /// Returns retained-plan and effective-geometry rebuild work.
     pub const fn geometry_stats(&self) -> RepairGeometryStats {
         self.geometry_stats
+    }
+}
+
+/// Scan and child-object checkpoint identity for repaired revision attestation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalRevisionAttestationJobContext {
+    scan_checkpoint: ResumeCheckpoint,
+    object_context: LocalObjectJobContext,
+}
+
+impl LocalRevisionAttestationJobContext {
+    /// Creates a context whose scan checkpoint must be distinct from all six object checkpoints.
+    pub const fn new(
+        scan_checkpoint: ResumeCheckpoint,
+        object_context: LocalObjectJobContext,
+    ) -> Self {
+        Self {
+            scan_checkpoint,
+            object_context,
+        }
+    }
+
+    /// Returns the checkpoint used for header, prefix, and inter-object trivia reads.
+    pub const fn scan_checkpoint(self) -> ResumeCheckpoint {
+        self.scan_checkpoint
+    }
+
+    /// Returns the strict-first local object context used for every effective interval.
+    pub const fn object_context(self) -> LocalObjectJobContext {
+        self.object_context
+    }
+
+    fn core_context(self) -> RevisionAttestationJobContext {
+        let strict = self.object_context.strict();
+        RevisionAttestationJobContext::new(
+            strict.job(),
+            self.scan_checkpoint,
+            strict.envelope_checkpoint(),
+            strict.boundary_checkpoint(),
+            strict.priority(),
+        )
+    }
+}
+
+/// Poll result for top-level attestation of one complete local-repair plan.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the one-shot proof-bearing repaired index stays inline without hidden allocation"
+)]
+pub enum LocalRevisionAttestationPoll {
+    /// Header, all effective objects, and all surrounding trivia were authenticated.
+    Ready(LocallyRepairedRevisionIndex),
+    /// One exact source range is absent and the owning runtime must await its ticket.
+    Pending {
+        /// One-shot source ticket.
+        ticket: DataTicket,
+        /// Canonical exact missing ranges.
+        missing: SmallRanges,
+        /// Exact scan or local-object checkpoint to requeue.
+        checkpoint: ResumeCheckpoint,
+    },
+    /// Attestation or required repair replay reached a terminal failure.
+    Failed(DocumentError),
+}
+
+impl fmt::Debug for LocalRevisionAttestationPoll {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ready(index) => formatter.debug_tuple("Ready").field(index).finish(),
+            Self::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => formatter
+                .debug_struct("Pending")
+                .field("ticket", ticket)
+                .field("missing", missing)
+                .field("checkpoint", checkpoint)
+                .finish(),
+            Self::Failed(error) => formatter.debug_tuple("Failed").field(error).finish(),
+        }
+    }
+}
+
+/// One-shot job that consumes rebuilt geometry and publishes only a repaired typestate.
+pub struct AttestLocalRepairRevisionJob {
+    inner: AttestRevisionJob,
+    context: LocalRevisionAttestationJobContext,
+    xref: Option<LocallyParsedXrefSection>,
+    geometry_stats: RepairGeometryStats,
+    repair_limits: ObjectRepairLimits,
+    failed: Option<DocumentError>,
+    complete: bool,
+}
+
+impl AttestLocalRepairRevisionJob {
+    /// Consumes complete effective geometry and configures strict-first repair replay.
+    pub fn new(
+        rebuilt: LocallyRebuiltCandidateRevision,
+        context: LocalRevisionAttestationJobContext,
+        limits: RevisionAttestationLimits,
+        object_limits: ObjectLimits,
+        repair_limits: ObjectRepairLimits,
+        syntax_limits: SyntaxLimits,
+    ) -> Result<Self, DocumentError> {
+        let LocallyRebuiltCandidateRevision {
+            xref,
+            candidate,
+            evidence,
+            geometry_stats,
+        } = rebuilt;
+        let inner = AttestRevisionJob::new_local(
+            candidate,
+            context.core_context(),
+            context.object_context,
+            limits,
+            object_limits,
+            repair_limits,
+            syntax_limits,
+            evidence,
+        )?;
+        Ok(Self {
+            inner,
+            context,
+            xref: Some(xref),
+            geometry_stats,
+            repair_limits,
+            failed: None,
+            complete: false,
+        })
+    }
+
+    /// Returns the immutable source snapshot covered by the repair plan and active attestation.
+    pub const fn snapshot(&self) -> SourceSnapshot {
+        self.inner.snapshot()
+    }
+
+    /// Returns the complete scan and local-object checkpoint context.
+    pub const fn context(&self) -> LocalRevisionAttestationJobContext {
+        self.context
+    }
+
+    /// Returns cumulative top-level and child-object work through the latest poll.
+    pub const fn stats(&self) -> RevisionAttestationStats {
+        self.inner.stats()
+    }
+
+    /// Returns the current coarse phase without exposing the internal strict attestation job.
+    pub const fn phase(&self) -> RevisionAttestationPhase {
+        if self.complete {
+            RevisionAttestationPhase::Complete
+        } else if self.failed.is_some() {
+            RevisionAttestationPhase::Failed
+        } else {
+            self.inner.phase()
+        }
+    }
+
+    /// Advances complete top-level attestation without performing host or async-runtime I/O.
+    pub fn poll(
+        &mut self,
+        source: &(dyn ByteSource + '_),
+        cancellation: &(dyn DocumentCancellation + '_),
+    ) -> LocalRevisionAttestationPoll {
+        if let Some(error) = self.failed {
+            return LocalRevisionAttestationPoll::Failed(error);
+        }
+        if self.complete {
+            return LocalRevisionAttestationPoll::Failed(DocumentError::for_code(
+                DocumentErrorCode::JobAlreadyComplete,
+                None,
+                None,
+            ));
+        }
+        match self.inner.poll(source, cancellation) {
+            RevisionAttestationPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => LocalRevisionAttestationPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            },
+            RevisionAttestationPoll::Failed(error) => {
+                self.failed = Some(error);
+                LocalRevisionAttestationPoll::Failed(error)
+            }
+            RevisionAttestationPoll::Ready(attested) => {
+                let Some(xref) = self.xref.take() else {
+                    return self.fail_internal();
+                };
+                let Some(evidence) = self.inner.take_local_evidence() else {
+                    return self.fail_internal();
+                };
+                if evidence.len() != attested.object_attestations().len() {
+                    return self.fail_internal();
+                }
+                self.complete = true;
+                LocalRevisionAttestationPoll::Ready(LocallyRepairedRevisionIndex {
+                    xref,
+                    attested,
+                    evidence,
+                    geometry_stats: self.geometry_stats,
+                    repair_limits: self.repair_limits,
+                })
+            }
+        }
+    }
+
+    fn fail_internal(&mut self) -> LocalRevisionAttestationPoll {
+        let error = DocumentError::for_code(DocumentErrorCode::InternalState, None, None);
+        self.failed = Some(error);
+        LocalRevisionAttestationPoll::Failed(error)
+    }
+}
+
+impl fmt::Debug for AttestLocalRepairRevisionJob {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttestLocalRepairRevisionJob")
+            .field("snapshot", &self.snapshot())
+            .field("context", &self.context)
+            .field("geometry_stats", &self.geometry_stats)
+            .field("repair_limits", &self.repair_limits)
+            .field("stats", &self.stats())
+            .field("phase", &self.phase())
+            .field("repair_evidence", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Fully top-level-attested revision that retains inseparable local repair evidence.
+///
+/// The internal strict-shaped proof is deliberately not exposed as an `AttestedRevisionIndex`;
+/// callers can observe only this repaired typestate and its immutable repair ledger.
+pub struct LocallyRepairedRevisionIndex {
+    xref: LocallyParsedXrefSection,
+    attested: AttestedRevisionIndex,
+    evidence: Vec<EffectiveObjectOffset>,
+    geometry_stats: RepairGeometryStats,
+    repair_limits: ObjectRepairLimits,
+}
+
+impl LocallyRepairedRevisionIndex {
+    /// Returns the immutable source snapshot covered by every retained proof.
+    pub const fn snapshot(&self) -> SourceSnapshot {
+        self.attested.snapshot()
+    }
+
+    /// Returns the caller-assigned revision identity.
+    pub const fn revision_id(&self) -> RevisionId {
+        self.attested.revision_id()
+    }
+
+    /// Returns the normally validated strict or locally repaired xref anchor.
+    pub const fn startxref(&self) -> u64 {
+        self.attested.startxref()
+    }
+
+    /// Returns the exact-generation trailer root covered by top-level attestation.
+    pub const fn root(&self) -> ObjectRef {
+        self.attested.root()
+    }
+
+    /// Returns the source-located supported PDF header at offset zero.
+    pub const fn header(&self) -> &Located<PdfHeader> {
+        self.attested.header()
+    }
+
+    /// Returns effective candidate-index construction and re-sort accounting.
+    pub const fn index_stats(&self) -> DocumentIndexStats {
+        self.attested.index_stats()
+    }
+
+    /// Returns complete header, object, and trivia attestation work.
+    pub const fn attestation_stats(&self) -> RevisionAttestationStats {
+        self.attested.attestation_stats()
+    }
+
+    /// Returns retained-plan and effective-geometry rebuild work.
+    pub const fn geometry_stats(&self) -> RepairGeometryStats {
+        self.geometry_stats
+    }
+
+    /// Returns the object-framing profile used for final strict-first replay.
+    pub const fn object_limits(&self) -> ObjectLimits {
+        self.attested.object_limits()
+    }
+
+    /// Returns the syntax profile used for final header and object validation.
+    pub const fn syntax_limits(&self) -> SyntaxLimits {
+        self.attested.syntax_limits()
+    }
+
+    /// Returns the bounded local-repair profile used for required final length replay.
+    pub const fn repair_limits(&self) -> ObjectRepairLimits {
+        self.repair_limits
+    }
+
+    /// Returns fixed-size top-level object proofs in effective physical order.
+    pub fn object_attestations(&self) -> &[ObjectAttestation] {
+        self.attested.object_attestations()
+    }
+
+    /// Looks up one fixed-size top-level proof by exact object identity.
+    pub fn attestation(&self, reference: ObjectRef) -> Result<&ObjectAttestation, DocumentError> {
+        self.attested.attestation(reference)
+    }
+
+    /// Returns local-xref diagnostics inseparable from the published revision.
+    pub fn xref_diagnostics(&self) -> &[XrefRepairDiagnostic] {
+        self.xref.diagnostics()
+    }
+
+    /// Returns the complete original-to-effective object repair ledger.
+    pub fn object_repair_evidence(&self) -> &[EffectiveObjectOffset] {
+        &self.evidence
+    }
+}
+
+impl fmt::Debug for LocallyRepairedRevisionIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocallyRepairedRevisionIndex")
+            .field("snapshot", &self.snapshot())
+            .field("revision_id", &self.revision_id())
+            .field("startxref", &self.startxref())
+            .field("root", &self.root())
+            .field("index_stats", &self.index_stats())
+            .field("geometry_stats", &self.geometry_stats)
+            .field("repair_limits", &self.repair_limits)
+            .field("attestation_stats", &self.attestation_stats())
+            .field("xref_diagnostics", &self.xref.diagnostics())
+            .field("repair_evidence", &"[LOCALLY_REPAIRED]")
+            .field("object_attestations", &"[REDACTED]")
+            .finish()
     }
 }
 

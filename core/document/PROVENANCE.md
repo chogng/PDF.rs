@@ -10,7 +10,10 @@ success publishes `AttestedRevisionIndex`.
 An explicit local-repair planning surface separately retains a proof-bearing local-xref result,
 derives original candidate targets, accepts only effective offsets minted from proof-bearing local
 objects, and atomically rebuilds every physical interval before attestation. Its rebuilt wrapper is
-deliberately unauthenticated and cannot be used as an `AttestedRevisionIndex`.
+deliberately unauthenticated and cannot be used as an `AttestedRevisionIndex`. A consuming local
+attestation job then reuses the complete header/object/gap scanner over effective geometry and
+publishes only `LocallyRepairedRevisionIndex`, which retains both xref and object repair evidence
+without exposing or converting to the internal strict-shaped proof.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
@@ -136,7 +139,9 @@ repair or publish partially attested state.
   Snapshot, reference, declared offset, original upper bound, and revision anchor must all match
   before any effective offset is installed. Incomplete, reordered, foreign, widened-bound, or
   out-of-revision evidence fails without publishing geometry.
-- All effective offsets are installed before one second bounded cancellable sort. The sort starts
+- All effective offsets are installed before one second bounded cancellable sort. The sort swaps
+  each proof record together with its physical interval, so a real effective-order change cannot
+  bind evidence to the wrong object. The sort starts
   from the original candidate's already-consumed step count, so declared and effective sorts share
   `max_sort_steps`; duplicate effective offsets are rejected, logical-to-physical slots are rebuilt,
   and every next-object or `startxref` upper bound is recomputed only after the complete sort.
@@ -144,9 +149,21 @@ repair or publish partially attested state.
   logical-index byte ceiling.
 - `LocallyRebuiltCandidateRevision` retains xref diagnostics, the complete original-to-effective
   proof list, aggregate geometry stats, and the rebuilt candidate. Its API labels intervals as
-  rebuilt but unauthenticated and exposes no raw candidate or attested-object authority. Normal
-  prefix/object/gap attestation and a proof-bearing repaired document result remain a subsequent
-  required phase.
+  rebuilt but unauthenticated and exposes no raw candidate or attested-object authority.
+- `AttestLocalRepairRevisionJob` consumes that wrapper, validates seven distinct scan/strict/
+  candidate/repair checkpoints, and reruns the same PDF-header and top-level trivia coverage as
+  strict attestation. Offset-only objects reopen strictly at their effective offsets; only objects
+  carrying a planned direct-length repair may use the strict-first local child. All final child
+  reads, including repair scans, and parser windows share revision-level aggregate caps.
+- Final direct-length replay must match the planned snapshot, reference, kind, declared value, and
+  effective value. Scan-byte and candidate-count observations may differ after upper bounds are
+  rebuilt, so they remain planning provenance rather than semantic equality fields. The final
+  stream length claim and payload span are separately rebound to the effective value. No new
+  offset or unplanned length repair may appear during publication.
+- `LocallyRepairedRevisionIndex` privately owns the complete top-level proof while exposing only a
+  repaired typestate, fixed-size object attestations, xref diagnostics, the original repair plan,
+  and geometry/attestation stats. It provides no `Deref`, `AsRef`, consuming conversion, strict
+  object reopen, or raw candidate access.
 
 ## Top-level attestation
 
@@ -534,11 +551,14 @@ rejection, and independent aggregate resource dimensions. Repository policy also
 strict-outline feature plus its ISO text, null, indirect-object, Catalog, outline-dictionary, and
 document-architecture requirement links and explicit partial-scope boundaries.
 Local-repair geometry tests drive a real local-xref result and every xref-derived target through the
-proof-bearing local object job, repair one shifted object header, require a complete ordered plan,
-and verify the final effective sort, logical remap, and every rebuilt upper bound. Regressions reject
-incomplete, reordered, widened-bound, and cancelled plans; exact and one-less retained-plan and
-aggregate two-sort ceilings prove pre-publication resource boundaries. The result is asserted to
-remain explicitly unauthenticated.
+proof-bearing local object job, repair one shifted object header and one direct stream length,
+require a complete ordered plan, and verify the final effective sort, logical remap, and every
+rebuilt upper bound. A separate fixture causes the declared and effective physical orders to differ
+and proves paired interval/evidence sorting through final publication. Regressions reject
+incomplete, reordered, widened-bound, cancelled, context-conflicting, and semantically changed
+plans; exact and one-less retained-plan, two-sort, and final aggregate child-work ceilings prove
+pre-publication resource boundaries. Final tests assert a complete repaired ledger, redacted debug,
+stable terminal replay, and the absence of a strict typestate conversion.
 
 # Known deviations and unsupported cases
 
@@ -549,10 +569,11 @@ remain explicitly unauthenticated.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
-- Local R1 can now retain xref/object offset evidence and rebuild complete effective candidate
-  geometry, but no public job yet runs normal top-level prefix/object/gap attestation over that
-  wrapper or returns a proof-bearing repaired document. The geometry component is therefore not a
-  repaired open, resolver, Session, or M1 exit claim.
+- Local R1 now returns a proof-bearing repaired document after complete top-level attestation, but
+  callers still drive xref repair, every first-pass object probe, geometry rebuild, and final
+  publication as separate stages. There is no single repaired-open coordinator owning aggregate
+  first-pass work, Range permits, or lifecycle state, and the repaired typestate is not yet a
+  service resolver, Session, or M1 exit claim.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
   chain job can follow top-level whole-object aliases, and the count job can traverse strict
   Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
@@ -620,3 +641,5 @@ remain explicitly unauthenticated.
 - 2026-07-15: Added proof-bound local repair planning, complete effective-offset collection,
   aggregate second-sort and retained-plan budgets, and atomic candidate-interval rebuild while
   keeping the result explicitly unauthenticated.
+- 2026-07-15: Added paired effective-interval/proof sorting and complete repaired top-level
+  attestation with semantic length replay, aggregate child work, and a sealed repaired typestate.

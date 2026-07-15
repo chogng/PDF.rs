@@ -6,8 +6,10 @@ use pdf_rs_bytes::{
     ResumeCheckpoint, SmallRanges, SourceSnapshot,
 };
 use pdf_rs_object::{
+    IndirectObject, LocalObjectJobContext, LocalObjectPoll, LocallyFramedObject,
     ObjectCancellation, ObjectError, ObjectErrorCode, ObjectJobContext, ObjectLimitKind,
-    ObjectLimits, ObjectPoll, ObjectStats, ObjectWorkCaps, OpenObjectJob,
+    ObjectLimits, ObjectPoll, ObjectRepairKind, ObjectRepairLimits, ObjectWorkCaps,
+    OpenLocalObjectJob, OpenObjectJob,
 };
 use pdf_rs_syntax::{
     InputExtent, Located, PdfHeader, SyntaxCancellation, SyntaxInput, SyntaxLimits, SyntaxParser,
@@ -16,7 +18,8 @@ use pdf_rs_syntax::{
 
 use crate::{
     AttestedRevisionIndex, CandidateRevisionIndex, DocumentCancellation, DocumentError,
-    DocumentErrorCode, DocumentLimitKind, ObjectAttestation, RevisionAttestationLimits,
+    DocumentErrorCode, DocumentLimitKind, EffectiveObjectOffset, ObjectAttestation,
+    RevisionAttestationLimits,
 };
 
 const CANCELLATION_INTERVAL: usize = 256;
@@ -195,10 +198,58 @@ struct ScanState {
     trivia: TriviaState,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "only one strict or local child is live and all work remains allocation-auditable"
+)]
+enum ObjectChild {
+    Strict(OpenObjectJob),
+    Local(OpenLocalObjectJob),
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "proof-bearing one-shot objects stay inline without unbudgeted allocation"
+)]
+enum FramedObject {
+    Strict(IndirectObject),
+    Local(LocallyFramedObject),
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "proof-bearing one-shot objects stay inline without unbudgeted allocation"
+)]
+enum ObjectChildPoll {
+    Ready(FramedObject),
+    Pending {
+        ticket: DataTicket,
+        missing: SmallRanges,
+        checkpoint: ResumeCheckpoint,
+    },
+    Failed {
+        error: ObjectError,
+        reference: pdf_rs_syntax::ObjectRef,
+        offset: u64,
+        work_caps: ObjectWorkCaps,
+        object_limits: ObjectLimits,
+    },
+}
+
 struct ObjectState {
     physical_index: usize,
-    child: OpenObjectJob,
-    accounted_stats: ObjectStats,
+    child: ObjectChild,
+    accounted_read_bytes: u64,
+    accounted_parse_bytes: u64,
+}
+
+enum AttestationProfile {
+    Strict,
+    Local {
+        context: LocalObjectJobContext,
+        repair_limits: ObjectRepairLimits,
+        expected: Vec<EffectiveObjectOffset>,
+    },
 }
 
 #[allow(
@@ -238,6 +289,7 @@ pub struct AttestRevisionJob {
     stats: RevisionAttestationStats,
     header: Option<Located<PdfHeader>>,
     evidence: Vec<ObjectAttestation>,
+    profile: AttestationProfile,
     state: JobState,
 }
 
@@ -250,6 +302,52 @@ impl AttestRevisionJob {
         object_limits: ObjectLimits,
         syntax_limits: SyntaxLimits,
     ) -> Result<Self, DocumentError> {
+        Self::new_with_profile(
+            candidate,
+            context,
+            limits,
+            object_limits,
+            syntax_limits,
+            AttestationProfile::Strict,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private composition boundary keeps every independently validated profile explicit"
+    )]
+    pub(crate) fn new_local(
+        candidate: CandidateRevisionIndex,
+        context: RevisionAttestationJobContext,
+        local_context: LocalObjectJobContext,
+        limits: RevisionAttestationLimits,
+        object_limits: ObjectLimits,
+        repair_limits: ObjectRepairLimits,
+        syntax_limits: SyntaxLimits,
+        expected: Vec<EffectiveObjectOffset>,
+    ) -> Result<Self, DocumentError> {
+        Self::new_with_profile(
+            candidate,
+            context,
+            limits,
+            object_limits,
+            syntax_limits,
+            AttestationProfile::Local {
+                context: local_context,
+                repair_limits,
+                expected,
+            },
+        )
+    }
+
+    fn new_with_profile(
+        candidate: CandidateRevisionIndex,
+        context: RevisionAttestationJobContext,
+        limits: RevisionAttestationLimits,
+        object_limits: ObjectLimits,
+        syntax_limits: SyntaxLimits,
+        profile: AttestationProfile,
+    ) -> Result<Self, DocumentError> {
         if context.scan_checkpoint == context.object_envelope_checkpoint
             || context.scan_checkpoint == context.object_boundary_checkpoint
             || context.object_envelope_checkpoint == context.object_boundary_checkpoint
@@ -259,6 +357,38 @@ impl AttestRevisionJob {
                 None,
                 None,
             ));
+        }
+        if let AttestationProfile::Local {
+            context: local_context,
+            ..
+        } = &profile
+        {
+            let strict = local_context.strict();
+            let candidate_context = local_context.candidate();
+            let checkpoints = [
+                context.scan_checkpoint,
+                strict.envelope_checkpoint(),
+                strict.boundary_checkpoint(),
+                candidate_context.envelope_checkpoint(),
+                candidate_context.boundary_checkpoint(),
+                local_context.header_scan_checkpoint(),
+                local_context.length_scan_checkpoint(),
+            ];
+            if strict.job() != context.job
+                || strict.priority() != context.priority
+                || strict.envelope_checkpoint() != context.object_envelope_checkpoint
+                || strict.boundary_checkpoint() != context.object_boundary_checkpoint
+                || checkpoints
+                    .iter()
+                    .enumerate()
+                    .any(|(index, checkpoint)| checkpoints[..index].contains(checkpoint))
+            {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidAttestationJobContext,
+                    None,
+                    None,
+                ));
+            }
         }
         let snapshot = candidate.snapshot();
         let source_len = snapshot
@@ -314,6 +444,15 @@ impl AttestRevisionJob {
                 limits.max_objects,
                 0,
                 object_count,
+                None,
+            ));
+        }
+        if let AttestationProfile::Local { expected, .. } = &profile
+            && expected.len() != candidate.physical_intervals.len()
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(candidate.root()),
                 None,
             ));
         }
@@ -406,6 +545,7 @@ impl AttestRevisionJob {
             },
             header: None,
             evidence,
+            profile,
             state: JobState::Scan(ScanState {
                 purpose: ScanPurpose::Prefix,
                 cursor: 0,
@@ -434,6 +574,16 @@ impl AttestRevisionJob {
     /// Returns cumulative work through the most recent poll.
     pub const fn stats(&self) -> RevisionAttestationStats {
         self.stats
+    }
+
+    pub(crate) fn take_local_evidence(&mut self) -> Option<Vec<EffectiveObjectOffset>> {
+        if !matches!(self.state, JobState::Complete) {
+            return None;
+        }
+        match &mut self.profile {
+            AttestationProfile::Local { expected, .. } => Some(mem::take(expected)),
+            AttestationProfile::Strict => None,
+        }
     }
 
     /// Returns the current coarse resumable phase.
@@ -625,19 +775,63 @@ impl AttestRevisionJob {
         mut state: ObjectState,
     ) -> Option<RevisionAttestationPoll> {
         let adapter = CancellationAdapter(cancellation);
-        let outcome = state.child.poll(source, &adapter);
-        let current = state.child.stats();
-        let read_delta = match current
-            .read_bytes()
-            .checked_sub(state.accounted_stats.read_bytes())
-        {
+        let outcome = match &mut state.child {
+            ObjectChild::Strict(child) => match child.poll(source, &adapter) {
+                ObjectPoll::Ready(object) => ObjectChildPoll::Ready(FramedObject::Strict(object)),
+                ObjectPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => ObjectChildPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                },
+                ObjectPoll::Failed(error) => ObjectChildPoll::Failed {
+                    error,
+                    reference: child.target().reference(),
+                    offset: child.target().xref_offset(),
+                    work_caps: child.work_caps(),
+                    object_limits: child.limits(),
+                },
+            },
+            ObjectChild::Local(child) => match child.poll(source, &adapter) {
+                LocalObjectPoll::Ready(object) => {
+                    ObjectChildPoll::Ready(FramedObject::Local(object))
+                }
+                LocalObjectPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => ObjectChildPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                },
+                LocalObjectPoll::Failed(error) => ObjectChildPoll::Failed {
+                    error,
+                    reference: child.declared_target().reference(),
+                    offset: child.declared_target().xref_offset(),
+                    work_caps: child.work_caps(),
+                    object_limits: child.object_limits(),
+                },
+            },
+        };
+        let (current_read, current_parse) = match &state.child {
+            ObjectChild::Strict(child) => {
+                let stats = child.stats();
+                (stats.read_bytes(), stats.parse_bytes())
+            }
+            ObjectChild::Local(child) => {
+                let stats = child.stats();
+                (stats.read_bytes(), stats.parse_bytes())
+            }
+        };
+        let read_delta = match current_read.checked_sub(state.accounted_read_bytes) {
             Some(value) => value,
             None => return Some(self.fail_internal(None, None)),
         };
-        let parse_delta = match current
-            .parse_bytes()
-            .checked_sub(state.accounted_stats.parse_bytes())
-        {
+        let parse_delta = match current_parse.checked_sub(state.accounted_parse_bytes) {
             Some(value) => value,
             None => return Some(self.fail_internal(None, None)),
         };
@@ -650,10 +844,11 @@ impl AttestRevisionJob {
             Some(value) if value <= self.limits.max_total_object_parse_bytes => value,
             _ => return Some(self.fail_internal(None, None)),
         };
-        state.accounted_stats = current;
+        state.accounted_read_bytes = current_read;
+        state.accounted_parse_bytes = current_parse;
 
         match outcome {
-            ObjectPoll::Pending {
+            ObjectChildPoll::Pending {
                 ticket,
                 missing,
                 checkpoint,
@@ -665,74 +860,153 @@ impl AttestRevisionJob {
                     checkpoint,
                 })
             }
-            ObjectPoll::Failed(error) => {
-                let reference = state.child.target().reference();
-                let offset = state.child.target().xref_offset();
-                Some(self.fail(self.map_object_error(
-                    error,
-                    reference,
-                    offset,
-                    state.child.work_caps(),
-                    state.child.limits(),
-                )))
+            ObjectChildPoll::Failed {
+                error,
+                reference,
+                offset,
+                work_caps,
+                object_limits,
+            } => Some(self.fail(self.map_object_error(
+                error,
+                reference,
+                offset,
+                work_caps,
+                object_limits,
+            ))),
+            ObjectChildPoll::Ready(object) => {
+                match self.complete_object(state.physical_index, object) {
+                    Ok(object_end) => {
+                        let interval = match self.candidate.as_ref().and_then(|candidate| {
+                            candidate
+                                .physical_intervals
+                                .get(state.physical_index)
+                                .copied()
+                        }) {
+                            Some(value) => value,
+                            None => return Some(self.fail_internal(None, None)),
+                        };
+                        self.state = JobState::Scan(ScanState {
+                            purpose: ScanPurpose::Gap {
+                                after_object: state.physical_index,
+                            },
+                            cursor: object_end,
+                            end: interval.object_upper_bound,
+                            charged: false,
+                            trivia: TriviaState::Neutral,
+                        });
+                        None
+                    }
+                    Err(error) => Some(self.fail(error)),
+                }
             }
-            ObjectPoll::Ready(object) => {
-                let interval = match self.candidate.as_ref().and_then(|candidate| {
-                    candidate
-                        .physical_intervals
-                        .get(state.physical_index)
-                        .copied()
-                }) {
-                    Some(value) => value,
-                    None => return Some(self.fail_internal(None, None)),
+        }
+    }
+
+    fn complete_object(
+        &mut self,
+        physical_index: usize,
+        object: FramedObject,
+    ) -> Result<u64, DocumentError> {
+        let interval = self
+            .candidate
+            .as_ref()
+            .and_then(|candidate| candidate.physical_intervals.get(physical_index).copied())
+            .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+        let startxref = self
+            .candidate
+            .as_ref()
+            .map_or(u64::MAX, CandidateRevisionIndex::startxref);
+        if self.evidence.len() != physical_index || self.evidence.len() >= self.evidence.capacity()
+        {
+            return Err(self.object_internal_error(interval));
+        }
+        let (object_end, attestation) = match object {
+            FramedObject::Strict(object) => {
+                let profile_matches = match &self.profile {
+                    AttestationProfile::Strict => true,
+                    AttestationProfile::Local { expected, .. } => {
+                        expected.get(physical_index).is_some_and(|proof| {
+                            proof.snapshot() == self.snapshot
+                                && proof.reference() == interval.reference
+                                && proof.effective_offset() == interval.xref_offset
+                                && proof.revision_startxref() == startxref
+                                && !proof.diagnostics().iter().any(|diagnostic| {
+                                    diagnostic.kind() == ObjectRepairKind::DirectStreamLength
+                                })
+                        })
+                    }
                 };
-                if object.snapshot() != self.snapshot
+                if !profile_matches
+                    || object.snapshot() != self.snapshot
                     || object.reference() != interval.reference
                     || object.xref_offset() != interval.xref_offset
                     || object.object_upper_bound() != interval.object_upper_bound
-                    || object.revision_startxref()
-                        != self
-                            .candidate
-                            .as_ref()
-                            .map_or(u64::MAX, CandidateRevisionIndex::startxref)
+                    || object.revision_startxref() != startxref
                     || object.header_span().start() != interval.xref_offset
                     || object.object_span().start() != interval.xref_offset
                     || object.object_span().end_exclusive() > interval.object_upper_bound
                     || object.endobj_span().end_exclusive() != object.object_span().end_exclusive()
-                    || self.evidence.len() != state.physical_index
-                    || self.evidence.len() >= self.evidence.capacity()
                 {
-                    return Some(
-                        self.fail_internal(Some(interval.reference), Some(interval.xref_offset)),
-                    );
+                    return Err(self.object_internal_error(interval));
                 }
-                let object_end = object.object_span().end_exclusive();
-                self.evidence.push(ObjectAttestation::from_object(
-                    interval.revision_id,
-                    &object,
-                ));
-                self.stats.objects_attested =
-                    match self.stats.objects_attested.checked_add(1) {
-                        Some(value) => value,
-                        None => {
-                            return Some(self.fail_internal(
-                                Some(interval.reference),
-                                Some(interval.xref_offset),
-                            ));
-                        }
-                    };
-                self.state = JobState::Scan(ScanState {
-                    purpose: ScanPurpose::Gap {
-                        after_object: state.physical_index,
-                    },
-                    cursor: object_end,
-                    end: interval.object_upper_bound,
-                    charged: false,
-                    trivia: TriviaState::Neutral,
-                });
-                None
+                (
+                    object.object_span().end_exclusive(),
+                    ObjectAttestation::from_object(interval.revision_id, &object),
+                )
             }
-        }
+            FramedObject::Local(object) => {
+                let AttestationProfile::Local { expected, .. } = &self.profile else {
+                    return Err(self.object_internal_error(interval));
+                };
+                let Some(expected) = expected.get(physical_index) else {
+                    return Err(self.object_internal_error(interval));
+                };
+                if object.snapshot() != self.snapshot
+                    || object.reference() != interval.reference
+                    || object.declared_xref_offset() != interval.xref_offset
+                    || object.object_upper_bound() != interval.object_upper_bound
+                    || object.revision_startxref() != startxref
+                    || object.object_span().end_exclusive() > interval.object_upper_bound
+                    || object.endobj_span().end_exclusive() != object.object_span().end_exclusive()
+                    || expected.snapshot() != self.snapshot
+                    || expected.reference() != interval.reference
+                    || expected.effective_offset() != interval.xref_offset
+                    || expected.revision_startxref() != startxref
+                {
+                    return Err(self.object_internal_error(interval));
+                }
+                if object.effective_xref_offset() != interval.xref_offset
+                    || object.header_span().start() != interval.xref_offset
+                    || object.object_span().start() != interval.xref_offset
+                    || !local_diagnostics_match(expected, &object)
+                {
+                    return Err(DocumentError::for_code(
+                        DocumentErrorCode::ObjectAttestationFailure,
+                        Some(interval.reference),
+                        Some(interval.xref_offset),
+                    ));
+                }
+                (
+                    object.object_span().end_exclusive(),
+                    ObjectAttestation::from_locally_framed(interval.revision_id, &object),
+                )
+            }
+        };
+        self.evidence.push(attestation);
+        self.stats.objects_attested = self
+            .stats
+            .objects_attested
+            .checked_add(1)
+            .ok_or_else(|| self.object_internal_error(interval))?;
+        Ok(object_end)
+    }
+
+    fn object_internal_error(&self, interval: crate::PhysicalObjectInterval) -> DocumentError {
+        DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(interval.reference),
+            Some(interval.xref_offset),
+        )
     }
 
     fn complete_scan(
@@ -830,26 +1104,85 @@ impl AttestRevisionJob {
             .as_ref()
             .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?
             .unattested_target(interval.reference)?;
-        let context = ObjectJobContext::new(
-            self.context.job,
-            self.context.object_envelope_checkpoint,
-            self.context.object_boundary_checkpoint,
-            self.context.priority,
-        );
-        let child = OpenObjectJob::new_with_work_caps(
-            target,
-            context,
-            self.object_limits,
-            self.syntax_limits,
-            work_caps,
-        )
-        .map_err(|error| {
-            DocumentError::from_attestation_object(error, interval.reference, interval.xref_offset)
-        })?;
+        let child = match &self.profile {
+            AttestationProfile::Strict => {
+                let context = ObjectJobContext::new(
+                    self.context.job,
+                    self.context.object_envelope_checkpoint,
+                    self.context.object_boundary_checkpoint,
+                    self.context.priority,
+                );
+                ObjectChild::Strict(
+                    OpenObjectJob::new_with_work_caps(
+                        target,
+                        context,
+                        self.object_limits,
+                        self.syntax_limits,
+                        work_caps,
+                    )
+                    .map_err(|error| {
+                        DocumentError::from_attestation_object(
+                            error,
+                            interval.reference,
+                            interval.xref_offset,
+                        )
+                    })?,
+                )
+            }
+            AttestationProfile::Local {
+                context,
+                repair_limits,
+                expected,
+            } => {
+                let needs_length_repair = expected.get(physical_index).is_some_and(|proof| {
+                    proof
+                        .diagnostics()
+                        .iter()
+                        .any(|diagnostic| diagnostic.kind() == ObjectRepairKind::DirectStreamLength)
+                });
+                if needs_length_repair {
+                    ObjectChild::Local(
+                        OpenLocalObjectJob::new_with_work_caps(
+                            target,
+                            *context,
+                            self.object_limits,
+                            *repair_limits,
+                            self.syntax_limits,
+                            work_caps,
+                        )
+                        .map_err(|error| {
+                            DocumentError::from_attestation_object(
+                                error,
+                                interval.reference,
+                                interval.xref_offset,
+                            )
+                        })?,
+                    )
+                } else {
+                    ObjectChild::Strict(
+                        OpenObjectJob::new_with_work_caps(
+                            target,
+                            context.strict(),
+                            self.object_limits,
+                            self.syntax_limits,
+                            work_caps,
+                        )
+                        .map_err(|error| {
+                            DocumentError::from_attestation_object(
+                                error,
+                                interval.reference,
+                                interval.xref_offset,
+                            )
+                        })?,
+                    )
+                }
+            }
+        };
         self.state = JobState::Object(ObjectState {
             physical_index,
             child,
-            accounted_stats: ObjectStats::default(),
+            accounted_read_bytes: 0,
+            accounted_parse_bytes: 0,
         });
         Ok(())
     }
@@ -1154,6 +1487,50 @@ const fn read_cap_is_aggregate(caps: ObjectWorkCaps, limits: ObjectLimits) -> bo
 
 const fn parse_cap_is_aggregate(caps: ObjectWorkCaps, limits: ObjectLimits) -> bool {
     caps.max_parse_bytes() < limits.max_total_parse_bytes()
+}
+
+fn local_diagnostics_match(expected: &EffectiveObjectOffset, object: &LocallyFramedObject) -> bool {
+    if object
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.kind() == ObjectRepairKind::ObjectOffset)
+    {
+        return false;
+    }
+    let mut actual = object.diagnostics().iter();
+    let mut expected_length = None;
+    for diagnostic in expected
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.kind() != ObjectRepairKind::ObjectOffset)
+    {
+        if diagnostic.kind() == ObjectRepairKind::DirectStreamLength {
+            expected_length = Some(*diagnostic);
+        }
+        let Some(observed) = actual.next() else {
+            return false;
+        };
+        if observed.snapshot() != diagnostic.snapshot()
+            || observed.reference() != diagnostic.reference()
+            || observed.kind() != diagnostic.kind()
+            || observed.declared() != diagnostic.declared()
+            || observed.effective() != diagnostic.effective()
+        {
+            return false;
+        }
+    }
+    if actual.next().is_some() {
+        return false;
+    }
+    match (expected_length, object.value()) {
+        (None, _) => true,
+        (Some(diagnostic), pdf_rs_object::IndirectObjectValue::Stream(stream)) => {
+            stream.length_claim().declaration().direct_value() == Some(diagnostic.declared())
+                && stream.length_claim().value() == diagnostic.effective()
+                && stream.data_span().len() == diagnostic.effective()
+        }
+        (Some(_), _) => false,
+    }
 }
 
 #[cfg(test)]

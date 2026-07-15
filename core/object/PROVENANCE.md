@@ -256,8 +256,9 @@ Native/external-engine differential is claimed in this bootstrap slice.
 - Only known-length immutable snapshots are accepted. Executable strict-policy regressions prove
   that neither a correct object header one byte away nor a correct stream boundary one byte beyond
   a wrong direct `/Length` is searched automatically; local R1 repair exists only through the
-  explicit sibling job. Top-level attestation of the rebuilt geometry, a proof-bearing repaired
-  document open, R2 repair, platform
+  explicit sibling job. Document-layer rebuilt-geometry attestation now publishes a sealed
+  proof-bearing repaired typestate, but a single coordinator owning first-pass repair planning,
+  R2 repair, platform
   Range scheduling/coalescing, cancellation delivery and ticket unsubscription, terminal
   completion/cancel/close arbitration, and browser/desktop E2E remain future work.
 - Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or
