@@ -18,7 +18,9 @@ Native Range-resume loop drives that same generated PDF through the product runt
 sibling strict-open runtime loop retains the direct single-job owner checks and also drives the real
 opening job through the public one-job coordinator into an opaque Ready source handoff.
 The quality CLI also validates the machine-readable M1 capability-profile ledger and refuses
-evidence-free REFERENCE or DIFFERENTIAL relabelling.
+REFERENCE or DIFFERENTIAL promotion unless every required artifact is repository-relative,
+content-addressed, ledger-bound, eligible, registered, gating, and connected through the required
+evidence graph.
 
 # Semantic owner
 
@@ -46,14 +48,41 @@ The manifest reader intentionally accepts a canonical TOML v1 subset: root
 schema, named tables, scalar values, and single-line string arrays. It rejects
 unknown/duplicate fields before checking every required semantic group.
 
-The separate M1 maturity reader accepts a smaller canonical array-of-profile subset. Every record
-freezes requirements, supported and excluded behavior, policy, target/reference identities, and
-the evidence slots required by the architecture maturity transitions. PLANNED records may retain
-explicit REQUIRED placeholders. REFERENCE records require concrete O0/O1 cases, target/reference
-identities, and independent review. DIFFERENTIAL records additionally require O2 adjudication,
-registered fuzz and minimization, a fixed holdout manifest, eligible benchmark and differential
-reports, and a complete reference or baseline fingerprint. This check prevents a label-only
-promotion; it does not judge the semantic contents of future evidence by itself.
+The separate M1 maturity reader accepts canonical root records, profile records, and string arrays,
+including the multiline arrays used by the companion traceability maps. Every profile freezes
+requirements, supported and excluded behavior, policy, one symbolic target, and the evidence slots
+required by the architecture maturity transitions. PLANNED records may retain explicit REQUIRED
+placeholders, but their feature identity, profile identity, and state must still agree with the
+feature map. REFERENCE and DIFFERENTIAL evidence slots must use
+`repository/relative/path#sha256:<64-lowercase-hex>` references. The reader rejects absolute,
+traversing, non-canonical alias, symlinked, missing, non-regular, hash-mismatched, and duplicate
+evidence references,
+then requires an exact project-authored maturity-evidence schema whose profile, feature, role,
+oracle, target, requirements, eligibility, registration, gating, external-observation, fuzz,
+benchmark, and verdict metadata agree with the promotion. It also verifies the role-specific
+cross-reference graph, feature/spec links, registered fuzz and benchmark identities, and the exact
+source/hash binding in the data ledger. O4 or otherwise external, ineligible, unregistered, or
+non-gating observations cannot satisfy a verdict-bearing evidence slot. The target remains a
+symbolic product identity and is never interpreted as an evidence file.
+
+Every promoted artifact also declares a role-specific `subject_kind`, at least one unique
+content-addressed `subjects` file, and nonempty `executed_tests` drawn from that feature's registered
+tests. Subject references cannot point back to any evidence artifact, and report subjects cannot be
+reused between roles. A hash-bound top-level integration-test source may be shared because every
+artifact must bind its registered test to that executable Cargo target; other Rust source sharing is
+limited to source-backed roles. REFERENCE subjects bind the symbolic target to a registered workspace
+implementation source and integration test. O0/O1 subjects must pass the canonical case-manifest
+validator and bind the exact oracle level, feature, Native runner, independent review, and
+reference-generation prohibition; O2 binds a two-reviewer adjudicated case or report. Review,
+minimizer, holdout, benchmark, differential, and fingerprint roles require separate canonical
+subject reports. The minimizer additionally hash-binds a workspace package's canonical cargo-fuzz
+manifest (`publish = false`, cargo-fuzz metadata, `libfuzzer-sys`, and unique `[[bin]]` name/path),
+its exact `fuzz_targets` source with the no-main libFuzzer entry, a registered integration test that
+runs `cargo check --manifest-path` for that fuzz package, and minimized case IDs. The benchmark binds
+registered scenario IDs, positive raw samples, and
+performance eligibility; the differential binds an executable full-Session test and result cases;
+and the fingerprint binds a lowercase SHA-256 identity. These anchors prevent the maturity
+artifact's own metadata from serving as its complete proof.
 
 The `m0.parser-mutation-smoke.v1` integration test binds the exact SHA-256 of
 the three existing canonical inputs. For each parser it selects seven stable
@@ -228,8 +257,14 @@ budget validation, deterministic bundle addressing, source/render/contract
 binding, artifact completeness, mismatch diagnostics, idempotent writes, and
 rejection of product-to-tools or full-engine dependencies. The cross-tool
 M1 maturity tests validate the repository's four truthfully PLANNED profiles and prove that
-label-only REFERENCE and DIFFERENTIAL edits fail on their missing evidence fields. The cross-tool
-mutation smoke covers canonical-seed identity, bounded fixed mutations,
+label-only REFERENCE and DIFFERENTIAL edits fail on their missing evidence fields. An isolated fake
+repository additionally proves one complete content-addressed DIFFERENTIAL graph passes and rejects
+absolute or traversing references, missing and non-regular paths, hash drift, duplicate references,
+O4/external or ineligible/unregistered/non-gating artifacts, schema and graph drift, feature/spec
+link drift, ledger identity/hash drift, duplicate ledger identities, unregistered fuzz identities or
+fuzz Cargo bins, empty or hash-drifted subjects, wrong subject role markers, and unregistered executed
+tests. The cross-tool mutation smoke covers
+canonical-seed identity, bounded fixed mutations,
 repeatable success/error observations, explicit input-limit rejection, and
 synthetic secret/seed-marker redaction. The Native composition test covers the
 canonical generated source identity, the formal strict-base opening entry and its
@@ -264,9 +299,11 @@ interrupted-write recovery remain planned before T1 inputs.
 
 # Known deviations and unsupported cases
 
-- The M1 maturity parser deliberately validates evidence presence and state-transition shape, not
-  arbitrary TOML or the future semantic contents of review, fuzz, holdout, benchmark, differential,
-  and fingerprint artifacts. Those artifacts require their own schema validators before promotion.
+- The M1 maturity parser validates the canonical metadata, content identity, eligibility, and
+  dependency graph of promotion evidence; it does not independently reproduce the underlying
+  review, fuzz campaign, holdout execution, benchmark samples, differential run, or reference build.
+  Those substantive claims remain owned by their registered producers and domain-specific gates.
+  The reader is intentionally a strict repository schema subset rather than a general TOML parser.
 
 - The manifest parser does not claim general TOML compatibility; multiline
   arrays, dotted keys, inline tables, escapes within array elements, and comments
@@ -321,6 +358,10 @@ interrupted-write recovery remain planned before T1 inputs.
 
 # History
 
+- 2026-07-15: Bound REFERENCE and DIFFERENTIAL maturity evidence to repository-relative SHA-256
+  references, exact artifact metadata and cross-reference graphs, feature/spec registrations, and
+  data-ledger hashes; added role-specific content-addressed subjects and executed-test registration
+  so artifact metadata cannot self-certify promotion, with isolated promotion and rejection fixtures.
 - 2026-07-15: Added the machine-readable M1 capability-profile ledger and a PR gate that retains
   all profiles as PLANNED while rejecting evidence-free maturity relabelling.
 
