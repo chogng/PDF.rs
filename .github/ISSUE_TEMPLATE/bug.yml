@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible defect in PDF.rs
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. GitHub Issues capture public intake; maintainers link scheduled work to an executable Linear `CHO-*` issue.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same behavior.
+          required: true
+        - label: I removed confidential or sensitive data from every attached PDF, log, and screenshot.
+          required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Explain who is affected and how severely.
+      placeholder: This prevents...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest deterministic sequence that triggers the problem.
+      placeholder: |
+        1. Open...
+        2. Run...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error, diagnostic, or incorrect output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe the result you expected and why.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Syntax or parser
+        - XRef or revisions
+        - Objects or document services
+        - Rendering
+        - Runtime or cache
+        - Quality tooling or CI
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the PDF.rs commit, operating system, architecture, and relevant command or application.
+      placeholder: |
+        PDF.rs commit:
+        OS and architecture:
+        Command or application:
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Add minimized non-sensitive inputs, logs, diagnostics, screenshots, or comparison results.
+    validations:
+      required: false

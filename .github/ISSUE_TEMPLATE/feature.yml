@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a focused PDF.rs capability or improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the desired outcome before proposing implementation. GitHub Issues capture public intake; maintainers link scheduled work to an executable Linear `CHO-*` issue.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same request.
+          required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: State the user-visible or developer-visible result.
+      placeholder: PDF.rs should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Explain the concrete workflow or document class that needs this capability.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Proposed scope
+      description: Describe the smallest useful slice, including important boundaries or non-goals.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or other designs you evaluated.
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Link relevant specifications, non-sensitive sample documents, measurements, or prior art.
+    validations:
+      required: false
