@@ -83,6 +83,73 @@ fn product_object_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io()
     );
 }
 
+#[test]
+fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/object has a repository root two levels above it");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+    assert_eq!(top_level_version(&feature_map), Some("0.36.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.36.0"));
+
+    let feature = record_with_id(&feature_map, "feature", "core.staged-stream-length-framing")
+        .expect("staged stream-length feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.staged-stream-length.v1\"",
+        "modules = [\"core/object\"]",
+        "core/object::staged_length",
+        "core/object::object_behavior",
+        "core/object::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "staged stream-length feature must contain {required:?}"
+        );
+    }
+
+    let syntax_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.3")
+        .expect("syntax architecture requirement must exist");
+    let object_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
+        .expect("object architecture requirement must exist");
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("M1 architecture requirement must exist");
+    for requirement in [syntax_requirement, object_requirement, milestone] {
+        assert!(requirement.contains("core.staged-stream-length-framing"));
+        assert!(requirement.contains("core/object::staged_length"));
+        assert!(requirement.contains("same-snapshot"));
+        assert!(requirement.contains("resolver"));
+        assert!(requirement.contains("M1 exit"));
+    }
+    assert!(object_requirement.contains("does not resolve or attest"));
+    assert!(object_requirement.contains("revision-aware object resolver"));
+    assert!(milestone.contains("not connected"));
+    assert!(milestone.contains("profiles remain PLANNED"));
+}
+
+fn top_level_version(document: &str) -> Option<&str> {
+    document
+        .lines()
+        .take_while(|line| !line.starts_with("[["))
+        .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+}
+
+fn record_with_id<'a>(document: &'a str, kind: &str, id: &str) -> Option<&'a str> {
+    let header = format!("{kind}]]");
+    let id_line = format!("id = \"{id}\"");
+    document
+        .split("\n[[")
+        .find(|record| record.starts_with(&header) && record.lines().any(|line| line == id_line))
+}
+
 fn collect_rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {
     let entries = fs::read_dir(directory).expect("source directory must be readable");
     for entry in entries {

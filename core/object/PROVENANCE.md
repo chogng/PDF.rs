@@ -2,13 +2,16 @@
 
 `core/object` is the strict single-indirect-object framing bootstrap for the Native product core.
 It validates one xref-derived target against its exact object header, parses one direct value, and
-frames a directly sized stream with bounded resumable reads. It performs no file, network,
-callback, filter decoding, or async-runtime I/O.
+frames a stream with bounded resumable reads. A staged path may stop after the stream dictionary,
+publish a direct value or indirect `/Length` dependency, and resume exact boundary validation only
+after a same-snapshot resolver supplies the referenced integer metadata. It performs no file,
+network, callback, filter decoding, or async-runtime I/O.
 
 # Semantic owner
 
-Parser/Security owns indirect-object header validation, direct `/Length` policy, exact stream
-framing, source identity, deterministic budgets, cancellation, and stable object failures.
+Parser/Security owns indirect-object header validation, `/Length` declaration classification,
+same-snapshot length-claim checks, exact stream framing, source identity, deterministic budgets,
+cancellation, and stable object failures.
 `core/bytes` owns immutable source snapshots and byte delivery, while `core/syntax` owns direct
 object and keyword syntax. `core/xref` is a sibling consumer of syntax rather than an object-crate
 dependency. `core/document` composes one validated traditional base section into candidate
@@ -54,9 +57,22 @@ claim.
 - Envelope windows grow geometrically from a bounded initial size. The parser recognizes one
   direct value and a borrowed terminal keyword without speculative rollback. `endobj` completes a
   direct object. Only a dictionary may precede `stream`, which must have a strict line ending.
-- A stream dictionary must contain exactly one `/Length`. A nonnegative direct integer is checked
-  against the stream budget and revision/source geometry; an indirect reference is a stable
-  unsupported capability, while missing, duplicate, negative, or ill-typed values are malformed.
+- A stream dictionary must contain exactly one `/Length`. Missing, duplicate, negative, or
+  ill-typed values are malformed. The compatibility `OpenObjectJob` accepts a nonnegative direct
+  integer and preserves `UnsupportedIndirectLength` for an indirect reference. The staged
+  `OpenObjectEnvelopeJob` instead returns `DeclaredStreamLength`, retaining the exact operand span
+  and either the checked direct value or referenced object without computing a payload end.
+- `StreamEnvelope::direct_length_claim` binds a direct value to the envelope's snapshot and owner.
+  For an indirect declaration, `ResolvedStreamLength::from_uncompressed_object` accepts only a
+  header-validated direct nonnegative integer `IndirectObject` and derives its snapshot, reference,
+  value, and physical value span; there is no public raw-value constructor. The envelope rejects a
+  different snapshot or reference as `RPE-OBJECT-0022`. A future document resolver remains
+  responsible for proving that this object is the effective revision definition selected for the
+  declared reference. `OpenStreamBoundaryJob` rechecks the claim against the declaration,
+  stream budget, checked payload-end arithmetic, and physical object bound before any source poll.
+  The envelope seals the original job context, object and syntax profiles, cumulative work caps,
+  and already-consumed stats; the boundary phase must inherit them and continues charging from the
+  envelope totals rather than resetting a second per-object budget.
 - The framing algorithm never creates a request proportional to the declared `/Length` and never
   requires the complete payload to be resident or contiguous. A bounded envelope window can
   opportunistically overlap a payload prefix (or all of a small payload) because `data_start` is
@@ -133,7 +149,11 @@ for both direct and stream objects, getters, and equivalence of the legacy const
 explicit configured-total caps. A framing matrix exhausts every initial envelope/boundary split and
 direct/stream candidate physical-bound cut for the bootstrap fixtures,
 and exact and one-less runtime resource boundaries. Physical-bound cases assert stable
-`RPE-OBJECT-0021` policy and terminal re-poll behavior.
+`RPE-OBJECT-0021` policy and terminal re-poll behavior. Staged-length tests cover direct versus
+indirect declaration classification, same-snapshot and exact-reference claim binding, stable
+`RPE-OBJECT-0022` mismatch policy, sparse envelope and exact-boundary Pending/resume checkpoints,
+a deliberately unsupplied large payload tail, terminal source change, cancellation, retained
+resolved-value provenance, and exact versus one-less aggregate work across both phases.
 Separate tests cover all limit-profile relationships and hard ceilings, lower source-error policy
 mapping, and repository dependency/purity rules. A `tools/quality` integration test generates the
 canonical PDF, parses its traditional xref section, and frames every in-use target while checking
@@ -144,10 +164,14 @@ Native/external-engine differential is claimed in this bootstrap slice.
 
 # Known deviations and unsupported cases
 
-- This is one strict framing job, not a complete object resolver. Indirect `/Length`, dependency
-  states, cycle/reference-chain diagnostics, object caches, object streams, xref streams, hybrid
-  files, incremental revision precedence, encryption, filters, content interpretation, and
-  document services remain unimplemented.
+- This is an object-framing component, not a complete object resolver. Indirect `/Length` is now an
+  explicit staged dependency and can be framed after resolver-supplied same-snapshot uncompressed
+  integer metadata, but no document resolver currently produces that metadata and no cycle,
+  precedence, generation, or attestation policy is integrated. Compressed length objects require
+  a future decoded-coordinate evidence model and cannot fabricate a physical `ByteSpan`. Object
+  caches, object streams, xref-stream
+  acquisition/filter decode, hybrid files, incremental revision integration, encryption, content
+  interpretation, and document services remain unimplemented.
 - `IndirectObjectTarget` carries xref-derived geometry but is publicly constructible so the object
   crate remains independent of its xref sibling. The object job therefore treats every target as
   untrusted and revalidates source geometry, its independent physical upper bound, the preceding
@@ -185,3 +209,6 @@ Native/external-engine differential is claimed in this bootstrap slice.
   exact direct/stream boundary coverage.
 - 2026-07-13: Propagated successful syntax scalar/container heap capacity through object stats and
   returned values without counting discarded retries or opaque stream payloads.
+- 2026-07-15: Added staged stream envelopes, explicit direct/indirect `/Length` dependencies,
+  same-snapshot resolver claim metadata, and resumable exact-boundary validation while preserving
+  the legacy direct-only framing contract.

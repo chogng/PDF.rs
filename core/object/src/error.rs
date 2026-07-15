@@ -93,8 +93,10 @@ pub enum ObjectErrorCode {
     DuplicateStreamLength,
     /// A direct stream length is negative, ill-typed, or out of range.
     InvalidStreamLength,
-    /// A valid indirect `/Length` requires a deliberately unsupported resolver phase.
+    /// The compatibility one-shot job cannot resolve an otherwise valid indirect `/Length`.
     UnsupportedIndirectLength,
+    /// A resolver-supplied length claim does not match its stream envelope.
+    InvalidStreamLengthClaim,
     /// The declared payload end is not followed by strict `endstream` and `endobj` framing.
     InvalidStreamBoundary,
     /// The lower direct-object syntax parser rejected the envelope.
@@ -244,6 +246,11 @@ impl ObjectError {
                 ObjectErrorCategory::Unsupported,
                 ObjectRecoverability::UseSupportedFeature,
                 "RPE-OBJECT-0013",
+            ),
+            ObjectErrorCode::InvalidStreamLengthClaim => (
+                ObjectErrorCategory::Configuration,
+                ObjectRecoverability::CorrectConfiguration,
+                "RPE-OBJECT-0022",
             ),
             ObjectErrorCode::InvalidStreamBoundary => (
                 ObjectErrorCategory::Syntax,

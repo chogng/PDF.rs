@@ -988,6 +988,20 @@ fn stream_length_policy_distinguishes_malformed_unsupported_and_resource_cases()
     let error = failed_at(&bytes, object_ref(1, 0), 0, startxref, limits);
     assert_eq!(error.code(), ObjectErrorCode::ResourceLimit);
     assert_eq!(error.limit().unwrap().kind(), ObjectLimitKind::StreamBytes);
+
+    let (bytes, startxref) = standalone(b"1 0 obj\n<< /Length 2 0 R >>\nstream\r");
+    assert_eq!(
+        failed_at(
+            &bytes,
+            object_ref(1, 0),
+            0,
+            startxref,
+            ObjectLimits::default(),
+        )
+        .code(),
+        ObjectErrorCode::UnsupportedIndirectLength,
+        "legacy direct-only framing must reject indirect Length before stream-line validation"
+    );
 }
 
 #[test]

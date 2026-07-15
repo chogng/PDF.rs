@@ -5,7 +5,7 @@ use pdf_rs_syntax::{
 };
 
 use crate::job::ObjectCancellation;
-use crate::{ObjectError, ObjectErrorCode, ObjectLimitKind, ObjectLimits};
+use crate::{DeclaredStreamLength, ObjectError, ObjectErrorCode};
 
 const CANCELLATION_PROBE_INTERVAL: u16 = 256;
 
@@ -15,7 +15,7 @@ pub(crate) struct EnvelopeContext {
     pub(crate) reference: ObjectRef,
     pub(crate) xref_offset: u64,
     pub(crate) object_upper_bound: u64,
-    pub(crate) limits: ObjectLimits,
+    pub(crate) allow_indirect_length: bool,
     pub(crate) syntax_limits: SyntaxLimits,
 }
 
@@ -35,10 +35,10 @@ pub(crate) struct ParsedDirect {
 pub(crate) struct ParsedStreamEnvelope {
     pub(crate) header_span: ByteSpan,
     pub(crate) dictionary: Located<PdfDictionary>,
-    pub(crate) length_value_span: ByteSpan,
+    pub(crate) declared_length: DeclaredStreamLength,
     pub(crate) stream_keyword_span: ByteSpan,
     pub(crate) stream_line_ending_span: ByteSpan,
-    pub(crate) data_span: ByteSpan,
+    pub(crate) data_start: u64,
     pub(crate) retained_heap_bytes: u64,
 }
 
@@ -171,16 +171,14 @@ pub(crate) fn parse_envelope(
                     Some(terminal.span().start()),
                 )),
             })?;
-            let (stream_length, length_value_span) =
-                direct_stream_length(&dictionary, reference, cancellation)?;
-            if stream_length > context.limits.max_stream_bytes() {
-                return Err(ObjectError::resource(
-                    ObjectLimitKind::StreamBytes,
-                    context.limits.max_stream_bytes(),
-                    0,
-                    stream_length,
+            let declared_length = stream_length(&dictionary, reference, cancellation)?;
+            if !context.allow_indirect_length
+                && matches!(declared_length, DeclaredStreamLength::Indirect { .. })
+            {
+                return Err(ObjectError::for_code(
+                    ObjectErrorCode::UnsupportedIndirectLength,
                     Some(reference),
-                    Some(length_value_span.start()),
+                    Some(declared_length.operand_span().start()),
                 ));
             }
 
@@ -196,36 +194,22 @@ pub(crate) fn parse_envelope(
                 }
             };
             let data_start = stream_line_ending_span.end_exclusive();
-            let data_end = data_start.checked_add(stream_length).ok_or_else(|| {
-                ObjectError::for_code(
-                    ObjectErrorCode::InvalidStreamLength,
-                    Some(reference),
-                    Some(length_value_span.start()),
-                )
-            })?;
-            if data_end >= context.object_upper_bound {
+            if data_start >= context.object_upper_bound {
                 return Err(ObjectError::for_code(
                     ObjectErrorCode::ObjectCrossesPhysicalBound,
                     Some(reference),
                     Some(context.object_upper_bound),
                 ));
             }
-            let data_span = ByteSpan::new(data_start, stream_length).map_err(|_| {
-                ObjectError::for_code(
-                    ObjectErrorCode::InternalState,
-                    Some(reference),
-                    Some(data_start),
-                )
-            })?;
             let retained_heap_bytes =
                 retained_heap_bytes(&parser, reference, dictionary.span().start())?;
             Ok(EnvelopeParse::Stream(ParsedStreamEnvelope {
                 header_span,
                 dictionary,
-                length_value_span,
+                declared_length,
                 stream_keyword_span: terminal.span(),
                 stream_line_ending_span,
-                data_span,
+                data_start,
                 retained_heap_bytes,
             }))
         }
@@ -322,11 +306,11 @@ pub(crate) fn parse_boundary(
     }))
 }
 
-fn direct_stream_length(
+fn stream_length(
     dictionary: &Located<PdfDictionary>,
     reference: ObjectRef,
     cancellation: &dyn ObjectCancellation,
-) -> Result<(u64, ByteSpan), ObjectError> {
+) -> Result<DeclaredStreamLength, ObjectError> {
     let mut found = None;
     let mut countdown = CANCELLATION_PROBE_INTERVAL;
     for entry in dictionary.value().entries() {
@@ -371,13 +355,15 @@ fn direct_stream_length(
                     Some(value.span().start()),
                 )
             })?;
-            Ok((length, value.span()))
+            Ok(DeclaredStreamLength::Direct {
+                value: length,
+                operand_span: value.span(),
+            })
         }
-        SyntaxObject::Reference(_) => Err(ObjectError::for_code(
-            ObjectErrorCode::UnsupportedIndirectLength,
-            Some(reference),
-            Some(value.span().start()),
-        )),
+        SyntaxObject::Reference(reference) => Ok(DeclaredStreamLength::Indirect {
+            reference: *reference,
+            operand_span: value.span(),
+        }),
         _ => Err(ObjectError::for_code(
             ObjectErrorCode::InvalidStreamLength,
             Some(reference),
@@ -469,8 +455,8 @@ mod tests {
             cancel_at: 2,
         };
 
-        let error = direct_stream_length(&dictionary, ObjectRef::new(1, 0).unwrap(), &cancellation)
-            .unwrap_err();
+        let error =
+            stream_length(&dictionary, ObjectRef::new(1, 0).unwrap(), &cancellation).unwrap_err();
         assert_eq!(error.code(), ObjectErrorCode::Cancelled);
         assert_eq!(cancellation.probes.load(Ordering::Acquire), 2);
     }

@@ -1,5 +1,5 @@
 schema = 1
-version = "0.35.0"
+version = "0.36.0"
 status = "active"
 
 [[feature]]
@@ -106,6 +106,18 @@ profile = "m1.indirect-object-framing.v1"
 clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
 modules = ["core/object"]
 tests = ["core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.staged-stream-length-framing"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.staged-stream-length.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/object"]
+tests = ["core/object::staged_length", "core/object::object_behavior", "core/object::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

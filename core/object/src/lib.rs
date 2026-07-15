@@ -14,6 +14,7 @@ mod job;
 mod limits;
 mod model;
 mod parser;
+mod staged;
 
 pub use error::{
     ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectLimit, ObjectLimitKind,
@@ -24,4 +25,8 @@ pub use job::{
     OpenObjectJob,
 };
 pub use limits::{ObjectLimitConfig, ObjectLimits, ObjectWorkCaps};
-pub use model::{FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue};
+pub use model::{
+    DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue,
+    ResolvedStreamLength, StreamEnvelope, StreamLengthClaim,
+};
+pub use staged::{ObjectEnvelopePoll, OpenObjectEnvelopeJob, OpenStreamBoundaryJob};

@@ -13,8 +13,8 @@ use crate::parser::{
     parse_envelope,
 };
 use crate::{
-    FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue, ObjectError,
-    ObjectErrorCode, ObjectLimitKind, ObjectLimits, ObjectWorkCaps,
+    DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue,
+    ObjectError, ObjectErrorCode, ObjectLimitKind, ObjectLimits, ObjectWorkCaps, StreamLengthClaim,
 };
 
 /// Runtime identity, phase checkpoints, and scheduling priority for one object job.
@@ -81,12 +81,12 @@ pub enum ObjectPhase {
 /// Deterministic work and accepted-envelope accounting for one open object job.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ObjectStats {
-    read_bytes: u64,
-    parse_bytes: u64,
-    envelope_attempts: u64,
-    boundary_attempts: u64,
-    declared_stream_bytes: u64,
-    retained_heap_bytes: u64,
+    pub(crate) read_bytes: u64,
+    pub(crate) parse_bytes: u64,
+    pub(crate) envelope_attempts: u64,
+    pub(crate) boundary_attempts: u64,
+    pub(crate) declared_stream_bytes: u64,
+    pub(crate) retained_heap_bytes: u64,
 }
 
 impl ObjectStats {
@@ -110,7 +110,11 @@ impl ObjectStats {
         self.boundary_attempts
     }
 
-    /// Returns the accepted direct stream length, or zero for direct objects.
+    /// Returns the stream length recorded by this job.
+    ///
+    /// An envelope-only job reports a direct declaration and zero for an unresolved
+    /// indirect declaration. A boundary job reports its accepted claim. Direct
+    /// non-stream objects always report zero.
     pub const fn declared_stream_bytes(self) -> u64 {
         self.declared_stream_bytes
     }
@@ -171,18 +175,28 @@ pub enum ObjectPoll {
     Failed(ObjectError),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one-shot parsed envelopes stay inline to keep all retained allocation accounting explicit"
+)]
 enum JobState {
     Envelope {
         window: u64,
         charged: bool,
     },
     StreamBoundary {
-        envelope: ParsedStreamEnvelope,
+        envelope: PreparedStreamEnvelope,
         window: u64,
         charged: bool,
     },
     Complete,
     Failed(ObjectError),
+}
+
+struct PreparedStreamEnvelope {
+    parsed: ParsedStreamEnvelope,
+    data_span: ByteSpan,
+    length_claim: StreamLengthClaim,
 }
 
 #[derive(Clone, Copy)]
@@ -484,7 +498,7 @@ impl OpenObjectJob {
                         reference: self.target.reference(),
                         xref_offset: object_start,
                         object_upper_bound: self.target.object_upper_bound(),
-                        limits: self.limits,
+                        allow_indirect_length: false,
                         syntax_limits: self.syntax_limits,
                     },
                     &bytes.bytes()[prefix_len..],
@@ -516,7 +530,23 @@ impl OpenObjectJob {
                         Some(ObjectPoll::Ready(object))
                     }
                     Ok(EnvelopeParse::Stream(envelope)) => {
-                        let data_end = envelope.data_span.end_exclusive();
+                        let DeclaredStreamLength::Direct { value, .. } = envelope.declared_length
+                        else {
+                            return Some(self.fail(ObjectError::for_code(
+                                ObjectErrorCode::UnsupportedIndirectLength,
+                                Some(self.target.reference()),
+                                Some(envelope.declared_length.operand_span().start()),
+                            )));
+                        };
+                        let data_span = match self.stream_data_span(
+                            envelope.data_start,
+                            value,
+                            envelope.declared_length.operand_span(),
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => return Some(self.fail(error)),
+                        };
+                        let data_end = data_span.end_exclusive();
                         let remaining = match self.target.object_upper_bound().checked_sub(data_end)
                         {
                             Some(value) if value != 0 => value,
@@ -528,10 +558,19 @@ impl OpenObjectJob {
                                 )));
                             }
                         };
-                        self.stats.declared_stream_bytes = envelope.data_span.len();
+                        self.stats.declared_stream_bytes = data_span.len();
                         self.stats.retained_heap_bytes = envelope.retained_heap_bytes;
                         self.state = JobState::StreamBoundary {
-                            envelope,
+                            envelope: PreparedStreamEnvelope {
+                                length_claim: StreamLengthClaim::direct(
+                                    self.target.snapshot(),
+                                    self.target.reference(),
+                                    envelope.declared_length,
+                                    value,
+                                ),
+                                parsed: envelope,
+                                data_span,
+                            },
                             window: self.limits.initial_boundary_bytes().min(remaining),
                             charged: false,
                         };
@@ -651,20 +690,20 @@ impl OpenObjectJob {
                             return Some(self.fail_internal(Some(data_end)));
                         };
                         let stream = FramedStream::new(
-                            envelope.dictionary,
-                            envelope.length_value_span,
-                            envelope.stream_keyword_span,
-                            envelope.stream_line_ending_span,
+                            envelope.parsed.dictionary,
+                            envelope.length_claim,
+                            envelope.parsed.stream_keyword_span,
+                            envelope.parsed.stream_line_ending_span,
                             envelope.data_span,
                             boundary.data_delimiter_span,
                             boundary.endstream_span,
                         );
                         let object = IndirectObject::new(
                             self.target,
-                            envelope.header_span,
+                            envelope.parsed.header_span,
                             object_span,
                             boundary.endobj_span,
-                            envelope.retained_heap_bytes,
+                            envelope.parsed.retained_heap_bytes,
                             IndirectObjectValue::Stream(stream),
                         );
                         Some(ObjectPoll::Ready(object))
@@ -841,6 +880,45 @@ impl OpenObjectJob {
                 ObjectErrorCode::InternalState,
                 Some(self.target.reference()),
                 Some(self.target.xref_offset()),
+            )
+        })
+    }
+
+    fn stream_data_span(
+        &self,
+        data_start: u64,
+        stream_length: u64,
+        operand_span: ByteSpan,
+    ) -> Result<ByteSpan, ObjectError> {
+        if stream_length > self.limits.max_stream_bytes() {
+            return Err(ObjectError::resource(
+                ObjectLimitKind::StreamBytes,
+                self.limits.max_stream_bytes(),
+                0,
+                stream_length,
+                Some(self.target.reference()),
+                Some(operand_span.start()),
+            ));
+        }
+        let data_end = data_start.checked_add(stream_length).ok_or_else(|| {
+            ObjectError::for_code(
+                ObjectErrorCode::InvalidStreamLength,
+                Some(self.target.reference()),
+                Some(operand_span.start()),
+            )
+        })?;
+        if data_end >= self.target.object_upper_bound() {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::ObjectCrossesPhysicalBound,
+                Some(self.target.reference()),
+                Some(self.target.object_upper_bound()),
+            ));
+        }
+        ByteSpan::new(data_start, stream_length).map_err(|_| {
+            ObjectError::for_code(
+                ObjectErrorCode::InternalState,
+                Some(self.target.reference()),
+                Some(data_start),
             )
         })
     }
