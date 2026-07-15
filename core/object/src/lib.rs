@@ -43,6 +43,6 @@ pub use object_stream::{
 pub use repair::{
     LocalObjectJobContext, LocalObjectPhase, LocalObjectPoll, LocallyFramedObject,
     ObjectRepairDiagnostic, ObjectRepairKind, ObjectRepairLimitConfig, ObjectRepairLimits,
-    ObjectRepairStats, OpenLocalObjectJob,
+    ObjectRepairStats, ObjectRepairWorkCaps, OpenLocalObjectJob,
 };
 pub use staged::{ObjectEnvelopePoll, OpenObjectEnvelopeJob, OpenStreamBoundaryJob};

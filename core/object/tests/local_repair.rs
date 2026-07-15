@@ -9,7 +9,7 @@ use pdf_rs_object::{
     IndirectObjectTarget, IndirectObjectValue, LocalObjectJobContext, LocalObjectPhase,
     LocalObjectPoll, NeverCancelled, ObjectError, ObjectErrorCode, ObjectJobContext,
     ObjectLimitConfig, ObjectLimitKind, ObjectLimits, ObjectRepairKind, ObjectRepairLimitConfig,
-    ObjectRepairLimits, ObjectWorkCaps, OpenLocalObjectJob,
+    ObjectRepairLimits, ObjectRepairWorkCaps, ObjectWorkCaps, OpenLocalObjectJob,
 };
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 
@@ -119,6 +119,15 @@ fn limits(update: impl FnOnce(&mut ObjectRepairLimitConfig)) -> ObjectRepairLimi
     let mut config = ObjectRepairLimitConfig::default();
     update(&mut config);
     ObjectRepairLimits::validate(config).unwrap()
+}
+
+fn default_work_caps() -> ObjectWorkCaps {
+    let limits = ObjectLimits::default();
+    ObjectWorkCaps::new(
+        limits.max_total_read_bytes(),
+        limits.max_total_parse_bytes(),
+    )
+    .unwrap()
 }
 
 fn ready(
@@ -618,6 +627,124 @@ fn boundary_candidate_attempts_and_child_validation_work_are_aggregate_bounded()
 }
 
 #[test]
+fn parent_repair_caps_bound_work_before_scans_without_disabling_strict_objects() {
+    let strict_fixture = direct_fixture();
+    let strict_store = strict_fixture.store(true);
+    let zero_repair = ObjectRepairWorkCaps::new(0, 0, 0).unwrap();
+    let mut strict = OpenLocalObjectJob::new_with_parent_caps(
+        strict_fixture.target(strict_fixture.actual_offset),
+        context(),
+        ObjectLimits::default(),
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        default_work_caps(),
+        zero_repair,
+    )
+    .unwrap();
+    assert_eq!(strict.repair_work_caps(), zero_repair);
+    assert!(matches!(
+        strict.poll(&strict_store, &NeverCancelled),
+        LocalObjectPoll::Ready(_)
+    ));
+    assert_eq!(strict.stats().repair_scan_bytes(), 0);
+
+    let offset_fixture = direct_fixture();
+    let offset_store = offset_fixture.store(true);
+    let baseline = ready(
+        &offset_fixture,
+        offset_fixture.actual_offset - 1,
+        ObjectRepairLimits::default(),
+    );
+    let exact_scan = baseline.stats().repair_scan_bytes();
+    let exact_headers = baseline.stats().header_candidates();
+    assert!(exact_scan > 0);
+    assert_eq!(exact_headers, 1);
+
+    let exact_repair = ObjectRepairWorkCaps::new(exact_scan, exact_headers, 0).unwrap();
+    let mut exact = OpenLocalObjectJob::new_with_parent_caps(
+        offset_fixture.target(offset_fixture.actual_offset - 1),
+        context(),
+        ObjectLimits::default(),
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        default_work_caps(),
+        exact_repair,
+    )
+    .unwrap();
+    assert!(matches!(
+        exact.poll(&offset_store, &NeverCancelled),
+        LocalObjectPoll::Ready(_)
+    ));
+    assert_eq!(exact.stats().repair_scan_bytes(), exact_scan);
+    assert_eq!(exact.stats().header_candidates(), exact_headers);
+
+    let one_less_scan = ObjectRepairWorkCaps::new(exact_scan - 1, exact_headers, 0).unwrap();
+    let mut capped = OpenLocalObjectJob::new_with_parent_caps(
+        offset_fixture.target(offset_fixture.actual_offset - 1),
+        context(),
+        ObjectLimits::default(),
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        default_work_caps(),
+        one_less_scan,
+    )
+    .unwrap();
+    assert!(matches!(
+        capped.poll(&offset_store, &NeverCancelled),
+        LocalObjectPoll::Failed(error)
+            if error.code() == ObjectErrorCode::ResourceLimit
+                && error.limit().unwrap().kind() == ObjectLimitKind::RepairScanBytes
+                && capped.stats().repair_scan_bytes() == 0
+    ));
+
+    let no_header_candidates = ObjectRepairWorkCaps::new(exact_scan, 0, 0).unwrap();
+    let mut capped = OpenLocalObjectJob::new_with_parent_caps(
+        offset_fixture.target(offset_fixture.actual_offset - 1),
+        context(),
+        ObjectLimits::default(),
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        default_work_caps(),
+        no_header_candidates,
+    )
+    .unwrap();
+    assert!(matches!(
+        capped.poll(&offset_store, &NeverCancelled),
+        LocalObjectPoll::Failed(error)
+            if error.code() == ObjectErrorCode::ResourceLimit
+                && error.limit().unwrap().kind()
+                    == ObjectLimitKind::RepairHeaderCandidates
+    ));
+
+    let stream = stream_fixture(3, b"DATA", 0xb0);
+    let stream_store = stream.store(true);
+    let baseline = ready(&stream, stream.actual_offset, ObjectRepairLimits::default());
+    let exact_scan = baseline.stats().repair_scan_bytes();
+    let exact_boundaries = baseline.stats().boundary_candidates();
+    assert!(exact_scan > 0);
+    assert_eq!(exact_boundaries, 1);
+
+    let no_boundary_candidates = ObjectRepairWorkCaps::new(exact_scan, 0, 0).unwrap();
+    let mut capped = OpenLocalObjectJob::new_with_parent_caps(
+        stream.target(stream.actual_offset),
+        context(),
+        ObjectLimits::default(),
+        ObjectRepairLimits::default(),
+        SyntaxLimits::default(),
+        default_work_caps(),
+        no_boundary_candidates,
+    )
+    .unwrap();
+    assert!(matches!(
+        capped.poll(&stream_store, &NeverCancelled),
+        LocalObjectPoll::Failed(error)
+            if error.code() == ObjectErrorCode::ResourceLimit
+                && error.limit().unwrap().kind()
+                    == ObjectLimitKind::RepairBoundaryCandidates
+    ));
+}
+
+#[test]
 fn repair_pending_repoll_does_not_recharge_and_source_change_is_terminal() {
     let stream = stream_fixture(3, b"DATA", 0x98);
     let store = stream.store(false);
@@ -826,6 +953,16 @@ fn configuration_rejects_zero_hard_overrides_and_duplicate_checkpoints() {
             ObjectErrorCode::InvalidRepairLimits
         );
     }
+    let zero_caps = ObjectRepairWorkCaps::new(0, 0, 0).unwrap();
+    assert_eq!(zero_caps.max_scan_bytes(), 0);
+    assert_eq!(zero_caps.max_header_candidates(), 0);
+    assert_eq!(zero_caps.max_boundary_candidates(), 0);
+    assert_eq!(
+        ObjectRepairWorkCaps::new(HARD.max_scan_bytes + 1, 0, 0)
+            .unwrap_err()
+            .code(),
+        ObjectErrorCode::InvalidRepairLimits
+    );
 
     let fixture = direct_fixture();
     let duplicate = LocalObjectJobContext::new(
@@ -846,5 +983,27 @@ fn configuration_rejects_zero_hard_overrides_and_duplicate_checkpoints() {
         .unwrap_err()
         .code(),
         ObjectErrorCode::InvalidRepairJobContext
+    );
+
+    let repair_limits = ObjectRepairLimits::default();
+    let oversized_parent = ObjectRepairWorkCaps::new(
+        repair_limits.max_scan_bytes() + 1,
+        repair_limits.max_header_candidates(),
+        repair_limits.max_boundary_candidates(),
+    )
+    .unwrap();
+    assert_eq!(
+        OpenLocalObjectJob::new_with_parent_caps(
+            fixture.target(fixture.actual_offset),
+            context(),
+            ObjectLimits::default(),
+            repair_limits,
+            SyntaxLimits::default(),
+            default_work_caps(),
+            oversized_parent,
+        )
+        .unwrap_err()
+        .code(),
+        ObjectErrorCode::InvalidLimits
     );
 }

@@ -125,12 +125,13 @@ makes no ISO or R0 semantic coverage claim.
   receives at most the configured boundary window. Exactly one complete `endstream`/`endobj`
   boundary may become the effective length. Missing, duplicate, invalid, negative, or indirect
   `/Length` declarations are not repaired.
-- Repair scans retain their own cumulative byte and candidate ceilings, while a parent-lent
-  `ObjectWorkCaps` also aggregates every scan exact-read with strict, corrected-header, and
-  envelope-replay reads. All validation children share the same parent parse cap. The legacy
-  constructor lends the configured object totals, and an explicit constructor can lend a smaller
-  remaining slice for document-wide accounting. Pending re-polls neither repeat nor recharge a
-  scan. The successful
+- Repair scans retain their own configured byte and candidate ceilings. A parent may additionally
+  lend `ObjectRepairWorkCaps` for repair-only scan bytes and header/boundary candidates alongside
+  `ObjectWorkCaps`, which aggregates every scan exact-read with strict, corrected-header, and
+  envelope-replay reads while all validation children share one parse cap. Repair-only caps may be
+  zero: the unchanged strict child can still succeed, but any exhausted repair dimension fails
+  before the rejected scan read or candidate is accepted. Legacy constructors lend the configured
+  totals unchanged. Pending re-polls neither repeat nor recharge a scan. The successful
   `LocallyFramedObject` is the only repaired publication surface: it delegates object semantics but
   does not expose a bare `IndirectObject`, and it retains the source snapshot, declared/effective
   offset or length, stable repair identifiers, scan evidence, and child work statistics.
@@ -215,6 +216,9 @@ missing candidates, strict failure allowlisting, same-snapshot Pending/resume an
 configuration/checkpoint validation, exact and one-less scan/delta/candidate ceilings, invalid
 looks-like boundary attempts, per-candidate boundary caps, and exact versus one-less parent-lent
 aggregate read/parse totals spanning strict, candidate, replay, and repair-scan work.
+Parent repair-cap tests separately prove zero-cap strict success, exact offset-repair scan/header
+work, one-less pre-read rejection, zero header/boundary candidate rejection, caps above the
+configured profile, and hard-ceiling validation.
 Object-stream tests build containers through the public RangeStore and `OpenObjectJob` path, then
 cover exact physical payload binding, independent decoded coordinates, nested arrays/dictionaries
 and references, `/Extends` validation and self-loop rejection, uninterpreted header-extension
@@ -296,3 +300,5 @@ Native/external-engine differential is claimed in this bootstrap slice.
   diagnostics, and exact scan/candidate/boundary resource regressions without changing R0 policy.
 - 2026-07-15: Extended parent-lent work caps across strict, candidate, replay, and repair-scan
   reads, exposed aggregate local-object work gauges, and pinned exact and one-less parent slices.
+- 2026-07-15: Added independently parent-lent repair scan/header/boundary caps, including zero-cap
+  strict success and pre-work exhaustion semantics for document-wide first-pass accounting.

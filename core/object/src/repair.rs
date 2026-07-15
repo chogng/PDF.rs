@@ -121,6 +121,67 @@ impl Default for ObjectRepairLimits {
     }
 }
 
+/// Parent-lent repair-only work ceilings for one local object job.
+///
+/// Unlike [`ObjectRepairLimits`], these runtime caps may be zero. A zero cap
+/// leaves the unchanged strict child available but rejects the corresponding
+/// repair work before it can consume parent-owned aggregate budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectRepairWorkCaps {
+    max_scan_bytes: u64,
+    max_header_candidates: u64,
+    max_boundary_candidates: u64,
+}
+
+impl ObjectRepairWorkCaps {
+    /// Creates repair-only work caps beneath fixed implementation ceilings.
+    pub fn new(
+        max_scan_bytes: u64,
+        max_header_candidates: u64,
+        max_boundary_candidates: u64,
+    ) -> Result<Self, ObjectError> {
+        if max_scan_bytes > HARD_MAX_SCAN_BYTES
+            || max_header_candidates > HARD_MAX_HEADER_CANDIDATES
+            || max_boundary_candidates > HARD_MAX_BOUNDARY_CANDIDATES
+        {
+            return Err(ObjectError::for_code(
+                ObjectErrorCode::InvalidRepairLimits,
+                None,
+                None,
+            ));
+        }
+        Ok(Self {
+            max_scan_bytes,
+            max_header_candidates,
+            max_boundary_candidates,
+        })
+    }
+
+    /// Copies the configured per-object repair ceilings as parent work caps.
+    pub const fn from_limits(limits: ObjectRepairLimits) -> Self {
+        Self {
+            max_scan_bytes: limits.max_scan_bytes,
+            max_header_candidates: limits.max_header_candidates,
+            max_boundary_candidates: limits.max_boundary_candidates,
+        }
+    }
+
+    /// Returns the repair-only exact-read and scan ceiling.
+    pub const fn max_scan_bytes(self) -> u64 {
+        self.max_scan_bytes
+    }
+
+    /// Returns the matching object-header candidate ceiling.
+    pub const fn max_header_candidates(self) -> u64 {
+        self.max_header_candidates
+    }
+
+    /// Returns the stream-boundary candidate ceiling.
+    pub const fn max_boundary_candidates(self) -> u64 {
+        self.max_boundary_candidates
+    }
+}
+
 /// Strict-child checkpoints plus repair-only scan and candidate checkpoints.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalObjectJobContext {
@@ -536,6 +597,7 @@ pub struct OpenLocalObjectJob {
     object_limits: ObjectLimits,
     repair_limits: ObjectRepairLimits,
     work_caps: ObjectWorkCaps,
+    repair_work_caps: ObjectRepairWorkCaps,
     syntax_limits: SyntaxLimits,
     stats: ObjectRepairStats,
     state: RepairState,
@@ -550,13 +612,14 @@ impl OpenLocalObjectJob {
         repair_limits: ObjectRepairLimits,
         syntax_limits: SyntaxLimits,
     ) -> Result<Self, ObjectError> {
-        Self::new_with_work_caps(
+        Self::new_with_parent_caps(
             target,
             context,
             object_limits,
             repair_limits,
             syntax_limits,
             ObjectWorkCaps::from_limits(object_limits),
+            ObjectRepairWorkCaps::from_limits(repair_limits),
         )
     }
 
@@ -572,6 +635,35 @@ impl OpenLocalObjectJob {
         repair_limits: ObjectRepairLimits,
         syntax_limits: SyntaxLimits,
         work_caps: ObjectWorkCaps,
+    ) -> Result<Self, ObjectError> {
+        Self::new_with_parent_caps(
+            target,
+            context,
+            object_limits,
+            repair_limits,
+            syntax_limits,
+            work_caps,
+            ObjectRepairWorkCaps::from_limits(repair_limits),
+        )
+    }
+
+    /// Starts local repair beneath parent-supplied validation and repair-only work caps.
+    ///
+    /// Validation read/parse caps and repair scan/candidate caps are independent. Repair-only
+    /// caps may be zero so a strict-valid object remains usable after a parent aggregate repair
+    /// budget is exhausted.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the public parent composition boundary keeps every validated profile explicit"
+    )]
+    pub fn new_with_parent_caps(
+        target: IndirectObjectTarget,
+        context: LocalObjectJobContext,
+        object_limits: ObjectLimits,
+        repair_limits: ObjectRepairLimits,
+        syntax_limits: SyntaxLimits,
+        work_caps: ObjectWorkCaps,
+        repair_work_caps: ObjectRepairWorkCaps,
     ) -> Result<Self, ObjectError> {
         let checkpoints = [
             context.strict().envelope_checkpoint(),
@@ -592,6 +684,9 @@ impl OpenLocalObjectJob {
         }
         if work_caps.max_read_bytes() > object_limits.max_total_read_bytes()
             || work_caps.max_parse_bytes() > object_limits.max_total_parse_bytes()
+            || repair_work_caps.max_scan_bytes() > repair_limits.max_scan_bytes()
+            || repair_work_caps.max_header_candidates() > repair_limits.max_header_candidates()
+            || repair_work_caps.max_boundary_candidates() > repair_limits.max_boundary_candidates()
         {
             return Err(ObjectError::for_code(
                 ObjectErrorCode::InvalidLimits,
@@ -612,6 +707,7 @@ impl OpenLocalObjectJob {
             object_limits,
             repair_limits,
             work_caps,
+            repair_work_caps,
             syntax_limits,
             stats: ObjectRepairStats::default(),
             state: RepairState::Strict(strict),
@@ -646,6 +742,11 @@ impl OpenLocalObjectJob {
     /// Returns the parent-supplied aggregate read and parse caps for this local job.
     pub const fn work_caps(&self) -> ObjectWorkCaps {
         self.work_caps
+    }
+
+    /// Returns the parent-lent repair-only scan and candidate caps.
+    pub const fn repair_work_caps(&self) -> ObjectRepairWorkCaps {
+        self.repair_work_caps
     }
 
     /// Returns strict-child and repair-only work charged so far.
@@ -784,6 +885,7 @@ impl OpenLocalObjectJob {
                                 &bytes,
                                 self.declared_target,
                                 self.repair_limits,
+                                self.repair_work_caps.max_header_candidates,
                                 cancellation,
                             ) {
                                 Ok(result) => result,
@@ -1006,6 +1108,7 @@ impl OpenLocalObjectJob {
                                 &envelope,
                                 declared_end,
                                 self.repair_limits,
+                                self.repair_work_caps.max_boundary_candidates,
                                 cancellation,
                             ) {
                                 Ok(candidate) => candidate,
@@ -1152,17 +1255,17 @@ impl OpenLocalObjectJob {
         let Some(total) = self.stats.repair_scan_bytes.checked_add(amount) else {
             return Err(ObjectError::resource(
                 ObjectLimitKind::RepairScanBytes,
-                self.repair_limits.max_scan_bytes,
+                self.repair_work_caps.max_scan_bytes,
                 self.stats.repair_scan_bytes,
                 amount,
                 Some(self.declared_target.reference()),
                 offset,
             ));
         };
-        if total > self.repair_limits.max_scan_bytes {
+        if total > self.repair_work_caps.max_scan_bytes {
             return Err(ObjectError::resource(
                 ObjectLimitKind::RepairScanBytes,
-                self.repair_limits.max_scan_bytes,
+                self.repair_work_caps.max_scan_bytes,
                 self.stats.repair_scan_bytes,
                 amount,
                 Some(self.declared_target.reference()),
@@ -1242,6 +1345,7 @@ impl fmt::Debug for OpenLocalObjectJob {
             .field("object_limits", &self.object_limits)
             .field("repair_limits", &self.repair_limits)
             .field("work_caps", &self.work_caps)
+            .field("repair_work_caps", &self.repair_work_caps)
             .field("syntax_limits", &self.syntax_limits)
             .field("stats", &self.stats)
             .field("phase", &self.phase())
@@ -1358,6 +1462,7 @@ fn scan_expected_headers(
     bytes: &ByteSlice,
     target: IndirectObjectTarget,
     limits: ObjectRepairLimits,
+    max_candidates: u64,
     cancellation: &dyn ObjectCancellation,
 ) -> Result<(Option<u64>, u64), ObjectError> {
     let lower = target
@@ -1416,10 +1521,10 @@ fn scan_expected_headers(
                 Some(absolute),
             )
         })?;
-        if count > limits.max_header_candidates {
+        if count > max_candidates {
             return Err(ObjectError::resource(
                 ObjectLimitKind::RepairHeaderCandidates,
-                limits.max_header_candidates,
+                max_candidates,
                 count - 1,
                 1,
                 Some(target.reference()),
@@ -1495,6 +1600,7 @@ fn scan_stream_boundaries(
     envelope: &StreamEnvelope,
     declared_end: u64,
     limits: ObjectRepairLimits,
+    max_candidates: u64,
     cancellation: &dyn ObjectCancellation,
 ) -> Result<BoundarySelection, ObjectError> {
     let target = envelope.target();
@@ -1545,10 +1651,10 @@ fn scan_stream_boundaries(
                 Some(absolute),
             )
         })?;
-        if count > limits.max_boundary_candidates {
+        if count > max_candidates {
             return Err(ObjectError::resource(
                 ObjectLimitKind::RepairBoundaryCandidates,
-                limits.max_boundary_candidates,
+                max_candidates,
                 count - 1,
                 1,
                 Some(target.reference()),
