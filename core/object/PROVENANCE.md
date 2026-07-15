@@ -6,17 +6,22 @@ and frames a stream with bounded resumable reads. An explicit R1 sibling exhaust
 strict child before it may probe one bounded local object-header or direct stream-length repair and
 retains proof of every effective value. A staged path may stop after the stream dictionary,
 publish a direct value or indirect `/Length` dependency, and resume exact boundary validation only
-after a same-snapshot resolver supplies the referenced integer metadata. A separate strict entry
-parses one complete unfiltered object-stream payload only from a fully framed stream container and
-an exact source-bound `ByteSlice`, preserving decoded coordinates separately from physical spans.
-It performs no file, network, callback, filter decoding, or async-runtime I/O.
+after a same-snapshot resolver supplies the referenced integer metadata. One strict compatibility
+entry parses a complete unfiltered object-stream payload from a fully framed container and exact
+source-bound `ByteSlice`. A consuming filtered sibling accepts only a move-only sealed
+`DecodedStream`, then retains the framed generation-zero `/ObjStm`, decode proof, and shared
+decoded-coordinate semantics inside one inseparable result. This crate does not itself decode
+filters and performs no file, network, callback, or async-runtime I/O.
 
 # Semantic owner
 
 Parser/Security owns indirect-object header validation, `/Length` declaration classification,
 same-snapshot length-claim checks, exact stream framing, source identity, deterministic budgets,
 cancellation, object-stream header/index validation, decoded-coordinate values, and stable object
-failures.
+failures. `core/filters` owns canonical filter plans, direct dictionary metadata interpretation,
+strict decode profiles, and sealed decode attestations. The object layer delegates canonicalization
+to `core/filters`, exact-compares the transient expected plan with the attestation, and retains only
+the attested authority.
 `core/bytes` owns immutable source snapshots and byte delivery, while `core/syntax` owns direct
 object and keyword syntax. `core/xref` is a sibling consumer of syntax rather than an object-crate
 dependency. `core/document` composes one validated traditional base section into candidate
@@ -29,6 +34,9 @@ precedence, and caching.
 - [RPE-ARCH-001, sections 4.3-4.5 and 5.1-5.4](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   defines the one-way `bytes -> syntax -> {xref, object}` dependency boundary, resumable
   ByteSource jobs, source-located object values, exact xref-header validation, and stream spans.
+- [RPE-ARCH-001, section 5.6](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
+  requires decoded-coordinate separation, proof-bound filter orchestration, deterministic decode
+  budgets, and cooperative cancellation without exposing unauthenticated decoded bytes.
 - [RPE-STD-001, sections 3, 5-6, and 8-9](../../docs/standards/coding-standard.md) requires
   one-way core dependencies, explicit parser states, stable structured errors, checked arithmetic,
   bounded allocation, cancellation, and async-runtime-free core parsing.
@@ -164,6 +172,24 @@ makes no ISO or R0 semantic coverage claim.
   must have generation zero and unique `/Type /ObjStm`, nonnegative `/N` and `/First`, no `/Filter`
   or `/DecodeParms`, and an optional generation-zero `/Extends` reference. `/Extends` is retained
   as provenance only and never changes xref lookup order; an immediate self-reference is rejected.
+- `parse_filtered_object_stream` consumes a move-only sealed `DecodedStream` with the complete
+  framed container. Before semantic parsing it rechecks the full `SourceSnapshot`, source identity,
+  owner, exact dictionary and encoded spans, exact encoded `ByteSlice` identity/range/length,
+  decoded length, and `M1StrictV1` profile. It passes the framed direct dictionary, attested decode
+  limits, and an object-cancellation adapter to `FilterPlan::from_pdf_dictionary`; the object crate
+  does not import or reproduce filter-name, chain, or predictor canonicalization rules. The
+  transient reconstructed plan must be nonempty and exactly equal to the attested plan, which is
+  the only retained canonical decode authority. A valid dictionary paired with a different proof
+  is the internal non-retryable `DecodeProofMismatch` diagnostic `RPE-OBJECT-0112`. Malformed
+  metadata remains syntax-classified, unsupported filters or parameters remain capability-classified,
+  canonical-plan resource dimensions remain distinct, and cancellation remains cancellation.
+- Both public entry points call one decoded-payload semantic implementation. The filtered result
+  owns its `IndirectObject`, `DecodedStream`, and `ObjectStream` without consuming extraction APIs.
+  A decoded-payload length resource failure is located at decoded offset zero rather than a
+  fabricated physical source position; dictionary metadata failures remain physically located.
+  Its checked retained-proof evidence adds framed syntax heap, decoder peak output capacity,
+  actual plan heap, parsed entry capacity, and parsed value capacity once each. RangeStore-owned
+  encoded backing is not double-counted.
 - The decoded header begins with `/N` nonzero object-number/relative-offset pairs. Any remaining
   bytes before `/First` are retained as an uninterpreted decoded-coordinate extension span instead
   of being mistaken for additional standard pairs. The first relative offset is zero; later offsets
@@ -194,12 +220,12 @@ dependencies, normative inputs, or golden sources for this crate.
 
 # Dependencies and generated data
 
-The only crate dependencies are the in-repository `pdf-rs-bytes` and `pdf-rs-syntax` lower-level
-product primitives. In particular, this crate does not depend on its sibling `core/xref`, which
-preserves the architecture's declared dependency direction without an ADR. The implementation
-otherwise uses the Rust standard library and has no development dependency, external PDF/2D
-engine, generated table, committed corpus object, filesystem access, network access, unsafe code,
-or async runtime.
+The only crate dependencies are the in-repository `pdf-rs-bytes`, `pdf-rs-filters`, and
+`pdf-rs-syntax` lower-level product primitives. In particular, this crate does not depend on its
+sibling `core/xref`, which preserves the architecture's declared dependency direction without an
+ADR. The implementation otherwise uses the Rust standard library and has no development
+dependency, external PDF/2D engine, generated table, committed corpus object, filesystem access,
+network access, unsafe code, or async runtime.
 
 Behavior tests assemble project-authored structural PDF bytes in memory, including the canonical
 612-byte generator geometry and a synthetic large stream whose middle payload is deliberately not
@@ -247,6 +273,16 @@ retained-entry, retained-value, and cumulative-syntax limits, immediate cancella
 fixed-interval cancellation during long numeric header scans and recursive conversion without
 partial publication. Child syntax exhaustion verifies decoded coordinates and preserved lower
 resource-limit evidence.
+Filtered object-stream tests cover Flate and PNG-predictor proofs, inseparable retained ownership,
+decoded-coordinate entries and failures, exact combined retained evidence, foreign snapshots,
+wrong owners and dictionary spans, same-source wrong encoded slices, empty plans, absent filters,
+nonzero-generation containers, semantic budgets, cancellation before entry and during delegated
+metadata walking, and redacted Debug output. Adversarial cases cover wrong supported and unknown
+names, non-name and empty arrays, chain arity and genuinely decodable order mismatches, duplicate
+metadata, malformed parameter shapes, predictor/default mismatches, and unfiltered identity
+forgery. Positive parity cases retain array-filter `null` and empty direct parameter dictionaries
+as canonical no-parameter plans. The product object layer delegates canonicalization to
+`core/filters` rather than duplicating those rules.
 Separate tests cover all limit-profile relationships and hard ceilings, lower source-error policy
 mapping, and repository dependency/purity rules. A `tools/quality` integration test generates the
 canonical PDF, parses its traditional xref section, and frames every in-use target while checking
@@ -257,11 +293,15 @@ Native/external-engine differential is claimed in this bootstrap slice.
 
 # Known deviations and unsupported cases
 
-- This is an object-framing and unfiltered object-stream component, not a complete object resolver.
+- This is an object-framing and proof-bound object-stream component, not a complete object resolver.
   A separate document slice now supplies effective uncompressed `/Length` evidence and binds
-  compressed xref rows to these decoded entries, but filtered payload decoding, source-driven xref
-  and revision acquisition, aliased or compressed `/Length`, general cycle state, caching,
+  compressed xref rows to decoded entries. This crate can consume an already-sealed filtered proof,
+  but source-driven decode scheduling, xref and revision acquisition, aliased or compressed
+  `/Length`, general cycle state, caching,
   encryption, content interpretation, and document-service integration remain unimplemented.
+- Filtered object-stream composition accepts only direct `/Filter` and `/DecodeParms` metadata
+  supported by `core/filters`; indirect parameter resolution belongs to a future revision-aware
+  document composition job.
 - `/Extends` is retained and an immediate self-loop is rejected, but this component does not acquire
   predecessor object streams or validate a transitive `/Extends` graph for cycles.
 - `IndirectObjectTarget` carries xref-derived geometry but is publicly constructible so the object
@@ -321,3 +361,7 @@ Native/external-engine differential is claimed in this bootstrap slice.
   reads, exposed aggregate local-object work gauges, and pinned exact and one-less parent slices.
 - 2026-07-15: Added independently parent-lent repair scan/header/boundary caps, including zero-cap
   strict success and pre-work exhaustion semantics for document-wide first-pass accounting.
+- 2026-07-15: Added proof-bound filtered object-stream composition with a single shared
+  decoded-coordinate parser, strict geometry and dictionary-to-attestation authority checks,
+  retained proof ownership, and Flate/predictor adversaries without adding decode scheduling or
+  claiming M1 exit.

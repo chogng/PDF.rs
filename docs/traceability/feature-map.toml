@@ -1,5 +1,5 @@
 schema = 1
-version = "0.58.0"
+version = "0.59.0"
 status = "active"
 
 [[feature]]
@@ -141,7 +141,7 @@ state = "PLANNED"
 profile = "m1.basic-stream-filters.v1"
 clauses = ["RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
 modules = ["core/filters"]
-tests = ["core/filters::decode_behavior", "core/filters::predictor_behavior", "core/filters::repository_policy"]
+tests = ["core/filters::decode_behavior", "core/filters::predictor_behavior", "core/filters::dictionary_plan", "core/filters::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -201,7 +201,7 @@ state = "PLANNED"
 profile = "m1.unfiltered-object-stream-resolution.v1"
 clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
 modules = ["core/object", "core/document"]
-tests = ["core/object::object_stream", "core/object::repository_policy", "core/document::compressed_resolver", "core/document::repository_policy"]
+tests = ["core/object::object_stream", "core/object::filtered_object_stream", "core/object::repository_policy", "core/document::compressed_resolver", "core/document::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

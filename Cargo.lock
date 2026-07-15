@@ -86,6 +86,7 @@ name = "pdf-rs-object"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
+ "pdf-rs-filters",
  "pdf-rs-syntax",
 ]
 

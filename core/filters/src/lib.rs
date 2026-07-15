@@ -6,6 +6,10 @@
 //! profile, deterministic budgets, fuel, and decoded length. Decoded positions
 //! use only [`DecodedOffset`] and [`DecodedRange`]; they are never represented as
 //! physical source spans.
+//!
+//! [`FilterPlan::from_pdf_dictionary`] is the strict, cancellable authority for mapping one parsed
+//! direct stream dictionary into the canonical plan that a composition layer exact-compares with
+//! sealed decode evidence.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

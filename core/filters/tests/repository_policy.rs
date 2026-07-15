@@ -117,6 +117,49 @@ fn decoded_products_are_sealed_non_clone_and_identity_is_not_a_public_filter() {
 }
 
 #[test]
+fn direct_dictionary_canonicalization_is_filters_owned_bounded_and_cancellable() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let model = fs::read_to_string(crate_root.join("src/model.rs")).unwrap();
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md")).unwrap();
+
+    for required in [
+        "pub fn from_pdf_dictionary<C: DecodeCancellation + ?Sized>(",
+        "unique_metadata_value",
+        "canonical_filter_shape",
+        "canonical_pdf_filter",
+        "canonical_parameter_stage",
+        "Self::allocate(filter_count, limits.max_filters())",
+        "limits.max_filters()",
+        "plan.validate_retained_heap_limit(limits.max_filters())",
+        "check_metadata_cancelled(cancellation)?",
+        "dictionary.entries().is_empty()",
+        "DecodeErrorCode::InvalidDecodeParameters",
+    ] {
+        assert!(
+            model.contains(required),
+            "direct dictionary canonicalizer must retain {required:?}"
+        );
+    }
+    for required in [
+        "filters-owned shared direct-metadata canonicalizer",
+        "Metadata keys must be unique",
+        "equal-length direct array",
+        "max_filters` limit before",
+        "throughout every outer",
+        "creates no additional",
+        "one private full-name",
+        "object-stream layer now uses the direct dictionary canonicalizer",
+        "single-filter scalar/array shape policy is",
+        "explicit compatibility decision",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "dictionary canonicalization provenance must state {required:?}"
+        );
+    }
+}
+
+#[test]
 fn predictor_support_is_parameter_attested_without_claiming_lzw_or_integration() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let model = fs::read_to_string(crate_root.join("src/model.rs")).unwrap();
@@ -150,8 +193,8 @@ fn predictor_support_is_parameter_attested_without_claiming_lzw_or_integration()
         "TIFF Predictor 2",
         "Every PNG predictor value at or above 10",
         "LZW, DCT, CCITT",
-        "The object layer does not yet call this crate",
-        "direct or indirect `/DecodeParms` mapping",
+        "indirect `/DecodeParms`",
+        "source-driven decode scheduling",
         "read-only inspected",
         "No PDFium code or table was copied",
         "O4, unregistered, non-gating observer",
@@ -177,8 +220,8 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml")).unwrap();
     let spec_map =
         fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml")).unwrap();
-    assert_eq!(top_level_version(&feature_map), Some("0.58.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.58.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.59.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.59.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.stream-filter-decode")
         .expect("basic stream-filter feature must exist");
@@ -212,9 +255,9 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         "TIFF Predictor 2 over packed 1-, 2-, 4-, 8-, and 16-bit samples",
         "every PNG predictor value at or above 10 through row tags 0 through 4",
         "The opt-in `OpenSourceXrefStreamJob` and `OpenSourceRevisionChainJob` paths now construct",
-        "Object streams do not yet construct or consume this proof",
+        "`parse_filtered_object_stream` now re-canonicalizes the exact source dictionary",
         "LZW, non-predictor decode parameters",
-        "filtered object-stream integration",
+        "filtered object-stream source acquisition and scheduling",
         "Every affected feature remains PLANNED",
         "does not claim general stream support or M1 exit",
         "status = \"partial\"",

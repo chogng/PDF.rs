@@ -3,12 +3,14 @@ use std::mem;
 
 use pdf_rs_bytes::{ByteSlice, SourceIdentity, SourceSnapshot};
 use pdf_rs_syntax::{
-    ByteSpan, InputExtent, Located, ObjectRef, PdfName, PdfReal, PdfString, SyntaxCancellation,
-    SyntaxError, SyntaxErrorCode, SyntaxInput, SyntaxLimit, SyntaxLimitConfig, SyntaxLimits,
-    SyntaxObject, SyntaxParser, SyntaxPoll,
+    ByteSpan, InputExtent, Located, ObjectRef, PdfDictionary, PdfName, PdfReal, PdfString,
+    SyntaxCancellation, SyntaxError, SyntaxErrorCode, SyntaxInput, SyntaxLimit, SyntaxLimitConfig,
+    SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll,
 };
 
-use crate::{IndirectObject, IndirectObjectValue, ObjectCancellation, ObjectRecoverability};
+use crate::{
+    FramedStream, IndirectObject, IndirectObjectValue, ObjectCancellation, ObjectRecoverability,
+};
 
 const HARD_MAX_DECODED_BYTES: u64 = 64 * 1024 * 1024;
 const HARD_MAX_OBJECTS: u64 = 1_000_000;
@@ -19,10 +21,10 @@ const HARD_MAX_RETAINED_VALUE_BYTES: u64 = 256 * 1024 * 1024;
 const HARD_MAX_TOTAL_SYNTAX_BYTES: u64 = 256 * 1024 * 1024;
 const CANCELLATION_INTERVAL: usize = 256;
 
-/// Unvalidated deterministic limits for one unfiltered object stream.
+/// Unvalidated deterministic limits for one decoded object-stream payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ObjectStreamLimitConfig {
-    /// Maximum bytes in the complete unfiltered payload.
+    /// Maximum bytes in the complete decoded payload.
     pub max_decoded_bytes: u64,
     /// Maximum embedded-object count declared by `/N`.
     pub max_objects: u64,
@@ -55,7 +57,7 @@ impl Default for ObjectStreamLimitConfig {
     }
 }
 
-/// Validated deterministic limits for one unfiltered object stream.
+/// Validated deterministic limits for one decoded object-stream payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ObjectStreamLimits {
     max_decoded_bytes: u64,
@@ -104,7 +106,7 @@ impl ObjectStreamLimits {
         })
     }
 
-    /// Returns the complete unfiltered-payload byte ceiling.
+    /// Returns the complete decoded-payload byte ceiling.
     pub const fn max_decoded_bytes(self) -> u64 {
         self.max_decoded_bytes
     }
@@ -155,7 +157,7 @@ impl Default for ObjectStreamLimits {
 /// Object-stream budget dimension that rejected work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectStreamLimitKind {
-    /// Complete unfiltered payload bytes.
+    /// Complete decoded payload bytes.
     DecodedBytes,
     /// Declared embedded-object count.
     Objects,
@@ -169,6 +171,12 @@ pub enum ObjectStreamLimitKind {
     RetainedValues,
     /// Cumulative entry windows submitted to the syntax parser.
     TotalSyntaxBytes,
+    /// Number of filters in canonical stream metadata.
+    FilterCount,
+    /// Allocator-visible bytes retained by the canonical filter plan.
+    FilterPlanBytes,
+    /// A fallible canonical-plan allocation failed within its validated count bound.
+    FilterPlanAllocation,
 }
 
 /// Structured object-stream resource-limit context.
@@ -209,9 +217,11 @@ pub enum ObjectStreamErrorCode {
     InvalidLimits,
     /// Container, dictionary, payload, or snapshot evidence is inconsistent.
     SourceMismatch,
-    /// `/Type`, `/N`, `/First`, or the container kind is invalid.
+    /// A sealed decode proof does not authorize this exact framed container and payload.
+    DecodeProofMismatch,
+    /// `/Type`, `/N`, `/First`, direct filter metadata, or the container kind is invalid.
     InvalidDictionary,
-    /// The unfiltered entry point received `/Filter` or `/DecodeParms`.
+    /// Filter metadata is unsupported by the selected object-stream profile.
     UnsupportedFilter,
     /// Header object-number/offset pairs are malformed or cross `/First`.
     InvalidHeader,
@@ -274,7 +284,7 @@ enum ObjectStreamErrorDetail {
 }
 
 impl ObjectStreamError {
-    fn at_source(code: ObjectStreamErrorCode, source_offset: Option<u64>) -> Self {
+    pub(crate) fn at_source(code: ObjectStreamErrorCode, source_offset: Option<u64>) -> Self {
         Self {
             code,
             coordinate: source_offset.map_or(
@@ -293,7 +303,7 @@ impl ObjectStreamError {
         }
     }
 
-    fn resource(
+    pub(crate) fn resource(
         kind: ObjectStreamLimitKind,
         limit: u64,
         consumed: u64,
@@ -412,6 +422,11 @@ const fn object_stream_policy(
             ObjectStreamErrorCategory::Source,
             ObjectRecoverability::ReopenSource,
             "RPE-OBJECT-0102",
+        ),
+        ObjectStreamErrorCode::DecodeProofMismatch => (
+            ObjectStreamErrorCategory::Internal,
+            ObjectRecoverability::DoNotRetry,
+            "RPE-OBJECT-0112",
         ),
         ObjectStreamErrorCode::InvalidDictionary => (
             ObjectStreamErrorCategory::Syntax,
@@ -660,7 +675,7 @@ pub struct ObjectStreamStats {
 }
 
 impl ObjectStreamStats {
-    /// Returns complete unfiltered payload bytes validated.
+    /// Returns complete decoded payload bytes validated.
     pub const fn decoded_bytes(self) -> u64 {
         self.decoded_bytes
     }
@@ -691,7 +706,7 @@ impl ObjectStreamStats {
     }
 }
 
-/// One validated unfiltered object stream with separate physical and decoded coordinates.
+/// One validated object stream with separate physical and decoded coordinates.
 #[derive(Eq, PartialEq)]
 pub struct ObjectStream {
     snapshot: SourceSnapshot,
@@ -819,6 +834,21 @@ impl SyntaxCancellation for SyntaxCancellationAdapter<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ObjectStreamPayloadCoordinates {
+    Physical(u64),
+    Decoded,
+}
+
+impl ObjectStreamPayloadCoordinates {
+    const fn error_offsets(self) -> (Option<u64>, Option<u64>) {
+        match self {
+            Self::Physical(offset) => (Some(offset), None),
+            Self::Decoded => (None, Some(0)),
+        }
+    }
+}
+
 /// Parses one complete unfiltered object stream from a framed container and exact source slice.
 ///
 /// The payload slice must match the framed stream's immutable identity and physical data span.
@@ -831,28 +861,35 @@ pub fn parse_unfiltered_object_stream(
     cancellation: &(dyn ObjectCancellation + '_),
 ) -> Result<ObjectStream, ObjectStreamError> {
     check_cancelled(cancellation)?;
-    let IndirectObjectValue::Stream(stream) = container.value() else {
-        return Err(ObjectStreamError::at_source(
-            ObjectStreamErrorCode::InvalidDictionary,
-            Some(container.xref_offset()),
-        ));
-    };
-    if container.reference().generation() != 0 {
-        return Err(ObjectStreamError::at_source(
-            ObjectStreamErrorCode::InvalidDictionary,
-            Some(container.xref_offset()),
-        ));
-    }
+    let stream = require_generation_zero_stream(container)?;
     validate_source_geometry(container, stream.data_span(), payload)?;
-    let dictionary = stream.dictionary();
-    if unique_value(dictionary.value(), b"Filter", cancellation)?.is_some()
-        || unique_value(dictionary.value(), b"DecodeParms", cancellation)?.is_some()
+    if has_unique_filter(stream.dictionary().value(), cancellation)?
+        || unique_value(stream.dictionary().value(), b"DecodeParms", cancellation)?.is_some()
     {
         return Err(ObjectStreamError::at_source(
             ObjectStreamErrorCode::UnsupportedFilter,
             Some(stream.data_span().start()),
         ));
     }
+    parse_decoded_object_stream(
+        container,
+        stream,
+        payload.bytes(),
+        ObjectStreamPayloadCoordinates::Physical(stream.data_span().start()),
+        limits,
+        cancellation,
+    )
+}
+
+pub(crate) fn parse_decoded_object_stream(
+    container: &IndirectObject,
+    stream: &FramedStream,
+    payload: &[u8],
+    payload_coordinates: ObjectStreamPayloadCoordinates,
+    limits: ObjectStreamLimits,
+    cancellation: &(dyn ObjectCancellation + '_),
+) -> Result<ObjectStream, ObjectStreamError> {
+    let dictionary = stream.dictionary();
     require_name(dictionary.value(), b"Type", b"ObjStm", cancellation)?;
     let (object_count, object_count_offset) =
         require_nonnegative_u64(dictionary.value(), b"N", cancellation)?;
@@ -888,14 +925,15 @@ pub fn parse_unfiltered_object_stream(
             None,
         ));
     }
-    let payload_len = u64::try_from(payload.bytes().len()).map_err(|_| {
+    let (payload_source_offset, payload_decoded_offset) = payload_coordinates.error_offsets();
+    let payload_len = u64::try_from(payload.len()).map_err(|_| {
         ObjectStreamError::resource(
             ObjectStreamLimitKind::DecodedBytes,
             limits.max_decoded_bytes,
             0,
             u64::MAX,
-            Some(stream.data_span().start()),
-            None,
+            payload_source_offset,
+            payload_decoded_offset,
         )
     })?;
     if payload_len > limits.max_decoded_bytes {
@@ -904,8 +942,8 @@ pub fn parse_unfiltered_object_stream(
             limits.max_decoded_bytes,
             0,
             payload_len,
-            Some(stream.data_span().start()),
-            None,
+            payload_source_offset,
+            payload_decoded_offset,
         ));
     }
     if first > payload_len {
@@ -919,12 +957,7 @@ pub fn parse_unfiltered_object_stream(
     let ParsedHeader {
         entries: headers,
         extension_span,
-    } = parse_header(
-        &payload.bytes()[..header_end],
-        object_count,
-        limits,
-        cancellation,
-    )?;
+    } = parse_header(&payload[..header_end], object_count, limits, cancellation)?;
     validate_unique_numbers(&headers, limits, cancellation)?;
     let entry_capacity = usize::try_from(object_count).map_err(|_| {
         ObjectStreamError::resource(
@@ -1037,7 +1070,7 @@ pub fn parse_unfiltered_object_stream(
         let input = SyntaxInput::new(
             container.snapshot().identity(),
             entry_start,
-            &payload.bytes()[start..end],
+            &payload[start..end],
             InputExtent::KnownSourceEnd,
         )
         .map_err(|error| ObjectStreamError::from_syntax(error, entry_start))?;
@@ -1078,8 +1111,7 @@ pub fn parse_unfiltered_object_stream(
             ));
         }
         let parsed_end = located.span().end_exclusive();
-        if parsed_end > entry_end
-            || !only_pdf_trivia(payload.bytes(), parsed_end, entry_end, cancellation)?
+        if parsed_end > entry_end || !only_pdf_trivia(payload, parsed_end, entry_end, cancellation)?
         {
             return Err(ObjectStreamError::at_decoded(
                 ObjectStreamErrorCode::InvalidEntryBoundary,
@@ -1162,6 +1194,31 @@ fn validate_source_geometry(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn require_generation_zero_stream(
+    container: &IndirectObject,
+) -> Result<&FramedStream, ObjectStreamError> {
+    let IndirectObjectValue::Stream(stream) = container.value() else {
+        return Err(ObjectStreamError::at_source(
+            ObjectStreamErrorCode::InvalidDictionary,
+            Some(container.xref_offset()),
+        ));
+    };
+    if container.reference().generation() != 0 {
+        return Err(ObjectStreamError::at_source(
+            ObjectStreamErrorCode::InvalidDictionary,
+            Some(container.xref_offset()),
+        ));
+    }
+    Ok(stream)
+}
+
+pub(crate) fn has_unique_filter(
+    dictionary: &PdfDictionary,
+    cancellation: &dyn ObjectCancellation,
+) -> Result<bool, ObjectStreamError> {
+    Ok(unique_value(dictionary, b"Filter", cancellation)?.is_some())
 }
 
 fn parse_header(
@@ -1959,7 +2016,9 @@ fn optional_reference(
     }
 }
 
-fn check_cancelled(cancellation: &dyn ObjectCancellation) -> Result<(), ObjectStreamError> {
+pub(crate) fn check_cancelled(
+    cancellation: &dyn ObjectCancellation,
+) -> Result<(), ObjectStreamError> {
     if cancellation.is_cancelled() {
         Err(ObjectStreamError::at_source(
             ObjectStreamErrorCode::Cancelled,

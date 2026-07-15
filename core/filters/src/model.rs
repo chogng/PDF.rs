@@ -2,10 +2,10 @@ use std::fmt;
 use std::mem;
 
 use pdf_rs_bytes::{ByteSlice, SourceIdentity, SourceSnapshot};
-use pdf_rs_syntax::{ByteSpan, ObjectRef};
+use pdf_rs_syntax::{ByteSpan, ObjectRef, PdfDictionary, SyntaxObject};
 
 use crate::limits::HARD_MAX_FILTERS;
-use crate::{DecodeError, DecodeErrorCode, DecodeLimitKind, DecodeLimits};
+use crate::{DecodeCancellation, DecodeError, DecodeErrorCode, DecodeLimitKind, DecodeLimits};
 
 /// Foundational PDF stream filter implemented by this crate.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -47,36 +47,11 @@ impl FilterPlan {
     /// Builds an ordered plan from already canonical filter identifiers.
     pub fn new(filters: &[StreamFilter]) -> Result<Self, DecodeError> {
         validate_hard_filter_count(filters.len())?;
-        let mut owned_filters = Vec::new();
-        owned_filters
-            .try_reserve_exact(filters.len())
-            .map_err(|_| {
-                DecodeError::resource(
-                    DecodeLimitKind::Allocation,
-                    u64::from(HARD_MAX_FILTERS),
-                    0,
-                    u64::try_from(filters.len()).unwrap_or(u64::MAX),
-                    None,
-                )
-            })?;
-        let mut stages = Vec::new();
-        stages.try_reserve_exact(filters.len()).map_err(|_| {
-            DecodeError::resource(
-                DecodeLimitKind::Allocation,
-                u64::from(HARD_MAX_FILTERS),
-                0,
-                u64::try_from(filters.len()).unwrap_or(u64::MAX),
-                None,
-            )
-        })?;
+        let mut plan = Self::allocate(filters.len(), HARD_MAX_FILTERS)?;
         for filter in filters.iter().copied() {
-            owned_filters.push(filter);
-            stages.push(FilterStage::without_parameters(filter));
+            plan.filters.push(filter);
+            plan.stages.push(FilterStage::without_parameters(filter));
         }
-        let plan = Self {
-            filters: owned_filters,
-            stages,
-        };
         plan.validate_retained_heap_limit(HARD_MAX_FILTERS)?;
         Ok(plan)
     }
@@ -84,37 +59,14 @@ impl FilterPlan {
     /// Builds an ordered plan whose stages retain their canonical decode parameters.
     pub fn from_stages(stages: &[FilterStage]) -> Result<Self, DecodeError> {
         validate_hard_filter_count(stages.len())?;
-        let mut owned_stages = Vec::new();
-        owned_stages.try_reserve_exact(stages.len()).map_err(|_| {
-            DecodeError::resource(
-                DecodeLimitKind::Allocation,
-                u64::from(HARD_MAX_FILTERS),
-                0,
-                u64::try_from(stages.len()).unwrap_or(u64::MAX),
-                None,
-            )
-        })?;
-        let mut filters = Vec::new();
-        filters.try_reserve_exact(stages.len()).map_err(|_| {
-            DecodeError::resource(
-                DecodeLimitKind::Allocation,
-                u64::from(HARD_MAX_FILTERS),
-                0,
-                u64::try_from(stages.len()).unwrap_or(u64::MAX),
-                None,
-            )
-        })?;
+        let mut plan = Self::allocate(stages.len(), HARD_MAX_FILTERS)?;
         for (index, stage) in stages.iter().enumerate() {
             stage.validate(Some(
                 u16::try_from(index).expect("hard filter count fits u16"),
             ))?;
-            owned_stages.push(*stage);
-            filters.push(stage.filter);
+            plan.stages.push(*stage);
+            plan.filters.push(stage.filter);
         }
-        let plan = Self {
-            filters,
-            stages: owned_stages,
-        };
         plan.validate_retained_heap_limit(HARD_MAX_FILTERS)?;
         Ok(plan)
     }
@@ -125,32 +77,123 @@ impl FilterPlan {
     /// unsupported. Unknown name bytes are never retained in the returned error.
     pub fn from_pdf_names(names: &[&[u8]]) -> Result<Self, DecodeError> {
         validate_hard_filter_count(names.len())?;
-        let mut filters = Vec::new();
-        filters.try_reserve_exact(names.len()).map_err(|_| {
-            DecodeError::resource(
-                DecodeLimitKind::Allocation,
-                u64::from(HARD_MAX_FILTERS),
-                0,
-                u64::try_from(names.len()).unwrap_or(u64::MAX),
-                None,
-            )
-        })?;
+        let mut plan = Self::allocate(names.len(), HARD_MAX_FILTERS)?;
         for (index, name) in names.iter().enumerate() {
-            let filter = match *name {
-                b"FlateDecode" => StreamFilter::FlateDecode,
-                b"ASCIIHexDecode" => StreamFilter::AsciiHexDecode,
-                b"ASCII85Decode" => StreamFilter::Ascii85Decode,
-                b"RunLengthDecode" => StreamFilter::RunLengthDecode,
-                _ => {
-                    return Err(DecodeError::for_code(
-                        DecodeErrorCode::UnsupportedFilter,
-                        Some(u16::try_from(index).expect("hard filter count fits u16")),
-                    ));
-                }
-            };
-            filters.push(filter);
+            let filter = canonical_pdf_filter(
+                name,
+                u16::try_from(index).expect("hard filter count fits u16"),
+            )?;
+            plan.filters.push(filter);
+            plan.stages.push(FilterStage::without_parameters(filter));
         }
-        Self::new(&filters)
+        plan.validate_retained_heap_limit(HARD_MAX_FILTERS)?;
+        Ok(plan)
+    }
+
+    /// Canonicalizes one strict stream dictionary's direct filter metadata.
+    ///
+    /// `/Filter` must be absent, one full canonical name, or a nonempty array of full canonical
+    /// names. `/DecodeParms` must be absent, `null`, or a direct dictionary for a single filter;
+    /// an array filter requires an equal-length direct array whose entries are `null` or direct
+    /// dictionaries. Duplicate metadata keys, indirect values, malformed shapes, abbreviations,
+    /// unknown filters, and unsupported parameters are rejected. Nonempty Flate predictor
+    /// dictionaries make all PDF defaults explicit in the returned canonical stages; an empty
+    /// dictionary is canonical no-parameter evidence.
+    ///
+    /// The validated decode limit is applied before any filter-count-proportional allocation and
+    /// again to the retained plan capacity before publication.
+    pub fn from_pdf_dictionary<C: DecodeCancellation + ?Sized>(
+        dictionary: &PdfDictionary,
+        limits: DecodeLimits,
+        cancellation: &C,
+    ) -> Result<Self, DecodeError> {
+        check_metadata_cancelled(cancellation)?;
+        let filter = unique_metadata_value(dictionary, b"Filter", cancellation)?;
+        let decode_parameters = unique_metadata_value(dictionary, b"DecodeParms", cancellation)?;
+        let Some(filter) = filter else {
+            if decode_parameters.is_some() {
+                return Err(DecodeError::for_code(
+                    DecodeErrorCode::InvalidDecodeParameters,
+                    None,
+                ));
+            }
+            let plan = Self::new(&[])?;
+            check_metadata_cancelled(cancellation)?;
+            plan.validate_retained_heap_limit(limits.max_filters())?;
+            return Ok(plan);
+        };
+
+        let (filter_count, array_filter) =
+            canonical_filter_shape(filter, limits.max_filters(), cancellation)?;
+        let mut plan = Self::allocate(filter_count, limits.max_filters())?;
+        match filter {
+            SyntaxObject::Name(name) => {
+                let filter = canonical_pdf_filter(name.bytes(), 0)?;
+                plan.filters.push(filter);
+                plan.stages.push(FilterStage::without_parameters(filter));
+            }
+            SyntaxObject::Array(values) => {
+                for (index, value) in values.values().iter().enumerate() {
+                    check_metadata_cancelled(cancellation)?;
+                    let SyntaxObject::Name(name) = value.value() else {
+                        return Err(DecodeError::for_code(
+                            DecodeErrorCode::InvalidDecodeParameters,
+                            Some(
+                                u16::try_from(index)
+                                    .expect("validated hard filter count always fits u16"),
+                            ),
+                        ));
+                    };
+                    let filter = canonical_pdf_filter(
+                        name.bytes(),
+                        u16::try_from(index).expect("validated hard filter count always fits u16"),
+                    )?;
+                    plan.filters.push(filter);
+                    plan.stages.push(FilterStage::without_parameters(filter));
+                }
+            }
+            _ => unreachable!("filter shape was validated above"),
+        }
+        match (array_filter, decode_parameters) {
+            (_, None) | (_, Some(SyntaxObject::Null)) => {}
+            (false, Some(SyntaxObject::Dictionary(parameters))) => {
+                plan.stages[0] =
+                    canonical_parameter_stage(plan.filters[0], parameters, 0, cancellation)?;
+            }
+            (true, Some(SyntaxObject::Array(parameters)))
+                if parameters.values().len() == plan.len() =>
+            {
+                for (index, value) in parameters.values().iter().enumerate() {
+                    check_metadata_cancelled(cancellation)?;
+                    let filter_index =
+                        u16::try_from(index).expect("validated hard filter count always fits u16");
+                    plan.stages[index] = match value.value() {
+                        SyntaxObject::Null => FilterStage::without_parameters(plan.filters[index]),
+                        SyntaxObject::Dictionary(parameters) => canonical_parameter_stage(
+                            plan.filters[index],
+                            parameters,
+                            filter_index,
+                            cancellation,
+                        )?,
+                        _ => {
+                            return Err(DecodeError::for_code(
+                                DecodeErrorCode::InvalidDecodeParameters,
+                                Some(filter_index),
+                            ));
+                        }
+                    };
+                }
+            }
+            (true, Some(SyntaxObject::Array(_))) | (true, Some(_)) | (false, Some(_)) => {
+                return Err(DecodeError::for_code(
+                    DecodeErrorCode::InvalidDecodeParameters,
+                    None,
+                ));
+            }
+        }
+        check_metadata_cancelled(cancellation)?;
+        plan.validate_retained_heap_limit(limits.max_filters())?;
+        Ok(plan)
     }
 
     /// Returns the canonical filters in decode order.
@@ -209,6 +252,31 @@ impl FilterPlan {
             .ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InternalState, None))
     }
 
+    fn allocate(count: usize, allocation_limit: u16) -> Result<Self, DecodeError> {
+        let attempted = u64::try_from(count).unwrap_or(u64::MAX);
+        let mut filters = Vec::new();
+        filters.try_reserve_exact(count).map_err(|_| {
+            DecodeError::resource(
+                DecodeLimitKind::Allocation,
+                u64::from(allocation_limit),
+                0,
+                attempted,
+                None,
+            )
+        })?;
+        let mut stages = Vec::new();
+        stages.try_reserve_exact(count).map_err(|_| {
+            DecodeError::resource(
+                DecodeLimitKind::Allocation,
+                u64::from(allocation_limit),
+                0,
+                attempted,
+                None,
+            )
+        })?;
+        Ok(Self { filters, stages })
+    }
+
     pub(crate) fn validate_retained_heap_limit(
         &self,
         max_filters: u16,
@@ -225,6 +293,140 @@ impl FilterPlan {
             ));
         }
         Ok(attempted)
+    }
+}
+
+fn unique_metadata_value<'a>(
+    dictionary: &'a PdfDictionary,
+    key: &[u8],
+    cancellation: &(impl DecodeCancellation + ?Sized),
+) -> Result<Option<&'a SyntaxObject>, DecodeError> {
+    let mut found = None;
+    for entry in dictionary.entries() {
+        check_metadata_cancelled(cancellation)?;
+        if entry.key().value().bytes() == key {
+            if found.is_some() {
+                return Err(DecodeError::for_code(
+                    DecodeErrorCode::InvalidDecodeParameters,
+                    None,
+                ));
+            }
+            found = Some(entry.value().value());
+        }
+    }
+    Ok(found)
+}
+
+fn canonical_filter_shape(
+    value: &SyntaxObject,
+    max_filters: u16,
+    cancellation: &(impl DecodeCancellation + ?Sized),
+) -> Result<(usize, bool), DecodeError> {
+    check_metadata_cancelled(cancellation)?;
+    let (count, array_filter) = match value {
+        SyntaxObject::Name(_) => (1, false),
+        SyntaxObject::Array(values) if !values.values().is_empty() => (values.values().len(), true),
+        _ => {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::InvalidDecodeParameters,
+                None,
+            ));
+        }
+    };
+    let attempted = u64::try_from(count).unwrap_or(u64::MAX);
+    if attempted > u64::from(max_filters) {
+        return Err(DecodeError::resource(
+            DecodeLimitKind::FilterCount,
+            u64::from(max_filters),
+            0,
+            attempted,
+            None,
+        ));
+    }
+    Ok((count, array_filter))
+}
+
+fn canonical_pdf_filter(name: &[u8], filter_index: u16) -> Result<StreamFilter, DecodeError> {
+    match name {
+        b"FlateDecode" => Ok(StreamFilter::FlateDecode),
+        b"ASCIIHexDecode" => Ok(StreamFilter::AsciiHexDecode),
+        b"ASCII85Decode" => Ok(StreamFilter::Ascii85Decode),
+        b"RunLengthDecode" => Ok(StreamFilter::RunLengthDecode),
+        _ => Err(DecodeError::for_code(
+            DecodeErrorCode::UnsupportedFilter,
+            Some(filter_index),
+        )),
+    }
+}
+
+fn canonical_parameter_stage(
+    filter: StreamFilter,
+    dictionary: &PdfDictionary,
+    filter_index: u16,
+    cancellation: &(impl DecodeCancellation + ?Sized),
+) -> Result<FilterStage, DecodeError> {
+    check_metadata_cancelled(cancellation)?;
+    if dictionary.entries().is_empty() {
+        return Ok(FilterStage::without_parameters(filter));
+    }
+    if filter != StreamFilter::FlateDecode {
+        return Err(DecodeError::for_code(
+            DecodeErrorCode::UnsupportedDecodeParameters,
+            Some(filter_index),
+        ));
+    }
+    let mut predictor = None;
+    let mut colors = None;
+    let mut bits_per_component = None;
+    let mut columns = None;
+    for entry in dictionary.entries() {
+        check_metadata_cancelled(cancellation)?;
+        let slot = match entry.key().value().bytes() {
+            b"Predictor" => &mut predictor,
+            b"Colors" => &mut colors,
+            b"BitsPerComponent" => &mut bits_per_component,
+            b"Columns" => &mut columns,
+            _ => {
+                return Err(DecodeError::for_code(
+                    DecodeErrorCode::InvalidDecodeParameters,
+                    Some(filter_index),
+                ));
+            }
+        };
+        if slot.is_some() {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::InvalidDecodeParameters,
+                Some(filter_index),
+            ));
+        }
+        let SyntaxObject::Integer(value) = entry.value().value() else {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::InvalidDecodeParameters,
+                Some(filter_index),
+            ));
+        };
+        *slot = Some(*value);
+    }
+    let parameters = PredictorParameters::new(
+        predictor.unwrap_or(1),
+        colors.unwrap_or(1),
+        bits_per_component.unwrap_or(8),
+        columns.unwrap_or(1),
+    )
+    .map_err(|error| DecodeError::for_code(error.code(), Some(filter_index)))?;
+    Ok(FilterStage {
+        filter,
+        parameters: FilterDecodeParameters::Predictor(parameters),
+    })
+}
+
+fn check_metadata_cancelled(
+    cancellation: &(impl DecodeCancellation + ?Sized),
+) -> Result<(), DecodeError> {
+    if cancellation.is_cancelled() {
+        Err(DecodeError::for_code(DecodeErrorCode::Cancelled, None))
+    } else {
+        Ok(())
     }
 }
 

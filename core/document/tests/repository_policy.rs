@@ -308,7 +308,7 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
         .expect("M1 requirement record must exist");
     assert!(milestone.contains("status = \"partial\""));
     assert!(milestone.contains("indirect-Length xref streams"));
-    assert!(milestone.contains("filtered object-stream integration"));
+    assert!(milestone.contains("filtered object-stream source scheduling"));
     assert!(milestone.contains("acquired-chain service integration remains open"));
 }
 
@@ -541,8 +541,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.58.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.58.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.59.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.59.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

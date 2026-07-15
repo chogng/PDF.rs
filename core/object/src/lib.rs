@@ -8,11 +8,15 @@
 //! An explicit sibling job can run that strict path first and then attempt one
 //! bounded, proof-bearing local header or direct-length repair; the strict
 //! entry points never search or recover implicitly.
+//! Filtered object streams are accepted only by a consuming proof-bound entry
+//! that keeps the complete framed container, sealed decoder attestation, and
+//! decoded-coordinate semantic result inseparable.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 mod error;
+mod filtered_object_stream;
 mod job;
 mod limits;
 mod model;
@@ -25,6 +29,7 @@ pub use error::{
     ObjectError, ObjectErrorCategory, ObjectErrorCode, ObjectLimit, ObjectLimitKind,
     ObjectRecoverability,
 };
+pub use filtered_object_stream::{FilteredObjectStream, parse_filtered_object_stream};
 pub use job::{
     NeverCancelled, ObjectCancellation, ObjectJobContext, ObjectPhase, ObjectPoll, ObjectStats,
     OpenObjectJob,

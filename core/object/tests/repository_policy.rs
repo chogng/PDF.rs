@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[test]
-fn product_object_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io() {
+fn product_object_core_only_depends_on_bytes_filters_and_syntax_and_has_no_platform_io() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = fs::read_to_string(crate_root.join("Cargo.toml"))
         .expect("crate manifest must be readable during repository tests");
@@ -21,9 +21,10 @@ fn product_object_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io()
         dependency_body,
         [
             r#"pdf-rs-bytes = { path = "../bytes" }"#,
+            r#"pdf-rs-filters = { path = "../filters" }"#,
             r#"pdf-rs-syntax = { path = "../syntax" }"#,
         ],
-        "core/object may depend only on the lower-level core/bytes and core/syntax crates"
+        "core/object may depend only on lower-level bytes, filters, and syntax crates"
     );
     assert!(
         !manifest.contains("pdf-rs-xref"),
@@ -84,6 +85,75 @@ fn product_object_core_only_depends_on_bytes_and_syntax_and_has_no_platform_io()
 }
 
 #[test]
+fn filtered_object_stream_proofs_delegate_canonicalization_and_require_exact_authority() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("object library surface must be readable");
+    let filtered = fs::read_to_string(crate_root.join("src/filtered_object_stream.rs"))
+        .expect("filtered object-stream source must be readable");
+    let semantic = fs::read_to_string(crate_root.join("src/object_stream.rs"))
+        .expect("object-stream semantic source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("object provenance must be readable");
+
+    for required in [
+        "pub struct FilteredObjectStream",
+        "framed_container: IndirectObject",
+        "decoded_proof: DecodedStream",
+        "object_stream: ObjectStream",
+        "pub fn parse_filtered_object_stream(",
+        "attestation.snapshot() != container.snapshot()",
+        "attestation.owner() != container.reference()",
+        "attestation.dictionary_span() != stream.dictionary().span()",
+        "attestation.encoded_span() != stream.data_span()",
+        "encoded_range.start() != stream.data_span().start()",
+        "attestation.profile() != DecodeProfile::M1StrictV1",
+        "FilterPlan::from_pdf_dictionary(",
+        "attestation.limits()",
+        "FilterMetadataCancellation",
+        "canonical_plan.is_empty()",
+        "&canonical_plan != attestation.filter_plan()",
+        "map_filter_metadata_error",
+        "DecodeLimitKind::FilterCount",
+        "DecodeLimitKind::FilterPlanBytes",
+        "retained_proof_bytes",
+    ] {
+        assert!(
+            filtered.contains(required),
+            "filtered object-stream authority gate must retain {required:?}"
+        );
+    }
+    assert!(library.contains("FilteredObjectStream"));
+    assert!(library.contains("parse_filtered_object_stream"));
+    assert!(semantic.contains("pub(crate) fn parse_decoded_object_stream("));
+    assert!(semantic.contains("parse_decoded_object_stream("));
+    assert!(semantic.contains("ObjectStreamPayloadCoordinates::Physical"));
+    assert!(filtered.contains("ObjectStreamPayloadCoordinates::Decoded"));
+    assert!(!filtered.contains("StreamFilter::"));
+    assert!(!filtered.contains("FilterDecodeParameters"));
+    assert!(!filtered.contains("PredictorParameters"));
+    assert!(!filtered.contains("from_pdf_names"));
+    assert!(!filtered.contains("impl Clone for FilteredObjectStream"));
+    assert!(!filtered.contains("#[derive(Clone)]\npub struct FilteredObjectStream"));
+    assert!(!filtered.contains("pub fn into_"));
+    for required in [
+        "move-only sealed `DecodedStream`",
+        "delegates canonicalization",
+        "only retained canonical decode authority",
+        "metadata remains syntax-classified",
+        "decoded offset zero",
+        "encoded backing is not double-counted",
+        "source-driven decode scheduling",
+        "claiming M1 exit",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "filtered object-stream provenance must state {required:?}"
+        );
+    }
+}
+
+#[test]
 fn xref_stream_anchor_geometry_cannot_relax_ordinary_entry_targets() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let library = fs::read_to_string(crate_root.join("src/lib.rs"))
@@ -125,8 +195,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.58.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.58.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.59.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.59.0"));
 
     let anchor_feature = record_with_id(&feature_map, "feature", "core.source-xref-anchor")
         .expect("source xref-anchor feature record must exist");
@@ -193,7 +263,7 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
         "proof-bound filtered or unfiltered primary-stream, hybrid, and incremental chains"
     ));
     assert!(milestone.contains("indirect-Length xref streams"));
-    assert!(milestone.contains("filtered object-stream integration"));
+    assert!(milestone.contains("filtered object-stream source scheduling"));
     assert!(milestone.contains("all affected profiles remain truthfully unpromoted"));
 
     let repair = record_with_id(&feature_map, "feature", "core.local-repair")

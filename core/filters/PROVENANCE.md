@@ -5,20 +5,24 @@ immutable `ByteSlice` and implements the internal no-filter identity path plus c
 `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`, and zlib-wrapped `FlateDecode` chains. A
 successful `DecodedStream` cannot be cloned or separated from its sealed `DecodeAttestation`.
 Canonical `FlateDecode` stages may additionally apply bounded TIFF Predictor 2 or PNG predictor
-values at or above 10 with explicit defaulted parameters.
+values at or above 10 with explicit defaulted parameters. `FilterPlan::from_pdf_dictionary`
+provides the filters-owned shared direct-metadata canonicalizer used by object-stream composition
+to bind a parsed stream dictionary to an attested plan; the separate source-xref bootstrap policy
+is recorded below pending explicit reconciliation.
 
 This crate performs no object resolution, Range polling, file/network access, async scheduling,
 decryption, image decoding, cache insertion, or external-engine fallback.
 
 # Semantic owner
 
-Parser/Security owns filter-plan and decode-parameter canonicalization, strict filter and predictor
-state machines, deterministic decode fuel, per-layer/cumulative/final output limits, cancellation
-probes, and source-redacted errors. `core/bytes` owns immutable snapshot-backed physical storage.
-`core/syntax` owns checked physical spans and object references. Object/document layers remain
-responsible for validating a stream dictionary and `/Length`, resolving its exact encoded
-`ByteSlice`, mapping `/Filter` and `/DecodeParms` values to a canonical plan, and deciding
-capability policy before calling this crate. Runtime owns job generation, cancellation delivery,
+Parser/Security owns strict direct `/Filter` and `/DecodeParms` canonicalization, filter and
+predictor state machines, deterministic decode fuel, per-layer/cumulative/final output limits,
+cancellation probes, and source-redacted errors. `core/bytes` owns immutable snapshot-backed
+physical storage. `core/syntax` owns parsed direct dictionaries, checked physical spans, and object
+references. Object/document layers remain responsible for validating a stream dictionary and
+`/Length`, resolving its exact encoded `ByteSlice`, passing the parsed direct dictionary through
+the filters-owned canonicalizer, exact-binding that plan to composition evidence, and deciding
+capability policy before decoding. Runtime owns job generation, cancellation delivery,
 session-wide budgets, and decoded-stream cache policy.
 
 # Normative sources
@@ -91,6 +95,22 @@ ISO/O0 conformance claim.
   integer ceiling), and component widths 1, 2, 4, 8, or 16. Invalid signs, zeroes, and row-width
   overflow are syntax failures; recognized values outside the component-width profile and
   parameters attached to a non-Flate filter are unsupported-capability failures.
+- `FilterPlan::from_pdf_dictionary` accepts an absent `/Filter` only with absent `/DecodeParms`, a
+  full canonical name, or a nonempty direct-name array. Metadata keys must be unique. A single
+  filter accepts absent, `null`, or one direct parameter dictionary; an array filter accepts
+  absent, `null`, or an equal-length direct array of `null` and direct dictionaries. Empty
+  parameter dictionaries canonicalize to no parameters, while nonempty Flate dictionaries make
+  `Predictor`, `Colors`, `BitsPerComponent`, and `Columns` defaults explicit. Indirect values,
+  abbreviations, malformed shapes, unknown keys, and duplicate/noninteger predictor fields are
+  rejected. `from_pdf_names` and direct-dictionary canonicalization share the private
+  `canonical_pdf_filter` full-name mapper, so the mapping remains centralized.
+- Dictionary canonicalization applies the validated `max_filters` limit before allocating the two
+  exact vectors owned by the returned `FilterPlan`, creates no additional
+  filter-count-proportional temporary vector, validates retained plan heap against the same
+  profile, and probes the caller's `DecodeCancellation` before and throughout every outer
+  dictionary, filter-array, parameter-array, and parameter-dictionary walk. The temporary name
+  and mapped-filter vectors used by older constructors were eliminated; one private full-name
+  mapper is shared by `from_pdf_names` and direct-dictionary canonicalization.
 - TIFF Predictor 2 reconstructs packed samples rather than bytes, adds the previous same-color
   sample modulo the component width, resets history at every row, and leaves unused row-padding
   bits unchanged. It covers 1-, 2-, 4-, 8-, and 16-bit components without allocating a side row:
@@ -160,7 +180,11 @@ adds no third-party license or redistribution obligation.
 
 # Tests and fuzz targets
 
-Behavior tests cover exact source/snapshot/object/span attestation, decoded-relative slicing,
+Behavior tests cover strict direct-dictionary canonicalization for absent, single, and ordered
+array filters; null, empty, and predictor parameter forms; explicit defaults; exact filter-count
+limits; cooperative cancellation during metadata walking; and malformed, duplicate, indirect,
+unknown, wrong-shape, and wrong-arity adversaries. Decode behavior tests cover exact
+source/snapshot/object/span attestation, decoded-relative slicing,
 redacted debug output, internal identity fuel, strict canonical-name handling, ASCIIHex whitespace
 and odd nibbles, ASCII85 full/partial/`z` groups and overflow, RunLength literal/repeat runs,
 ordered filter composition, missing terminators, illegal bytes/groups/runs, trailing data,
@@ -191,9 +215,13 @@ differential evidence in this stage.
 - Empty encoded streams cannot currently be represented by the non-empty `ByteRange`/`ByteSlice`
   primitive. Resolving that physical-input contract belongs to `core/bytes`; this crate does not
   synthesize an unattested empty slice.
-- The object layer does not yet call this crate. Exact `/Length`, dictionary-to-plan validation,
-  direct or indirect `/DecodeParms` mapping, stream decryption order, object-stream consumption,
-  and decoded cache keys remain future integration work.
+- The object-stream layer now uses the direct dictionary canonicalizer and exact-compares its
+  result with sealed decode evidence. Exact `/Length` acquisition, indirect `/DecodeParms`
+  resolution, stream decryption order, source-driven decode scheduling, and decoded cache keys
+  remain composition work. The existing source-xref acquisition path still carries a separate,
+  overlapping in-module bootstrap canonicalizer whose single-filter scalar/array shape policy is
+  not identical; any migration or tightening requires an explicit compatibility decision and
+  regressions rather than being described as non-semantic cleanup.
 - The strict required-marker and trailing-data policy is intentionally not presented as pinned ISO
   conformance until clause-level authority and conformance fixtures are registered.
 - Limits and `M1V1` fuel weights are bootstrap values, not a released `FuelSchedule` or
@@ -203,6 +231,8 @@ differential evidence in this stage.
 
 # History
 
+- 2026-07-15: Added the filters-owned, cancellable, limit-bound strict direct dictionary
+  canonicalizer used for exact metadata-to-attestation composition checks.
 - 2026-07-15: Added bounded TIFF and PNG predictor decoding with canonical per-stage parameters,
   packed-sample reconstruction, strict row tags/framing, algorithm fuel, cancellation, and layered
   output/capacity enforcement.
