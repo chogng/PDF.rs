@@ -4,15 +4,17 @@
 bootstrap discovers the final `startxref` marker of a known-length immutable source and parses one
 bounded traditional xref table and trailer. A separate synchronous primitive validates one
 complete caller-supplied unfiltered xref-stream payload against source-bound dictionary metadata.
-Neither primitive performs file, network, callback, filter-decoder, or async-runtime I/O.
+A third synchronous primitive validates and composes already-parsed revision candidates from
+newest to oldest. None performs file, network, callback, filter-decoder, or async-runtime I/O.
 
 # Semantic owner
 
 Parser/Security owns bounded xref discovery, table geometry, entry validation, source identity,
-and stable xref failures. `core/bytes` owns immutable source snapshots and byte delivery, while
+and stable xref failures. It also owns representation-independent xref row precedence over parsed
+revision candidates. `core/bytes` owns immutable source snapshots and byte delivery, while
 `core/syntax` owns direct-object syntax. The sibling `core/object` crate validates one supplied
-xref-derived target without introducing an `object -> xref` dependency; future document/revision
-layers own their composition, reference resolution, revision precedence, and document services.
+xref-derived target without introducing an `object -> xref` dependency; future document layers
+own proof-bearing xref acquisition, reference resolution, object validation, and document services.
 
 # Normative sources
 
@@ -30,6 +32,9 @@ layers own their composition, reference resolution, revision precedence, and doc
 - [RPE-STD-005, sections 4-9](../../docs/standards/security-and-resource-budget.md) requires
   deterministic input, scan, entry, and allocation limits before work, cooperative cancellation
   checks in potentially long loops, immutable source validation, and bounded xref traversal.
+- [Adobe PDF Reference 1.7, section 3.4.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf)
+  defines unknown xref-stream row types as null references and the hybrid lookup order of current
+  traditional section, current `/XRefStm` supplement, then `/Prev`.
 
 The repository does not yet bind this bootstrap xref profile to a pinned ISO 32000 snapshot,
 errata set, or clause-level conformance cases. This module therefore makes no ISO or R0 semantic
@@ -62,11 +67,24 @@ coverage claim.
   `/Root` and `/Prev` values are checked and retained for later composition. `/Filter` and
   `/DecodeParms` are rejected at this explicitly unfiltered boundary.
 - Xref-stream row geometry must match the complete payload exactly. Big-endian fields implement
-  the type-zero default rule and preserve free, uncompressed, and compressed row semantics.
+  the type-zero default rule and preserve null, free, uncompressed, and compressed row semantics;
+  an unknown future type is retained as a null row rather than reviving an older definition.
   Physical payload geometry remains a source `ByteSpan`, but each row records only a relative
   `DecodedXrefSpan`; a decoded byte offset is never published as a physical source offset. Decoded
   bytes, entries, `/Index` pairs, field widths, and allocator-reported retained entry capacity are
   independently bounded with fallible allocation and cooperative cancellation.
+- The pure revision composer consumes primary candidates from newest to oldest. It binds every
+  primary and supplement to one complete `SourceSnapshot`, requires exact backward `/Prev` links,
+  nondecreasing `/Size`, unique in-range anchors, a complete traditional base but sparse updates,
+  and `Prev < XRefStm < current startxref` for traditional hybrid updates. Primary xref-stream
+  candidates prove a typed self entry at their own anchor; hybrid anchors may be defined by the
+  current table or supplement. Supplemental `/Prev` is retained but never drives the primary chain.
+- Lookup checks the current primary before its hybrid supplement and only then visits the older
+  revision. A free or null winning row hides every older definition. A newest trailer root must
+  resolve to a live generation-compatible row and cannot become visible only through the current
+  hybrid supplement. Composition bounds revisions, primary-plus-supplement sections, total rows,
+  retained vector capacity, and cancellation loops. These are candidate invariants, not proof of
+  source acquisition, filter output, object headers, object-stream contents, or resolver state.
 - Missing bytes are parser control flow. Byte acquisition is expressed through the synchronous
   `ByteSource` polling contract; Pending returns the ticket, canonical missing ranges, and caller
   checkpoint without charging parse work. Retryable work restarts only from explicit tail or table
@@ -111,13 +129,20 @@ and redacted section diagnostics. A `tools/quality` integration test runs this j
 canonical generated PDF and feeds every in-use entry into the sibling object-framing job without
 adding a product dependency between the two crates.
 
-Decoded-xref-stream tests cover canonical free, uncompressed, and compressed rows; `/W` type
+Decoded-xref-stream tests cover canonical null, free, uncompressed, and compressed rows; `/W` type
 defaults; `/Index` object-number selection; malformed widths, index geometry, row types, and exact
 payload length; unsupported filter metadata; separate source and decoded error coordinates;
 source identity/geometry mismatch; cancellation; stable recovery policy; equality and one-less
 decoded-byte and retained-capacity limits; and invalid limit profiles. These are component tests
 over already-decoded payload bytes, not a Range, stream-framing, filter-decode, or revision-chain
 E2E.
+
+Revision-chain tests cover traditional, primary-stream, and hybrid candidate layers; exact table,
+supplement, and older-revision lookup order; newer replacement, free, and null masking; stream
+self anchors; ignored supplemental `/Prev`; strict primary `/Prev`, anchor, `/Size`, entry, source,
+and root geometry; complete traditional-base versus sparse-update shape; equality and one-less
+revision/section/entry/retained-capacity limits; cancellation; and stable recovery policy. They do
+not acquire or decode any xref section and are not a strict-open or document-service E2E.
 
 `core/xref::repository_policy` scans product source for forbidden filesystem, network,
 async-runtime, and external-engine tokens and verifies that the crate depends only on
@@ -130,12 +155,13 @@ slice.
 - The resumable open profile supports one strict traditional xref table only. The decoded
   xref-stream table primitive is not wired into that job: containing-object acquisition and
   framing, direct or indirect `/Length` validation, filter decoding, pause/resume, `/XRefStm`
-  hybrid composition, `/Prev` traversal, object streams, multiple incremental updates, and
-  latest-wins revision precedence remain unimplemented.
+  and sparse traditional-update parsing remain unimplemented. The pure composer can validate
+  already-parsed hybrid and `/Prev` candidates with latest-wins lookup, but no proof-bearing job
+  currently produces those candidates or hands them to document services.
 - Entry offsets are structurally bounded. The separate object framing job validates all four
   supplied canonical targets in a test-only quality composition loop, but a product-owned physical
-  interval index, revision composition, reference resolution, and caching remain future
-  document/revision-layer work.
+  interval index for composed candidates, object-header validation across revisions, reference
+  resolution, object streams, and caching remain future document/revision-layer work.
 - Only known-length immutable snapshots are accepted. Unknown-length discovery, platform Range
   scheduling, request coalescing, cancellation delivery and ticket unsubscription, terminal
   completion/cancel/close arbitration, and browser/desktop E2E remain future runtime/platform
@@ -156,3 +182,6 @@ slice.
 - 2026-07-15: Added bounded validation for complete caller-supplied unfiltered decoded
   xref-stream tables with distinct decoded coordinates and stable recovery policy; acquisition,
   decoding, and revision composition remain outside this slice.
+- 2026-07-15: Added bounded pure composition for already-parsed traditional, primary-stream, and
+  hybrid revision candidates, including null/free masking and strict lookup precedence; parsing,
+  proof-bearing acquisition, object resolution, and product integration remain outside this slice.

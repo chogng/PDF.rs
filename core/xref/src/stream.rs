@@ -142,7 +142,7 @@ pub enum XrefStreamErrorCode {
     InvalidIndex,
     /// Payload length does not exactly match `/W` and `/Index` geometry.
     InvalidPayloadLength,
-    /// One decoded row has an unknown type or an out-of-range field.
+    /// One decoded row has an out-of-range field.
     InvalidEntry,
     /// Deterministic work or retained capacity exceeded its ceiling.
     ResourceLimit,
@@ -374,6 +374,11 @@ impl DecodedXrefSpan {
 /// Semantic payload of one xref-stream row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum XrefStreamEntryKind {
+    /// An unknown future entry type interpreted as a null reference.
+    Null {
+        /// Encoded entry type retained for diagnostics and future profiles.
+        encoded_type: u64,
+    },
     /// A free entry.
     Free {
         /// Next object number in the free chain.
@@ -753,12 +758,7 @@ pub fn parse_unfiltered_xref_stream(
                         )
                     })?,
                 },
-                _ => {
-                    return Err(XrefStreamError::at_decoded(
-                        XrefStreamErrorCode::InvalidEntry,
-                        decoded_start,
-                    ));
-                }
+                encoded_type => XrefStreamEntryKind::Null { encoded_type },
             };
             entries.push(XrefStreamEntry {
                 object_number,

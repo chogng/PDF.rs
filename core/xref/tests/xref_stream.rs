@@ -9,9 +9,9 @@ use pdf_rs_syntax::{
     SyntaxParser, SyntaxPoll,
 };
 use pdf_rs_xref::{
-    NeverCancelled, XrefRecoverability, XrefStream, XrefStreamEntryKind, XrefStreamError,
-    XrefStreamErrorCategory, XrefStreamErrorCode, XrefStreamLimitConfig, XrefStreamLimitKind,
-    XrefStreamLimits, parse_unfiltered_xref_stream,
+    NeverCancelled, RevisionEntry, RevisionEntryKind, XrefRecoverability, XrefStream,
+    XrefStreamEntryKind, XrefStreamError, XrefStreamErrorCategory, XrefStreamErrorCode,
+    XrefStreamLimitConfig, XrefStreamLimitKind, XrefStreamLimits, parse_unfiltered_xref_stream,
 };
 
 fn identity(byte: u8) -> SourceIdentity {
@@ -178,18 +178,24 @@ fn malformed_width_index_and_payload_geometry_are_distinct() {
 }
 
 #[test]
-fn unknown_and_out_of_range_rows_report_only_decoded_offsets() {
+fn unknown_rows_become_null_and_out_of_range_rows_use_only_decoded_offsets() {
     let mut unknown = canonical_payload();
     unknown[4] = 3;
-    let error = parse(
+    let stream = parse(
         b"<< /Type /XRef /Size 3 /W [1 2 1] >>",
         &unknown,
         XrefStreamLimits::default(),
     )
-    .unwrap_err();
-    assert_eq!(error.code(), XrefStreamErrorCode::InvalidEntry);
-    assert_eq!(error.source_offset(), None);
-    assert_eq!(error.decoded_offset(), Some(4));
+    .unwrap();
+    assert_eq!(
+        stream.entries()[1].kind(),
+        XrefStreamEntryKind::Null { encoded_type: 3 }
+    );
+    assert_eq!(stream.entries()[1].decoded_span().start(), 4);
+    assert_eq!(
+        RevisionEntry::from(stream.entries()[1]).kind(),
+        RevisionEntryKind::Null { encoded_type: 3 }
+    );
 
     let error = parse(
         b"<< /Type /XRef /Size 1 /W [1 8 1] >>",

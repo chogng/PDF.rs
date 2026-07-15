@@ -1,5 +1,5 @@
 schema = 1
-version = "0.34.0"
+version = "0.35.0"
 status = "active"
 
 [[feature]]
@@ -82,6 +82,18 @@ profile = "m1.decoded-xref-stream-table.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
 modules = ["core/xref"]
 tests = ["core/xref::xref_stream", "core/xref::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.xref-revision-chain"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.xref-revision-chain.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/xref"]
+tests = ["core/xref::revision_chain", "core/xref::xref_stream", "core/xref::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
