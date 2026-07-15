@@ -60,6 +60,7 @@ name = "pdf-rs-document"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
+ "pdf-rs-filters",
  "pdf-rs-object",
  "pdf-rs-syntax",
  "pdf-rs-xref",

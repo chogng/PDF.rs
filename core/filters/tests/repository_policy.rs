@@ -100,6 +100,20 @@ fn decoded_products_are_sealed_non_clone_and_identity_is_not_a_public_filter() {
             "sealed decoded-product fields must not be public"
         );
     }
+    for required in [
+        "pub fn retained_heap_bytes(&self)",
+        "pub fn retained_heap_upper_bound(max_filters: u16)",
+        "self.filters.capacity()",
+        "self.stages.capacity()",
+        "plan_retained_heap_bytes",
+        "DecodeLimitKind::FilterPlanBytes",
+    ] {
+        assert!(
+            model.contains(required),
+            "sealed plan retention evidence must use {required:?}"
+        );
+    }
+    assert!(!model.contains("fn retained_heap_bound("));
 }
 
 #[test]
@@ -163,8 +177,8 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml")).unwrap();
     let spec_map =
         fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml")).unwrap();
-    assert_eq!(top_level_version(&feature_map), Some("0.56.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.56.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.57.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.57.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.stream-filter-decode")
         .expect("basic stream-filter feature must exist");
@@ -197,10 +211,11 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         "charges block, Huffman, input, output, and cancellation work",
         "TIFF Predictor 2 over packed 1-, 2-, 4-, 8-, and 16-bit samples",
         "every PNG predictor value at or above 10 through row tags 0 through 4",
-        "The object and xref layers do not yet",
+        "The opt-in `OpenSourceXrefStreamJob` and `OpenSourceRevisionChainJob` paths now construct",
+        "Object streams do not yet construct or consume this proof",
         "LZW, non-predictor decode parameters",
-        "object/xref integration",
-        "feature is PLANNED",
+        "filtered object-stream integration",
+        "Every affected feature remains PLANNED",
         "does not claim general stream support or M1 exit",
         "status = \"partial\"",
     ] {

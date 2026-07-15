@@ -59,7 +59,9 @@ ISO/O0 conformance claim.
   The successful attestation retains the complete `SourceSnapshot`, explicit `SourceIdentity`,
   owner `ObjectRef`, dictionary span, encoded span and physical slice, canonical plan, profile,
   validated limits, fuel schedule and consumption, cumulative output, peak retained capacity, and
-  final decoded length.
+  final decoded length. It also records canonical-plan heap retention from the actual capacities
+  of both long-lived `Vec<StreamFilter>` and `Vec<FilterStage>` allocations, separately from output
+  capacity so downstream owners can add each allocation exactly once.
 - The public `StreamFilter` enum contains only the four implemented canonical filters. An empty
   plan selects a private identity copy path. The non-standard PDF name `Identity`, abbreviated
   names, and unknown names return source-redacted `UnsupportedFilter`; there is no external-engine
@@ -118,6 +120,15 @@ ISO/O0 conformance claim.
   are charged simultaneously; the successful attestation records the observed peak. The original
   physical `ByteSlice` backing remains charged by `RangeStore` and is not double-counted as filter
   output capacity.
+- `FilterPlan::retained_heap_bytes` uses checked platform-size conversion, multiplication, and
+  addition over both actual vector capacities. `FilterPlan::retained_heap_upper_bound` is the
+  single public derivation of the corresponding `max_filters` and type-width ceiling for parent
+  pre-admission. Invalid filter ceilings are configuration errors; conversion or arithmetic
+  overflow is an internal invariant failure. Constructors reject allocator capacity beyond the
+  fixed hard-filter-count type-width bound, and `decode_stream` rechecks the actual capacity against
+  the request's `max_filters`-derived `FilterPlanBytes` resource bound before codec work. Constructor-local
+  canonicalization vectors do not survive in `DecodedStream` and therefore are not publication
+  retention; their element counts remain bounded by the same hard filter-count ceiling.
 - Decoded positions use `DecodedOffset` and `DecodedRange` only. Physical `ByteSpan` values are
   retained solely for the dictionary and encoded source evidence; no decoded byte is assigned a
   fabricated physical location.

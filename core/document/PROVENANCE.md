@@ -20,12 +20,17 @@ and final attestation without publishing any intermediate typestate.
 `OpenSourceXrefStreamJob` is a separate partial M1 acquisition primitive for an already-classified
 stream-object anchor. It frames that exact indirect object, accepts only direct `/Length`, requests
 the exact encoded payload from the same immutable snapshot, validates the declared terminal
-boundary, and publishes the existing unfiltered `XrefStream` only inside a non-cloneable wrapper
-that also retains the complete framed container.
-`OpenSourceRevisionChainJob` is the proof-preserving parent for the unfiltered direct-Length
-profile. It discovers the final marker, classifies each exact primary anchor, acquires traditional
-or stream primaries plus optional hybrid supplements, follows strict backward `/Prev` links, and
-calls the existing pure newest-to-oldest composer only after every raw source proof is retained.
+boundary, and publishes the parsed `XrefStream` only inside a non-cloneable wrapper that also
+retains the complete framed container. The compatibility constructor remains explicitly
+unfiltered; `new_with_decode_limits` additionally accepts strict direct `/Filter` and `/DecodeParms`
+metadata, passes the exact `ByteSlice` through `pdf-rs-filters`, and retains the sealed
+`DecodedStream` proof beside the semantic table.
+`OpenSourceRevisionChainJob` is the proof-preserving parent for the direct-Length profile. Its
+compatibility constructor remains unfiltered, while its opt-in decode constructor pre-admits and
+composes filtered stream sections. It discovers the final marker, classifies each exact primary
+anchor, acquires traditional or stream primaries plus optional hybrid supplements, follows strict
+backward `/Prev` links, and calls the existing pure newest-to-oldest composer only after every raw
+source and optional decode proof is retained.
 Its move-only result keeps the final marker, every classified anchor, every original parsed
 section, and the composed chain without publicly lending the cloneable naked `RevisionChain`.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
@@ -33,11 +38,12 @@ iteratively follow a top-level direct-reference chain, or validate a strict Cata
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
 access boundary.
 
-The crate performs no file, network, data callback, async-runtime, stream decoding, general object
-graph traversal, or caching. Its first resolver slice follows only whole-object reference aliases;
-an independent revision-aware slice can frame one effective uncompressed definition, resolve an
-uncompressed direct-integer stream `/Length` dependency, and bind one predecoded object-stream
-entry to its latest-wins compressed xref row from an already-composed revision chain;
+The crate performs no file, network, data callback, async-runtime, general object graph traversal,
+or caching. Its only owned stream-decoding composition is the opt-in source xref-stream boundary;
+other document streams remain opaque. Its first resolver slice follows only whole-object reference
+aliases; an independent revision-aware slice can frame one effective uncompressed definition,
+resolve an uncompressed direct-integer stream `/Length` dependency, and bind one predecoded
+object-stream entry to its latest-wins compressed xref row from an already-composed revision chain;
 the separate page-count slice interprets only Catalog and Page/Pages structural fields, while the
 outline slice interprets only the optional Catalog `Outlines` reference and strict linked outline
 dictionaries reachable from it. Neither publishes page handles, inherited resources, a reusable
@@ -63,6 +69,9 @@ semantic responsibilities.
 - [RPE-ARCH-001, sections 4.3-4.5 and 5.4](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires one-way core dependencies, revision identity, reverse xref composition, and validation
   of offset, generation, object number, and object header before use.
+- [RPE-ARCH-001, section 5.6](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
+  requires independent stream-filter orchestration, decoded-coordinate separation, deterministic
+  output/fuel/memory budgets, and cooperative cancellation.
 - [RPE-ARCH-001, sections 5.8-5.9](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires a lazy document boundary and page-tree protection against cycles, duplicate children,
   false counts, excessive depth, and non-Page/Pages objects.
@@ -86,12 +95,13 @@ semantic responsibilities.
   entry boundaries. The revision-aware slice binds already-validated unfiltered object streams but
   does not acquire or filter-decode their payloads. The same authorized snapshot and SHA-256 above
   apply.
-- [ISO 32000-1:2008, 7.5.8](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+- [ISO 32000-1:2008, 7.4 and 7.5.8](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines cross-reference stream dictionaries, entries, and the requirement that a primary stream
-  identify its own uncompressed container. The source-acquisition slice implements exact unfiltered
-  direct-Length framing and primary self-entry validation; hybrid ownership may instead be proved by
-  its traditional primary during later composition. The same authorized snapshot and SHA-256 above
-  apply.
+  identify its own uncompressed container, together with filter arrays and per-filter decode
+  parameters. The source-acquisition slice implements exact direct-Length framing, strict direct
+  filter metadata, foundational decoding with Flate predictor parameters, and primary self-entry
+  validation; hybrid ownership may instead be proved by its traditional primary during later
+  composition. The same authorized snapshot and SHA-256 above apply.
 - [ISO 32000-1:2008, 7.7.2 and 12.3.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines the Catalog's optional indirect `Outlines` entry and the outline root/item dictionaries,
   linked-list topology, text titles, targets, and signed visible-item counts used by the strict
@@ -111,7 +121,7 @@ repair or publish partially attested state.
 
 # Algorithms and derivations
 
-## Source-framed unfiltered xref streams
+## Source-framed xref streams
 
 - The constructor receives the complete classified anchor geometry rather than caller payload
   bytes. `IndirectObjectTarget::at_xref_stream_anchor` distinguishes primary geometry from a hybrid
@@ -129,30 +139,51 @@ repair or publish partially attested state.
 - The final transition defensively rechecks snapshot, explicit xref-stream target kind, container
   reference, anchor, upper bound, owning revision anchor, header/object/end-object containment,
   direct claim, dictionary source, and exact payload span. It passes only that source-owned
-  `ByteSlice` to `parse_unfiltered_xref_stream`; caller-provided payload bytes never become proof.
+  `ByteSlice` to either `parse_unfiltered_xref_stream` or the sealed decode boundary;
+  caller-provided payload bytes never become proof. The filtered path accepts a unique direct
+  `/Filter` name or nonempty direct-name array and a unique direct `/DecodeParms` null, dictionary,
+  or equal-length array of null/dictionaries. It rejects duplicates, references, array-length
+  mismatches, unknown parameter keys, and noninteger predictor fields before decoding. Filter names
+  are canonicalized by `pdf-rs-filters`; Flate predictor defaults and explicit `Predictor`, `Colors`,
+  `BitsPerComponent`, and `Columns` remain in the sealed plan. A filtered direct `/Length 0` is
+  reported as `UnsupportedEmptyFilteredPayload`: its filter metadata is not called malformed, but
+  the current physical `ByteSlice` decode boundary cannot represent an empty Range. Compatibility
+  unfiltered empty streams continue to reach the xref semantic parser under their existing policy.
+- `DecodeRequest` binds the source snapshot, container, exact dictionary span, exact encoded span,
+  exact source-owned `ByteSlice`, canonical plan, strict profile, and complete decode limits.
+  `parse_decoded_xref_stream` runs only after successful decoding and receives only decoded-relative
+  bytes; the physical encoded span remains the table's source geometry. The move-only result retains
+  the complete `DecodedStream` and `DecodeAttestation`, so no naked semantic xref proof can outlive
+  its raw framing and optional decoding evidence.
 - A primary stream must contain one matching uncompressed self row at its exact anchor and
   generation. A hybrid supplement may omit that row because the owning traditional primary can
   define it, but any self row it does contain must still be exact. The non-cloneable
-  `SourceAcquiredXrefStream` retains the complete framed container, parsed table, object work,
-  exact payload-read accounting, combined retained-proof bytes, and xref-stream stats. Public
-  queries expose only scalar metadata and borrowed rows.
+  `SourceAcquiredXrefStream` retains the complete framed container, optional sealed decoded proof,
+  parsed table, object work, exact payload-read accounting, decoder work/fuel/retention accounting,
+  combined retained-proof bound, and xref-stream stats. Public queries expose only scalar metadata,
+  borrowed decoder evidence, and borrowed rows.
   The wrapper does not publicly lend the cloneable naked `XrefStream`; a crate-private borrow
   remains available to the future proof-preserving mixed-revision coordinator.
 - Unfiltered decoded length is capped before the exact payload Range request by both the object
-  stream-byte ceiling and the xref decoded-byte ceiling. The payload `ByteSlice` is transient and
-  is dropped before publication. Ready retained proof has no variable child fan-out: it is exactly
-  one framed dictionary plus one xref entry vector, each already independently bounded. Their
-  checked actual sum is retained in stats and rechecked against the derived sum of syntax-owned,
-  syntax-container, and xref-entry ceilings, so this fixed two-child composition needs no separate
-  caller-supplied aggregate profile.
+  stream-byte ceiling and the xref decoded-byte ceiling. Filtered encoded length is instead capped
+  by the object stream-byte and decoder input ceilings; filter count, per-layer output, cumulative
+  output, final output, retained capacity, fuel, and cancellation interval remain independently
+  enforced by the decoder profile. The unfiltered payload `ByteSlice` is transient. A filtered
+  result retains its exact encoded `ByteSlice` inside the decoder attestation and conservatively
+  charges decoder peak output capacity plus actual filter-plan heap capacity in addition to
+  framed-dictionary and xref-entry bounds, without counting either decoder allocation twice.
+  The metadata canonicalizer's temporary name, parameter, and stage vectors are hard-bounded by
+  `max_filters` and dropped before successful publication, so they are not included in ready-proof
+  retention. Every checked sum is revalidated against the corresponding syntax, xref, and optional
+  decoder ceilings before publication.
 - `SourceXrefStreamError` does not route failures through `DocumentError`. It preserves complete
-  lower `ObjectError`, `XrefStreamError`, or `SourceError` values and has stable policy for the
-  acquisition-only checks. Cancellation and source change are terminal, a successful one-shot job
-  rejects replay, and no source bytes appear in diagnostics or debug output.
-- This slice does not decode filters, resolve indirect `/Length`, discover or follow `/Prev`, acquire
-  a traditional primary or `/XRefStm` partner, compose revision precedence, publish a revision
-  chain, integrate strict-open or repaired services, schedule object streams, or provide Session
-  ownership. It is therefore partial M1 evidence rather than a source revision or M1 exit.
+  lower `ObjectError`, `DecodeError`, `XrefStreamError`, or `SourceError` values and has stable
+  policy for the acquisition-only checks. Cancellation and source change are terminal, a successful
+  one-shot job rejects replay, and no source bytes appear in diagnostics or debug output.
+- This slice does not resolve indirect `/Length`, discover or follow `/Prev`, acquire a traditional
+  primary or `/XRefStm` partner, compose revision precedence, publish a revision chain, integrate
+  strict-open or repaired services, decode object streams, or provide Session ownership. It is
+  therefore partial M1 evidence rather than a source revision or M1 exit.
 
 ## Source-acquired mixed revision chains
 
@@ -175,7 +206,9 @@ repair or publish partially attested state.
   scalar root/latest-wins lookup and borrowed raw proof wrappers.
 - Before polling each child, the parent admits the complete geometric worst-case read/parse work
   that child can perform: exact anchor bytes, bounded exponential tail/section windows, or staged
-  object windows plus the largest permitted payload. The active reservation remains held across
+  object windows plus the largest permitted payload. In opt-in filtered mode, stream parse admission
+  additionally includes encoded decoder input, cumulative layer output, and the final decoded bytes
+  reparsed by the xref semantic layer. The active reservation remains held across
   `Pending` replay and is released only after terminal child return, so the aggregate ceiling is not
   a post-work observation. Parent stats separately aggregate lower reported work without double
   charging unresolved replays and retain admission high-water marks.
@@ -184,13 +217,15 @@ repair or publish partially attested state.
   traditional proof reserves its maximum physical section span, the complete configured xref-entry
   count at fixed per-entry width, and configured syntax-owned/container ceilings because the lower
   section does not expose trailer or entry-vector capacity accounting. Stream children reserve the
-  complete lower syntax/xref retained ceilings before polling and commit only their checked lower
-  metric. Candidate and parent vectors use allocator-reported capacities. Every checked addition
-  and allocation can fail before work or publication.
-- This coordinator supports only unfiltered direct-Length xref streams. It does not decode filters,
-  resolve indirect xref-stream Length, invoke R1 repair, attest the resulting object geometry,
-  schedule object-stream decoding, provide page or outline services, or own a Range store,
-  scheduler, or Session. It is a source-acquisition component and does not establish M1 exit.
+  complete lower syntax/xref, optional decoder output-capacity ceiling, and worst canonical-plan
+  heap returned by the filters crate's checked `FilterPlan::retained_heap_upper_bound` API before
+  polling, then commit only their checked lower metric. Candidate and parent vectors use allocator-reported
+  capacities. Every checked addition and allocation can fail before work or publication.
+- This coordinator supports unfiltered direct-Length xref streams through the compatibility
+  constructor and strict foundational filtered xref streams through the explicit decode
+  constructor. It does not resolve indirect xref-stream Length, invoke R1 repair, attest the
+  resulting object geometry, schedule object-stream decoding, provide page or outline services, or
+  own a Range store, scheduler, or Session. It is a source-acquisition component and does not establish M1 exit.
 
 ## Strict base-revision opening
 
@@ -619,10 +654,10 @@ claim in this slice.
 
 # Dependencies and generated data
 
-The only dependencies are the in-repository `pdf-rs-bytes`, `pdf-rs-syntax`, `pdf-rs-xref`, and
-`pdf-rs-object` crates. The PDFDocEncoding match table is manually encoded from the hash-pinned
-normative snapshot; it is not generated data. There are no development dependencies, platform
-I/O APIs, external PDF engines, or async runtimes.
+The only dependencies are the in-repository `pdf-rs-bytes`, `pdf-rs-filters`, `pdf-rs-syntax`,
+`pdf-rs-xref`, and `pdf-rs-object` crates. The PDFDocEncoding match table is manually encoded from
+the hash-pinned normative snapshot; it is not generated data. There are no development
+dependencies, platform I/O APIs, external PDF engines, or async runtimes.
 
 # Tests
 
@@ -631,16 +666,20 @@ same-job context validation, reverse physical Range delivery, unchanged `Pending
 charging, xref and document error preservation, cancellation in both xref and attestation phases,
 snapshot mismatch, cumulative stats, and stable successful and failed terminals.
 Source-xref-stream tests cover primary and hybrid geometry, exact direct Length and caller bounds,
-indirect-Length and filtered-stream Unsupported policy, malformed Type/container/self evidence,
-single-ticket Pending replay with boundary bytes delivered before payload bytes, cancellation,
-source change, lower byte-source failure preservation, stable terminal replay, and object/xref
-size and work limits.
+compatibility filtered-stream Unsupported policy, Flate decoding, Flate predictor parameters,
+filter arrays with matching parameter arrays, exact encoded/decoded proof retention, duplicate,
+unknown, indirect, and mismatched filter metadata, decoder cancellation/output/input limits,
+malformed Type/container/self evidence, single-ticket Pending replay with boundary bytes delivered
+before payload bytes, source change, lower byte-source failure preservation, stable terminal replay,
+and object/xref size and work limits.
 Source-revision-chain tests cover traditional, primary-stream, hybrid, and two-revision `/Prev`
 acquisition; exact newest/older/hybrid upper bounds; raw proof retention and latest-wins lookup;
-single-ticket Pending replay; cancellation, source change, stable terminal replay, strict backward
-geometry, pairwise checkpoint rejection, parent revision and conservative retained-bound limits,
-stream-child read/parse/retained exact-and-one-less pre-admission without a rejected child poll,
-bounded sparse replay through final publication, and complete lower xref error preservation.
+strict backward `/Prev` links; single-ticket Pending replay; cancellation, source change, stable
+terminal replay, geometry and pairwise checkpoint rejection, parent revision and conservative
+retained-bound limits, stream-child read/parse/retained exact-and-one-less pre-admission without a
+rejected child poll,
+filtered decode/output/retention pre-admission, bounded sparse replay through final publication,
+and complete lower xref error preservation.
 Revision-resolver tests cover nearest cross-revision anchors, primary and hybrid-supplement
 provenance, primary target plus supplement-only indirect Length, supplement self-container bounds,
 older effective revision bounds, latest free/null/compressed/generation terminal states, primary
@@ -706,9 +745,9 @@ first-pass, and final-attestation phases without repeated charging.
 
 - The product strict-open path still accepts only one traditional base revision. A separate
   already-composed-chain resolver implements latest-wins uncompressed lookup and binds validated
-  unfiltered object streams. The new source coordinator acquires unfiltered direct-Length `/Prev`
-  and `/XRefStm` chains, but filtered or indirect-Length xref streams, product attestation of that
-  chain, object-stream scheduling/ownership, and service integration remain unsupported.
+  unfiltered object streams. The source coordinator can opt into foundational filtered
+  direct-Length `/Prev` and `/XRefStm` chains, but indirect-Length xref streams, product attestation
+  of that chain, object-stream scheduling/ownership, and service integration remain unsupported.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
@@ -793,3 +832,8 @@ first-pass, and final-attestation phases without repeated charging.
 - 2026-07-15: Added complete unfiltered direct-Length traditional, primary-stream, hybrid, and
   incremental source-chain acquisition with exact upper bounds, one active Pending, conservative
   retained-proof admission, raw proof ownership, and move-only composed publication.
+- 2026-07-15: Added opt-in strict direct filtered xref-stream acquisition with exact encoded
+  `ByteSlice` attestation, Flate predictor parameters, decoded semantic parsing, structured decoder
+  errors, and parent-chain decode/output/retention pre-admission while preserving unfiltered APIs.
+- 2026-07-15: Closed filtered xref-stream plan-retention accounting with actual-capacity evidence,
+  checked parent pre-admission, and an explicit unsupported policy for empty physical payloads.

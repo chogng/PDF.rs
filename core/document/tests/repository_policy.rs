@@ -36,6 +36,7 @@ fn product_document_core_has_only_approved_sibling_dependencies_and_no_platform_
         dependency_body,
         [
             r#"pdf-rs-bytes = { path = "../bytes" }"#,
+            r#"pdf-rs-filters = { path = "../filters" }"#,
             r#"pdf-rs-syntax = { path = "../syntax" }"#,
             r#"pdf-rs-xref = { path = "../xref" }"#,
             r#"pdf-rs-object = { path = "../object" }"#,
@@ -133,6 +134,9 @@ fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
         "OpenObjectEnvelopeJob",
         "OpenStreamBoundaryJob",
         "parse_unfiltered_xref_stream",
+        "parse_decoded_xref_stream",
+        "DecodeRequest::new",
+        "decoded_proof: Option<DecodedStream>",
         "PayloadState::Missing",
         "ReadRequest::new",
         "SourceAcquiredXrefStream",
@@ -140,10 +144,13 @@ fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
         "SourceXrefStreamErrorDetail::XrefStream",
         "SourceXrefStreamErrorDetail::Source",
         "SourceXrefStreamErrorCode::UnsupportedIndirectLength",
+        "SourceXrefStreamErrorCode::UnsupportedEmptyFilteredPayload",
         "IndirectObjectTargetKind::XrefStreamAnchor",
         "pub(crate) const fn xref_stream(&self) -> &XrefStream",
         "pub fn entries(&self) -> &[XrefStreamEntry]",
         "SourceXrefStreamLimitKind::PayloadBytes",
+        "plan_retained_heap_bytes",
+        "FilterPlan::retained_heap_upper_bound",
         "retained_proof_bytes",
     ] {
         assert!(
@@ -152,7 +159,9 @@ fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
         );
     }
     assert!(!source.contains("DocumentError"));
-    assert!(!source.contains("pdf_rs_filters"));
+    assert!(!source.contains("mem::size_of::<StreamFilter>()"));
+    assert!(!source.contains("mem::size_of::<FilterStage>()"));
+    assert!(source.contains("pdf_rs_filters"));
     assert!(!source.contains("Vec<u8>"));
     assert!(!source.contains("pub const fn xref_stream(&self) -> &XrefStream"));
     assert!(!source.contains("pub fn xref_stream(&self) -> &XrefStream"));
@@ -162,8 +171,10 @@ fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
         "single-waiting-target Range arbiter contract",
         "caller-provided payload bytes never become proof",
         "does not publicly lend the cloneable naked `XrefStream`",
-        "combined retained-proof bytes",
-        "does not decode filters",
+        "`DecodedStream` proof beside the semantic table",
+        "strict direct `/Filter` and `/DecodeParms`",
+        "temporary name, parameter, and stage vectors are hard-bounded",
+        "UnsupportedEmptyFilteredPayload",
         "discover or follow `/Prev`",
         "compose revision precedence",
         "partial M1 evidence",
@@ -182,8 +193,9 @@ fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
     for required in [
         "state = \"PLANNED\"",
         "profile = \"m1.source-xref-stream-acquisition.v1\"",
+        "RPE-ARCH-001/5.6",
         "RPE-ARCH-001/15.3/M1",
-        "modules = [\"core/document\", \"core/object\", \"core/xref\"]",
+        "modules = [\"core/document\", \"core/filters\", \"core/object\", \"core/xref\"]",
         "core/document::source_xref_stream",
         "fuzz_targets = []",
         "benchmarks = []",
@@ -240,7 +252,9 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
         "without publicly lending the cloneable naked `RevisionChain`",
         "admits the complete geometric worst-case read/parse work",
         "explicit conservative `retained_bound`",
-        "supports only unfiltered direct-Length xref streams",
+        "compatibility constructor remains unfiltered",
+        "opt-in decode constructor pre-admits",
+        "composes filtered stream sections",
         "does not establish M1 exit",
     ] {
         assert!(
@@ -259,8 +273,9 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
         "state = \"PLANNED\"",
         "profile = \"m1.source-revision-chain-acquisition.v1\"",
         "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/5.6",
         "RPE-ARCH-001/15.3/M1",
-        "modules = [\"core/document\", \"core/xref\", \"core/object\"]",
+        "modules = [\"core/document\", \"core/filters\", \"core/xref\", \"core/object\"]",
         "core/document::source_revision_chain",
         "fuzz_targets = []",
         "benchmarks = []",
@@ -271,7 +286,11 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
         );
     }
 
-    for requirement_id in ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1"] {
+    for requirement_id in [
+        "RPE-ARCH-001/5.4",
+        "RPE-ARCH-001/5.6",
+        "RPE-ARCH-001/15.3/M1",
+    ] {
         let requirement = record_with_id(&spec_map, "requirement", requirement_id)
             .expect("source revision-chain requirement record must exist");
         for required in [
@@ -288,7 +307,8 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
         .expect("M1 requirement record must exist");
     assert!(milestone.contains("status = \"partial\""));
-    assert!(milestone.contains("filtered or indirect-Length xref streams"));
+    assert!(milestone.contains("indirect-Length xref streams"));
+    assert!(milestone.contains("filtered object-stream integration"));
     assert!(milestone.contains("complete Session ownership remain open"));
 }
 
@@ -504,8 +524,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.56.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.56.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.57.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.57.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

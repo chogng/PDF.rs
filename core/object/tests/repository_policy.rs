@@ -125,8 +125,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.56.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.56.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.57.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.57.0"));
 
     let anchor_feature = record_with_id(&feature_map, "feature", "core.source-xref-anchor")
         .expect("source xref-anchor feature record must exist");
@@ -186,12 +186,15 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
     assert!(object_requirement.contains("DecodedObjectSpan"));
     assert!(object_requirement.contains("latest effective uncompressed container"));
     assert!(object_requirement.contains("object-stream scheduling and ownership"));
-    assert!(milestone.contains("connects those already-composed inputs"));
     assert!(milestone.contains(
-        "proof-preserving unfiltered direct-Length source revision-chain discovery and traversal"
+        "A bounded document resolver connects the already-composed revision and staged-object components"
     ));
-    assert!(milestone.contains("does not decode filtered or indirect-Length xref streams"));
-    assert!(milestone.contains("profiles remain PLANNED"));
+    assert!(milestone.contains(
+        "proof-bound filtered or unfiltered primary-stream, hybrid, and incremental chains"
+    ));
+    assert!(milestone.contains("indirect-Length xref streams"));
+    assert!(milestone.contains("filtered object-stream integration"));
+    assert!(milestone.contains("all affected profiles remain truthfully unpromoted"));
 
     let repair = record_with_id(&feature_map, "feature", "core.local-repair")
         .expect("local-repair feature record must exist");

@@ -10,6 +10,10 @@ use pdf_rs_document::{
     SourceXrefStreamErrorCode, SourceXrefStreamJobContext, SourceXrefStreamLimitKind,
     SourceXrefStreamPhase, SourceXrefStreamPoll, SourceXrefStreamRecoverability,
 };
+use pdf_rs_filters::{
+    DecodeErrorCode, DecodeLimitConfig, DecodeLimitKind, DecodeLimits, FilterDecodeParameters,
+    StreamFilter,
+};
 use pdf_rs_object::{
     IndirectObjectTargetKind, IndirectObjectValue, ObjectErrorCode, ObjectLimitConfig,
     ObjectLimitKind, ObjectLimits,
@@ -141,6 +145,128 @@ fn job(fixture: &Fixture) -> OpenSourceXrefStreamJob {
         XrefStreamLimits::default(),
     )
     .unwrap()
+}
+
+fn filtered_job_with(fixture: &Fixture, decode_limits: DecodeLimits) -> OpenSourceXrefStreamJob {
+    OpenSourceXrefStreamJob::new_with_decode_limits(
+        fixture.snapshot,
+        fixture.container,
+        fixture.startxref,
+        fixture.object_upper_bound,
+        fixture.revision_startxref,
+        context(),
+        ObjectLimits::default(),
+        SyntaxLimits::default(),
+        XrefStreamLimits::default(),
+        decode_limits,
+    )
+    .unwrap()
+}
+
+fn filtered_job(fixture: &Fixture) -> OpenSourceXrefStreamJob {
+    filtered_job_with(fixture, DecodeLimits::default())
+}
+
+fn empty_payload_error(filtered: bool, tag: u8) -> pdf_rs_document::SourceXrefStreamError {
+    let container = ObjectRef::new(9, 0).unwrap();
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let startxref = u64::try_from(bytes.len()).unwrap();
+    let filter = if filtered {
+        " /Filter /FlateDecode"
+    } else {
+        ""
+    };
+    bytes.extend_from_slice(
+        format!(
+            "9 0 obj\n<< /Type /XRef /Size 10 /W [1 2 1] /Index [9 1]{filter} /Length 0 >>\nstream\n"
+        )
+        .as_bytes(),
+    );
+    bytes.extend_from_slice(b"\nendstream\nendobj\n");
+    let object_upper_bound = u64::try_from(bytes.len()).unwrap();
+    bytes.extend_from_slice(b"xref\n0 1\n");
+    let source_snapshot = snapshot(u64::try_from(bytes.len()).unwrap(), tag);
+    let store = RangeStore::new(source_snapshot, Default::default()).unwrap();
+    let range = ByteRange::new(0, u64::try_from(bytes.len()).unwrap()).unwrap();
+    store
+        .supply(RangeResponse::new(source_snapshot, range, bytes).unwrap())
+        .unwrap();
+    let mut job = if filtered {
+        OpenSourceXrefStreamJob::new_with_decode_limits(
+            source_snapshot,
+            container,
+            startxref,
+            object_upper_bound,
+            startxref,
+            context(),
+            ObjectLimits::default(),
+            SyntaxLimits::default(),
+            XrefStreamLimits::default(),
+            DecodeLimits::default(),
+        )
+    } else {
+        OpenSourceXrefStreamJob::new(
+            source_snapshot,
+            container,
+            startxref,
+            object_upper_bound,
+            startxref,
+            context(),
+            ObjectLimits::default(),
+            SyntaxLimits::default(),
+            XrefStreamLimits::default(),
+        )
+    }
+    .unwrap();
+    failed(job.poll(&store, &NeverCancelSourceXrefStream))
+}
+
+fn run_filtered_ready(
+    fixture: &Fixture,
+) -> (
+    OpenSourceXrefStreamJob,
+    pdf_rs_document::SourceAcquiredXrefStream,
+) {
+    let store = supplied_store(fixture);
+    let mut job = filtered_job(fixture);
+    let ready = match job.poll(&store, &NeverCancelSourceXrefStream) {
+        SourceXrefStreamPoll::Ready(ready) => ready,
+        other => panic!("fully supplied filtered fixture did not complete: {other:?}"),
+    };
+    (job, ready)
+}
+
+fn zlib_stored(payload: &[u8]) -> Vec<u8> {
+    assert!(!payload.is_empty());
+    assert!(payload.len() <= usize::from(u16::MAX));
+    let length = payload.len() as u16;
+    let mut output = vec![0x78, 0x01, 0x01];
+    output.extend_from_slice(&length.to_le_bytes());
+    output.extend_from_slice(&(!length).to_le_bytes());
+    output.extend_from_slice(payload);
+    output.extend_from_slice(&adler32(payload).to_be_bytes());
+    output
+}
+
+fn adler32(bytes: &[u8]) -> u32 {
+    let mut first = 1_u32;
+    let mut second = 0_u32;
+    for byte in bytes {
+        first = (first + u32::from(*byte)) % 65_521;
+        second = (second + first) % 65_521;
+    }
+    (second << 16) | first
+}
+
+fn ascii_hex(bytes: &[u8]) -> Vec<u8> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = Vec::with_capacity(bytes.len() * 2 + 1);
+    for byte in bytes {
+        output.push(HEX[usize::from(byte >> 4)]);
+        output.push(HEX[usize::from(byte & 0x0f)]);
+    }
+    output.push(b'>');
+    output
 }
 
 fn run_ready(
@@ -842,6 +968,309 @@ fn lower_source_failure_and_size_work_limits_keep_original_details() {
     assert_eq!(
         object.limit().unwrap().kind(),
         ObjectLimitKind::EnvelopeBytes
+    );
+}
+
+#[test]
+fn filtered_flate_retains_exact_encoded_and_decoded_proof() {
+    let encoded = zlib_stored(&[1, 0, 9, 0]);
+    let fixture = fixture(
+        encoded.clone(),
+        |length| {
+            format!(
+                "<< /Type /XRef /Size 10 /W [1 2 1] /Index [9 1] /Filter /FlateDecode /DecodeParms null /Length {length} >>"
+            )
+        },
+        true,
+        0x91,
+    );
+    let (job, ready) = run_filtered_ready(&fixture);
+    assert_eq!(job.phase(), SourceXrefStreamPhase::Complete);
+    assert_eq!(ready.entries().len(), 1);
+    let decoded = ready.decoded_proof().expect("filtered proof is retained");
+    assert_eq!(decoded.bytes(), &[1, 0, 9, 0]);
+    let attestation = decoded.attestation();
+    assert_eq!(attestation.snapshot(), fixture.snapshot);
+    assert_eq!(attestation.owner(), fixture.container);
+    assert_eq!(
+        attestation.encoded_span().start(),
+        fixture.payload_range.start()
+    );
+    assert_eq!(
+        attestation.encoded_span().len(),
+        fixture.payload_range.len()
+    );
+    assert_eq!(attestation.encoded().bytes(), encoded);
+    let IndirectObjectValue::Stream(stream) = ready.framed_container().value() else {
+        panic!("filtered proof must retain its framed stream")
+    };
+    assert_eq!(attestation.dictionary_span(), stream.dictionary().span());
+    assert_eq!(
+        attestation.filter_plan().filters(),
+        &[StreamFilter::FlateDecode]
+    );
+    assert_eq!(
+        attestation.filter_plan().stages()[0].decode_parameters(),
+        FilterDecodeParameters::None
+    );
+    let decode = ready.stats().decode().expect("decoder stats are retained");
+    assert_eq!(decode.encoded_input_bytes(), fixture.payload_range.len());
+    assert_eq!(decode.decoded_bytes(), 4);
+    assert_eq!(
+        decode.plan_retained_heap_bytes(),
+        attestation.plan_retained_heap_bytes()
+    );
+    assert_eq!(
+        decode.work_bytes(),
+        decode.encoded_input_bytes() + decode.cumulative_output_bytes()
+    );
+    assert_eq!(
+        ready.stats().retained_proof_bytes(),
+        ready.framed_container().retained_heap_bytes()
+            + ready.stats().xref_stream().unwrap().retained_entry_bytes()
+            + decode.peak_retained_capacity_bytes()
+            + decode.plan_retained_heap_bytes()
+    );
+    assert!(!format!("{ready:?}").contains("[1, 0, 9, 0]"));
+}
+
+#[test]
+fn empty_filtered_payload_is_unsupported_without_changing_unfiltered_policy() {
+    let filtered = empty_payload_error(true, 0x9b);
+    assert_eq!(
+        filtered.code(),
+        SourceXrefStreamErrorCode::UnsupportedEmptyFilteredPayload
+    );
+    assert_eq!(
+        filtered.category(),
+        SourceXrefStreamErrorCategory::Unsupported
+    );
+    assert_eq!(
+        filtered.recoverability(),
+        SourceXrefStreamRecoverability::UseSupportedFeature
+    );
+    assert_eq!(filtered.diagnostic_id(), "RPE-SOURCE-XREF-0017");
+    assert!(filtered.decode_error().is_none());
+
+    let unfiltered = empty_payload_error(false, 0x9c);
+    assert_eq!(
+        unfiltered.code(),
+        SourceXrefStreamErrorCode::XrefStreamFailure
+    );
+    assert_eq!(
+        unfiltered.xref_stream_error().unwrap().code(),
+        XrefStreamErrorCode::InvalidPayloadLength
+    );
+}
+
+#[test]
+fn flate_predictor_and_filter_array_parameters_are_canonical() {
+    let predictor = fixture(
+        zlib_stored(&[0, 1, 0, 9, 0]),
+        |length| {
+            format!(
+                "<< /Type /XRef /Size 10 /W [1 2 1] /Index [9 1] /Filter /FlateDecode /DecodeParms << /Predictor 12 /Colors 1 /BitsPerComponent 8 /Columns 4 >> /Length {length} >>"
+            )
+        },
+        true,
+        0x92,
+    );
+    let (_, ready) = run_filtered_ready(&predictor);
+    assert_eq!(ready.decoded_proof().unwrap().bytes(), &[1, 0, 9, 0]);
+    let FilterDecodeParameters::Predictor(parameters) = ready
+        .decoded_proof()
+        .unwrap()
+        .attestation()
+        .filter_plan()
+        .stages()[0]
+        .decode_parameters()
+    else {
+        panic!("direct predictor dictionary must stay canonical in the proof")
+    };
+    assert_eq!(parameters.predictor(), 12);
+    assert_eq!(parameters.colors(), 1);
+    assert_eq!(parameters.bits_per_component(), 8);
+    assert_eq!(parameters.columns(), 4);
+
+    let encoded = ascii_hex(&zlib_stored(&[1, 0, 9, 0]));
+    let array = fixture(
+        encoded,
+        |length| {
+            format!(
+                "<< /Type /XRef /Size 10 /W [1 2 1] /Index [9 1] /Filter [/ASCIIHexDecode /FlateDecode] /DecodeParms [<<>> << /Predictor 1 /Columns 4 >>] /Length {length} >>"
+            )
+        },
+        true,
+        0x93,
+    );
+    let (_, ready) = run_filtered_ready(&array);
+    let decoded = ready.decoded_proof().unwrap();
+    assert_eq!(decoded.bytes(), &[1, 0, 9, 0]);
+    assert_eq!(
+        decoded.attestation().filter_plan().filters(),
+        &[StreamFilter::AsciiHexDecode, StreamFilter::FlateDecode]
+    );
+    assert_eq!(
+        decoded.attestation().filter_plan().stages()[0].decode_parameters(),
+        FilterDecodeParameters::None
+    );
+    assert!(matches!(
+        decoded.attestation().filter_plan().stages()[1].decode_parameters(),
+        FilterDecodeParameters::Predictor(parameters) if parameters.predictor() == 1
+    ));
+}
+
+#[test]
+fn filtered_metadata_rejects_duplicate_unknown_indirect_and_mismatched_values() {
+    let encoded = zlib_stored(&[1, 0, 9, 0]);
+    let cases = [
+        (
+            " /Filter /FlateDecode /Filter /FlateDecode",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /Filter 2 0 R",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /DecodeParms null",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /Filter /LZWDecode",
+            SourceXrefStreamErrorCode::DecodeFailure,
+            Some(DecodeErrorCode::UnsupportedFilter),
+        ),
+        (
+            " /Filter [/FlateDecode /ASCIIHexDecode] /DecodeParms [null]",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /Filter /FlateDecode /DecodeParms 2 0 R",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /Filter /FlateDecode /DecodeParms null /DecodeParms null",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /Filter /FlateDecode /DecodeParms << /EarlyChange 1 >>",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+        (
+            " /Filter /FlateDecode /DecodeParms << /Predictor 1 /Predictor 1 >>",
+            SourceXrefStreamErrorCode::InvalidFilterMetadata,
+            None,
+        ),
+    ];
+    for (index, (metadata, expected, decode)) in cases.into_iter().enumerate() {
+        let fixture = fixture(
+            encoded.clone(),
+            |length| {
+                format!(
+                    "<< /Type /XRef /Size 10 /W [1 2 1] /Index [9 1]{metadata} /Length {length} >>"
+                )
+            },
+            true,
+            0xa0 + u8::try_from(index).unwrap(),
+        );
+        let store = supplied_store(&fixture);
+        let error = failed(filtered_job(&fixture).poll(&store, &NeverCancelSourceXrefStream));
+        assert_eq!(error.code(), expected, "metadata case {index}");
+        assert_eq!(error.decode_error().map(|error| error.code()), decode);
+    }
+}
+
+#[test]
+fn filtered_decode_limits_cancellation_and_source_change_remain_structured() {
+    struct CancelOnProbe {
+        cancel_at: usize,
+        probes: AtomicUsize,
+    }
+
+    impl pdf_rs_document::SourceXrefStreamCancellation for CancelOnProbe {
+        fn is_cancelled(&self) -> bool {
+            self.probes.fetch_add(1, Ordering::AcqRel) + 1 >= self.cancel_at
+        }
+    }
+
+    let encoded = zlib_stored(&[1, 0, 9, 0]);
+    let fixture = fixture(
+        encoded.clone(),
+        |length| {
+            format!(
+                "<< /Type /XRef /Size 10 /W [1 2 1] /Index [9 1] /Filter /FlateDecode /Length {length} >>"
+            )
+        },
+        true,
+        0xb1,
+    );
+    let store = supplied_store(&fixture);
+
+    let input_limited = DecodeLimits::validate(DecodeLimitConfig {
+        max_input_bytes: u64::try_from(encoded.len()).unwrap() - 1,
+        ..DecodeLimitConfig::default()
+    })
+    .unwrap();
+    let mut limited = filtered_job_with(&fixture, input_limited);
+    let error = failed(limited.poll(&store, &NeverCancelSourceXrefStream));
+    assert_eq!(error.code(), SourceXrefStreamErrorCode::ResourceLimit);
+    assert_eq!(
+        error.limit().unwrap().kind(),
+        SourceXrefStreamLimitKind::PayloadBytes
+    );
+    assert_eq!(limited.stats().payload_read_attempts(), 0);
+
+    let output_limited = DecodeLimits::validate(DecodeLimitConfig {
+        max_final_output_bytes: 3,
+        ..DecodeLimitConfig::default()
+    })
+    .unwrap();
+    let error = failed(
+        filtered_job_with(&fixture, output_limited).poll(&store, &NeverCancelSourceXrefStream),
+    );
+    assert_eq!(error.code(), SourceXrefStreamErrorCode::DecodeFailure);
+    let decode = error.decode_error().unwrap();
+    assert_eq!(decode.code(), DecodeErrorCode::ResourceLimit);
+    assert_eq!(
+        decode.limit().unwrap().kind(),
+        DecodeLimitKind::FinalOutputBytes
+    );
+
+    let mut observed_decoder_cancel = false;
+    for cancel_at in 1..=2048 {
+        let cancellation = CancelOnProbe {
+            cancel_at,
+            probes: AtomicUsize::new(0),
+        };
+        let mut job = filtered_job(&fixture);
+        if let SourceXrefStreamPoll::Failed(error) = job.poll(&store, &cancellation)
+            && error.code() == SourceXrefStreamErrorCode::DecodeFailure
+            && error.decode_error().map(|error| error.code()) == Some(DecodeErrorCode::Cancelled)
+        {
+            observed_decoder_cancel = true;
+            break;
+        }
+    }
+    assert!(
+        observed_decoder_cancel,
+        "cancellation must cross the decoder boundary"
+    );
+
+    let foreign_snapshot = snapshot(u64::try_from(fixture.bytes.len()).unwrap(), 0xb2);
+    let foreign = RangeStore::new(foreign_snapshot, Default::default()).unwrap();
+    let error = failed(filtered_job(&fixture).poll(&foreign, &NeverCancelSourceXrefStream));
+    assert_eq!(error.code(), SourceXrefStreamErrorCode::SnapshotMismatch);
+    assert_eq!(
+        error.recoverability(),
+        SourceXrefStreamRecoverability::ReopenSource
     );
 }
 

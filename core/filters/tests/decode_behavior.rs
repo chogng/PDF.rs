@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pdf_rs_bytes::{
@@ -145,7 +146,64 @@ fn internal_identity_keeps_exact_physical_evidence_and_decoded_coordinates() {
     assert_eq!(evidence.cumulative_output_bytes(), 6);
     assert_eq!(evidence.decoded_length(), 6);
     assert!(evidence.peak_retained_capacity_bytes() >= 6);
+    assert_eq!(evidence.plan_retained_heap_bytes(), 0);
     assert!(!format!("{decoded:?}").contains("secret"));
+}
+
+#[test]
+fn successful_decode_attests_actual_filter_plan_vector_capacity() {
+    let decoded = decode(b"41>", &[StreamFilter::AsciiHexDecode]);
+    let evidence = decoded.attestation();
+    let plan = evidence.filter_plan();
+    let minimum = u64::try_from(plan.len()).unwrap()
+        * (u64::try_from(mem::size_of::<StreamFilter>()).unwrap()
+            + u64::try_from(mem::size_of::<pdf_rs_filters::FilterStage>()).unwrap());
+
+    assert_eq!(decoded.bytes(), b"A");
+    assert_eq!(
+        evidence.plan_retained_heap_bytes(),
+        plan.retained_heap_bytes().unwrap()
+    );
+    assert!(evidence.plan_retained_heap_bytes() >= minimum);
+}
+
+#[test]
+fn filter_plan_retained_upper_bound_is_checked_at_public_boundaries() {
+    let per_filter = u64::try_from(mem::size_of::<StreamFilter>()).unwrap()
+        + u64::try_from(mem::size_of::<pdf_rs_filters::FilterStage>()).unwrap();
+    assert_eq!(
+        FilterPlan::retained_heap_upper_bound(1).unwrap(),
+        per_filter
+    );
+    assert_eq!(
+        FilterPlan::retained_heap_upper_bound(32).unwrap(),
+        per_filter * 32
+    );
+    assert_eq!(
+        FilterPlan::retained_heap_upper_bound(0).unwrap_err().code(),
+        DecodeErrorCode::InvalidLimits
+    );
+    assert_eq!(
+        FilterPlan::retained_heap_upper_bound(33)
+            .unwrap_err()
+            .code(),
+        DecodeErrorCode::InvalidLimits
+    );
+
+    let decoded = decode_stream(
+        Fixture::new(b"41>")
+            .request(
+                plan(&[StreamFilter::AsciiHexDecode]),
+                configured(|config| config.max_filters = 1),
+            )
+            .unwrap(),
+        &NeverCancelled,
+    )
+    .unwrap();
+    assert!(
+        decoded.attestation().plan_retained_heap_bytes()
+            <= FilterPlan::retained_heap_upper_bound(1).unwrap()
+    );
 }
 
 #[test]

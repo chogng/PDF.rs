@@ -11,6 +11,7 @@ use pdf_rs_document::{
     SourceRevisionChainLimits, SourceRevisionChainPhase, SourceRevisionChainPoll,
     SourceRevisionPrimaryProof, SourceXrefStreamErrorCode,
 };
+use pdf_rs_filters::{DecodeLimitConfig, DecodeLimits, FilterPlan};
 use pdf_rs_object::{ObjectLimitConfig, ObjectLimits};
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{
@@ -118,6 +119,7 @@ fn filtered_primary_stream_fixture(tag: u8) -> Fixture {
     append_stream_entry(&mut payload, 0, 0, u16::MAX);
     append_stream_entry(&mut payload, 1, u32::try_from(root).unwrap(), 0);
     append_stream_entry(&mut payload, 1, u32::try_from(startxref).unwrap(), 0);
+    let payload = ascii_hex(&payload);
     bytes.extend_from_slice(
         format!(
             "2 0 obj\n<< /Type /XRef /Size 3 /Root 1 0 R /W [1 4 2] /Filter /ASCIIHexDecode /Length {} >>\nstream\n",
@@ -129,6 +131,17 @@ fn filtered_primary_stream_fixture(tag: u8) -> Fixture {
     bytes.extend_from_slice(b"\nendstream\nendobj\n");
     append_final_marker(&mut bytes, startxref);
     fixture(bytes, startxref, tag)
+}
+
+fn ascii_hex(bytes: &[u8]) -> Vec<u8> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = Vec::with_capacity(bytes.len() * 2 + 1);
+    for byte in bytes {
+        output.push(HEX[usize::from(byte >> 4)]);
+        output.push(HEX[usize::from(byte & 0x0f)]);
+    }
+    output.push(b'>');
+    output
 }
 
 fn hybrid_fixture(tag: u8) -> Fixture {
@@ -312,6 +325,55 @@ fn job_with(
 
 fn job(fixture: &Fixture) -> OpenSourceRevisionChainJob {
     job_with(fixture, context(), SourceRevisionChainLimits::default()).unwrap()
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "test helper preserves complete parent and decoder error evidence"
+)]
+fn filtered_job_with(
+    fixture: &Fixture,
+    limits: SourceRevisionChainLimits,
+) -> Result<OpenSourceRevisionChainJob, pdf_rs_document::SourceRevisionChainError> {
+    filtered_job_with_decode_limits(fixture, limits, DecodeLimits::default())
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "test helper preserves complete parent and decoder error evidence"
+)]
+fn filtered_job_with_decode_limits(
+    fixture: &Fixture,
+    limits: SourceRevisionChainLimits,
+    decode_limits: DecodeLimits,
+) -> Result<OpenSourceRevisionChainJob, pdf_rs_document::SourceRevisionChainError> {
+    OpenSourceRevisionChainJob::new_with_decode_limits(
+        fixture.snapshot,
+        context(),
+        limits,
+        XrefLimits::default(),
+        XrefAnchorLimits::default(),
+        ObjectLimits::default(),
+        SyntaxLimits::default(),
+        XrefStreamLimits::default(),
+        decode_limits,
+        RevisionLimits::default(),
+    )
+}
+
+fn run_filtered_ready(
+    fixture: &Fixture,
+) -> (
+    OpenSourceRevisionChainJob,
+    pdf_rs_document::SourceAcquiredRevisionChain,
+) {
+    let store = supplied_store(fixture);
+    let mut job = filtered_job_with(fixture, SourceRevisionChainLimits::default()).unwrap();
+    let ready = match job.poll(&store, &NeverCancelSourceRevisionChain) {
+        SourceRevisionChainPoll::Ready(ready) => ready,
+        other => panic!("fully supplied filtered source did not complete: {other:?}"),
+    };
+    (job, ready)
 }
 
 fn run_ready(
@@ -783,6 +845,92 @@ fn stream_child_admission_accepts_exact_and_rejects_one_less_before_stream_polli
         let source = PhaseCountingSource::new(&store);
         let limits = SourceRevisionChainLimits::validate(limits).unwrap();
         let mut constrained = job_with(&fixture, context(), limits).unwrap();
+        let error = failed(constrained.poll(&source, &NeverCancelSourceRevisionChain));
+        assert_eq!(error.code(), SourceRevisionChainErrorCode::ResourceLimit);
+        assert_eq!(error.limit().unwrap().kind(), expected);
+        assert_eq!(constrained.stats().stream_jobs(), 0);
+        assert_eq!(source.stream_polls(), 0);
+    }
+}
+
+#[test]
+fn filtered_stream_child_preadmits_decode_output_and_retention_bounds() {
+    let fixture = filtered_primary_stream_fixture(0xad);
+    let (_, ready) = run_filtered_ready(&fixture);
+    let stream = ready.proofs()[0]
+        .primary()
+        .stream()
+        .expect("filtered primary proof is retained");
+    assert!(stream.decoded_proof().is_some());
+    assert!(stream.stats().decode().is_some());
+    let measured = ready.stats();
+    let admitted = SourceRevisionChainLimitConfig {
+        max_total_read_bytes: measured.max_admitted_read_bytes(),
+        max_total_parse_bytes: measured.max_admitted_parse_bytes(),
+        max_retained_bound_bytes: measured.max_admitted_retained_bound_bytes(),
+    };
+    let decode_limits = DecodeLimits::default();
+    let plan_bound = FilterPlan::retained_heap_upper_bound(decode_limits.max_filters()).unwrap();
+    assert!(admitted.max_total_parse_bytes > measured.parse_bytes());
+    assert!(admitted.max_retained_bound_bytes > measured.retained_bound_bytes());
+    assert!(admitted.max_retained_bound_bytes >= plan_bound);
+
+    let one_filter_decode_limits = DecodeLimits::validate(DecodeLimitConfig {
+        max_filters: 1,
+        ..DecodeLimitConfig::default()
+    })
+    .unwrap();
+    let one_filter_store = supplied_store(&fixture);
+    let mut one_filter_job = filtered_job_with_decode_limits(
+        &fixture,
+        SourceRevisionChainLimits::default(),
+        one_filter_decode_limits,
+    )
+    .unwrap();
+    let one_filter_ready =
+        match one_filter_job.poll(&one_filter_store, &NeverCancelSourceRevisionChain) {
+            SourceRevisionChainPoll::Ready(ready) => ready,
+            other => panic!("one-filter admission did not complete: {other:?}"),
+        };
+    let one_filter_plan_bound =
+        FilterPlan::retained_heap_upper_bound(one_filter_decode_limits.max_filters()).unwrap();
+    assert_eq!(
+        measured
+            .max_admitted_retained_bound_bytes()
+            .checked_sub(one_filter_ready.stats().max_admitted_retained_bound_bytes()),
+        plan_bound.checked_sub(one_filter_plan_bound),
+        "parent admission must consume the filters-owned plan upper bound exactly"
+    );
+
+    let store = supplied_store(&fixture);
+    let exact_source = PhaseCountingSource::new(&store);
+    let exact_limits = SourceRevisionChainLimits::validate(admitted).unwrap();
+    let mut exact = filtered_job_with(&fixture, exact_limits).unwrap();
+    assert!(matches!(
+        exact.poll(&exact_source, &NeverCancelSourceRevisionChain),
+        SourceRevisionChainPoll::Ready(_)
+    ));
+    assert!(exact_source.stream_polls() > 0);
+
+    for (limits, expected) in [
+        (
+            SourceRevisionChainLimitConfig {
+                max_total_parse_bytes: admitted.max_total_parse_bytes - 1,
+                ..admitted
+            },
+            SourceRevisionChainLimitKind::ParseBytes,
+        ),
+        (
+            SourceRevisionChainLimitConfig {
+                max_retained_bound_bytes: admitted.max_retained_bound_bytes - 1,
+                ..admitted
+            },
+            SourceRevisionChainLimitKind::RetainedBoundBytes,
+        ),
+    ] {
+        let source = PhaseCountingSource::new(&store);
+        let limits = SourceRevisionChainLimits::validate(limits).unwrap();
+        let mut constrained = filtered_job_with(&fixture, limits).unwrap();
         let error = failed(constrained.poll(&source, &NeverCancelSourceRevisionChain));
         assert_eq!(error.code(), SourceRevisionChainErrorCode::ResourceLimit);
         assert_eq!(error.limit().unwrap().kind(), expected);

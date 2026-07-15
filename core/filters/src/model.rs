@@ -1,4 +1,5 @@
 use std::fmt;
+use std::mem;
 
 use pdf_rs_bytes::{ByteSlice, SourceIdentity, SourceSnapshot};
 use pdf_rs_syntax::{ByteSpan, ObjectRef};
@@ -72,10 +73,12 @@ impl FilterPlan {
             owned_filters.push(filter);
             stages.push(FilterStage::without_parameters(filter));
         }
-        Ok(Self {
+        let plan = Self {
             filters: owned_filters,
             stages,
-        })
+        };
+        plan.validate_retained_heap_limit(HARD_MAX_FILTERS)?;
+        Ok(plan)
     }
 
     /// Builds an ordered plan whose stages retain their canonical decode parameters.
@@ -108,10 +111,12 @@ impl FilterPlan {
             owned_stages.push(*stage);
             filters.push(stage.filter);
         }
-        Ok(Self {
+        let plan = Self {
             filters,
             stages: owned_stages,
-        })
+        };
+        plan.validate_retained_heap_limit(HARD_MAX_FILTERS)?;
+        Ok(plan)
     }
 
     /// Canonicalizes strict full PDF filter names in source order.
@@ -167,6 +172,71 @@ impl FilterPlan {
     pub fn is_empty(&self) -> bool {
         self.filters.is_empty()
     }
+
+    /// Returns allocator-visible heap bytes retained by the two canonical plan vectors.
+    ///
+    /// The evidence uses the actual `Vec` capacities for both filters and stages, not
+    /// their logical lengths. Inline `Vec` headers and constructor-local temporary
+    /// buffers are not heap storage retained by this plan. A platform-size conversion,
+    /// multiplication, or sum overflow is reported as [`DecodeErrorCode::InternalState`].
+    pub fn retained_heap_bytes(&self) -> Result<u64, DecodeError> {
+        retained_vec_bytes::<StreamFilter>(self.filters.capacity())?
+            .checked_add(retained_vec_bytes::<FilterStage>(self.stages.capacity())?)
+            .ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InternalState, None))
+    }
+
+    /// Returns the checked retained-heap upper bound for a filter-count ceiling.
+    ///
+    /// The bound covers the element storage of both canonical plan vectors at
+    /// `max_filters` capacity. Zero or a value above the implementation's hard filter
+    /// ceiling returns [`DecodeErrorCode::InvalidLimits`]; platform-size conversion,
+    /// multiplication, or addition overflow returns [`DecodeErrorCode::InternalState`].
+    /// Successful plans are checked against this bound before publication.
+    pub fn retained_heap_upper_bound(max_filters: u16) -> Result<u64, DecodeError> {
+        if max_filters == 0 || max_filters > HARD_MAX_FILTERS {
+            return Err(DecodeError::for_code(DecodeErrorCode::InvalidLimits, None));
+        }
+        let count = u64::from(max_filters);
+        u64::try_from(mem::size_of::<StreamFilter>())
+            .ok()
+            .and_then(|filter_width| count.checked_mul(filter_width))
+            .and_then(|filters| {
+                u64::try_from(mem::size_of::<FilterStage>())
+                    .ok()
+                    .and_then(|stage_width| count.checked_mul(stage_width))
+                    .and_then(|stages| filters.checked_add(stages))
+            })
+            .ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InternalState, None))
+    }
+
+    pub(crate) fn validate_retained_heap_limit(
+        &self,
+        max_filters: u16,
+    ) -> Result<u64, DecodeError> {
+        let limit = Self::retained_heap_upper_bound(max_filters)?;
+        let attempted = self.retained_heap_bytes()?;
+        if attempted > limit {
+            return Err(DecodeError::resource(
+                DecodeLimitKind::FilterPlanBytes,
+                limit,
+                0,
+                attempted,
+                None,
+            ));
+        }
+        Ok(attempted)
+    }
+}
+
+fn retained_vec_bytes<T>(capacity: usize) -> Result<u64, DecodeError> {
+    u64::try_from(capacity)
+        .ok()
+        .and_then(|count| {
+            u64::try_from(mem::size_of::<T>())
+                .ok()
+                .and_then(|width| count.checked_mul(width))
+        })
+        .ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InternalState, None))
 }
 
 /// One canonical stream-filter layer and its bound decode parameters.
@@ -520,6 +590,7 @@ pub struct DecodeAttestation {
     pub(crate) fuel_consumed: u64,
     pub(crate) cumulative_output_bytes: u64,
     pub(crate) peak_retained_capacity_bytes: u64,
+    pub(crate) plan_retained_heap_bytes: u64,
     pub(crate) decoded_length: u64,
 }
 
@@ -589,6 +660,14 @@ impl DecodeAttestation {
         self.peak_retained_capacity_bytes
     }
 
+    /// Returns actual heap capacity retained by the canonical filter plan.
+    ///
+    /// This excludes decoded output capacity, which is reported separately by
+    /// [`Self::peak_retained_capacity_bytes`].
+    pub const fn plan_retained_heap_bytes(&self) -> u64 {
+        self.plan_retained_heap_bytes
+    }
+
     /// Returns the final decoded byte length.
     pub const fn decoded_length(&self) -> u64 {
         self.decoded_length
@@ -615,6 +694,7 @@ impl fmt::Debug for DecodeAttestation {
                 "peak_retained_capacity_bytes",
                 &self.peak_retained_capacity_bytes,
             )
+            .field("plan_retained_heap_bytes", &self.plan_retained_heap_bytes)
             .field("decoded_length", &self.decoded_length)
             .finish()
     }

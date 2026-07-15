@@ -1,5 +1,5 @@
 schema = 1
-version = "0.56.0"
+version = "0.57.0"
 status = "active"
 
 [[feature]]
@@ -103,8 +103,8 @@ id = "core.source-xref-stream-acquisition"
 owner = "parser-security"
 state = "PLANNED"
 profile = "m1.source-xref-stream-acquisition.v1"
-clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
-modules = ["core/document", "core/object", "core/xref"]
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/document", "core/filters", "core/object", "core/xref"]
 tests = ["core/document::source_xref_stream", "core/document::repository_policy", "core/object::staged_length", "core/xref::xref_stream"]
 fuzz_targets = []
 benchmarks = []
@@ -115,8 +115,8 @@ id = "core.source-revision-chain-acquisition"
 owner = "parser-security"
 state = "PLANNED"
 profile = "m1.source-revision-chain-acquisition.v1"
-clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
-modules = ["core/document", "core/xref", "core/object"]
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/document", "core/filters", "core/xref", "core/object"]
 tests = ["core/document::source_revision_chain", "core/document::source_xref_stream", "core/xref::traditional_revision", "core/xref::revision_chain"]
 fuzz_targets = []
 benchmarks = []

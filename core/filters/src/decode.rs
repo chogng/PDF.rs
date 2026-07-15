@@ -67,6 +67,7 @@ pub fn decode_stream<C: DecodeCancellation + ?Sized>(
             None,
         ));
     }
+    let plan_retained_heap_bytes = plan.validate_retained_heap_limit(limits.max_filters)?;
 
     let schedule = profile.fuel_schedule();
     let mut budget = DecodeBudget::new(limits, schedule);
@@ -133,6 +134,7 @@ pub fn decode_stream<C: DecodeCancellation + ?Sized>(
         fuel_consumed: budget.fuel_consumed,
         cumulative_output_bytes: budget.cumulative_output_bytes,
         peak_retained_capacity_bytes: budget.peak_retained_capacity_bytes,
+        plan_retained_heap_bytes,
         decoded_length,
     };
     Ok(DecodedStream {

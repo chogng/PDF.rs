@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.56.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.56.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.57.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.57.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -1087,7 +1087,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "ticket failure",
         "never invoke parser code inline",
         "public run_one method is the only parser entry",
-        "every host ingress as queue-only work",
+        "keeps every host ingress parser-free",
         "without polling the parser or probing cancellation",
         "opaque move-only handoff",
         "same private source owner",
@@ -1109,7 +1109,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "runtime/session::repository_policy",
         "tools/quality::native_strict_open_runtime_loop",
         "Public run_one is its only parser entry",
-        "Host supply, snapshot observation, and failure ingress only queue work",
+        "Host supply, snapshot observation, and failure ingress never poll parser code",
         "a failure turn does not poll the parser or probe cancellation",
         "opaque move-only handoff",
         "same private source owner",

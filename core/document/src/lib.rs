@@ -20,12 +20,13 @@
 //! unauthenticated intermediate typestate.
 //! A separate source xref-stream job frames an already-classified primary or
 //! hybrid stream anchor, acquires its exact direct-Length payload, and retains
-//! the framed container with an unfiltered table proof. A parent source-chain
+//! the framed container with an unfiltered table proof or an opt-in sealed
+//! foundational-filter decode proof. A parent source-chain
 //! job discovers the final marker, classifies and acquires traditional,
 //! primary-stream, and hybrid sections newest-to-oldest, and publishes only
 //! after pure revision composition succeeds. Both jobs still reject indirect
-//! Length and filtered payloads, and neither integrates the chain into the
-//! strict attestation opener or a Session.
+//! Length, and neither integrates the chain into the strict attestation opener
+//! or a Session.
 //! An explicit local-repair planning surface can instead retain xref and
 //! object-offset proof, rebuild every effective interval atomically, and
 //! publish only an explicitly unauthenticated wrapper. A consuming sibling
@@ -132,9 +133,9 @@ pub use source_revision_chain::{
 };
 pub use source_xref_stream::{
     NeverCancelSourceXrefStream, OpenSourceXrefStreamJob, SourceAcquiredXrefStream,
-    SourceXrefStreamCancellation, SourceXrefStreamError, SourceXrefStreamErrorCategory,
-    SourceXrefStreamErrorCode, SourceXrefStreamJobContext, SourceXrefStreamLimit,
-    SourceXrefStreamLimitKind, SourceXrefStreamPhase, SourceXrefStreamPoll,
+    SourceXrefStreamCancellation, SourceXrefStreamDecodeStats, SourceXrefStreamError,
+    SourceXrefStreamErrorCategory, SourceXrefStreamErrorCode, SourceXrefStreamJobContext,
+    SourceXrefStreamLimit, SourceXrefStreamLimitKind, SourceXrefStreamPhase, SourceXrefStreamPoll,
     SourceXrefStreamRecoverability, SourceXrefStreamStats,
 };
 pub use strict_base_open::{

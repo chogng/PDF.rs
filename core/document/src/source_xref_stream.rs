@@ -8,17 +8,22 @@ use pdf_rs_bytes::{
     ResumeCheckpoint, SmallRanges, SourceError, SourceErrorCategory, SourceRecoverability,
     SourceSnapshot,
 };
+use pdf_rs_filters::{
+    DecodeCancellation, DecodeError, DecodeErrorCategory, DecodeLimits, DecodeProfile,
+    DecodeRecoverability, DecodeRequest, DecodedStream, FilterDecodeParameters, FilterPlan,
+    FilterStage, PredictorParameters, decode_stream,
+};
 use pdf_rs_object::{
     DeclaredStreamLength, IndirectObject, IndirectObjectTarget, IndirectObjectTargetKind,
     IndirectObjectValue, ObjectCancellation, ObjectEnvelopePoll, ObjectError, ObjectErrorCategory,
     ObjectJobContext, ObjectLimits, ObjectPoll, ObjectRecoverability, ObjectStats,
     OpenObjectEnvelopeJob, OpenStreamBoundaryJob,
 };
-use pdf_rs_syntax::{ByteSpan, ObjectRef, SyntaxLimits};
+use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfDictionary, SyntaxLimits, SyntaxObject};
 use pdf_rs_xref::{
     XrefCancellation, XrefRecoverability, XrefStream, XrefStreamEntry, XrefStreamEntryKind,
     XrefStreamError, XrefStreamErrorCategory, XrefStreamLimits, XrefStreamStats,
-    parse_unfiltered_xref_stream,
+    parse_decoded_xref_stream, parse_unfiltered_xref_stream,
 };
 
 /// Runtime identity, phase checkpoints, and priority for one source xref-stream job.
@@ -128,6 +133,14 @@ impl XrefCancellation for XrefCancellationAdapter<'_> {
     }
 }
 
+struct DecodeCancellationAdapter<'a>(&'a dyn SourceXrefStreamCancellation);
+
+impl DecodeCancellation for DecodeCancellationAdapter<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
 /// Stable machine-readable failure for source-framed xref-stream acquisition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceXrefStreamErrorCode {
@@ -151,6 +164,12 @@ pub enum SourceXrefStreamErrorCode {
     InvalidSelfEntry,
     /// Decoded xref-stream validation failed.
     XrefStreamFailure,
+    /// Filter or decode-parameter metadata is duplicated, indirect, or malformed.
+    InvalidFilterMetadata,
+    /// A filtered stream declares an empty physical payload unsupported by the decode boundary.
+    UnsupportedEmptyFilteredPayload,
+    /// Snapshot-bound stream decoding failed.
+    DecodeFailure,
     /// A payload or combined retained-proof budget was exceeded.
     ResourceLimit,
     /// The owning runtime cancelled acquisition.
@@ -164,9 +183,11 @@ pub enum SourceXrefStreamErrorCode {
 /// Acquisition-level resource dimension rejected before publishing proof.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceXrefStreamLimitKind {
-    /// Exact encoded bytes retained transiently for the unfiltered parser.
+    /// Exact encoded bytes admitted for unfiltered parsing or filtered decoding.
     PayloadBytes,
-    /// Combined framed-dictionary and parsed-entry bytes retained by the result.
+    /// Direct filter names admitted to the canonical decode plan.
+    FilterCount,
+    /// Combined framed-dictionary, decoder, and parsed-entry bound retained by the result.
     RetainedProofBytes,
 }
 
@@ -189,7 +210,7 @@ impl SourceXrefStreamLimit {
         self.limit
     }
 
-    /// Returns the rejected byte count.
+    /// Returns the rejected byte or entry count.
     pub const fn attempted(self) -> u64 {
         self.attempted
     }
@@ -240,6 +261,7 @@ enum SourceXrefStreamErrorDetail {
     None,
     Limit(SourceXrefStreamLimit),
     Object(ObjectError),
+    Decode(DecodeError),
     XrefStream(XrefStreamError),
     Source(SourceError),
 }
@@ -302,6 +324,20 @@ impl SourceXrefStreamError {
             dependency: None,
             offset: error.source_offset(),
             detail: SourceXrefStreamErrorDetail::XrefStream(error),
+        }
+    }
+
+    fn from_decode(error: DecodeError, container: ObjectRef, offset: u64) -> Self {
+        let (category, recoverability) = decode_policy(error);
+        Self {
+            code: SourceXrefStreamErrorCode::DecodeFailure,
+            category,
+            recoverability,
+            diagnostic_id: "RPE-SOURCE-XREF-0016",
+            container: Some(container),
+            dependency: None,
+            offset: Some(offset),
+            detail: SourceXrefStreamErrorDetail::Decode(error),
         }
     }
 
@@ -383,6 +419,7 @@ impl SourceXrefStreamError {
             SourceXrefStreamErrorDetail::Limit(limit) => Some(limit),
             SourceXrefStreamErrorDetail::None
             | SourceXrefStreamErrorDetail::Object(_)
+            | SourceXrefStreamErrorDetail::Decode(_)
             | SourceXrefStreamErrorDetail::XrefStream(_)
             | SourceXrefStreamErrorDetail::Source(_) => None,
         }
@@ -394,6 +431,19 @@ impl SourceXrefStreamError {
             SourceXrefStreamErrorDetail::Object(error) => Some(error),
             SourceXrefStreamErrorDetail::None
             | SourceXrefStreamErrorDetail::Limit(_)
+            | SourceXrefStreamErrorDetail::Decode(_)
+            | SourceXrefStreamErrorDetail::XrefStream(_)
+            | SourceXrefStreamErrorDetail::Source(_) => None,
+        }
+    }
+
+    /// Returns the complete lower decoder error when filtered decoding failed.
+    pub const fn decode_error(self) -> Option<DecodeError> {
+        match self.detail {
+            SourceXrefStreamErrorDetail::Decode(error) => Some(error),
+            SourceXrefStreamErrorDetail::None
+            | SourceXrefStreamErrorDetail::Limit(_)
+            | SourceXrefStreamErrorDetail::Object(_)
             | SourceXrefStreamErrorDetail::XrefStream(_)
             | SourceXrefStreamErrorDetail::Source(_) => None,
         }
@@ -406,6 +456,7 @@ impl SourceXrefStreamError {
             SourceXrefStreamErrorDetail::None
             | SourceXrefStreamErrorDetail::Limit(_)
             | SourceXrefStreamErrorDetail::Object(_)
+            | SourceXrefStreamErrorDetail::Decode(_)
             | SourceXrefStreamErrorDetail::Source(_) => None,
         }
     }
@@ -417,6 +468,7 @@ impl SourceXrefStreamError {
             SourceXrefStreamErrorDetail::None
             | SourceXrefStreamErrorDetail::Limit(_)
             | SourceXrefStreamErrorDetail::Object(_)
+            | SourceXrefStreamErrorDetail::Decode(_)
             | SourceXrefStreamErrorDetail::XrefStream(_) => None,
         }
     }
@@ -432,6 +484,7 @@ impl Error for SourceXrefStreamError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.detail {
             SourceXrefStreamErrorDetail::Object(error) => Some(error),
+            SourceXrefStreamErrorDetail::Decode(error) => Some(error),
             SourceXrefStreamErrorDetail::XrefStream(error) => Some(error),
             SourceXrefStreamErrorDetail::Source(error) => Some(error),
             SourceXrefStreamErrorDetail::None | SourceXrefStreamErrorDetail::Limit(_) => None,
@@ -497,6 +550,21 @@ const fn policy(
             SourceXrefStreamRecoverability::DoNotRetry,
             "RPE-SOURCE-XREF-0010",
         ),
+        SourceXrefStreamErrorCode::InvalidFilterMetadata => (
+            SourceXrefStreamErrorCategory::Syntax,
+            SourceXrefStreamRecoverability::CorrectInput,
+            "RPE-SOURCE-XREF-0015",
+        ),
+        SourceXrefStreamErrorCode::UnsupportedEmptyFilteredPayload => (
+            SourceXrefStreamErrorCategory::Unsupported,
+            SourceXrefStreamRecoverability::UseSupportedFeature,
+            "RPE-SOURCE-XREF-0017",
+        ),
+        SourceXrefStreamErrorCode::DecodeFailure => (
+            SourceXrefStreamErrorCategory::Internal,
+            SourceXrefStreamRecoverability::DoNotRetry,
+            "RPE-SOURCE-XREF-0016",
+        ),
         SourceXrefStreamErrorCode::ResourceLimit => (
             SourceXrefStreamErrorCategory::Resource,
             SourceXrefStreamRecoverability::ReduceWorkload,
@@ -518,6 +586,37 @@ const fn policy(
             "RPE-SOURCE-XREF-0013",
         ),
     }
+}
+
+fn decode_policy(
+    error: DecodeError,
+) -> (
+    SourceXrefStreamErrorCategory,
+    SourceXrefStreamRecoverability,
+) {
+    let category = match error.category() {
+        DecodeErrorCategory::Configuration => SourceXrefStreamErrorCategory::Configuration,
+        DecodeErrorCategory::Syntax => SourceXrefStreamErrorCategory::Syntax,
+        DecodeErrorCategory::Unsupported => SourceXrefStreamErrorCategory::Unsupported,
+        DecodeErrorCategory::Resource => SourceXrefStreamErrorCategory::Resource,
+        DecodeErrorCategory::Integrity => SourceXrefStreamErrorCategory::Source,
+        DecodeErrorCategory::Cancellation => SourceXrefStreamErrorCategory::Cancellation,
+        DecodeErrorCategory::Internal => SourceXrefStreamErrorCategory::Internal,
+    };
+    let recoverability = match error.recoverability() {
+        DecodeRecoverability::CorrectConfiguration => {
+            SourceXrefStreamRecoverability::CorrectConfiguration
+        }
+        DecodeRecoverability::CorrectInput => SourceXrefStreamRecoverability::CorrectInput,
+        DecodeRecoverability::ReportUnsupported => {
+            SourceXrefStreamRecoverability::UseSupportedFeature
+        }
+        DecodeRecoverability::ReduceWorkload => SourceXrefStreamRecoverability::ReduceWorkload,
+        DecodeRecoverability::ReopenSource => SourceXrefStreamRecoverability::ReopenSource,
+        DecodeRecoverability::AbandonOperation => SourceXrefStreamRecoverability::AbandonOperation,
+        DecodeRecoverability::DoNotRetry => SourceXrefStreamRecoverability::DoNotRetry,
+    };
+    (category, recoverability)
 }
 
 fn object_policy(
@@ -617,12 +716,61 @@ pub enum SourceXrefStreamPhase {
     Envelope,
     /// Independently acquiring the exact payload and validating its exact terminal boundary.
     PayloadAndBoundary,
-    /// Parsing and validating the complete unfiltered xref table.
+    /// Decoding when required, then parsing and validating the complete xref table.
     Parse,
     /// The proof-bearing result was returned.
     Complete,
     /// The job reached a stable terminal failure.
     Failed,
+}
+
+/// Deterministic filtered-decoder work retained after successful acquisition.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SourceXrefStreamDecodeStats {
+    encoded_input_bytes: u64,
+    cumulative_output_bytes: u64,
+    work_bytes: u64,
+    fuel_consumed: u64,
+    peak_retained_capacity_bytes: u64,
+    plan_retained_heap_bytes: u64,
+    decoded_bytes: u64,
+}
+
+impl SourceXrefStreamDecodeStats {
+    /// Returns exact snapshot-bound encoded input bytes consumed by the decoder.
+    pub const fn encoded_input_bytes(self) -> u64 {
+        self.encoded_input_bytes
+    }
+
+    /// Returns cumulative bytes emitted across every filter and predictor layer.
+    pub const fn cumulative_output_bytes(self) -> u64 {
+        self.cumulative_output_bytes
+    }
+
+    /// Returns encoded input plus cumulative output charged as parent parser work.
+    pub const fn work_bytes(self) -> u64 {
+        self.work_bytes
+    }
+
+    /// Returns deterministic decoder fuel consumed by the successful operation.
+    pub const fn fuel_consumed(self) -> u64 {
+        self.fuel_consumed
+    }
+
+    /// Returns the decoder's conservative peak simultaneously retained output capacity.
+    pub const fn peak_retained_capacity_bytes(self) -> u64 {
+        self.peak_retained_capacity_bytes
+    }
+
+    /// Returns actual heap capacity retained by the canonical decoder plan.
+    pub const fn plan_retained_heap_bytes(self) -> u64 {
+        self.plan_retained_heap_bytes
+    }
+
+    /// Returns the final decoded payload length passed to the semantic xref parser.
+    pub const fn decoded_bytes(self) -> u64 {
+        self.decoded_bytes
+    }
 }
 
 /// Cumulative work and child-parser evidence for one acquisition job.
@@ -631,6 +779,7 @@ pub struct SourceXrefStreamStats {
     object: ObjectStats,
     payload_read_bytes: u64,
     payload_read_attempts: u64,
+    decode: Option<SourceXrefStreamDecodeStats>,
     xref_stream: Option<XrefStreamStats>,
     retained_proof_bytes: u64,
 }
@@ -651,21 +800,26 @@ impl SourceXrefStreamStats {
         self.payload_read_attempts
     }
 
+    /// Returns filtered-decoder accounting when `/Filter` selected the decode boundary.
+    pub const fn decode(self) -> Option<SourceXrefStreamDecodeStats> {
+        self.decode
+    }
+
     /// Returns decoded table work after xref-stream validation succeeds.
     pub const fn xref_stream(self) -> Option<XrefStreamStats> {
         self.xref_stream
     }
 
-    /// Returns combined object-dictionary and xref-entry capacity retained by ready proof.
+    /// Returns exact retained container, decoder output/plan, and xref-entry heap evidence.
     pub const fn retained_proof_bytes(self) -> u64 {
         self.retained_proof_bytes
     }
 }
 
 /// Source-acquired xref-stream proof retaining its complete framed container.
-#[derive(Eq, PartialEq)]
 pub struct SourceAcquiredXrefStream {
     framed_container: IndirectObject,
+    decoded_proof: Option<DecodedStream>,
     xref_stream: XrefStream,
     stats: SourceXrefStreamStats,
 }
@@ -679,6 +833,11 @@ impl SourceAcquiredXrefStream {
     /// Returns the complete framed xref-stream indirect object.
     pub const fn framed_container(&self) -> &IndirectObject {
         &self.framed_container
+    }
+
+    /// Borrows the sealed decoder output and attestation for a filtered payload.
+    pub const fn decoded_proof(&self) -> Option<&DecodedStream> {
+        self.decoded_proof.as_ref()
     }
 
     /// Borrows the complete table only for proof-preserving composition inside this crate.
@@ -736,11 +895,23 @@ impl fmt::Debug for SourceAcquiredXrefStream {
         formatter
             .debug_struct("SourceAcquiredXrefStream")
             .field("framed_container", &self.framed_container)
+            .field("decoded_proof", &self.decoded_proof)
             .field("xref_stream", &self.xref_stream)
             .field("stats", &self.stats)
             .finish()
     }
 }
+
+impl PartialEq for SourceAcquiredXrefStream {
+    fn eq(&self, other: &Self) -> bool {
+        self.framed_container == other.framed_container
+            && decoded_proofs_equal(self.decoded_proof.as_ref(), other.decoded_proof.as_ref())
+            && self.xref_stream == other.xref_stream
+            && self.stats == other.stats
+    }
+}
+
+impl Eq for SourceAcquiredXrefStream {}
 
 /// Result of polling one source-framed xref-stream acquisition job.
 #[allow(
@@ -749,7 +920,7 @@ impl fmt::Debug for SourceAcquiredXrefStream {
 )]
 #[derive(Debug, Eq, PartialEq)]
 pub enum SourceXrefStreamPoll {
-    /// A complete framed container and validated unfiltered table are ready.
+    /// A complete framed container and proof-bound validated table are ready.
     Ready(SourceAcquiredXrefStream),
     /// One active exact read is missing source bytes.
     Pending {
@@ -770,6 +941,11 @@ enum PayloadState {
     Ready(ByteSlice),
 }
 
+enum PayloadDecodePlan {
+    Unfiltered,
+    Filtered(FilterPlan),
+}
+
 impl PayloadState {
     const fn is_ready(&self) -> bool {
         matches!(self, Self::Empty | Self::Ready(_))
@@ -786,6 +962,7 @@ struct AcquireState {
     boundary: OpenStreamBoundaryJob,
     payload: PayloadState,
     framed: Option<IndirectObject>,
+    decode_plan: PayloadDecodePlan,
     next: AcquireStep,
 }
 
@@ -799,13 +976,14 @@ enum JobState {
     Parse {
         framed: IndirectObject,
         payload: PayloadState,
+        decode_plan: PayloadDecodePlan,
     },
     Transition,
     Complete,
     Failed(SourceXrefStreamError),
 }
 
-/// One-shot job that frames and acquires one explicitly unfiltered xref stream from source.
+/// One-shot job that frames and acquires one proof-bound xref stream from source.
 pub struct OpenSourceXrefStreamJob {
     snapshot: SourceSnapshot,
     container: ObjectRef,
@@ -816,6 +994,7 @@ pub struct OpenSourceXrefStreamJob {
     object_limits: ObjectLimits,
     syntax_limits: SyntaxLimits,
     xref_stream_limits: XrefStreamLimits,
+    decode_limits: Option<DecodeLimits>,
     stats: SourceXrefStreamStats,
     state: JobState,
 }
@@ -836,6 +1015,67 @@ impl OpenSourceXrefStreamJob {
         object_limits: ObjectLimits,
         syntax_limits: SyntaxLimits,
         xref_stream_limits: XrefStreamLimits,
+    ) -> Result<Self, SourceXrefStreamError> {
+        Self::new_inner(
+            snapshot,
+            container,
+            startxref,
+            object_upper_bound,
+            revision_startxref,
+            context,
+            object_limits,
+            syntax_limits,
+            xref_stream_limits,
+            None,
+        )
+    }
+
+    /// Starts acquisition with strict direct filter metadata and a sealed decode boundary.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the opt-in constructor makes every source and decode profile explicit"
+    )]
+    pub fn new_with_decode_limits(
+        snapshot: SourceSnapshot,
+        container: ObjectRef,
+        startxref: u64,
+        object_upper_bound: u64,
+        revision_startxref: u64,
+        context: SourceXrefStreamJobContext,
+        object_limits: ObjectLimits,
+        syntax_limits: SyntaxLimits,
+        xref_stream_limits: XrefStreamLimits,
+        decode_limits: DecodeLimits,
+    ) -> Result<Self, SourceXrefStreamError> {
+        Self::new_inner(
+            snapshot,
+            container,
+            startxref,
+            object_upper_bound,
+            revision_startxref,
+            context,
+            object_limits,
+            syntax_limits,
+            xref_stream_limits,
+            Some(decode_limits),
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private compatibility constructor owns all independent child profiles"
+    )]
+    fn new_inner(
+        snapshot: SourceSnapshot,
+        container: ObjectRef,
+        startxref: u64,
+        object_upper_bound: u64,
+        revision_startxref: u64,
+        context: SourceXrefStreamJobContext,
+        object_limits: ObjectLimits,
+        syntax_limits: SyntaxLimits,
+        xref_stream_limits: XrefStreamLimits,
+        decode_limits: Option<DecodeLimits>,
     ) -> Result<Self, SourceXrefStreamError> {
         if !context.is_valid() {
             return Err(SourceXrefStreamError::for_code(
@@ -866,6 +1106,7 @@ impl OpenSourceXrefStreamJob {
             object_limits,
             syntax_limits,
             xref_stream_limits,
+            decode_limits,
             stats: SourceXrefStreamStats::default(),
             state: JobState::Envelope(envelope),
         })
@@ -914,6 +1155,11 @@ impl OpenSourceXrefStreamJob {
     /// Returns the validated xref-stream limits.
     pub const fn xref_stream_limits(&self) -> XrefStreamLimits {
         self.xref_stream_limits
+    }
+
+    /// Returns the optional filtered-decoder limits selected at construction.
+    pub const fn decode_limits(&self) -> Option<DecodeLimits> {
+        self.decode_limits
     }
 
     /// Returns cumulative work through the latest poll.
@@ -997,6 +1243,18 @@ impl OpenSourceXrefStreamJob {
                             ));
                         }
                         ObjectEnvelopePoll::Stream(envelope) => {
+                            let decode_plan = match self.decode_limits {
+                                Some(decode_limits) => match canonical_decode_plan(
+                                    envelope.dictionary().value(),
+                                    decode_limits,
+                                    self.container,
+                                    cancellation,
+                                ) {
+                                    Ok(plan) => plan,
+                                    Err(error) => return self.fail(error),
+                                },
+                                None => PayloadDecodePlan::Unfiltered,
+                            };
                             let declaration = envelope.declared_length();
                             let DeclaredStreamLength::Direct { value, .. } = declaration else {
                                 return self.fail(SourceXrefStreamError::for_code(
@@ -1049,12 +1307,30 @@ impl OpenSourceXrefStreamJob {
                                     return self.fail(SourceXrefStreamError::from_object(error));
                                 }
                             };
-                            if value > self.xref_stream_limits.max_decoded_bytes() {
+                            let payload_limit = match (&decode_plan, self.decode_limits) {
+                                (PayloadDecodePlan::Filtered(_), Some(limits)) => {
+                                    limits.max_input_bytes()
+                                }
+                                (PayloadDecodePlan::Unfiltered, _)
+                                | (PayloadDecodePlan::Filtered(_), None) => {
+                                    self.xref_stream_limits.max_decoded_bytes()
+                                }
+                            };
+                            if value > payload_limit {
                                 return self.fail(SourceXrefStreamError::resource(
                                     SourceXrefStreamLimitKind::PayloadBytes,
-                                    self.xref_stream_limits.max_decoded_bytes(),
+                                    payload_limit,
                                     value,
                                     self.container,
+                                    Some(data_start),
+                                ));
+                            }
+                            if value == 0 && matches!(&decode_plan, PayloadDecodePlan::Filtered(_))
+                            {
+                                return self.fail(SourceXrefStreamError::for_code(
+                                    SourceXrefStreamErrorCode::UnsupportedEmptyFilteredPayload,
+                                    Some(self.container),
+                                    None,
                                     Some(data_start),
                                 ));
                             }
@@ -1090,6 +1366,7 @@ impl OpenSourceXrefStreamJob {
                                 boundary,
                                 payload,
                                 framed: None,
+                                decode_plan,
                                 next: AcquireStep::Payload,
                             });
                         }
@@ -1108,6 +1385,7 @@ impl OpenSourceXrefStreamJob {
                         self.state = JobState::Parse {
                             framed,
                             payload: acquire.payload,
+                            decode_plan: acquire.decode_plan,
                         };
                         continue;
                     }
@@ -1205,8 +1483,12 @@ impl OpenSourceXrefStreamJob {
                         }
                     }
                 }
-                JobState::Parse { framed, payload } => {
-                    return self.parse(framed, payload, cancellation);
+                JobState::Parse {
+                    framed,
+                    payload,
+                    decode_plan,
+                } => {
+                    return self.parse(framed, payload, decode_plan, cancellation);
                 }
                 JobState::Complete => {
                     self.state = JobState::Complete;
@@ -1237,6 +1519,7 @@ impl OpenSourceXrefStreamJob {
         &mut self,
         framed: IndirectObject,
         payload: PayloadState,
+        decode_plan: PayloadDecodePlan,
         cancellation: &dyn SourceXrefStreamCancellation,
     ) -> SourceXrefStreamPoll {
         if cancellation.is_cancelled() {
@@ -1263,39 +1546,151 @@ impl OpenSourceXrefStreamJob {
             ));
         };
         let data_span = stream.data_span();
-        let payload_bytes = match &payload {
-            PayloadState::Empty => &[][..],
-            PayloadState::Ready(bytes)
-                if bytes.identity() == self.snapshot.identity()
-                    && bytes.range().start() == data_span.start()
-                    && bytes.range().len() == data_span.len() =>
-            {
-                bytes.bytes()
-            }
-            PayloadState::Ready(_) | PayloadState::Missing { .. } => {
-                return self.fail(SourceXrefStreamError::for_code(
-                    SourceXrefStreamErrorCode::SourceGeometryMismatch,
-                    Some(self.container),
-                    None,
-                    Some(data_span.start()),
-                ));
-            }
-        };
-        let xref_stream = match parse_unfiltered_xref_stream(
-            self.snapshot,
-            self.container,
-            stream.dictionary().value(),
-            data_span,
-            payload_bytes,
-            self.xref_stream_limits,
-            &XrefCancellationAdapter(cancellation),
-        ) {
-            Ok(stream) => stream,
-            Err(error) => {
-                return self.fail(SourceXrefStreamError::from_xref_stream(
-                    error,
+        let (xref_stream, decoded_proof) = match decode_plan {
+            PayloadDecodePlan::Unfiltered => {
+                let payload_bytes = match &payload {
+                    PayloadState::Empty => &[][..],
+                    PayloadState::Ready(bytes)
+                        if valid_payload(bytes, self.snapshot, data_span) =>
+                    {
+                        bytes.bytes()
+                    }
+                    PayloadState::Ready(_) | PayloadState::Missing { .. } => {
+                        return self.fail(SourceXrefStreamError::for_code(
+                            SourceXrefStreamErrorCode::SourceGeometryMismatch,
+                            Some(self.container),
+                            None,
+                            Some(data_span.start()),
+                        ));
+                    }
+                };
+                let xref_stream = match parse_unfiltered_xref_stream(
+                    self.snapshot,
                     self.container,
-                ));
+                    stream.dictionary().value(),
+                    data_span,
+                    payload_bytes,
+                    self.xref_stream_limits,
+                    &XrefCancellationAdapter(cancellation),
+                ) {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        return self.fail(SourceXrefStreamError::from_xref_stream(
+                            error,
+                            self.container,
+                        ));
+                    }
+                };
+                (xref_stream, None)
+            }
+            PayloadDecodePlan::Filtered(plan) => {
+                let encoded = match payload {
+                    PayloadState::Ready(encoded) => encoded,
+                    PayloadState::Empty => {
+                        return self.fail(SourceXrefStreamError::for_code(
+                            SourceXrefStreamErrorCode::UnsupportedEmptyFilteredPayload,
+                            Some(self.container),
+                            None,
+                            Some(data_span.start()),
+                        ));
+                    }
+                    PayloadState::Missing { .. } => {
+                        return self.fail(SourceXrefStreamError::for_code(
+                            SourceXrefStreamErrorCode::InternalState,
+                            Some(self.container),
+                            None,
+                            Some(data_span.start()),
+                        ));
+                    }
+                };
+                if !valid_payload(&encoded, self.snapshot, data_span) {
+                    return self.fail(SourceXrefStreamError::for_code(
+                        SourceXrefStreamErrorCode::SourceGeometryMismatch,
+                        Some(self.container),
+                        None,
+                        Some(data_span.start()),
+                    ));
+                }
+                let Some(decode_limits) = self.decode_limits else {
+                    return self.fail(SourceXrefStreamError::for_code(
+                        SourceXrefStreamErrorCode::InternalState,
+                        Some(self.container),
+                        None,
+                        Some(data_span.start()),
+                    ));
+                };
+                let request = match DecodeRequest::new(
+                    self.snapshot,
+                    self.container,
+                    stream.dictionary().span(),
+                    data_span,
+                    encoded,
+                    plan,
+                    DecodeProfile::M1StrictV1,
+                    decode_limits,
+                ) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return self.fail(SourceXrefStreamError::from_decode(
+                            error,
+                            self.container,
+                            data_span.start(),
+                        ));
+                    }
+                };
+                let decoded = match decode_stream(request, &DecodeCancellationAdapter(cancellation))
+                {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        return self.fail(SourceXrefStreamError::from_decode(
+                            error,
+                            self.container,
+                            data_span.start(),
+                        ));
+                    }
+                };
+                let attestation = decoded.attestation();
+                let work_bytes = match data_span
+                    .len()
+                    .checked_add(attestation.cumulative_output_bytes())
+                {
+                    Some(value) => value,
+                    None => {
+                        return self.fail(SourceXrefStreamError::for_code(
+                            SourceXrefStreamErrorCode::InternalState,
+                            Some(self.container),
+                            None,
+                            Some(data_span.start()),
+                        ));
+                    }
+                };
+                self.stats.decode = Some(SourceXrefStreamDecodeStats {
+                    encoded_input_bytes: data_span.len(),
+                    cumulative_output_bytes: attestation.cumulative_output_bytes(),
+                    work_bytes,
+                    fuel_consumed: attestation.fuel_consumed(),
+                    peak_retained_capacity_bytes: attestation.peak_retained_capacity_bytes(),
+                    plan_retained_heap_bytes: attestation.plan_retained_heap_bytes(),
+                    decoded_bytes: attestation.decoded_length(),
+                });
+                let xref_stream = match parse_decoded_xref_stream(
+                    self.snapshot,
+                    self.container,
+                    stream.dictionary().value(),
+                    data_span,
+                    decoded.bytes(),
+                    self.xref_stream_limits,
+                    &XrefCancellationAdapter(cancellation),
+                ) {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        return self.fail(SourceXrefStreamError::from_xref_stream(
+                            error,
+                            self.container,
+                        ));
+                    }
+                };
+                (xref_stream, Some(decoded))
             }
         };
         self.stats.xref_stream = Some(xref_stream.stats());
@@ -1312,11 +1707,51 @@ impl OpenSourceXrefStreamJob {
                 Some(self.startxref),
             ));
         }
+        let decoder_retained_limit = if decoded_proof.is_some() {
+            match self.decode_limits {
+                Some(limits) => {
+                    let plan_limit =
+                        match FilterPlan::retained_heap_upper_bound(limits.max_filters()) {
+                            Ok(limit) => limit,
+                            Err(_) => {
+                                return self.fail(SourceXrefStreamError::for_code(
+                                    SourceXrefStreamErrorCode::InternalState,
+                                    Some(self.container),
+                                    None,
+                                    Some(self.startxref),
+                                ));
+                            }
+                        };
+                    match limits.max_retained_capacity_bytes().checked_add(plan_limit) {
+                        Some(limit) => limit,
+                        None => {
+                            return self.fail(SourceXrefStreamError::for_code(
+                                SourceXrefStreamErrorCode::InternalState,
+                                Some(self.container),
+                                None,
+                                Some(self.startxref),
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    return self.fail(SourceXrefStreamError::for_code(
+                        SourceXrefStreamErrorCode::InternalState,
+                        Some(self.container),
+                        None,
+                        Some(self.startxref),
+                    ));
+                }
+            }
+        } else {
+            0
+        };
         let retained_limit = match self
             .syntax_limits
             .max_owned_bytes()
             .checked_add(self.syntax_limits.max_container_bytes())
             .and_then(|value| value.checked_add(self.xref_stream_limits.max_retained_entry_bytes()))
+            .and_then(|value| value.checked_add(decoder_retained_limit))
         {
             Some(limit) => limit,
             None => {
@@ -1331,7 +1766,20 @@ impl OpenSourceXrefStreamJob {
         let retained_proof_bytes = match framed
             .retained_heap_bytes()
             .checked_add(xref_stream.stats().retained_entry_bytes())
-        {
+            .and_then(|value| {
+                value.checked_add(
+                    self.stats
+                        .decode
+                        .map_or(0, SourceXrefStreamDecodeStats::peak_retained_capacity_bytes),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    self.stats
+                        .decode
+                        .map_or(0, SourceXrefStreamDecodeStats::plan_retained_heap_bytes),
+                )
+            }) {
             Some(value) => value,
             None => {
                 return self.fail(SourceXrefStreamError::resource(
@@ -1363,6 +1811,7 @@ impl OpenSourceXrefStreamJob {
         }
         let result = SourceAcquiredXrefStream {
             framed_container: framed,
+            decoded_proof,
             xref_stream,
             stats: self.stats,
         };
@@ -1389,9 +1838,292 @@ impl fmt::Debug for OpenSourceXrefStreamJob {
             .field("object_limits", &self.object_limits)
             .field("syntax_limits", &self.syntax_limits)
             .field("xref_stream_limits", &self.xref_stream_limits)
+            .field("decode_limits", &self.decode_limits)
             .field("stats", &self.stats)
             .field("phase", &self.phase())
             .finish()
+    }
+}
+
+fn canonical_decode_plan(
+    dictionary: &PdfDictionary,
+    limits: DecodeLimits,
+    container: ObjectRef,
+    cancellation: &dyn SourceXrefStreamCancellation,
+) -> Result<PayloadDecodePlan, SourceXrefStreamError> {
+    let filter = unique_metadata_value(dictionary, b"Filter", container, cancellation)?;
+    let decode_parameters =
+        unique_metadata_value(dictionary, b"DecodeParms", container, cancellation)?;
+    let Some(filter) = filter else {
+        return match decode_parameters {
+            Some(value) => Err(invalid_filter_metadata(container, value.span().start())),
+            None => Ok(PayloadDecodePlan::Unfiltered),
+        };
+    };
+    let filter_count = match filter.value() {
+        SyntaxObject::Name(_) => 1_usize,
+        SyntaxObject::Array(array) if !array.values().is_empty() => array.values().len(),
+        _ => {
+            return Err(invalid_filter_metadata(container, filter.span().start()));
+        }
+    };
+    let filter_count_u64 = u64::try_from(filter_count).unwrap_or(u64::MAX);
+    if filter_count_u64 > u64::from(limits.max_filters()) {
+        return Err(SourceXrefStreamError::resource(
+            SourceXrefStreamLimitKind::FilterCount,
+            u64::from(limits.max_filters()),
+            filter_count_u64,
+            container,
+            Some(filter.span().start()),
+        ));
+    }
+
+    let mut names = Vec::new();
+    names.try_reserve_exact(filter_count).map_err(|_| {
+        SourceXrefStreamError::resource(
+            SourceXrefStreamLimitKind::FilterCount,
+            u64::from(limits.max_filters()),
+            filter_count_u64,
+            container,
+            Some(filter.span().start()),
+        )
+    })?;
+    match filter.value() {
+        SyntaxObject::Name(name) => names.push(name.bytes()),
+        SyntaxObject::Array(array) => {
+            for value in array.values() {
+                check_metadata_cancelled(container, value.span().start(), cancellation)?;
+                let SyntaxObject::Name(name) = value.value() else {
+                    return Err(invalid_filter_metadata(container, value.span().start()));
+                };
+                names.push(name.bytes());
+            }
+        }
+        _ => return Err(invalid_filter_metadata(container, filter.span().start())),
+    }
+    let plan = FilterPlan::from_pdf_names(&names).map_err(|error| {
+        SourceXrefStreamError::from_decode(error, container, filter.span().start())
+    })?;
+    let Some(decode_parameters) = decode_parameters else {
+        check_metadata_cancelled(container, filter.span().start(), cancellation)?;
+        return Ok(PayloadDecodePlan::Filtered(plan));
+    };
+    let parameters = canonical_decode_parameters(
+        decode_parameters,
+        filter_count,
+        limits,
+        container,
+        cancellation,
+    )?;
+    let mut stages = Vec::new();
+    stages.try_reserve_exact(filter_count).map_err(|_| {
+        SourceXrefStreamError::resource(
+            SourceXrefStreamLimitKind::FilterCount,
+            u64::from(limits.max_filters()),
+            filter_count_u64,
+            container,
+            Some(filter.span().start()),
+        )
+    })?;
+    for (filter, parameters) in plan.filters().iter().copied().zip(parameters) {
+        let stage = FilterStage::new(filter, parameters).map_err(|error| {
+            SourceXrefStreamError::from_decode(error, container, decode_parameters.span().start())
+        })?;
+        stages.push(stage);
+    }
+    let plan = FilterPlan::from_stages(&stages).map_err(|error| {
+        SourceXrefStreamError::from_decode(error, container, filter.span().start())
+    })?;
+    check_metadata_cancelled(container, filter.span().start(), cancellation)?;
+    Ok(PayloadDecodePlan::Filtered(plan))
+}
+
+fn canonical_decode_parameters(
+    value: &Located<SyntaxObject>,
+    filter_count: usize,
+    limits: DecodeLimits,
+    container: ObjectRef,
+    cancellation: &dyn SourceXrefStreamCancellation,
+) -> Result<Vec<FilterDecodeParameters>, SourceXrefStreamError> {
+    let mut parameters = Vec::new();
+    parameters.try_reserve_exact(filter_count).map_err(|_| {
+        SourceXrefStreamError::resource(
+            SourceXrefStreamLimitKind::FilterCount,
+            u64::from(limits.max_filters()),
+            u64::try_from(filter_count).unwrap_or(u64::MAX),
+            container,
+            Some(value.span().start()),
+        )
+    })?;
+    match value.value() {
+        SyntaxObject::Null => parameters.resize(filter_count, FilterDecodeParameters::None),
+        SyntaxObject::Dictionary(dictionary) if filter_count == 1 => {
+            parameters.push(canonical_predictor_parameters(
+                dictionary,
+                value.span().start(),
+                container,
+                cancellation,
+            )?);
+        }
+        SyntaxObject::Array(array) if array.values().len() == filter_count => {
+            for parameter in array.values() {
+                check_metadata_cancelled(container, parameter.span().start(), cancellation)?;
+                match parameter.value() {
+                    SyntaxObject::Null => parameters.push(FilterDecodeParameters::None),
+                    SyntaxObject::Dictionary(dictionary) => {
+                        parameters.push(canonical_predictor_parameters(
+                            dictionary,
+                            parameter.span().start(),
+                            container,
+                            cancellation,
+                        )?);
+                    }
+                    _ => {
+                        return Err(invalid_filter_metadata(container, parameter.span().start()));
+                    }
+                }
+            }
+        }
+        _ => {
+            return Err(invalid_filter_metadata(container, value.span().start()));
+        }
+    }
+    Ok(parameters)
+}
+
+fn canonical_predictor_parameters(
+    dictionary: &PdfDictionary,
+    offset: u64,
+    container: ObjectRef,
+    cancellation: &dyn SourceXrefStreamCancellation,
+) -> Result<FilterDecodeParameters, SourceXrefStreamError> {
+    if dictionary.entries().is_empty() {
+        return Ok(FilterDecodeParameters::None);
+    }
+    let mut predictor = None;
+    let mut colors = None;
+    let mut bits_per_component = None;
+    let mut columns = None;
+    for entry in dictionary.entries() {
+        check_metadata_cancelled(container, entry.key().span().start(), cancellation)?;
+        let slot = match entry.key().value().bytes() {
+            b"Predictor" => &mut predictor,
+            b"Colors" => &mut colors,
+            b"BitsPerComponent" => &mut bits_per_component,
+            b"Columns" => &mut columns,
+            _ => {
+                return Err(invalid_filter_metadata(
+                    container,
+                    entry.key().span().start(),
+                ));
+            }
+        };
+        if slot.is_some() {
+            return Err(invalid_filter_metadata(
+                container,
+                entry.key().span().start(),
+            ));
+        }
+        let SyntaxObject::Integer(integer) = entry.value().value() else {
+            return Err(invalid_filter_metadata(
+                container,
+                entry.value().span().start(),
+            ));
+        };
+        *slot = Some(*integer);
+    }
+    let parameters = PredictorParameters::new(
+        predictor.unwrap_or(1),
+        colors.unwrap_or(1),
+        bits_per_component.unwrap_or(8),
+        columns.unwrap_or(1),
+    )
+    .map_err(|error| SourceXrefStreamError::from_decode(error, container, offset))?;
+    Ok(FilterDecodeParameters::Predictor(parameters))
+}
+
+fn unique_metadata_value<'a>(
+    dictionary: &'a PdfDictionary,
+    key: &[u8],
+    container: ObjectRef,
+    cancellation: &dyn SourceXrefStreamCancellation,
+) -> Result<Option<&'a Located<SyntaxObject>>, SourceXrefStreamError> {
+    let mut selected = None;
+    for entry in dictionary.entries() {
+        check_metadata_cancelled(container, entry.key().span().start(), cancellation)?;
+        if entry.key().value().bytes() == key {
+            if selected.is_some() {
+                return Err(invalid_filter_metadata(
+                    container,
+                    entry.key().span().start(),
+                ));
+            }
+            selected = Some(entry.value());
+        }
+    }
+    Ok(selected)
+}
+
+fn check_metadata_cancelled(
+    container: ObjectRef,
+    offset: u64,
+    cancellation: &dyn SourceXrefStreamCancellation,
+) -> Result<(), SourceXrefStreamError> {
+    if cancellation.is_cancelled() {
+        Err(SourceXrefStreamError::for_code(
+            SourceXrefStreamErrorCode::Cancelled,
+            Some(container),
+            None,
+            Some(offset),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn invalid_filter_metadata(container: ObjectRef, offset: u64) -> SourceXrefStreamError {
+    SourceXrefStreamError::for_code(
+        SourceXrefStreamErrorCode::InvalidFilterMetadata,
+        Some(container),
+        None,
+        Some(offset),
+    )
+}
+
+fn valid_payload(bytes: &ByteSlice, snapshot: SourceSnapshot, span: ByteSpan) -> bool {
+    bytes.identity() == snapshot.identity()
+        && bytes.range().start() == span.start()
+        && bytes.range().len() == span.len()
+        && u64::try_from(bytes.bytes().len()).ok() == Some(span.len())
+}
+
+fn decoded_proofs_equal(left: Option<&DecodedStream>, right: Option<&DecodedStream>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            let left_attestation = left.attestation();
+            let right_attestation = right.attestation();
+            left.bytes() == right.bytes()
+                && left_attestation.snapshot() == right_attestation.snapshot()
+                && left_attestation.source_identity() == right_attestation.source_identity()
+                && left_attestation.owner() == right_attestation.owner()
+                && left_attestation.dictionary_span() == right_attestation.dictionary_span()
+                && left_attestation.encoded_span() == right_attestation.encoded_span()
+                && left_attestation.encoded() == right_attestation.encoded()
+                && left_attestation.filter_plan() == right_attestation.filter_plan()
+                && left_attestation.profile() == right_attestation.profile()
+                && left_attestation.limits() == right_attestation.limits()
+                && left_attestation.fuel_schedule() == right_attestation.fuel_schedule()
+                && left_attestation.fuel_consumed() == right_attestation.fuel_consumed()
+                && left_attestation.cumulative_output_bytes()
+                    == right_attestation.cumulative_output_bytes()
+                && left_attestation.peak_retained_capacity_bytes()
+                    == right_attestation.peak_retained_capacity_bytes()
+                && left_attestation.plan_retained_heap_bytes()
+                    == right_attestation.plan_retained_heap_bytes()
+                && left_attestation.decoded_length() == right_attestation.decoded_length()
+        }
+        (None, Some(_)) | (Some(_), None) => false,
     }
 }
 

@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 pdf-rs-bytes = { path = "../bytes" }
+pdf-rs-filters = { path = "../filters" }
 pdf-rs-syntax = { path = "../syntax" }
 pdf-rs-xref = { path = "../xref" }
 pdf-rs-object = { path = "../object" }

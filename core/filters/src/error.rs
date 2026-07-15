@@ -8,6 +8,8 @@ pub enum DecodeLimitKind {
     InputBytes,
     /// Number of filters in the canonical plan.
     FilterCount,
+    /// Allocator-visible heap bytes retained by the canonical plan vectors.
+    FilterPlanBytes,
     /// Bytes emitted by one filter layer.
     LayerOutputBytes,
     /// Bytes emitted cumulatively by every filter layer.

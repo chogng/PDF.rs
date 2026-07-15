@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use pdf_rs_bytes::{
     ByteSource, DataTicket, JobId, RequestPriority, ResumeCheckpoint, SmallRanges, SourceSnapshot,
 };
+use pdf_rs_filters::{DecodeLimits, FilterPlan};
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
 use pdf_rs_xref::{
@@ -695,7 +696,7 @@ pub enum SourceRevisionPrimaryProof {
         /// Original source-bound traditional section.
         section: TraditionalRevisionSection,
     },
-    /// A classified stream-object anchor and its framed unfiltered xref-stream proof.
+    /// A classified stream-object anchor and its complete proof-bound xref-stream result.
     Stream {
         /// Exact classified primary anchor.
         anchor: XrefAnchor,
@@ -1017,7 +1018,7 @@ enum JobState {
     Failed(SourceRevisionChainError),
 }
 
-/// One-shot bounded source job for unfiltered direct-Length mixed revision chains.
+/// One-shot bounded source job for direct-Length mixed revision chains.
 pub struct OpenSourceRevisionChainJob {
     snapshot: SourceSnapshot,
     context: SourceRevisionChainJobContext,
@@ -1027,6 +1028,7 @@ pub struct OpenSourceRevisionChainJob {
     object_limits: ObjectLimits,
     syntax_limits: SyntaxLimits,
     xref_stream_limits: XrefStreamLimits,
+    decode_limits: Option<DecodeLimits>,
     revision_limits: RevisionLimits,
     final_marker: Option<FinalStartXref>,
     proofs: Vec<SourceRevisionProof>,
@@ -1053,6 +1055,67 @@ impl OpenSourceRevisionChainJob {
         object_limits: ObjectLimits,
         syntax_limits: SyntaxLimits,
         xref_stream_limits: XrefStreamLimits,
+        revision_limits: RevisionLimits,
+    ) -> Result<Self, SourceRevisionChainError> {
+        Self::new_inner(
+            snapshot,
+            context,
+            limits,
+            xref_limits,
+            anchor_limits,
+            object_limits,
+            syntax_limits,
+            xref_stream_limits,
+            None,
+            revision_limits,
+        )
+    }
+
+    /// Starts source-chain acquisition with strict filtered xref-stream decoding enabled.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "every independent lower, decode, and parent profile is explicit"
+    )]
+    pub fn new_with_decode_limits(
+        snapshot: SourceSnapshot,
+        context: SourceRevisionChainJobContext,
+        limits: SourceRevisionChainLimits,
+        xref_limits: XrefLimits,
+        anchor_limits: XrefAnchorLimits,
+        object_limits: ObjectLimits,
+        syntax_limits: SyntaxLimits,
+        xref_stream_limits: XrefStreamLimits,
+        decode_limits: DecodeLimits,
+        revision_limits: RevisionLimits,
+    ) -> Result<Self, SourceRevisionChainError> {
+        Self::new_inner(
+            snapshot,
+            context,
+            limits,
+            xref_limits,
+            anchor_limits,
+            object_limits,
+            syntax_limits,
+            xref_stream_limits,
+            Some(decode_limits),
+            revision_limits,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private compatibility constructor owns all independent profiles"
+    )]
+    fn new_inner(
+        snapshot: SourceSnapshot,
+        context: SourceRevisionChainJobContext,
+        limits: SourceRevisionChainLimits,
+        xref_limits: XrefLimits,
+        anchor_limits: XrefAnchorLimits,
+        object_limits: ObjectLimits,
+        syntax_limits: SyntaxLimits,
+        xref_stream_limits: XrefStreamLimits,
+        decode_limits: Option<DecodeLimits>,
         revision_limits: RevisionLimits,
     ) -> Result<Self, SourceRevisionChainError> {
         if !context.is_valid() {
@@ -1086,6 +1149,7 @@ impl OpenSourceRevisionChainJob {
             object_limits,
             syntax_limits,
             xref_stream_limits,
+            decode_limits,
             revision_limits,
             final_marker: None,
             proofs: Vec::new(),
@@ -1116,6 +1180,11 @@ impl OpenSourceRevisionChainJob {
     /// Returns the aggregate acquisition and retained-bound profile.
     pub const fn limits(&self) -> SourceRevisionChainLimits {
         self.limits
+    }
+
+    /// Returns the optional filtered xref-stream decode profile.
+    pub const fn decode_limits(&self) -> Option<DecodeLimits> {
+        self.decode_limits
     }
 
     /// Returns cumulative work and conservative retained-publication evidence.
@@ -1417,7 +1486,12 @@ impl OpenSourceRevisionChainJob {
                     let parse = child
                         .object()
                         .parse_bytes()
-                        .checked_add(child.xref_stream().map_or(0, |stats| stats.decoded_bytes()));
+                        .checked_add(child.decode().map_or(0, |stats| stats.work_bytes()))
+                        .and_then(|value| {
+                            value.checked_add(
+                                child.xref_stream().map_or(0, |stats| stats.decoded_bytes()),
+                            )
+                        });
                     let read = child
                         .object()
                         .read_bytes()
@@ -1720,17 +1794,31 @@ impl OpenSourceRevisionChainJob {
         revision_startxref: u64,
         role: StreamRole,
     ) -> Result<(), SourceRevisionChainError> {
-        let job = OpenSourceXrefStreamJob::new(
-            self.snapshot,
-            container,
-            anchor.startxref(),
-            object_upper_bound,
-            revision_startxref,
-            self.context.stream(),
-            self.object_limits,
-            self.syntax_limits,
-            self.xref_stream_limits,
-        )
+        let job = match self.decode_limits {
+            Some(decode_limits) => OpenSourceXrefStreamJob::new_with_decode_limits(
+                self.snapshot,
+                container,
+                anchor.startxref(),
+                object_upper_bound,
+                revision_startxref,
+                self.context.stream(),
+                self.object_limits,
+                self.syntax_limits,
+                self.xref_stream_limits,
+                decode_limits,
+            ),
+            None => OpenSourceXrefStreamJob::new(
+                self.snapshot,
+                container,
+                anchor.startxref(),
+                object_upper_bound,
+                revision_startxref,
+                self.context.stream(),
+                self.object_limits,
+                self.syntax_limits,
+                self.xref_stream_limits,
+            ),
+        }
         .map_err(SourceRevisionChainError::from_stream)?;
         let (read_bound, parse_bound, retained_bound) =
             self.stream_child_bounds(anchor.startxref(), object_upper_bound)?;
@@ -2040,9 +2128,12 @@ impl OpenSourceRevisionChainJob {
                 u64::MAX,
             )
         })?;
-        let payload = available
-            .min(self.object_limits.max_stream_bytes())
-            .min(self.xref_stream_limits.max_decoded_bytes());
+        let payload = available.min(self.object_limits.max_stream_bytes()).min(
+            self.decode_limits.map_or_else(
+                || self.xref_stream_limits.max_decoded_bytes(),
+                DecodeLimits::max_input_bytes,
+            ),
+        );
         let read = object_work
             .min(self.object_limits.max_total_read_bytes())
             .checked_add(payload)
@@ -2053,9 +2144,28 @@ impl OpenSourceRevisionChainJob {
                     u64::MAX,
                 )
             })?;
+        let decode_parse = match self.decode_limits {
+            Some(limits) => payload
+                .checked_add(limits.max_total_output_bytes())
+                .and_then(|value| {
+                    value.checked_add(
+                        limits
+                            .max_final_output_bytes()
+                            .min(self.xref_stream_limits.max_decoded_bytes()),
+                    )
+                }),
+            None => Some(payload),
+        }
+        .ok_or_else(|| {
+            SourceRevisionChainError::resource(
+                SourceRevisionChainLimitKind::ParseBytes,
+                self.limits.max_total_parse_bytes,
+                u64::MAX,
+            )
+        })?;
         let parse = object_work
             .min(self.object_limits.max_total_parse_bytes())
-            .checked_add(payload)
+            .checked_add(decode_parse)
             .ok_or_else(|| {
                 SourceRevisionChainError::resource(
                     SourceRevisionChainLimitKind::ParseBytes,
@@ -2063,11 +2173,34 @@ impl OpenSourceRevisionChainJob {
                     u64::MAX,
                 )
             })?;
+        let decoder_retained = match self.decode_limits {
+            Some(limits) => {
+                let plan =
+                    FilterPlan::retained_heap_upper_bound(limits.max_filters()).map_err(|_| {
+                        SourceRevisionChainError::for_code(
+                            SourceRevisionChainErrorCode::InternalState,
+                            None,
+                        )
+                    })?;
+                limits
+                    .max_retained_capacity_bytes()
+                    .checked_add(plan)
+                    .ok_or_else(|| {
+                        SourceRevisionChainError::resource(
+                            SourceRevisionChainLimitKind::RetainedBoundBytes,
+                            self.limits.max_retained_bound_bytes,
+                            u64::MAX,
+                        )
+                    })?
+            }
+            None => 0,
+        };
         let retained = self
             .syntax_limits
             .max_owned_bytes()
             .checked_add(self.syntax_limits.max_container_bytes())
             .and_then(|value| value.checked_add(self.xref_stream_limits.max_retained_entry_bytes()))
+            .and_then(|value| value.checked_add(decoder_retained))
             .ok_or_else(|| {
                 SourceRevisionChainError::resource(
                     SourceRevisionChainLimitKind::RetainedBoundBytes,
