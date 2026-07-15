@@ -1,3 +1,4 @@
+use crate::flate::decode_flate;
 use crate::{
     DecodeAttestation, DecodeError, DecodeErrorCode, DecodeFuelScheduleVersion, DecodeLimitKind,
     DecodeLimits, DecodeRequest, DecodedStream, StreamFilter,
@@ -131,6 +132,14 @@ fn decode_layer<C: DecodeCancellation + ?Sized>(
     cancellation: &C,
 ) -> Result<Vec<u8>, DecodeError> {
     match filter {
+        StreamFilter::FlateDecode => decode_flate(
+            input,
+            input_capacity,
+            is_final,
+            filter_index,
+            budget,
+            cancellation,
+        ),
         StreamFilter::AsciiHexDecode => decode_ascii_hex(
             input,
             input_capacity,
@@ -438,7 +447,7 @@ const fn is_pdf_whitespace(byte: u8) -> bool {
     matches!(byte, 0 | b'\t' | b'\n' | 0x0c | b'\r' | b' ')
 }
 
-struct DecodeBudget {
+pub(crate) struct DecodeBudget {
     limits: DecodeLimits,
     schedule: DecodeFuelScheduleVersion,
     fuel_consumed: u64,
@@ -448,7 +457,7 @@ struct DecodeBudget {
 }
 
 impl DecodeBudget {
-    const fn new(limits: DecodeLimits, schedule: DecodeFuelScheduleVersion) -> Self {
+    pub(crate) const fn new(limits: DecodeLimits, schedule: DecodeFuelScheduleVersion) -> Self {
         Self {
             limits,
             schedule,
@@ -465,6 +474,16 @@ impl DecodeBudget {
         cancellation: &C,
     ) -> Result<(), DecodeError> {
         self.charge_fuel(self.schedule.layer_setup_cost(), filter_index, cancellation)
+    }
+
+    fn charge_algorithm<C: DecodeCancellation + ?Sized>(
+        &mut self,
+        amount: u64,
+        filter_index: Option<u16>,
+        cancellation: &C,
+    ) -> Result<(), DecodeError> {
+        let cost = self.schedule.algorithm_step_cost().saturating_mul(amount);
+        self.charge_fuel(cost, filter_index, cancellation)
     }
 
     fn consume_input<C: DecodeCancellation + ?Sized>(
@@ -585,7 +604,7 @@ impl DecodeBudget {
     }
 }
 
-struct OutputBuffer<'a> {
+pub(crate) struct OutputBuffer<'a> {
     bytes: Vec<u8>,
     input_capacity: usize,
     is_final: bool,
@@ -596,7 +615,7 @@ struct OutputBuffer<'a> {
 }
 
 impl<'a> OutputBuffer<'a> {
-    fn new(
+    pub(crate) fn new(
         input_capacity: usize,
         is_final: bool,
         filter_index: Option<u16>,
@@ -614,14 +633,14 @@ impl<'a> OutputBuffer<'a> {
         }
     }
 
-    fn consume_input<C: DecodeCancellation + ?Sized>(
+    pub(crate) fn consume_input<C: DecodeCancellation + ?Sized>(
         &mut self,
         cancellation: &C,
     ) -> Result<(), DecodeError> {
         self.budget.consume_input(self.filter_index, cancellation)
     }
 
-    fn push<C: DecodeCancellation + ?Sized>(
+    pub(crate) fn push<C: DecodeCancellation + ?Sized>(
         &mut self,
         byte: u8,
         cancellation: &C,
@@ -637,6 +656,15 @@ impl<'a> OutputBuffer<'a> {
         self.layer_output_bytes = attempted_layer;
         self.budget.cumulative_output_bytes = attempted_total;
         Ok(())
+    }
+
+    pub(crate) fn charge_algorithm<C: DecodeCancellation + ?Sized>(
+        &mut self,
+        amount: u64,
+        cancellation: &C,
+    ) -> Result<(), DecodeError> {
+        self.budget
+            .charge_algorithm(amount, self.filter_index, cancellation)
     }
 
     fn ensure_capacity(&mut self) -> Result<(), DecodeError> {
@@ -715,7 +743,16 @@ impl<'a> OutputBuffer<'a> {
         u64::try_from(self.input_capacity.saturating_add(self.bytes.capacity())).unwrap_or(u64::MAX)
     }
 
-    fn finish(self) -> Vec<u8> {
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) fn byte_at_distance(&self, distance: usize) -> Option<u8> {
+        let index = self.bytes.len().checked_sub(distance)?;
+        self.bytes.get(index).copied()
+    }
+
+    pub(crate) fn finish(self) -> Vec<u8> {
         self.bytes
     }
 }

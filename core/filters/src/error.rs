@@ -86,6 +86,10 @@ pub enum DecodeErrorCode {
     InvalidAscii85,
     /// RunLength input contains a truncated or otherwise invalid run.
     InvalidRunLength,
+    /// A zlib wrapper or its Deflate payload is malformed.
+    InvalidFlate,
+    /// A zlib preset dictionary was declared without an approved dictionary profile.
+    UnsupportedFlateDictionary,
     /// A deterministic decoding budget was exceeded.
     ResourceLimit,
     /// The physical bytes belong to a different immutable source revision.
@@ -187,6 +191,16 @@ impl DecodeError {
                 DecodeErrorCategory::Syntax,
                 DecodeRecoverability::CorrectInput,
                 "RPE-FILTERS-0008",
+            ),
+            DecodeErrorCode::InvalidFlate => (
+                DecodeErrorCategory::Syntax,
+                DecodeRecoverability::CorrectInput,
+                "RPE-FILTERS-0013",
+            ),
+            DecodeErrorCode::UnsupportedFlateDictionary => (
+                DecodeErrorCategory::Unsupported,
+                DecodeRecoverability::ReportUnsupported,
+                "RPE-FILTERS-0014",
             ),
             DecodeErrorCode::ResourceLimit => (
                 DecodeErrorCategory::Resource,

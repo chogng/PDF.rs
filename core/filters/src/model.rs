@@ -9,6 +9,8 @@ use crate::{DecodeError, DecodeErrorCode, DecodeLimitKind, DecodeLimits};
 /// Foundational PDF stream filter implemented by this crate.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum StreamFilter {
+    /// The canonical PDF `FlateDecode` filter with a zlib wrapper.
+    FlateDecode,
     /// The canonical PDF `ASCIIHexDecode` filter.
     AsciiHexDecode,
     /// The canonical PDF `ASCII85Decode` filter.
@@ -21,6 +23,7 @@ impl StreamFilter {
     /// Returns the canonical PDF name bytes without the leading slash.
     pub const fn canonical_pdf_name(self) -> &'static [u8] {
         match self {
+            Self::FlateDecode => b"FlateDecode",
             Self::AsciiHexDecode => b"ASCIIHexDecode",
             Self::Ascii85Decode => b"ASCII85Decode",
             Self::RunLengthDecode => b"RunLengthDecode",
@@ -74,6 +77,7 @@ impl FilterPlan {
         })?;
         for (index, name) in names.iter().enumerate() {
             let filter = match *name {
+                b"FlateDecode" => StreamFilter::FlateDecode,
                 b"ASCIIHexDecode" => StreamFilter::AsciiHexDecode,
                 b"ASCII85Decode" => StreamFilter::Ascii85Decode,
                 b"RunLengthDecode" => StreamFilter::RunLengthDecode,
@@ -121,7 +125,7 @@ fn validate_hard_filter_count(count: usize) -> Result<(), DecodeError> {
 /// Version of deterministic stream-decoding fuel weights.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DecodeFuelScheduleVersion {
-    /// One unit per layer setup, consumed input byte, and emitted output byte.
+    /// One unit per setup/algorithm step, consumed input byte, and emitted output byte.
     M1V1,
 }
 
@@ -139,6 +143,12 @@ impl DecodeFuelScheduleVersion {
     }
 
     pub(crate) const fn output_byte_cost(self) -> u64 {
+        match self {
+            Self::M1V1 => 1,
+        }
+    }
+
+    pub(crate) const fn algorithm_step_cost(self) -> u64 {
         match self {
             Self::M1V1 => 1,
         }

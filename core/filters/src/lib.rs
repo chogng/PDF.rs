@@ -12,6 +12,7 @@
 
 mod decode;
 mod error;
+mod flate;
 mod limits;
 mod model;
 

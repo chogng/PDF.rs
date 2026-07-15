@@ -1,5 +1,5 @@
 schema = 1
-version = "0.52.0"
+version = "0.53.0"
 status = "active"
 
 [[requirement]]
@@ -97,12 +97,12 @@ component_notes = "The m1.xref-revision-chain.v1 pure composer consumes already-
 [[requirement]]
 id = "RPE-ARCH-001/5.6"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
-summary = "Native stream decoding binds exact encoded bytes to sealed proof and enforces strict basic-filter, output, capacity, fuel, and cancellation budgets."
+summary = "Native stream decoding binds exact encoded bytes to sealed proof and enforces strict foundational-filter, Flate, output, capacity, fuel, and cancellation budgets."
 features = ["core.stream-filter-decode"]
 implementation = ["core/filters"]
 tests = ["core/filters::decode_behavior", "core/filters::repository_policy"]
 status = "partial"
-notes = "The m1.basic-stream-filters.v1 product slice consumes one exact immutable ByteSlice and publishes non-Clone DecodedStream bytes only together with sealed evidence for the complete SourceSnapshot, source identity, owner ObjectRef, dictionary and encoded physical spans, encoded slice, canonical filter plan, profile, validated limits, fuel schedule and consumption, cumulative output, allocator-reported peak simultaneous intermediate/output capacity, and final decoded length. An empty plan is an internal identity path; the non-standard PDF name Identity and unknown or abbreviated names are UnsupportedFilter without external fallback. Strict ASCIIHexDecode, ASCII85Decode, and RunLengthDecode implementations support ordered chains, decoded-only coordinates, deterministic per-layer/cumulative/final output and retained-capacity ceilings, source-change rejection, and cooperative cancellation. The object and xref layers do not yet construct decode requests or consume this proof. Flate, predictors, LZW, decode parameters, crypt filters, image codecs, empty physical ByteSlice input, clause-pinned ISO conformance cases, registered fuzzing, and differential evidence remain open. The feature is PLANNED and this partial mapping does not claim general stream support or M1 exit."
+notes = "The m1.basic-stream-filters.v1 product slice consumes one exact immutable ByteSlice and publishes non-Clone DecodedStream bytes only together with sealed evidence for the complete SourceSnapshot, source identity, owner ObjectRef, dictionary and encoded physical spans, encoded slice, canonical filter plan, profile, validated limits, fuel schedule and consumption, cumulative output, allocator-reported peak simultaneous intermediate/output capacity, and final decoded length. An empty plan is an internal identity path; the non-standard PDF name Identity and unknown or abbreviated names are UnsupportedFilter without external fallback. Strict ASCIIHexDecode, ASCII85Decode, RunLengthDecode, and dependency-free zlib-wrapped FlateDecode implementations support ordered chains, decoded-only coordinates, deterministic per-layer/cumulative/final output and retained-capacity ceilings, source-change rejection, and cooperative cancellation. Flate covers stored, fixed-Huffman, and dynamic-Huffman blocks, validates declared windows through 32 KiB plus Adler-32, and charges block, Huffman, input, output, and cancellation work under the same fuel schedule. The object and xref layers do not yet construct decode requests or consume this proof. Predictors, LZW, decode parameters, crypt filters, image codecs, empty physical ByteSlice input, clause-pinned ISO conformance cases, registered fuzzing, and differential evidence remain open. The feature is PLANNED and this partial mapping does not claim general stream support or M1 exit."
 
 [[requirement]]
 id = "RPE-ARCH-001/5.8-5.9"

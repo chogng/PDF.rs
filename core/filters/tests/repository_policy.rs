@@ -113,8 +113,8 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml")).unwrap();
     let spec_map =
         fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml")).unwrap();
-    assert_eq!(top_level_version(&feature_map), Some("0.52.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.52.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.53.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.53.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.stream-filter-decode")
         .expect("basic stream-filter feature must exist");
@@ -141,8 +141,11 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         "ASCIIHexDecode",
         "ASCII85Decode",
         "RunLengthDecode",
+        "FlateDecode",
+        "stored, fixed-Huffman, and dynamic-Huffman",
+        "charges block, Huffman, input, output, and cancellation work",
         "The object and xref layers do not yet",
-        "Flate, predictors, LZW",
+        "Predictors, LZW",
         "feature is PLANNED",
         "does not claim general stream support or M1 exit",
         "status = \"partial\"",
