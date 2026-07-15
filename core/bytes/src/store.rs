@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::source::{BackingBytes, ResidentTracker};
@@ -18,6 +18,10 @@ const HARD_MAX_TICKETS: usize = 4096;
 const HARD_MAX_SUBSCRIBERS_PER_TICKET: usize = 4096;
 const HARD_MAX_TOTAL_SUBSCRIPTIONS: usize = 16_384;
 const HARD_MAX_MISSING_RANGES: usize = 256;
+
+// Relaxed ordering is sufficient: the counter establishes uniqueness only and
+// does not publish or synchronize any other Range-store state.
+static NEXT_RANGE_STORE_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 /// Unvalidated Range-store resource-limit input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,6 +255,7 @@ struct StoreState {
 /// stable copies, canonicalizes overlapping and adjacent segments, and turns
 /// data arrival into terminal tickets without invoking parser callbacks.
 pub struct RangeStore {
+    ticket_namespace: u64,
     snapshot: SourceSnapshot,
     limits: RangeStoreLimits,
     resident: Arc<ResidentTracker>,
@@ -288,7 +293,13 @@ impl RangeStore {
                 usize_to_u64(limits.max_tickets),
             )
         })?;
+        let ticket_namespace = NEXT_RANGE_STORE_NAMESPACE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| SourceError::for_code(SourceErrorCode::InternalState))?;
         Ok(Self {
+            ticket_namespace,
             snapshot,
             limits,
             resident: Arc::new(ResidentTracker::new(limits.max_resident_bytes)),
@@ -1050,7 +1061,7 @@ impl ByteSource for RangeStore {
                 usize_to_u64(state.subscription_count + 1),
             ));
         }
-        let ticket = DataTicket(state.next_ticket);
+        let ticket = DataTicket::new(self.ticket_namespace, state.next_ticket);
         state.next_ticket = match state.next_ticket.checked_add(1) {
             Some(next) => next,
             None => {

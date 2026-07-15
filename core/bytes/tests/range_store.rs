@@ -483,6 +483,42 @@ fn ticket_failures_have_one_terminal_transition() {
 }
 
 #[test]
+fn ticket_identity_is_bound_to_one_range_store_namespace() {
+    let observed = snapshot(Some(4));
+    let first_store = RangeStore::new(observed, limits()).unwrap();
+    let second_store = RangeStore::new(observed, limits()).unwrap();
+    let first = match first_store.poll(request(0, 4, 1, 1)) {
+        ReadPoll::Pending { ticket, .. } => ticket,
+        other => panic!("expected first pending ticket, got {other:?}"),
+    };
+    let second = match second_store.poll(request(0, 4, 1, 1)) {
+        ReadPoll::Pending { ticket, .. } => ticket,
+        other => panic!("expected second pending ticket, got {other:?}"),
+    };
+
+    assert_eq!(first.value(), 1);
+    assert_eq!(second.value(), 1);
+    assert_ne!(first, second);
+    assert_eq!(
+        first_store.ticket_status(second).unwrap_err().code(),
+        SourceErrorCode::UnknownTicket
+    );
+    assert_eq!(
+        first_store
+            .fail_ticket(second, SourceError::source_unavailable())
+            .unwrap_err()
+            .code(),
+        SourceErrorCode::UnknownTicket
+    );
+    assert_eq!(
+        first_store.ticket_status(first).unwrap(),
+        TicketStatus::Pending {
+            subscriber_count: 1
+        }
+    );
+}
+
+#[test]
 fn integrity_ticket_failure_poisons_every_pending_read() {
     let observed = snapshot(Some(8));
     let store = RangeStore::new(observed, limits()).unwrap();

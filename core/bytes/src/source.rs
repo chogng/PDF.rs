@@ -217,12 +217,22 @@ impl ResumeSubscription {
 
 /// Opaque one-shot data-arrival ticket allocated by a Range store.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DataTicket(pub(crate) u64);
+pub struct DataTicket {
+    namespace: u64,
+    value: u64,
+}
 
 impl DataTicket {
-    /// Returns the opaque numeric value for runtime bookkeeping.
+    pub(crate) const fn new(namespace: u64, value: u64) -> Self {
+        Self { namespace, value }
+    }
+
+    /// Returns the store-local opaque numeric value for runtime bookkeeping.
+    ///
+    /// Equality also includes a private Range-store namespace, so values from
+    /// different stores never identify the same ticket.
     pub const fn value(self) -> u64 {
-        self.0
+        self.value
     }
 }
 
