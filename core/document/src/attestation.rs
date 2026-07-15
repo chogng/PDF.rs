@@ -1081,7 +1081,10 @@ impl AttestRevisionJob {
                 | ObjectLimitKind::BoundaryBytes
                 | ObjectLimitKind::StreamBytes
                 | ObjectLimitKind::TotalReadBytes
-                | ObjectLimitKind::TotalParseBytes => {}
+                | ObjectLimitKind::TotalParseBytes
+                | ObjectLimitKind::RepairScanBytes
+                | ObjectLimitKind::RepairHeaderCandidates
+                | ObjectLimitKind::RepairBoundaryCandidates => {}
             }
         }
         DocumentError::from_attestation_object(error, reference, offset)

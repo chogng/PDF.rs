@@ -369,6 +369,21 @@ impl StreamLengthClaim {
         }
     }
 
+    pub(crate) const fn repaired_direct(
+        snapshot: SourceSnapshot,
+        owner: ObjectRef,
+        declaration: DeclaredStreamLength,
+        value: u64,
+    ) -> Self {
+        Self {
+            snapshot,
+            owner,
+            declaration,
+            value,
+            resolved_value_span: None,
+        }
+    }
+
     /// Returns the source snapshot to which this claim is bound.
     pub const fn snapshot(self) -> SourceSnapshot {
         self.snapshot

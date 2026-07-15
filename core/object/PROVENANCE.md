@@ -1,8 +1,10 @@
 # Scope
 
-`core/object` is the strict single-indirect-object framing bootstrap for the Native product core.
-It validates one xref-derived target against its exact object header, parses one direct value, and
-frames a stream with bounded resumable reads. A staged path may stop after the stream dictionary,
+`core/object` is the single-indirect-object framing bootstrap for the Native product core. Its R0
+entry validates one xref-derived target against its exact object header, parses one direct value,
+and frames a stream with bounded resumable reads. An explicit R1 sibling exhausts that unchanged
+strict child before it may probe one bounded local object-header or direct stream-length repair and
+retains proof of every effective value. A staged path may stop after the stream dictionary,
 publish a direct value or indirect `/Length` dependency, and resume exact boundary validation only
 after a same-snapshot resolver supplies the referenced integer metadata. A separate strict entry
 parses one complete unfiltered object-stream payload only from a fully framed stream container and
@@ -108,6 +110,27 @@ makes no ISO or R0 semantic coverage claim.
   `ByteSource::poll`, and a scoped parse window is charged before parser invocation, so exhausted
   parent work cannot perform the rejected lower-layer operation. The scoped caps do not weaken
   per-object envelope, boundary, stream, source, or syntax limits.
+- `OpenLocalObjectJob` always polls one unchanged `OpenObjectJob` first. It enters repair only for
+  an invalid expected header or a direct stream whose declared boundary fails locally. Unsupported
+  indirect lengths, resource exhaustion, cancellation, snapshot/source failures, configuration,
+  and internal failures remain terminal and never enter a recovery path.
+- Header repair scans only a fixed caller-bounded delta around the declared xref offset for the
+  exact expected object number, generation, `obj` keyword, and following PDF whitespace. Matching
+  anchors, including later-invalid candidates, consume a fixed candidate budget. Exactly one
+  anchor must survive token checks, and the candidate is passed back through the normal object job
+  with the remaining cumulative read/parse caps; no scanned syntax is published directly.
+- Direct-length repair first replays the normally parsed stream envelope, preserving the declared
+  direct `/Length`, then scans a fixed length delta for LF or CRLF `endstream` anchors. Every
+  looks-like anchor consumes the candidate budget before normal boundary parsing, and each parse
+  receives at most the configured boundary window. Exactly one complete `endstream`/`endobj`
+  boundary may become the effective length. Missing, duplicate, invalid, negative, or indirect
+  `/Length` declarations are not repaired.
+- Repair scans have their own cumulative byte and candidate ceilings, while the strict child,
+  corrected-header validation, and envelope replay share the original per-object cumulative
+  read/parse totals. Pending re-polls neither repeat nor recharge a scan. The successful
+  `LocallyFramedObject` is the only repaired publication surface: it delegates object semantics but
+  does not expose a bare `IndirectObject`, and it retains the source snapshot, declared/effective
+  offset or length, stable repair identifiers, scan evidence, and child work statistics.
 - Cancellation is checked before source polls and phase transitions. Syntax loops use fixed
   256-iteration probes, and the object-owned `/Length` scan applies the same bound. Cancellation,
   malformed input, unsupported behavior, resource exhaustion, source failure, and internal
@@ -183,6 +206,12 @@ indirect declaration classification, same-snapshot and exact-reference claim bin
 `RPE-OBJECT-0022` mismatch policy, sparse envelope and exact-boundary Pending/resume checkpoints,
 a deliberately unsupplied large payload tail, terminal source change, cancellation, retained
 resolved-value provenance, and exact versus one-less aggregate work across both phases.
+Local-repair tests cover unchanged strict success, nearby exact-header correction, direct-length
+correction with LF/CRLF/bare-CR distinctions, combined offset and length evidence, ambiguous and
+missing candidates, strict failure allowlisting, same-snapshot Pending/resume and source change,
+configuration/checkpoint validation, exact and one-less scan/delta/candidate ceilings, invalid
+looks-like boundary attempts, per-candidate boundary caps, and aggregate strict/candidate/replay
+read and parse totals.
 Object-stream tests build containers through the public RangeStore and `OpenObjectJob` path, then
 cover exact physical payload binding, independent decoded coordinates, nested arrays/dictionaries
 and references, `/Extends` validation and self-loop rejection, uninterpreted header-extension
@@ -221,11 +250,13 @@ Native/external-engine differential is claimed in this bootstrap slice.
   indexed physical offset but does not authenticate the offset's lexical context. Top-level
   attestation remains a security-relevant gate before treating this bootstrap as a complete
   resolver.
-- Only known-length immutable snapshots and strict behavior are accepted. Executable strict-policy
-  regressions prove that neither a correct object header one byte away nor a correct stream
-  boundary one byte beyond a wrong direct `/Length` is searched automatically. R1/R2 repair, unknown
-  length, platform Range scheduling/coalescing, cancellation delivery and ticket unsubscription,
-  terminal completion/cancel/close arbitration, and browser/desktop E2E remain future work.
+- Only known-length immutable snapshots are accepted. Executable strict-policy regressions prove
+  that neither a correct object header one byte away nor a correct stream boundary one byte beyond
+  a wrong direct `/Length` is searched automatically; local R1 repair exists only through the
+  explicit sibling job. Rebuilding every effective repaired offset into one candidate document
+  index, top-level geometry attestation, proof-bearing repaired document open, R2 repair, platform
+  Range scheduling/coalescing, cancellation delivery and ticket unsubscription, terminal
+  completion/cancel/close arbitration, and browser/desktop E2E remain future work.
 - Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or
   `ReleaseProfile` decision.
 - The lower syntax model still implements deep `Clone` for source-located objects. New object-layer
@@ -256,3 +287,6 @@ Native/external-engine differential is claimed in this bootstrap slice.
 - 2026-07-15: Added uninterpreted header-extension provenance, conversion-peak accounting and
   cancellation evidence, numeric-scan probes, proof-preserving child limit mapping, strict
   top-level member rules, and exact/one-less resource boundaries.
+- 2026-07-15: Added an explicit strict-first local R1 sibling for bounded expected-header and direct
+  stream-length repair, normal candidate revalidation, aggregate child work caps, proof-bearing
+  diagnostics, and exact scan/candidate/boundary resource regressions without changing R0 policy.

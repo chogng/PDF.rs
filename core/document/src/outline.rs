@@ -839,7 +839,10 @@ impl ReadOutlineJob<'_> {
                 | ObjectLimitKind::BoundaryBytes
                 | ObjectLimitKind::StreamBytes
                 | ObjectLimitKind::TotalReadBytes
-                | ObjectLimitKind::TotalParseBytes => {}
+                | ObjectLimitKind::TotalParseBytes
+                | ObjectLimitKind::RepairScanBytes
+                | ObjectLimitKind::RepairHeaderCandidates
+                | ObjectLimitKind::RepairBoundaryCandidates => {}
             }
         }
         error

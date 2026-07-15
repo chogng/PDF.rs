@@ -95,8 +95,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.40.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.40.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.41.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.41.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.staged-stream-length-framing")
         .expect("staged stream-length feature record must exist");
@@ -140,6 +140,25 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
     assert!(milestone.contains("connects those already-composed inputs"));
     assert!(milestone.contains("does not acquire revision sections"));
     assert!(milestone.contains("profiles remain PLANNED"));
+
+    let repair = record_with_id(&feature_map, "feature", "core.local-repair")
+        .expect("local-repair feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.r1-local-repair.v1\"",
+        "core/object::local_repair",
+        "core/object::object_behavior",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            repair.contains(required),
+            "local repair must contain {required:?}"
+        );
+    }
+    assert!(milestone.contains("object R1 sibling"));
+    assert!(milestone.contains("repaired geometry attestation"));
+    assert!(milestone.contains("proof-bearing repaired document open"));
 }
 
 fn top_level_version(document: &str) -> Option<&str> {

@@ -19,6 +19,12 @@ pub enum ObjectLimitKind {
     TotalReadBytes,
     /// Cumulative complete windows parsed across retries.
     TotalParseBytes,
+    /// Source bytes read and examined only by explicit local repair.
+    RepairScanBytes,
+    /// Matching object-header anchors considered by local repair.
+    RepairHeaderCandidates,
+    /// Strict stream-boundary anchors considered by local repair.
+    RepairBoundaryCandidates,
 }
 
 /// Structured object resource-limit context without document bytes.
@@ -113,6 +119,14 @@ pub enum ObjectErrorCode {
     UnexpectedEndOfSource,
     /// Object syntax or declared stream data crosses its indexed physical interval.
     ObjectCrossesPhysicalBound,
+    /// Local-repair limits are zero or above fixed hard ceilings.
+    InvalidRepairLimits,
+    /// Strict, candidate, and scan checkpoints are not pairwise distinct.
+    InvalidRepairJobContext,
+    /// No unique bounded local object repair passed normal validation.
+    LocalRepairFailed,
+    /// More than one bounded local object repair candidate passed validation.
+    AmbiguousRepair,
 }
 
 /// Coarse indirect-object failure category.
@@ -291,6 +305,26 @@ impl ObjectError {
                 ObjectErrorCategory::Syntax,
                 ObjectRecoverability::CorrectInput,
                 "RPE-OBJECT-0021",
+            ),
+            ObjectErrorCode::InvalidRepairLimits => (
+                ObjectErrorCategory::Configuration,
+                ObjectRecoverability::CorrectConfiguration,
+                "RPE-OBJECT-0023",
+            ),
+            ObjectErrorCode::InvalidRepairJobContext => (
+                ObjectErrorCategory::Configuration,
+                ObjectRecoverability::CorrectConfiguration,
+                "RPE-OBJECT-0024",
+            ),
+            ObjectErrorCode::LocalRepairFailed => (
+                ObjectErrorCategory::Syntax,
+                ObjectRecoverability::CorrectInput,
+                "RPE-OBJECT-0025",
+            ),
+            ObjectErrorCode::AmbiguousRepair => (
+                ObjectErrorCategory::Syntax,
+                ObjectRecoverability::CorrectInput,
+                "RPE-OBJECT-0026",
             ),
         };
         Self {

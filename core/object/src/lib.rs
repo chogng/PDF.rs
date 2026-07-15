@@ -5,6 +5,9 @@
 //! boundary reads, so their opaque payload need not be resident or contiguous.
 //! Successful values also report the allocator-visible syntax heap capacity
 //! they retain, without treating discarded retries as resident state.
+//! An explicit sibling job can run that strict path first and then attempt one
+//! bounded, proof-bearing local header or direct-length repair; the strict
+//! entry points never search or recover implicitly.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -15,6 +18,7 @@ mod limits;
 mod model;
 mod object_stream;
 mod parser;
+mod repair;
 mod staged;
 
 pub use error::{
@@ -35,5 +39,10 @@ pub use object_stream::{
     DecodedObjectSpan, ObjectStream, ObjectStreamEntry, ObjectStreamError,
     ObjectStreamErrorCategory, ObjectStreamErrorCode, ObjectStreamLimit, ObjectStreamLimitConfig,
     ObjectStreamLimitKind, ObjectStreamLimits, ObjectStreamStats, parse_unfiltered_object_stream,
+};
+pub use repair::{
+    LocalObjectJobContext, LocalObjectPhase, LocalObjectPoll, LocallyFramedObject,
+    ObjectRepairDiagnostic, ObjectRepairKind, ObjectRepairLimitConfig, ObjectRepairLimits,
+    ObjectRepairStats, OpenLocalObjectJob,
 };
 pub use staged::{ObjectEnvelopePoll, OpenObjectEnvelopeJob, OpenStreamBoundaryJob};
