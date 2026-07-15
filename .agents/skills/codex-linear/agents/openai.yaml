@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Linear"
+  short_description: "Coordinate Git work through Linear issues"
+  default_prompt: "Use $codex-linear to claim a Linear issue, coordinate the branch, and keep status and evidence synchronized."
