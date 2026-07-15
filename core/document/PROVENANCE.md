@@ -14,6 +14,9 @@ deliberately unauthenticated and cannot be used as an `AttestedRevisionIndex`. A
 attestation job then reuses the complete header/object/gap scanner over effective geometry and
 publishes only `LocallyRepairedRevisionIndex`, which retains both xref and object repair evidence
 without exposing or converting to the internal strict-shaped proof.
+`OpenLocallyRepairedBaseRevisionJob` is the formal core R1 composition: it alone owns local xref
+discovery, every declared-geometry object probe, complete proof-plan allocation, atomic rebuild,
+and final attestation without publishing any intermediate typestate.
 That sealed typestate is the only public factory for bounded jobs that reparse one exact object,
 iteratively follow a top-level direct-reference chain, or validate a strict Catalog and count its
 complete page tree or enumerate its bounded strict outline while preserving the attested-object
@@ -164,6 +167,19 @@ repair or publish partially attested state.
   repaired typestate, fixed-size object attestations, xref diagnostics, the original repair plan,
   and geometry/attestation stats. It provides no `Deref`, `AsRef`, consuming conversion, strict
   object reopen, or raw candidate access.
+- `OpenLocallyRepairedBaseRevisionJob` validates one shared `JobId`, equal first/final object
+  priority, and seventeen globally distinct xref, first-pass, and final-attestation checkpoints.
+  It sequentially drives local xref discovery, converts every original physical interval through
+  `OpenLocalObjectJob`, rebuilds all effective geometry, and starts final attestation in one
+  non-recursive one-shot state machine. Pending passes through with the exact active checkpoint;
+  lower xref, object, and document errors remain separately inspectable and stable.
+- `LocalRepairProbeLimits` bounds first-pass object count, cumulative read/parse work,
+  repair-only scan bytes, header and boundary candidates, and allocator-reported fixed-proof
+  capacity. Evidence capacity is checked and fallibly reserved before any object child starts.
+  Each child borrows the remaining validation and zero-capable repair-only slices before polling,
+  so one child cannot overshoot the parent ceiling. Aggregate failures retain both the document
+  limit and original lower object limit; exact exhaustion still permits later strict-valid
+  objects because repair-only caps may be zero.
 
 ## Top-level attestation
 
@@ -559,6 +575,13 @@ incomplete, reordered, widened-bound, cancelled, context-conflicting, and semant
 plans; exact and one-less retained-plan, two-sort, and final aggregate child-work ceilings prove
 pre-publication resource boundaries. Final tests assert a complete repaired ledger, redacted debug,
 stable terminal replay, and the absence of a strict typestate conversion.
+Local repaired-open tests use one four-object fixture whose single job repairs final `startxref`,
+traditional-row whitespace, one object offset, and one direct stream length before a trailing
+strict object. They prove the complete xref/object ledger, all seven first-pass aggregate exact and
+one-less boundaries, nested candidate read/parse exhaustion with retained lower evidence,
+zero-repair strict success, pre-probe evidence admission, seventeen-checkpoint context validation,
+stable cancellation/source mismatch, and sparse upper-before-lower Range delivery through xref,
+first-pass, and final-attestation phases without repeated charging.
 
 # Known deviations and unsupported cases
 
@@ -569,11 +592,11 @@ stable terminal replay, and the absence of a strict typestate conversion.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
-- Local R1 now returns a proof-bearing repaired document after complete top-level attestation, but
-  callers still drive xref repair, every first-pass object probe, geometry rebuild, and final
-  publication as separate stages. There is no single repaired-open coordinator owning aggregate
-  first-pass work, Range permits, or lifecycle state, and the repaired typestate is not yet a
-  service resolver, Session, or M1 exit claim.
+- Local R1 now has one aggregate-bounded core repaired-open coordinator and returns a proof-bearing
+  repaired document only after complete top-level attestation. The coordinator remains a
+  synchronous injected-`ByteSource` job: it does not own Range permits, transport, runtime queues,
+  request/generation lifecycle, page-count/outline service jobs, or a complete Session, and does
+  not establish M1 exit.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
   chain job can follow top-level whole-object aliases, and the count job can traverse strict
   Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
@@ -643,3 +666,5 @@ stable terminal replay, and the absence of a strict typestate conversion.
   keeping the result explicitly unauthenticated.
 - 2026-07-15: Added paired effective-interval/proof sorting and complete repaired top-level
   attestation with semantic length replay, aggregate child work, and a sealed repaired typestate.
+- 2026-07-15: Added the single core R1 repaired-open coordinator with seventeen-checkpoint identity,
+  preallocated proof plans, parent-lent first-pass aggregate caps, and sparse Range replay evidence.

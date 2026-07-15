@@ -24,6 +24,9 @@
 //! then reruns complete header/object/gap attestation over that rebuilt geometry,
 //! revalidates planned direct-length repairs under aggregate work caps, and
 //! publishes a distinct repaired typestate retaining the full repair ledger.
+//! `OpenLocallyRepairedBaseRevisionJob` is the single core entry that owns this
+//! complete R1 sequence, including local xref discovery, aggregate-bounded
+//! first-pass object probes, atomic geometry rebuild, and final attestation.
 //! Successful proof-bearing values retain their resolution profile and expose
 //! checked value-owned footprint components as evidence for a future cache owner,
 //! but this crate does not cache them.
@@ -43,6 +46,7 @@ mod dictionary;
 mod error;
 mod index;
 mod limits;
+mod local_repair_open;
 mod model;
 mod outline;
 mod outline_limits;
@@ -72,6 +76,11 @@ pub use error::{
 };
 pub use index::{DocumentCancellation, NeverCancelled};
 pub use limits::{DocumentLimitConfig, DocumentLimits};
+pub use local_repair_open::{
+    LocalRepairOpenContext, LocalRepairOpenError, LocalRepairOpenLimits, LocalRepairOpenPhase,
+    LocalRepairOpenPoll, LocalRepairOpenStats, LocalRepairProbeLimitConfig, LocalRepairProbeLimits,
+    LocalRepairProbeStats, OpenLocallyRepairedBaseRevisionJob,
+};
 pub use model::{
     AttestedRevisionIndex, CandidateRevisionIndex, DocumentIndexStats, ObjectAttestation,
     ObjectAttestationKind, PhysicalObjectInterval, RevisionId,

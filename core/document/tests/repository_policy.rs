@@ -206,7 +206,7 @@ fn traceability_registers_revision_resolution_without_claiming_complete_m1_suppo
 }
 
 #[test]
-fn traceability_registers_repair_attestation_without_claiming_complete_open() {
+fn traceability_registers_core_repaired_open_without_claiming_a_session() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
         .parent()
@@ -221,6 +221,8 @@ fn traceability_registers_repair_attestation_without_claiming_complete_open() {
         fs::read_to_string(crate_root.join("src/index.rs")).expect("index source must be readable");
     let repair_source = fs::read_to_string(crate_root.join("src/repair.rs"))
         .expect("repair source must be readable");
+    let open_source = fs::read_to_string(crate_root.join("src/local_repair_open.rs"))
+        .expect("local repaired-open source must be readable");
     assert!(index_source.contains("pub(crate) fn from_locally_parsed_xref"));
     assert!(!index_source.contains("pub fn from_locally_parsed_xref"));
     assert!(!repair_source.contains("pub fn into_candidate"));
@@ -229,6 +231,9 @@ fn traceability_registers_repair_attestation_without_claiming_complete_open() {
     assert!(!repair_source.contains("pub fn attested("));
     assert!(!repair_source.contains("Deref for LocallyRepairedRevisionIndex"));
     assert!(!repair_source.contains("AsRef<AttestedRevisionIndex>"));
+    assert!(open_source.contains("OpenLocallyRepairedBaseRevisionJob"));
+    assert!(open_source.contains("new_with_parent_caps"));
+    assert!(!open_source.contains("pub fn plan("));
 
     let feature = record_with_id(&feature_map, "feature", "core.local-repair")
         .expect("local-repair feature record must exist");
@@ -236,6 +241,7 @@ fn traceability_registers_repair_attestation_without_claiming_complete_open() {
         "state = \"PLANNED\"",
         "profile = \"m1.r1-local-repair.v1\"",
         "core/document::local_repair_geometry",
+        "core/document::local_repair_open",
         "tools/quality::maturity",
         "fuzz_targets = []",
         "benchmarks = []",
@@ -250,14 +256,17 @@ fn traceability_registers_repair_attestation_without_claiming_complete_open() {
         .expect("M1 requirement record must exist");
     for required in [
         "core/document::local_repair_geometry",
+        "core/document::local_repair_open",
         "document repair pipeline retains the local-xref proof",
         "pairs every proof with its interval",
         "linearly attests the header, every effective object, and all top-level trivia",
         "aggregate child-work caps",
         "LocallyRepairedRevisionIndex",
         "complete xref/object repair ledger",
-        "single repaired-open coordinator",
-        "Range/session lifecycle remain open",
+        "single core repaired-open coordinator",
+        "seventeen globally distinct checkpoints",
+        "first-pass aggregate",
+        "complete Session ownership remain open",
         "does not claim M1 exit",
         "status = \"partial\"",
     ] {
@@ -280,8 +289,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.44.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.44.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.45.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.45.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

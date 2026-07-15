@@ -43,6 +43,20 @@ pub enum DocumentLimitKind {
     AttestationObjectParseBytes,
     /// Conservatively accounted allocator capacity for retained fixed-size evidence.
     AttestationEvidenceBytes,
+    /// Objects started by one local-repair first-pass probe.
+    RepairProbeObjects,
+    /// Cumulative exact source bytes charged by local-repair first-pass objects.
+    RepairProbeReadBytes,
+    /// Cumulative parser-window bytes charged by local-repair first-pass objects.
+    RepairProbeParseBytes,
+    /// Cumulative repair-only source bytes scanned by local-repair first-pass objects.
+    RepairProbeScanBytes,
+    /// Matching object-header candidates accepted by local-repair first-pass scans.
+    RepairProbeHeaderCandidates,
+    /// Stream-boundary candidates accepted by local-repair first-pass scans.
+    RepairProbeBoundaryCandidates,
+    /// Allocator-reported capacity retained for the complete first-pass repair proof plan.
+    RepairProbeEvidenceBytes,
     /// Indirect objects started by one bounded reference-chain job.
     ReferenceChainObjects,
     /// Top-level indirect-reference edges followed by one bounded reference-chain job.
@@ -231,6 +245,8 @@ pub enum DocumentErrorCode {
     InvalidOutlineTarget,
     /// Runtime identity or checkpoints across xref and attestation phases are inconsistent.
     InvalidStrictBaseOpenContext,
+    /// Runtime identity or checkpoints across local-repair open phases are inconsistent.
+    InvalidLocalRepairOpenContext,
     /// Runtime identity or child checkpoints for revision-aware resolution are inconsistent.
     InvalidRevisionResolverJobContext,
     /// The effective xref-stream definition is null and hides every older definition.
@@ -561,6 +577,11 @@ impl DocumentError {
                 DocumentErrorCategory::Configuration,
                 DocumentRecoverability::CorrectConfiguration,
                 "RPE-DOCUMENT-0046",
+            ),
+            DocumentErrorCode::InvalidLocalRepairOpenContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0057",
             ),
             DocumentErrorCode::InvalidRevisionResolverJobContext => (
                 DocumentErrorCategory::Configuration,

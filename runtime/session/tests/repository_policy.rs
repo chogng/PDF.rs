@@ -248,8 +248,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.44.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.44.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.45.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.45.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -541,13 +541,13 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "consuming close returns exact owner-release evidence",
         "all five parser checkpoints",
         "upper-half-before-lower out-of-order supply",
-        "generic multi-job scheduler with queue priority, fairness, backpressure, and a job registry",
+        "generic multi-job scheduler with priority, fairness, backpressure, and a job registry",
         "not a complete Session",
         "viewport generations",
         "The explicit xref R1 sibling now first exhausts that strict child",
         "The explicit object R1 sibling likewise exhausts the unchanged strict framer",
         "LocallyRepairedRevisionIndex",
-        "single repaired-open coordinator",
+        "single core repaired-open coordinator",
         "not registered DIFFERENTIAL evidence",
         "does not claim M1 exit",
     ] {
