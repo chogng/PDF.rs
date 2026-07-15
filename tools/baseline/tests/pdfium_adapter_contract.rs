@@ -475,12 +475,13 @@ fn parts_with_limits(
     environment: Vec<(String, String)>,
     limits: ProcessLimits,
 ) -> (BaselineDescriptor, ProcessSpec, ProcessLimits) {
-    let executable = fixture_executable(mode, directory);
+    let executable = PathBuf::from(env!("CARGO_BIN_EXE_pdf-rs-baseline-fixture"));
+    let working_directory = fixture_working_directory(mode, directory);
     let process = ProcessSpec::new(
         &executable,
         arguments,
         environment,
-        directory.path(),
+        working_directory,
         "test-only-direct-child-no-grandchildren",
     )
     .unwrap();
@@ -525,33 +526,12 @@ fn page_count_limits() -> ProcessLimits {
     .unwrap()
 }
 
-fn fixture_executable(mode: &str, directory: &TestDirectory) -> PathBuf {
-    let source = PathBuf::from(env!("CARGO_BIN_EXE_pdf-rs-baseline-fixture"));
-    let destination = directory
+fn fixture_working_directory(mode: &str, directory: &TestDirectory) -> PathBuf {
+    let path = directory
         .path()
-        .join(format!("pdf-rs-baseline-fixture-{mode}"));
-
-    // Keep one copied inode under exactly one mode-bearing path. Multiple hard
-    // links to the built inode make macOS `current_exe()` path selection
-    // ambiguous when these tests run concurrently. Renaming the per-test copy
-    // preserves executable validation while making the selected mode stable.
-    let existing = fs::read_dir(directory.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("pdf-rs-baseline-fixture-"))
-        });
-    match existing {
-        Some(path) if path != destination => fs::rename(path, &destination).unwrap(),
-        Some(_) => {}
-        None => {
-            fs::copy(source, &destination).unwrap();
-        }
-    }
-    destination
+        .join(format!("pdf-rs-baseline-fixture-mode-{mode}"));
+    fs::create_dir_all(&path).unwrap();
+    path
 }
 
 fn fixture_serial_guard() -> MutexGuard<'static, ()> {

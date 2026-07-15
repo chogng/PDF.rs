@@ -30,11 +30,13 @@ fn run() -> Result<(), ()> {
     let arguments: Vec<String> = env::args().skip(1).collect();
     let environment_mode = env::var("PDF_RS_BASELINE_FIXTURE_MODE").ok();
     let executable_mode = executable_mode();
+    let working_directory_mode = working_directory_mode();
     let mode = arguments
         .first()
         .map(String::as_str)
         .or(environment_mode.as_deref())
         .or(executable_mode.as_deref())
+        .or(working_directory_mode.as_deref())
         .ok_or(())?;
     match mode {
         "ok" => write_produced_response(read_request()?, 2, 0),
@@ -307,11 +309,22 @@ fn run() -> Result<(), ()> {
 }
 
 fn executable_mode() -> Option<String> {
-    env::current_exe()
-        .ok()?
+    env::args_os()
+        .next()
+        .as_deref()
+        .map(std::path::Path::new)?
         .file_name()?
         .to_str()?
         .strip_prefix("pdf-rs-baseline-fixture-")
+        .map(str::to_owned)
+}
+
+fn working_directory_mode() -> Option<String> {
+    env::current_dir()
+        .ok()?
+        .file_name()?
+        .to_str()?
+        .strip_prefix("pdf-rs-baseline-fixture-mode-")
         .map(str::to_owned)
 }
 
