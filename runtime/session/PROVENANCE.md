@@ -17,7 +17,9 @@ before returning an idempotent close report. `M1StrictDocumentSession` composes 
 the same Range owner after Ready, one shared attested-index root, one Ready-store owner, and exactly
 one page-count plus one outline job slot. It exposes Created, Opening, WaitingForData, Ready,
 Closing, Closed, and Failed; accepts caller-issued request/job/generation identities; and permits
-parser work only through one bounded actor turn.
+parser work only through one bounded actor turn. Its read-only `M1OpeningParserAudit` reports the
+opening job phase, cumulative strict-open statistics, and retained waiting checkpoint without
+exposing the job, source, resume permit, or any execution capability.
 
 This is the Session slice needed for the M1 page-count/outline and Range lifecycle exit, not the
 complete product Session. It has no password, viewport, rendering, save, surface, generic job
@@ -33,6 +35,11 @@ threshold and budgets. The bounded actor decides
 which of those two jobs may execute and validates their caller-issued identities. A future generic
 scheduler and registry still owns arbitrary job kinds, priority classes, long-lived ID allocation,
 and Worker-wide arbitration. The platform owns physical source transport.
+
+The repository's loopback HTTP Range harness is test-only host evidence. It consumes pure
+coalescer plans, sends strong-ETag `If-Range` requests to a bounded `std::net` fixture, validates
+the complete response geometry, and routes exact member bytes back to the actor. It is not linked
+into the product library and does not establish a reusable HTTP adapter or product transport owner.
 
 `runtime/cache` continues to own complete keys, admission, byte accounting,
 cancellation probes, borrowed hits, and deterministic eviction. A later complete
@@ -217,6 +224,28 @@ completed close.
   Range registrations/backing, Ready-cache entries/bytes, and the private shared-index root handle.
   Shared index heap retained transitively by active jobs is bounded by the already-attested index
   profile but is not allocator telemetry and is not added again to cache/Range byte totals.
+- `opening_parser_audit` borrows immutable actor state and returns only value-owned phase,
+  cumulative-statistics, and checkpoint evidence while the opening coordinator exists. It neither
+  wakes nor polls a job and becomes absent when ownership moves to Ready or a terminal. The
+  loopback E2E compares the complete snapshot before and after every host ingress, then requires a
+  later explicit `run_one` turn to change it or complete opening.
+
+## Test-only loopback Range host
+
+- The fixture server binds only an ephemeral loopback address, accepts a fixed request count, and
+  requires a closed byte Range plus strong `If-Range`. A matching validator returns one exact 206;
+  a changed validator returns one complete 200 so the host can report the new snapshot instead of
+  supplying bytes under the old identity.
+- Response parsing admits at most 16 KiB of headers and 1 MiB of body, checks their aggregate size,
+  rejects duplicate required headers, reads exactly `Content-Length` plus EOF, and accepts only a
+  strong entity tag. A 206 must carry the requested `Content-Range`, the bound snapshot's exact
+  total length, and a matching body length. A 200 must omit `Content-Range` and carry the complete
+  expected source length.
+- Coalesced response routing uses checked relative geometry and bounds-checked slices for every
+  exact member, then supplies members in reverse source order. No HTTP callback holds a parser,
+  calls `run_one`, or mints a Range ticket. The test host has fixed timeouts but is not hardened for
+  chunked encoding, TLS, authentication, retries, redirects, connection reuse, proxy behavior, or
+  platform cancellation.
 
 # Tests
 
@@ -241,13 +270,21 @@ page-count/outline two-slot round-robin completion, stale generation and mismatc
 opening cancellation, source snapshot change, host ticket failure, pending-open close, active
 service close, both explicit and Range-detected Ready source change, terminal ingress rejection,
 idempotent close, and zero post-terminal resources.
+The loopback suite additionally drives coalescer groups through real loopback sockets with strong
+ETag/`If-Range`, reverse exact-member supply, and a complete strict-open/page-count/outline actor
+path. It proves every ingress leaves the read-only parser audit unchanged until a later actor turn,
+rejects a gated real 206 after cancellation, caches one old-snapshot byte before a changed validator
+forces `SourceChanged`, and checks all twelve resource fields plus nested release reports. Separate
+negative cases reject oversized headers or bodies and malformed, mismatched, or length-inconsistent
+`Content-Range` responses.
 
 # External observations and dependencies
 
-No PDFium, external engine, third-party implementation source, or external output
-was used. Product dependencies are the in-repository `core/bytes`, `runtime/cache`, and
+No PDFium, external engine, third-party implementation source, external output, or external or
+non-loopback network service was used. Product dependencies are the in-repository `core/bytes`, `runtime/cache`, and
 `core/document` crates. Object, syntax, and xref crates are test-only dependencies used to assemble
-project-authored structural fixtures.
+project-authored structural fixtures; the loopback host uses only the Rust standard library and
+project-authored bytes.
 
 # Known deviations
 
@@ -264,7 +301,8 @@ project-authored structural fixtures.
   cross-session arbitration, transport I/O, host-request submission or cancellation, password flow,
   surfaces, rendering, save, platform queue close, event port, or a close deadline. Its sibling
   coalescer computes bounded host-range groups but does not integrate a transport or become a
-  scheduler.
+  scheduler. The loopback test consumes those groups outside the product crate and therefore does
+  not close any of these product-transport or scheduler gaps.
 - Parent Worker-to-Session budget reservation, cross-session aggregation,
   persistent or cross-session caches, decrypted-value security domains, stable
   failure caching, in-flight resolution coalescing, concurrent shards, and the
@@ -279,6 +317,10 @@ project-authored structural fixtures.
 
 # History
 
+- 2026-07-15: Added a read-only strict-opening parser audit and test-only bounded loopback HTTP
+  Range evidence for coalesced reverse delivery, parser-free ingress, late-response cancellation,
+  changed-validator teardown with previously cached bytes, exact terminal release accounting, and
+  malformed response rejection without claiming a product transport or generic scheduler.
 - 2026-07-15: Added a pure snapshot-bound Range request coalescer with strict gap-threshold merging,
   deterministic source ordering, highest-member priority, exact request-ID retention, checked byte
   accounting, fallible bounded metadata, and cooperative cancellation without transport or generic

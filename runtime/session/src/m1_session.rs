@@ -2,13 +2,15 @@ use std::fmt;
 use std::mem;
 
 use pdf_rs_bytes::{
-    DataTicket, JobId, RangeResponse, RangeStoreLimits, SmallRanges, SourceError, SourceSnapshot,
+    DataTicket, JobId, RangeResponse, RangeStoreLimits, ResumeCheckpoint, SmallRanges, SourceError,
+    SourceSnapshot,
 };
 use pdf_rs_cache::{ReadyStoreBinding, ReadyStoreEpoch, ReadyStoreLimits, ReadyStoreSessionId};
 use pdf_rs_document::{
     CountPagesJob, DocumentCancellation, DocumentError, OpenStrictBaseRevisionJob, Outline,
     OutlineJobContext, OutlineLimits, OutlinePoll, PageCount, PageCountPoll, PageTreeJobContext,
-    PageTreeLimits, ReadOutlineJob, SharedAttestedRevisionIndex,
+    PageTreeLimits, ReadOutlineJob, SharedAttestedRevisionIndex, StrictBaseOpenPhase,
+    StrictBaseOpenStats,
 };
 
 use crate::{
@@ -368,6 +370,35 @@ pub struct M1SessionResources {
     cache_resident_bytes: u64,
     index_handles: usize,
     resident_bytes: u64,
+}
+
+/// Read-only evidence of opening parser state at an M1 actor boundary.
+///
+/// Host ingress may change Range completion ownership, but it must leave every
+/// field in this snapshot unchanged. Only [`M1StrictDocumentSession::run_one`]
+/// may advance these parser-owned values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M1OpeningParserAudit {
+    job_phase: StrictBaseOpenPhase,
+    stats: StrictBaseOpenStats,
+    waiting_checkpoint: Option<ResumeCheckpoint>,
+}
+
+impl M1OpeningParserAudit {
+    /// Returns the resumable child-parser phase retained by the opening owner.
+    pub const fn job_phase(self) -> StrictBaseOpenPhase {
+        self.job_phase
+    }
+
+    /// Returns cumulative parser work committed by prior actor turns.
+    pub const fn stats(self) -> StrictBaseOpenStats {
+        self.stats
+    }
+
+    /// Returns the exact checkpoint still waiting on host data, when suspended.
+    pub const fn waiting_checkpoint(self) -> Option<ResumeCheckpoint> {
+        self.waiting_checkpoint
+    }
 }
 
 impl M1SessionResources {
@@ -757,6 +788,22 @@ impl M1StrictDocumentSession {
                 M1SessionResources::ZERO
             }
         }
+    }
+
+    /// Returns opening parser progress without exposing either execution owner.
+    ///
+    /// The snapshot is absent after the opening coordinator has moved into the
+    /// Ready handoff or a session terminal. It is intended for runtime auditing
+    /// and cannot poll, resume, or otherwise mutate parser state.
+    pub fn opening_parser_audit(&self) -> Option<M1OpeningParserAudit> {
+        let SessionState::Opening(coordinator) = &self.state else {
+            return None;
+        };
+        Some(M1OpeningParserAudit {
+            job_phase: coordinator.job_phase(),
+            stats: coordinator.stats(),
+            waiting_checkpoint: coordinator.waiting_checkpoint(),
+        })
     }
 
     /// Admits the only page-count slot after validating caller identities.

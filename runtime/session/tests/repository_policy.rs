@@ -296,6 +296,7 @@ fn bounded_m1_session_is_one_actor_without_a_generic_scheduler_claim() {
         "RPE-ARCH-001/15.3/M1",
         "modules = [\"runtime/session\"]",
         "runtime/session::m1_strict_document_session",
+        "runtime/session::range_loopback_http",
         "fuzz_targets = []",
         "benchmarks = []",
     ] {
@@ -338,8 +339,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.60.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.60.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.61.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.61.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -416,6 +417,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "RPE-ARCH-001/15.3/M1",
         "modules = [\"runtime/session\"]",
         "runtime/session::range_coalescer",
+        "runtime/session::range_loopback_http",
         "runtime/session::repository_policy",
         "fuzz_targets = []",
         "benchmarks = []",
@@ -423,6 +425,26 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         assert!(
             coalescer.contains(required),
             "Range-request coalescer feature must contain {required:?}"
+        );
+    }
+
+    let loopback = record_with_id(&feature_map, "feature", "runtime.range-loopback-http-e2e")
+        .expect("Range loopback HTTP E2E feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.range-loopback-http-e2e.v1\"",
+        "RPE-ARCH-001/5.1-5.2",
+        "RPE-ARCH-001/14.2",
+        "RPE-ARCH-001/15.3/M1",
+        "modules = [\"runtime/session\"]",
+        "runtime/session::range_loopback_http",
+        "runtime/session::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            loopback.contains(required),
+            "Range loopback HTTP E2E feature must contain {required:?}"
         );
     }
 
@@ -530,6 +552,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         .expect("Native byte-access requirement must exist");
     for required in [
         "runtime.range-request-coalescer",
+        "runtime.range-loopback-http-e2e",
         "runtime.range-resume-arbiter",
         "runtime.strict-base-open-job-owner",
         "runtime.strict-base-open-coordinator",
@@ -541,6 +564,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "tools/quality::native_range_resume_loop",
         "tools/quality::native_strict_open_runtime_loop",
         "runtime/session::range_coalescer",
+        "runtime/session::range_loopback_http",
         "status = \"partial\"",
         "runtime caller registers each returned Pending ticket with its job, checkpoint, and generation",
         "unified ordered completion stream",
@@ -561,6 +585,10 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "upper-half-before-lower out-of-order delivery",
         "gap strictly below a caller threshold",
         "without issuing transport or completing tickets",
+        "test-only std::net loopback host",
+        "strong ETag and If-Range",
+        "rejects a real late 206 after cancellation",
+        "not product transport",
         "host submission/cancellation",
         "generic multi-job scheduler with priority, fairness, backpressure, and generation registry",
         "complete Session/request/Worker ownership",
@@ -599,9 +627,11 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         .expect("handle lifecycle requirement must exist");
     for required in [
         "runtime.range-resume-arbiter",
+        "runtime.range-loopback-http-e2e",
         "runtime.strict-base-open-job-owner",
         "runtime.strict-base-open-coordinator",
         "runtime/session::range_resume",
+        "runtime/session::range_loopback_http",
         "runtime/session::strict_base_open_owner",
         "runtime/session::strict_base_open_coordinator",
         "runtime/session::repository_policy",
@@ -631,11 +661,13 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         .expect("M1 byte-and-object milestone requirement must exist");
     for required in [
         "runtime.range-resume-arbiter",
+        "runtime.range-loopback-http-e2e",
         "runtime.strict-base-open-job-owner",
         "runtime.strict-base-open-coordinator",
         "quality.native-range-resume-loop",
         "quality.native-strict-open-runtime-loop",
         "runtime/session::range_resume",
+        "runtime/session::range_loopback_http",
         "runtime/session::strict_base_open_owner",
         "runtime/session::strict_base_open_coordinator",
         "runtime/session::repository_policy",

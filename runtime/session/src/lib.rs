@@ -32,10 +32,11 @@ pub use error::{
     ReadySessionErrorCode, ReadySessionRecoverability,
 };
 pub use m1_session::{
-    M1RequestId, M1RequestIdentity, M1Service, M1ServiceFailure, M1SessionCancel,
-    M1SessionCancelRejectReason, M1SessionClose, M1SessionCloseReport, M1SessionFailure,
-    M1SessionIngress, M1SessionIngressRejectReason, M1SessionPhase, M1SessionRequestError,
-    M1SessionResources, M1SessionRun, M1SessionWait, M1StrictDocumentSession,
+    M1OpeningParserAudit, M1RequestId, M1RequestIdentity, M1Service, M1ServiceFailure,
+    M1SessionCancel, M1SessionCancelRejectReason, M1SessionClose, M1SessionCloseReport,
+    M1SessionFailure, M1SessionIngress, M1SessionIngressRejectReason, M1SessionPhase,
+    M1SessionRequestError, M1SessionResources, M1SessionRun, M1SessionWait,
+    M1StrictDocumentSession,
 };
 pub use owner::{
     ReadySessionCloseReport, ReadySessionOwner, ReadySessionPhase, ReadySessionResources,

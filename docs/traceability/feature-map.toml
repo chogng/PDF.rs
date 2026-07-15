@@ -1,5 +1,5 @@
 schema = 1
-version = "0.60.0"
+version = "0.61.0"
 status = "active"
 
 [[feature]]
@@ -333,7 +333,19 @@ state = "PLANNED"
 profile = "m1.range-request-coalescer.v1"
 clauses = ["RPE-ARCH-001/5.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
 modules = ["runtime/session"]
-tests = ["runtime/session::range_coalescer", "runtime/session::repository_policy"]
+tests = ["runtime/session::range_coalescer", "runtime/session::range_loopback_http", "runtime/session::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.range-loopback-http-e2e"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.range-loopback-http-e2e.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::range_loopback_http", "runtime/session::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
@@ -369,7 +381,7 @@ state = "PLANNED"
 profile = "m1.strict-document-session.v1"
 clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/9.1", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/8"]
 modules = ["runtime/session"]
-tests = ["runtime/session::m1_strict_document_session", "runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy"]
+tests = ["runtime/session::m1_strict_document_session", "runtime/session::range_loopback_http", "runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
