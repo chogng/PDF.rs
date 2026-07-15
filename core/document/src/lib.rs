@@ -45,6 +45,7 @@ mod page_tree_limits;
 mod reference_chain;
 mod reference_chain_limits;
 mod residency;
+mod revision_resolver;
 mod strict_base_open;
 mod text_string;
 
@@ -83,6 +84,12 @@ pub use reference_chain::{
 };
 pub use reference_chain_limits::{ReferenceChainLimitConfig, ReferenceChainLimits};
 pub use residency::DocumentResidentFootprint;
+pub use revision_resolver::{
+    CompressedObjectLocator, EffectiveObjectLocator, ResolveObjectJob, ResolvedObject,
+    RevisionObjectIndex, RevisionObjectIndexStats, RevisionResolverJobContext,
+    RevisionResolverLimits, RevisionResolverPhase, RevisionResolverPoll, RevisionResolverStats,
+    UncompressedObjectLocator,
+};
 pub use strict_base_open::{
     OpenStrictBaseRevisionJob, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
     StrictBaseOpenPhase, StrictBaseOpenPoll, StrictBaseOpenStats,

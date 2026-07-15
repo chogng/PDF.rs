@@ -14,6 +14,8 @@ access boundary.
 
 The crate performs no file, network, data callback, async-runtime, stream decoding, general object
 graph traversal, or caching. Its first resolver slice follows only whole-object reference aliases;
+an independent revision-aware slice can frame one effective uncompressed definition and resolve an
+uncompressed direct-integer stream `/Length` dependency from an already-composed revision chain;
 the separate page-count slice interprets only Catalog and Page/Pages structural fields, while the
 outline slice interprets only the optional Catalog `Outlines` reference and strict linked outline
 dictionaries reachable from it. Neither publishes page handles, inherited resources, a reusable
@@ -52,6 +54,11 @@ semantic responsibilities.
   object values. The outline bootstrap implements direct null omission but deliberately stops at
   indirect semantic values and does not implement undefined-reference or reference-to-null
   equivalence. The same authorized snapshot and SHA-256 above apply.
+- [ISO 32000-1:2008, 7.3.8.2 and 7.5.4](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines direct or indirect stream Length and cross-reference entry selection across updates. The
+  revision-aware slice implements only effective uncompressed object framing and an uncompressed
+  direct-integer Length target; it does not decode object streams or acquire revision sections.
+  The same authorized snapshot and SHA-256 above apply.
 - [ISO 32000-1:2008, 7.7.2 and 12.3.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines the Catalog's optional indirect `Outlines` entry and the outline root/item dictionaries,
   linked-list topology, text titles, targets, and signed visible-item counts used by the strict
@@ -125,6 +132,38 @@ This slice does not claim an ISO 32000 conformance profile or R0 resolver covera
   transition that moves the candidate, supported header, and complete evidence vector into
   `AttestedRevisionIndex`. The index also retains the exact validated object and syntax profiles
   used for initial framing. No partial attested type exists.
+
+## Revision-aware uncompressed resolution
+
+- `RevisionObjectIndex` consumes one already-validated `RevisionChain`. It fallibly retains every
+  primary and hybrid xref anchor plus every uncompressed entry offset, charges actual vector
+  capacity, sorts with bounded cancellable heapsort, and deduplicates only after work accounting.
+  Each effective uncompressed interval ends at the nearest greater retained object or xref anchor.
+- Lookup preserves the chain's exact newest-primary, same-revision-supplement, then older-revision
+  precedence. A winning free or unknown-type null row hides all older definitions. Exact generation
+  mismatch never falls back. Compressed definitions retain their object-stream number and decoded
+  entry index but return a stable unsupported result because no physical source span is fabricated.
+- `ResolveObjectJob` validates the selected uncompressed number, generation, offset, preceding
+  whitespace, `obj` header, value, and `endobj` framing through `core/object`. A primary xref-stream
+  self entry remains unsupported because the ordinary target model is bounded before a revision's
+  `startxref`; the resolver does not weaken that invariant.
+- A stream envelope with indirect `/Length` performs a second latest-wins exact-generation lookup.
+  Only an effective uncompressed object whose complete direct value is a nonnegative integer can
+  mint `ResolvedStreamLength`; its snapshot, reference, and physical integer span are checked again
+  before the original envelope resumes at the exact payload end. Self-dependency is a stable cycle.
+  Missing, free, null, generation-mismatch, compressed, stream-valued, negative, and non-integer
+  dependencies are terminal and never trigger older-definition fallback.
+- Four pairwise-distinct checkpoints identify target envelope, target boundary, dependency envelope,
+  and the dependency boundary reserved for future profile expansion. Pending tickets and canonical
+  missing ranges pass through unchanged. Cancellation, source change, and every lower error enter a
+  stable terminal state. `RevisionResolverLimits` is the explicit parent profile: its cumulative
+  read and parse ceilings are exactly twice one validated child-object ceiling, and at most two
+  children run sequentially, so neither child receives more than half the parent scope. Aggregate
+  resolver stats report checked work without claiming a session-wide budget.
+- The derived intervals remain xref metadata plus exact local header/framing validation. Unlike
+  `AttestedRevisionIndex`, this slice does not linearly prove top-level trivia/object coverage. It
+  also does not acquire `/Prev` or `/XRefStm`, decode filters or object streams, implement repair,
+  cache values, integrate strict-open/page-count/outline, or establish a complete resolver or M1 exit.
 
 ## Proof-preserving object access
 
@@ -352,6 +391,11 @@ terminal object was reopened through the same retained profile, and its chain re
 only. It does not publish a mutable object graph, cache entry, raw byte capability, or reusable
 child-job constructor.
 
+The separate `ResolvedObject` wrapper retains its effective locator and exposes the lower framed
+object only by shared borrow; it has no consuming into-object path. This preserves latest-wins
+evidence for downstream inspection, but it is not interchangeable with `AttestedObject`: its
+xref-derived interval has not received the strict base path's linear top-level coverage proof.
+
 The page-count job is another consumer of the same proof. Its summary copies only immutable source,
 revision, Catalog, page-tree-root, scalar count, and work evidence. It exposes neither parsed
 dictionaries nor a constructor capable of reopening arbitrary objects after the borrowed attested
@@ -371,10 +415,11 @@ framing only establish lexical extent.
 # External observations
 
 No PDFium, other PDF engine, third-party implementation source, or external output was used to
-derive the candidate index, attestation state machine, text-string mapping and decoder, page-tree
-traversal, or outline topology and count validation. After that implementation boundary was fixed, a separate
-`tools/baseline` O4 probe compared the public PDFium bookmark surface with Native on self-authored
-fixtures: the valid observable subset matched exactly, while a wrong `/Prev` produced the expected
+derive the candidate index, revision-aware resolver, attestation state machine, text-string mapping
+and decoder, page-tree traversal, or outline topology and count validation. After that
+implementation boundary was fixed, a separate `tools/baseline` O4 probe compared the public PDFium
+bookmark surface with Native on self-authored fixtures: the valid observable subset matched
+exactly, while a wrong `/Prev` produced the expected
 strictness difference because PDFium does not expose that backlink. A separate public page-count
 probe matched Native exactly and repeatably on valid one-page and nested three-page fixtures. On an
 otherwise identical nested fixture whose positive root Count was 4 rather than the recomputed 3,
@@ -396,6 +441,12 @@ Strict-base-open tests cover complete product-entry publication, all five distin
 same-job context validation, reverse physical Range delivery, unchanged `Pending` replay and
 charging, xref and document error preservation, cancellation in both xref and attestation phases,
 snapshot mismatch, cumulative stats, and stable successful and failed terminals.
+Revision-resolver tests cover nearest cross-revision anchors, primary and hybrid-supplement
+provenance, primary target plus supplement-only indirect Length, supplement self-container bounds,
+older effective revision bounds, latest free/null/compressed/generation terminal states, primary
+xref-stream self-entry rejection, exact integer Length evidence, three-checkpoint sparse resume
+without payload residency, cancellation, source change, self-dependency, stable terminals, explicit
+two-child parent work limits, and 256-step entry-count/dedup cancellation.
 Candidate tests cover physical sort ordering, exact sort-budget exhaustion, the 256-step
 cancellation ceiling, checked conservative accounting, exact logical lookup outcomes, duplicate
 and out-of-revision offsets, and trailer-root policy. Attestation unit tests guard fixed evidence
@@ -430,8 +481,10 @@ document-architecture requirement links and explicit partial-scope boundaries.
 
 # Known deviations and unsupported cases
 
-- Only one strict traditional base revision is accepted. Revision chains, `/Prev`, xref streams,
-  hybrid references, object streams, and revision precedence remain unsupported.
+- The product strict-open path still accepts only one traditional base revision. A separate
+  already-composed-chain resolver implements latest-wins uncompressed lookup, but `/Prev` and
+  `/XRefStm` acquisition, filtered xref streams, object streams, and service integration remain
+  unsupported.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
@@ -441,9 +494,11 @@ document-architecture requirement links and explicit partial-scope boundaries.
   general nested semantic references, persistent dependency states, concurrent work coalescing,
   retained-value caching, negative caching, admission/reservation, eviction, and cross-job/session
   resident ownership remain unsupported. Successful footprints are measurement evidence only.
-- Indirect stream `/Length`, repair, encrypted object interpretation, filters, decoded stream
-  payloads, random-access page indexing, inherited resources, page handles, name-tree services,
-  writer behavior, and document actions remain unsupported.
+- Indirect stream `/Length` is supported only when the effective dependency is an uncompressed
+  direct nonnegative integer in the separate revision-aware job. Compressed or aliased Length,
+  repair, encrypted object interpretation, filters, decoded stream payloads, random-access page
+  indexing, inherited resources, page handles, name-tree services, writer behavior, and document
+  actions remain unsupported.
 - The separate page-count O4 comparison covers only two fixed valid counts and one mismatched
   positive root Count. It is exact and repeatable on the valid fixtures, but remains non-gating and
   unregistered and cannot adjudicate the Native validator's Parent, cycle, duplicate, or recursive
@@ -491,3 +546,5 @@ document-architecture requirement links and explicit partial-scope boundaries.
 - 2026-07-14: Added the formal resumable strict-base opening entry, composing xref discovery,
   candidate indexing, and attestation under one job identity, five distinct checkpoints, preserved
   child errors and stats, and one cancellation source without publishing an intermediate index.
+- 2026-07-15: Added bounded effective revision lookup, derived cross-revision physical anchors, and
+  Range-resumable uncompressed object framing with same-snapshot indirect stream-Length evidence.

@@ -76,8 +76,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.36.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.36.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.37.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.37.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -229,11 +229,14 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     assert!(requirement.contains("relative decoded spans rather than physical source ByteSpan"));
     assert!(requirement.contains("Filtered xref-stream acquisition and decode"));
     assert!(requirement.contains("current traditional primary, current hybrid supplement"));
-    assert!(requirement.contains("primary free and xref-stream null rows hide older definitions"));
+    assert!(
+        requirement
+            .contains("primary free and xref-stream unknown-type null rows hide older definitions")
+    );
     assert!(requirement.contains("Supplemental Prev metadata is retained but never drives"));
-    assert!(requirement.contains("candidate composition only"));
-    assert!(requirement.contains("hybrid files"));
-    assert!(requirement.contains("Prev chains"));
+    assert!(requirement.contains("already-composed chains"));
+    assert!(requirement.contains("hybrid acquisition"));
+    assert!(requirement.contains("Prev chains and stream filters are not acquired from source"));
     assert!(requirement.contains("object streams"));
     assert!(requirement.contains("repair"));
     assert!(requirement.contains("does not claim M1 exit"));

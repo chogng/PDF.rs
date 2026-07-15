@@ -145,6 +145,64 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
 }
 
 #[test]
+fn traceability_registers_revision_resolution_without_claiming_complete_m1_support() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature traceability map must be readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("specification traceability map must be readable");
+
+    let feature = record_with_id(
+        &feature_map,
+        "feature",
+        "core.revision-aware-object-resolver",
+    )
+    .expect("revision-aware resolver feature record must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.revision-aware-uncompressed-resolver.v1\"",
+        "RPE-ARCH-001/5.3-5.4",
+        "RPE-ARCH-001/15.3/M1",
+        "RPE-STD-002/6-7",
+        "RPE-STD-005/7-10",
+        "modules = [\"core/document\"]",
+        "core/document::revision_resolver",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "revision resolver feature must contain {required:?}"
+        );
+    }
+
+    let architecture = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.4")
+        .expect("xref and object architecture mapping must exist");
+    for required in [
+        "core.revision-aware-object-resolver",
+        "core/document::revision_resolver",
+        "latest-wins",
+        "indirect `/Length`",
+        "unknown-type null",
+        "do not linearly attest top-level object placement",
+        "compressed-object resolution",
+        "does not claim M1 exit",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            architecture.contains(required),
+            "architecture mapping must contain {required:?}"
+        );
+    }
+}
+
+#[test]
 fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -156,8 +214,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.36.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.36.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.37.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.37.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

@@ -248,8 +248,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.36.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.36.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.37.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.37.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");

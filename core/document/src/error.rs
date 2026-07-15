@@ -21,6 +21,12 @@ pub enum DocumentLimitKind {
     LogicalIndexBytes,
     /// Comparisons and swaps performed while sorting by physical offset.
     SortSteps,
+    /// Object and xref anchors retained by the revision-aware resolver index.
+    RevisionResolverAnchors,
+    /// Allocator-reported bytes retained for revision-aware physical anchors.
+    RevisionResolverIndexBytes,
+    /// Comparisons and swaps performed while sorting revision-aware physical anchors.
+    RevisionResolverSortSteps,
     /// Fallible bounded index-capacity reservation using conservative byte accounting.
     Allocation,
     /// Immutable source bytes addressable by the revision-attestation profile.
@@ -225,6 +231,20 @@ pub enum DocumentErrorCode {
     InvalidOutlineTarget,
     /// Runtime identity or checkpoints across xref and attestation phases are inconsistent.
     InvalidStrictBaseOpenContext,
+    /// Runtime identity or child checkpoints for revision-aware resolution are inconsistent.
+    InvalidRevisionResolverJobContext,
+    /// The effective xref-stream definition is null and hides every older definition.
+    NullObject,
+    /// The effective object is compressed and requires decoded object-stream coordinates.
+    UnsupportedCompressedObject,
+    /// A primary xref-stream container cannot use the ordinary pre-xref physical target model.
+    UnsupportedXrefStreamContainer,
+    /// The effective uncompressed object failed exact header or framing validation.
+    ObjectResolutionFailure,
+    /// A stream declares its own object identity as the indirect length dependency.
+    IndirectLengthCycle,
+    /// An indirect stream length did not resolve to one uncompressed nonnegative integer object.
+    InvalidIndirectLength,
 }
 
 /// Coarse document-composition failure category.
@@ -536,6 +556,41 @@ impl DocumentError {
                 DocumentRecoverability::CorrectConfiguration,
                 "RPE-DOCUMENT-0046",
             ),
+            DocumentErrorCode::InvalidRevisionResolverJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0047",
+            ),
+            DocumentErrorCode::NullObject => (
+                DocumentErrorCategory::Lookup,
+                DocumentRecoverability::CorrectReference,
+                "RPE-DOCUMENT-0048",
+            ),
+            DocumentErrorCode::UnsupportedCompressedObject => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0049",
+            ),
+            DocumentErrorCode::UnsupportedXrefStreamContainer => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0050",
+            ),
+            DocumentErrorCode::ObjectResolutionFailure => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0051",
+            ),
+            DocumentErrorCode::IndirectLengthCycle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0052",
+            ),
+            DocumentErrorCode::InvalidIndirectLength => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0053",
+            ),
         };
         Self {
             code,
@@ -765,6 +820,56 @@ impl DocumentError {
             },
             ..base
         }
+    }
+
+    pub(crate) const fn from_revision_resolver_object(
+        error: ObjectError,
+        reference: ObjectRef,
+        offset: u64,
+        constructor: bool,
+    ) -> Self {
+        let code = match error.source_error() {
+            Some(source) => match source.category() {
+                SourceErrorCategory::Integrity => DocumentErrorCode::SourceSnapshotMismatch,
+                SourceErrorCategory::Resource => DocumentErrorCode::ResourceLimit,
+                SourceErrorCategory::Input
+                | SourceErrorCategory::Lifecycle
+                | SourceErrorCategory::Availability
+                | SourceErrorCategory::Internal => DocumentErrorCode::SourceFailure,
+            },
+            None => match error.category() {
+                ObjectErrorCategory::Resource => DocumentErrorCode::ResourceLimit,
+                ObjectErrorCategory::Cancellation => DocumentErrorCode::Cancelled,
+                ObjectErrorCategory::Source => match error.code() {
+                    ObjectErrorCode::SnapshotMismatch => DocumentErrorCode::SourceSnapshotMismatch,
+                    ObjectErrorCode::UnexpectedEndOfSource => {
+                        DocumentErrorCode::UnexpectedEndOfSource
+                    }
+                    _ => DocumentErrorCode::SourceFailure,
+                },
+                ObjectErrorCategory::Configuration => match error.code() {
+                    ObjectErrorCode::InvalidLimits => DocumentErrorCode::InvalidLimits,
+                    ObjectErrorCode::InvalidJobContext => {
+                        DocumentErrorCode::InvalidRevisionResolverJobContext
+                    }
+                    _ => DocumentErrorCode::InternalState,
+                },
+                ObjectErrorCategory::Syntax => match error.code() {
+                    ObjectErrorCode::InvalidStreamLength
+                    | ObjectErrorCode::InvalidStreamLengthClaim => {
+                        DocumentErrorCode::InvalidIndirectLength
+                    }
+                    _ => DocumentErrorCode::ObjectResolutionFailure,
+                },
+                ObjectErrorCategory::Unsupported => DocumentErrorCode::UnsupportedObjectFraming,
+                ObjectErrorCategory::Internal => DocumentErrorCode::InternalState,
+            },
+        };
+        let code = match (constructor, error.code()) {
+            (true, ObjectErrorCode::InvalidTarget) => DocumentErrorCode::TargetConstructionFailure,
+            _ => code,
+        };
+        Self::with_object_error(code, error, reference, offset, true)
     }
 
     pub(crate) const fn from_object_access_constructor(
