@@ -54,6 +54,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --release \
     --lib \
     --package pdf-rs-bytes \
+    --package pdf-rs-filters \
     --package pdf-rs-syntax \
     --package pdf-rs-xref \
     --package pdf-rs-object \

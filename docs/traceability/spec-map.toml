@@ -1,5 +1,5 @@
 schema = 1
-version = "0.48.0"
+version = "0.49.0"
 status = "active"
 
 [[requirement]]
@@ -95,6 +95,16 @@ notes = "The m1.traditional-xref.v1 bootstrap is limited to a known-length immut
 component_notes = "The m1.xref-revision-chain.v1 pure composer consumes already-parsed candidates newest-to-oldest and validates one immutable snapshot, exact backward primary Prev links, nondecreasing Size, complete traditional base versus sparse updates, primary-stream self anchors, hybrid geometry, unique anchors, stable limits, and cancellation. Lookup order is current traditional primary, current hybrid supplement, then the older primary; primary free and xref-stream unknown-type null rows hide older definitions. The m1.staged-stream-length.v1 object component exposes bounded Range-resumable direct or resolver-supplied same-snapshot Length framing. The m1.revision-aware-uncompressed-resolver.v1 document slice connects those inputs for effective uncompressed targets and direct-integer Length dependencies. The m1.unfiltered-object-stream-resolution.v1 slice additionally binds a framed exact source payload to decoded-only entry coordinates, then verifies each compressed xref row against the latest effective generation-zero container, exact index, and embedded object number. These xref-derived intervals plus local checks do not linearly attest update placement. The strict base parser still rejects sparse incremental tables and XRefStm, while the separate anchored job parses only a caller-selected traditional section; final-anchor classification, Prev traversal, hybrid supplement streams, stream filters, and object streams are not acquired from source, and repair, strict-open integration, document-service integration, and complete resolver ownership remain open. All four component profiles remain PLANNED and this mapping does not claim M1 exit."
 
 [[requirement]]
+id = "RPE-ARCH-001/5.6"
+snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+summary = "Native stream decoding binds exact encoded bytes to sealed proof and enforces strict basic-filter, output, capacity, fuel, and cancellation budgets."
+features = ["core.stream-filter-decode"]
+implementation = ["core/filters"]
+tests = ["core/filters::decode_behavior", "core/filters::repository_policy"]
+status = "partial"
+notes = "The m1.basic-stream-filters.v1 product slice consumes one exact immutable ByteSlice and publishes non-Clone DecodedStream bytes only together with sealed evidence for the complete SourceSnapshot, source identity, owner ObjectRef, dictionary and encoded physical spans, encoded slice, canonical filter plan, profile, validated limits, fuel schedule and consumption, cumulative output, allocator-reported peak simultaneous intermediate/output capacity, and final decoded length. An empty plan is an internal identity path; the non-standard PDF name Identity and unknown or abbreviated names are UnsupportedFilter without external fallback. Strict ASCIIHexDecode, ASCII85Decode, and RunLengthDecode implementations support ordered chains, decoded-only coordinates, deterministic per-layer/cumulative/final output and retained-capacity ceilings, source-change rejection, and cooperative cancellation. The object and xref layers do not yet construct decode requests or consume this proof. Flate, predictors, LZW, decode parameters, crypt filters, image codecs, empty physical ByteSlice input, clause-pinned ISO conformance cases, registered fuzzing, and differential evidence remain open. The feature is PLANNED and this partial mapping does not claim general stream support or M1 exit."
+
+[[requirement]]
 id = "RPE-ARCH-001/5.8-5.9"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
 summary = "Native strict-base document composition provides bounded text strings, outline enumeration, complete Page/Pages validation, and sealed owned service jobs over one attested proof."
@@ -174,13 +184,14 @@ notes = "M0 exit was accepted on 2026-07-15 after the active, independently revi
 [[requirement]]
 id = "RPE-ARCH-001/15.3/M1"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
-summary = "M1 byte-and-object infrastructure provides SourceSnapshot, bounded Range pause/resume, syntax, xref, object framing, strict base composition, proof-bearing local repair attestation, staged revision resolution, unfiltered compressed-object binding, and sealed owned document-service jobs while tracking Session and differential exit gates."
+summary = "M1 byte-and-object infrastructure provides SourceSnapshot, bounded Range pause/resume, syntax, xref, object framing, strict basic stream filters, strict base composition, proof-bearing local repair attestation, staged revision resolution, unfiltered compressed-object binding, and sealed owned document-service jobs while tracking Session and differential exit gates."
 features = [
   "core.snapshot-byte-source",
   "core.pdf-syntax",
   "core.traditional-xref",
   "core.decoded-xref-stream-table",
   "core.xref-revision-chain",
+  "core.stream-filter-decode",
   "core.indirect-object-framing",
   "core.staged-stream-length-framing",
   "core.revision-aware-object-resolver",
@@ -200,7 +211,7 @@ features = [
   "quality.native-range-resume-loop",
   "quality.native-strict-open-runtime-loop",
 ]
-implementation = ["core/bytes", "core/syntax", "core/xref", "core/object", "core/document", "runtime/session", "tools/quality"]
+implementation = ["core/bytes", "core/syntax", "core/xref", "core/filters", "core/object", "core/document", "runtime/session", "tools/quality"]
 tests = [
   "core/bytes::range_store",
   "core/syntax::parser_behavior",
@@ -209,6 +220,8 @@ tests = [
   "core/xref::local_repair",
   "core/xref::xref_stream",
   "core/xref::revision_chain",
+  "core/filters::decode_behavior",
+  "core/filters::repository_policy",
   "core/object::framing_matrix",
   "core/object::local_repair",
   "core/document::local_repair_geometry",

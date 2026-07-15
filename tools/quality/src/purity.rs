@@ -31,6 +31,11 @@ const PRODUCT_PACKAGES: &[ProductPackage] = &[
         crate_name: "pdf_rs_document",
     },
     ProductPackage {
+        manifest: "core/filters/Cargo.toml",
+        package_name: "pdf-rs-filters",
+        crate_name: "pdf_rs_filters",
+    },
+    ProductPackage {
         manifest: "core/object/Cargo.toml",
         package_name: "pdf-rs-object",
         crate_name: "pdf_rs_object",

@@ -1,0 +1,10 @@
+[package]
+name = "pdf-rs-filters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-bytes = { path = "../bytes" }
+pdf-rs-syntax = { path = "../syntax" }

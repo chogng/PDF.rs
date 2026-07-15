@@ -1,5 +1,5 @@
 schema = 1
-version = "0.48.0"
+version = "0.49.0"
 status = "active"
 
 [[feature]]
@@ -94,6 +94,18 @@ profile = "m1.xref-revision-chain.v1"
 clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
 modules = ["core/xref"]
 tests = ["core/xref::traditional_revision", "core/xref::revision_chain", "core/xref::xref_stream", "core/xref::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.stream-filter-decode"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.basic-stream-filters.v1"
+clauses = ["RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/filters"]
+tests = ["core/filters::decode_behavior", "core/filters::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
