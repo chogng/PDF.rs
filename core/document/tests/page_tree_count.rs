@@ -707,6 +707,56 @@ fn pending_replays_ticket_checkpoint_missing_ranges_and_charges_without_duplicat
     assert_eq!(before_read.stats().object_read_bytes(), 0);
 }
 
+#[test]
+fn owned_page_count_job_retains_proof_across_pending_and_source_change() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<pdf_rs_document::SharedAttestedRevisionIndex>();
+
+    let fixture = nested_three_page_fixture();
+    let shared = ready_index(&fixture).into_shared();
+    assert_eq!(shared.as_attested().snapshot(), fixture.snapshot);
+    let mut job: CountPagesJob<'static> = shared
+        .count_pages_owned(context(), compact_limits())
+        .unwrap();
+    drop(shared);
+
+    let store = RangeStore::new(fixture.snapshot, Default::default()).unwrap();
+    let (ticket, missing, checkpoint) = match job.poll(&store, &DocumentNeverCancelled) {
+        PageCountPoll::Pending {
+            ticket,
+            missing,
+            checkpoint,
+        } => (ticket, missing, checkpoint),
+        other => panic!("owned page-count job must suspend on absent bytes: {other:?}"),
+    };
+    let charged = job.stats();
+    match job.poll(&store, &DocumentNeverCancelled) {
+        PageCountPoll::Pending {
+            ticket: repeated_ticket,
+            missing: repeated_missing,
+            checkpoint: repeated_checkpoint,
+        } => {
+            assert_eq!(repeated_ticket, ticket);
+            assert_eq!(repeated_missing, missing);
+            assert_eq!(repeated_checkpoint, checkpoint);
+        }
+        other => panic!("owned job must preserve unchanged Pending: {other:?}"),
+    }
+    assert_eq!(job.stats(), charged);
+
+    store.signal_source_changed().unwrap();
+    let failure = match job.poll(&store, &DocumentNeverCancelled) {
+        PageCountPoll::Failed(error) => error,
+        other => panic!("source change must terminate owned job: {other:?}"),
+    };
+    assert_eq!(failure.code(), DocumentErrorCode::SourceSnapshotMismatch);
+    assert_eq!(job.stats(), charged);
+    assert!(matches!(
+        job.poll(&store, &DocumentNeverCancelled),
+        PageCountPoll::Failed(repeated) if repeated == failure
+    ));
+}
+
 fn exact_shape_limits(read: u64, parse: u64, traversal: u64) -> PageTreeLimits {
     limits_with(5, 3, 3, 2, read, parse, traversal)
 }

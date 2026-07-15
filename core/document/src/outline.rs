@@ -12,11 +12,12 @@ use crate::dictionary::{
     collect_structural_fields, direct_dictionary, optional_non_null_field, reject_duplicate_field,
     required_field,
 };
+use crate::model::AttestedRevisionIndexOwner;
 use crate::text_string::{TextStringMeasurement, decode_measured_text_string, measure_text_string};
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     DecodedTextString, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    OpenAttestedObjectJob, OutlineLimits, StrictCatalog,
+    OpenAttestedObjectJob, OutlineLimits, SharedAttestedRevisionIndex, StrictCatalog,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -431,7 +432,8 @@ struct ChildState {
 /// requests, and never trusts outline counts to allocate. Result and traversal
 /// storage are reserved from validated limits before the job is published.
 pub struct ReadOutlineJob<'index> {
-    index: &'index AttestedRevisionIndex,
+    index: AttestedRevisionIndexOwner<'index>,
+    snapshot: SourceSnapshot,
     context: OutlineJobContext,
     limits: OutlineLimits,
     catalog: Option<StrictCatalog>,
@@ -454,7 +456,7 @@ pub struct ReadOutlineJob<'index> {
 impl ReadOutlineJob<'_> {
     /// Returns the immutable source snapshot covered by the owning attested index.
     pub const fn snapshot(&self) -> SourceSnapshot {
-        self.index.snapshot()
+        self.snapshot
     }
 
     /// Returns runtime identity, child checkpoints, and scheduling priority.
@@ -853,7 +855,7 @@ impl ReadOutlineJob<'_> {
         object: AttestedObject,
         cancellation: &dyn DocumentCancellation,
     ) -> Result<(), DocumentError> {
-        let parsed = parse_strict_catalog(self.index, &object, cancellation)?;
+        let parsed = parse_strict_catalog(&self.index, &object, cancellation)?;
         let catalog = parsed.summary();
         let outlines = parsed.outlines_entry(cancellation)?;
         self.catalog = Some(catalog);
@@ -1862,175 +1864,201 @@ impl AttestedRevisionIndex {
         context: OutlineJobContext,
         limits: OutlineLimits,
     ) -> Result<ReadOutlineJob<'_>, DocumentError> {
-        let root = self.root();
-        let root_offset = self.attestation(root)?.xref_offset();
-        if context.object_envelope_checkpoint == context.object_boundary_checkpoint {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::InvalidOutlineJobContext,
-                Some(root),
-                Some(root_offset),
-            ));
-        }
+        read_outline_with_owner(AttestedRevisionIndexOwner::Borrowed(self), context, limits)
+    }
+}
 
-        let item_capacity = usize::try_from(limits.max_items()).map_err(|_| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        let work_capacity = limits
-            .max_items()
-            .checked_mul(2)
-            .and_then(|value| value.checked_add(1))
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(root),
-                    Some(root_offset),
-                )
-            })?;
-        let seen_capacity = limits
-            .max_items()
-            .checked_mul(2)
-            .and_then(u64::checked_next_power_of_two)
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(root),
-                    Some(root_offset),
-                )
-            })?;
-        let active_capacity = usize::try_from(limits.max_depth()).map_err(|_| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        let requested_total = validate_retained_plan(
-            limits,
-            root,
-            root_offset,
-            [item_capacity, work_capacity, seen_capacity, active_capacity],
-        )?;
-        let allocation_error = |attempted| {
-            DocumentError::outline_resource(
-                DocumentLimitKind::OutlineRetainedBytes,
-                limits.max_retained_bytes(),
-                0,
-                attempted,
-                root,
-                Some(root_offset),
-            )
-        };
-        let mut items = Vec::new();
-        items
-            .try_reserve_exact(item_capacity)
-            .map_err(|_| allocation_error(requested_total))?;
-        let items_plan = validate_retained_plan(
-            limits,
-            root,
-            root_offset,
-            [
-                items.capacity(),
-                work_capacity,
-                seen_capacity,
-                active_capacity,
-            ],
-        )?;
-        let mut work = Vec::new();
-        work.try_reserve_exact(work_capacity)
-            .map_err(|_| allocation_error(items_plan))?;
-        let work_plan = validate_retained_plan(
-            limits,
-            root,
-            root_offset,
-            [
-                items.capacity(),
-                work.capacity(),
-                seen_capacity,
-                active_capacity,
-            ],
-        )?;
-        let mut seen = Vec::new();
-        seen.try_reserve_exact(seen_capacity)
-            .map_err(|_| allocation_error(work_plan))?;
-        let seen_plan = validate_retained_plan(
-            limits,
-            root,
-            root_offset,
-            [
-                items.capacity(),
-                work.capacity(),
-                seen.capacity(),
-                active_capacity,
-            ],
-        )?;
-        seen.resize(seen_capacity, 0_u64);
-        let mut active = Vec::new();
-        active
-            .try_reserve_exact(active_capacity)
-            .map_err(|_| allocation_error(seen_plan))?;
-        let reserved_total = validate_retained_plan(
-            limits,
-            root,
-            root_offset,
-            [
-                items.capacity(),
-                work.capacity(),
-                seen.capacity(),
-                active.capacity(),
-            ],
-        )?;
-
-        let reserved_working = working_bytes(work.capacity(), seen.capacity(), active.capacity())
-            .ok_or_else(|| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        let reserved_result = result_bytes(items.capacity()).ok_or_else(|| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        Ok(ReadOutlineJob {
-            index: self,
+impl SharedAttestedRevisionIndex {
+    /// Creates an outline job that owns a clone of this proof handle.
+    pub fn read_outline_owned(
+        &self,
+        context: OutlineJobContext,
+        limits: OutlineLimits,
+    ) -> Result<ReadOutlineJob<'static>, DocumentError> {
+        read_outline_with_owner(
+            AttestedRevisionIndexOwner::Shared(self.clone()),
             context,
             limits,
-            catalog: None,
-            root: None,
-            root_count: None,
-            root_count_offset: None,
-            work,
-            seen_slots: seen,
-            seen_count: 0,
-            active_items: active,
-            items,
-            current: None,
-            child: None,
-            stats: OutlineStats {
-                reserved_working_bytes: reserved_working,
-                reserved_result_bytes: reserved_result,
-                peak_retained_bytes: reserved_total,
-                ..OutlineStats::default()
-            },
-            visible_items: 0,
-            state: JobState::Active,
-            terminal_error: DocumentError::for_code(
+        )
+    }
+}
+
+fn read_outline_with_owner<'index>(
+    index: AttestedRevisionIndexOwner<'index>,
+    context: OutlineJobContext,
+    limits: OutlineLimits,
+) -> Result<ReadOutlineJob<'index>, DocumentError> {
+    let attested = index.as_attested();
+    let snapshot = attested.snapshot();
+    let root = attested.root();
+    let root_offset = attested.attestation(root)?.xref_offset();
+    if context.object_envelope_checkpoint == context.object_boundary_checkpoint {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InvalidOutlineJobContext,
+            Some(root),
+            Some(root_offset),
+        ));
+    }
+
+    let item_capacity = usize::try_from(limits.max_items()).map_err(|_| {
+        DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        )
+    })?;
+    let work_capacity = limits
+        .max_items()
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            DocumentError::for_code(
                 DocumentErrorCode::InternalState,
                 Some(root),
                 Some(root_offset),
-            ),
-        })
-    }
+            )
+        })?;
+    let seen_capacity = limits
+        .max_items()
+        .checked_mul(2)
+        .and_then(u64::checked_next_power_of_two)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(root),
+                Some(root_offset),
+            )
+        })?;
+    let active_capacity = usize::try_from(limits.max_depth()).map_err(|_| {
+        DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        )
+    })?;
+    let requested_total = validate_retained_plan(
+        limits,
+        root,
+        root_offset,
+        [item_capacity, work_capacity, seen_capacity, active_capacity],
+    )?;
+    let allocation_error = |attempted| {
+        DocumentError::outline_resource(
+            DocumentLimitKind::OutlineRetainedBytes,
+            limits.max_retained_bytes(),
+            0,
+            attempted,
+            root,
+            Some(root_offset),
+        )
+    };
+    let mut items = Vec::new();
+    items
+        .try_reserve_exact(item_capacity)
+        .map_err(|_| allocation_error(requested_total))?;
+    let items_plan = validate_retained_plan(
+        limits,
+        root,
+        root_offset,
+        [
+            items.capacity(),
+            work_capacity,
+            seen_capacity,
+            active_capacity,
+        ],
+    )?;
+    let mut work = Vec::new();
+    work.try_reserve_exact(work_capacity)
+        .map_err(|_| allocation_error(items_plan))?;
+    let work_plan = validate_retained_plan(
+        limits,
+        root,
+        root_offset,
+        [
+            items.capacity(),
+            work.capacity(),
+            seen_capacity,
+            active_capacity,
+        ],
+    )?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(seen_capacity)
+        .map_err(|_| allocation_error(work_plan))?;
+    let seen_plan = validate_retained_plan(
+        limits,
+        root,
+        root_offset,
+        [
+            items.capacity(),
+            work.capacity(),
+            seen.capacity(),
+            active_capacity,
+        ],
+    )?;
+    seen.resize(seen_capacity, 0_u64);
+    let mut active = Vec::new();
+    active
+        .try_reserve_exact(active_capacity)
+        .map_err(|_| allocation_error(seen_plan))?;
+    let reserved_total = validate_retained_plan(
+        limits,
+        root,
+        root_offset,
+        [
+            items.capacity(),
+            work.capacity(),
+            seen.capacity(),
+            active.capacity(),
+        ],
+    )?;
+
+    let reserved_working = working_bytes(work.capacity(), seen.capacity(), active.capacity())
+        .ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(root),
+                Some(root_offset),
+            )
+        })?;
+    let reserved_result = result_bytes(items.capacity()).ok_or_else(|| {
+        DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        )
+    })?;
+    Ok(ReadOutlineJob {
+        index,
+        snapshot,
+        context,
+        limits,
+        catalog: None,
+        root: None,
+        root_count: None,
+        root_count_offset: None,
+        work,
+        seen_slots: seen,
+        seen_count: 0,
+        active_items: active,
+        items,
+        current: None,
+        child: None,
+        stats: OutlineStats {
+            reserved_working_bytes: reserved_working,
+            reserved_result_bytes: reserved_result,
+            peak_retained_bytes: reserved_total,
+            ..OutlineStats::default()
+        },
+        visible_items: 0,
+        state: JobState::Active,
+        terminal_error: DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        ),
+    })
 }
 
 #[derive(Clone, Copy)]

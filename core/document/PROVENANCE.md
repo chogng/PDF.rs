@@ -208,6 +208,10 @@ repair or publish partially attested state.
   transition that moves the candidate, supported header, and complete evidence vector into
   `AttestedRevisionIndex`. The index also retains the exact validated object and syntax profiles
   used for initial framing. No partial attested type exists.
+- A completed `AttestedRevisionIndex` may be consumed into `SharedAttestedRevisionIndex`, whose
+  private `Arc` is cloneable for service ownership. There is no constructor from a candidate,
+  parsed xref, or raw `Arc`; every shared handle therefore retains exactly one already-complete
+  attestation proof and the same immutable snapshot and parser profiles.
 
 ## Revision-aware object resolution
 
@@ -335,8 +339,10 @@ repair or publish partially attested state.
 
 ## Strict Catalog and bounded page count
 
-- `AttestedRevisionIndex::count_pages` is the only factory for the one-shot page-count job. The
-  job first reopens the trailer root through the proof-preserving object-access API and accepts
+- `AttestedRevisionIndex::count_pages` remains the borrowed factory for the one-shot page-count job,
+  while `SharedAttestedRevisionIndex::count_pages_owned` clones the proof handle into an otherwise
+  identical job suitable for later registry ownership. The job first reopens the trailer root
+  through the proof-preserving object-access API and accepts
   only a direct dictionary with one structural `/Type /Catalog` and one exact `/Pages` reference.
   It neither follows a whole-object Catalog alias nor accepts a stream as the Catalog. The pure
   Catalog parser is shared within `core/document`, but optional service fields remain lazily owned:
@@ -479,15 +485,17 @@ object only by shared borrow; it has no consuming into-object path. This preserv
 evidence for downstream inspection, but it is not interchangeable with `AttestedObject`: its
 xref-derived interval has not received the strict base path's linear top-level coverage proof.
 
-The page-count job is another consumer of the same proof. Its summary copies only immutable source,
-revision, Catalog, page-tree-root, scalar count, and work evidence. It exposes neither parsed
-dictionaries nor a constructor capable of reopening arbitrary objects after the borrowed attested
-index is gone.
+The page-count job is another consumer of the same proof. It may borrow the attested index or own a
+clone of its sealed shared handle; both forms execute the same state machine and mint child access
+only through that proof. Its summary copies only immutable source, revision, Catalog,
+page-tree-root, scalar count, and work evidence. It exposes neither parsed dictionaries nor a
+constructor capable of reopening arbitrary objects after the job and its proof handle are gone.
 
-The outline job is likewise only a proof consumer. Its owned preorder copies decoded titles and
-scalar/link-derived evidence after all traversed dictionaries have been reopened and validated.
-It exposes neither parsed target objects nor byte, resolution, navigation, or action-execution
-authority after the borrowed attested index is gone.
+The outline job is likewise only a proof consumer and supports the same borrowed or sealed-handle
+ownership forms. Its owned preorder copies decoded titles and scalar/link-derived evidence after
+all traversed dictionaries have been reopened and validated. It exposes neither parsed target
+objects nor byte, resolution, navigation, or action-execution authority after the job and its proof
+handle are gone.
 
 The proof is deliberately closed-world: bytes between indexed in-use objects must be trivia.
 Stale free-object bodies, unindexed top-level objects, or other top-level tokens are rejected even
@@ -548,8 +556,9 @@ aliases, nested-reference non-traversal, self and multi-object cycles, lookup fa
 one-less limits, pending idempotence, source and cancellation priority, stable terminal replay, and
 redacted diagnostics. Page-count tests cover strict Catalog shape, valid flat and nested trees,
 zero pages, structural duplicate keys, wrong node shapes, exact parent links, self and multi-level
-cycles, duplicate children, per-node Count agreement, Pending idempotence, cancellation, terminal
-replay, and every traversal limit boundary. Repository policy checks the sibling dependency
+cycles, duplicate children, per-node Count agreement, borrowed and owned proof handles, Pending
+idempotence, source change, cancellation, terminal replay, and every traversal limit boundary.
+Repository policy checks the sibling dependency
 allowlist and absence of platform/external-engine APIs. Resident-footprint tests cover checked
 component and capacity overflow, portable runtime inline sizes, scalar and allocated syntax values,
 identical small/large stream-dictionary footprints, nonzero pre-reserved root-chain capacity,
@@ -558,7 +567,8 @@ platform-specific byte constants. Text-string tests construct every input throug
 syntax parser and cover the complete non-identity PDFDocEncoding mapping, defined and undefined
 controls, undefined high bytes, UTF-16BE BMP and supplementary scalars, malformed surrogate
 structure, BOM selection, exact input/output capacity limits, cancellation, and redaction.
-Outline behavior tests cover absent and empty outlines, valid nested linked lists, structural
+Outline behavior tests cover absent and empty outlines, owned jobs surviving caller-handle release,
+owned cancellation, valid nested linked lists, structural
 topology/count/title/target failures, root Count presence and omission, indirect semantic-value
 boundaries, representative traversal limits, pre-allocation aggregate title checks, and redacted
 diagnostics.
@@ -668,3 +678,5 @@ first-pass, and final-attestation phases without repeated charging.
   attestation with semantic length replay, aggregate child work, and a sealed repaired typestate.
 - 2026-07-15: Added the single core R1 repaired-open coordinator with seventeen-checkpoint identity,
   preallocated proof plans, parent-lent first-pass aggregate caps, and sparse Range replay evidence.
+- 2026-07-15: Added a sealed cloneable attested-index ownership handle and owned page-count and
+  outline job constructors without adding a Session, registry, or alternate proof-minting path.

@@ -1,4 +1,6 @@
 use std::fmt;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use pdf_rs_bytes::SourceSnapshot;
 use pdf_rs_object::{
@@ -400,7 +402,57 @@ pub struct AttestedRevisionIndex {
     pub(crate) syntax_limits: SyntaxLimits,
 }
 
+/// Cloneable ownership handle for one fully attested revision index.
+///
+/// The private `Arc` can be created only by consuming an [`AttestedRevisionIndex`], so sharing the
+/// proof does not expose a path from candidate xref metadata to attested authority.
+#[derive(Clone)]
+pub struct SharedAttestedRevisionIndex(Arc<AttestedRevisionIndex>);
+
+impl SharedAttestedRevisionIndex {
+    /// Borrows the immutable attestation proof retained by this handle.
+    pub fn as_attested(&self) -> &AttestedRevisionIndex {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SharedAttestedRevisionIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("SharedAttestedRevisionIndex")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+pub(crate) enum AttestedRevisionIndexOwner<'index> {
+    Borrowed(&'index AttestedRevisionIndex),
+    Shared(SharedAttestedRevisionIndex),
+}
+
+impl AttestedRevisionIndexOwner<'_> {
+    pub(crate) fn as_attested(&self) -> &AttestedRevisionIndex {
+        match self {
+            Self::Borrowed(index) => index,
+            Self::Shared(index) => index.as_attested(),
+        }
+    }
+}
+
+impl Deref for AttestedRevisionIndexOwner<'_> {
+    type Target = AttestedRevisionIndex;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_attested()
+    }
+}
+
 impl AttestedRevisionIndex {
+    /// Consumes this proof into a cloneable ownership handle for document-service jobs.
+    pub fn into_shared(self) -> SharedAttestedRevisionIndex {
+        SharedAttestedRevisionIndex(Arc::new(self))
+    }
+
     /// Returns the immutable source snapshot covered by the attestation proof.
     pub const fn snapshot(&self) -> SourceSnapshot {
         self.candidate.snapshot

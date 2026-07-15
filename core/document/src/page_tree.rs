@@ -12,10 +12,11 @@ use crate::dictionary::{
     StructuralFields, collect_structural_fields, direct_dictionary, optional_field,
     reject_duplicate_field, required_field,
 };
+use crate::model::AttestedRevisionIndexOwner;
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    OpenAttestedObjectJob, PageTreeLimits, StrictCatalog,
+    OpenAttestedObjectJob, PageTreeLimits, SharedAttestedRevisionIndex, StrictCatalog,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -245,7 +246,8 @@ struct ChildState {
 /// requests, and never trusts `/Count` or `/Kids` to allocate. Traversal storage
 /// is reserved from validated limits before the job is published.
 pub struct CountPagesJob<'index> {
-    index: &'index AttestedRevisionIndex,
+    index: AttestedRevisionIndexOwner<'index>,
+    snapshot: SourceSnapshot,
     context: PageTreeJobContext,
     limits: PageTreeLimits,
     catalog: Option<StrictCatalog>,
@@ -263,7 +265,7 @@ pub struct CountPagesJob<'index> {
 impl CountPagesJob<'_> {
     /// Returns the immutable source snapshot covered by the owning attested index.
     pub const fn snapshot(&self) -> SourceSnapshot {
-        self.index.snapshot()
+        self.snapshot
     }
 
     /// Returns runtime identity, child checkpoints, and scheduling priority.
@@ -644,7 +646,7 @@ impl CountPagesJob<'_> {
         object: AttestedObject,
         cancellation: &dyn DocumentCancellation,
     ) -> Result<(), DocumentError> {
-        let parsed = parse_strict_catalog(self.index, &object, cancellation)?;
+        let parsed = parse_strict_catalog(&self.index, &object, cancellation)?;
         let catalog = parsed.summary();
         let pages_entry = parsed.pages_entry();
         let pages = pages_entry.reference();
@@ -1145,138 +1147,164 @@ impl AttestedRevisionIndex {
         context: PageTreeJobContext,
         limits: PageTreeLimits,
     ) -> Result<CountPagesJob<'_>, DocumentError> {
-        let root = self.root();
-        let root_offset = self.attestation(root)?.xref_offset();
-        if context.object_envelope_checkpoint == context.object_boundary_checkpoint {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::InvalidPageTreeJobContext,
-                Some(root),
-                Some(root_offset),
-            ));
-        }
+        count_pages_with_owner(AttestedRevisionIndexOwner::Borrowed(self), context, limits)
+    }
+}
 
-        let work_items = usize::try_from(limits.effective_work_items()).map_err(|_| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        let seen_slots = limits
-            .effective_seen_references()
-            .checked_mul(2)
-            .and_then(u64::checked_next_power_of_two)
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(root),
-                    Some(root_offset),
-                )
-            })?;
-        let active_depth = usize::try_from(limits.max_depth()).map_err(|_| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        let requested_bytes =
-            traversal_bytes(work_items, seen_slots, active_depth).ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(root),
-                    Some(root_offset),
-                )
-            })?;
-        if requested_bytes > limits.max_retained_traversal_bytes() {
-            return Err(DocumentError::page_tree_resource(
-                DocumentLimitKind::PageTreeTraversalBytes,
-                limits.max_retained_traversal_bytes(),
-                0,
-                requested_bytes,
-                root,
-                Some(root_offset),
-            ));
-        }
-
-        let mut work = Vec::new();
-        work.try_reserve_exact(work_items).map_err(|_| {
-            DocumentError::page_tree_resource(
-                DocumentLimitKind::PageTreeTraversalBytes,
-                limits.max_retained_traversal_bytes(),
-                0,
-                requested_bytes,
-                root,
-                Some(root_offset),
-            )
-        })?;
-        let mut seen = Vec::new();
-        seen.try_reserve_exact(seen_slots).map_err(|_| {
-            DocumentError::page_tree_resource(
-                DocumentLimitKind::PageTreeTraversalBytes,
-                limits.max_retained_traversal_bytes(),
-                0,
-                requested_bytes,
-                root,
-                Some(root_offset),
-            )
-        })?;
-        seen.resize(seen_slots, 0_u64);
-        let mut active = Vec::new();
-        active.try_reserve_exact(active_depth).map_err(|_| {
-            DocumentError::page_tree_resource(
-                DocumentLimitKind::PageTreeTraversalBytes,
-                limits.max_retained_traversal_bytes(),
-                0,
-                requested_bytes,
-                root,
-                Some(root_offset),
-            )
-        })?;
-
-        let reserved_bytes = traversal_bytes(work.capacity(), seen.capacity(), active.capacity())
-            .ok_or_else(|| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(root),
-                Some(root_offset),
-            )
-        })?;
-        if reserved_bytes > limits.max_retained_traversal_bytes() {
-            return Err(DocumentError::page_tree_resource(
-                DocumentLimitKind::PageTreeTraversalBytes,
-                limits.max_retained_traversal_bytes(),
-                0,
-                reserved_bytes,
-                root,
-                Some(root_offset),
-            ));
-        }
-
-        Ok(CountPagesJob {
-            index: self,
+impl SharedAttestedRevisionIndex {
+    /// Creates a page-count job that owns a clone of this proof handle.
+    pub fn count_pages_owned(
+        &self,
+        context: PageTreeJobContext,
+        limits: PageTreeLimits,
+    ) -> Result<CountPagesJob<'static>, DocumentError> {
+        count_pages_with_owner(
+            AttestedRevisionIndexOwner::Shared(self.clone()),
             context,
             limits,
-            catalog: None,
-            work,
-            seen_slots: seen,
-            seen_count: 0,
-            active_pages_nodes: active,
-            current: None,
-            child: None,
-            stats: PageTreeStats {
-                reserved_traversal_bytes: reserved_bytes,
-                ..PageTreeStats::default()
-            },
-            state: JobState::Active,
-            terminal_error: DocumentError::for_code(
+        )
+    }
+}
+
+fn count_pages_with_owner<'index>(
+    index: AttestedRevisionIndexOwner<'index>,
+    context: PageTreeJobContext,
+    limits: PageTreeLimits,
+) -> Result<CountPagesJob<'index>, DocumentError> {
+    let attested = index.as_attested();
+    let snapshot = attested.snapshot();
+    let root = attested.root();
+    let root_offset = attested.attestation(root)?.xref_offset();
+    if context.object_envelope_checkpoint == context.object_boundary_checkpoint {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InvalidPageTreeJobContext,
+            Some(root),
+            Some(root_offset),
+        ));
+    }
+
+    let work_items = usize::try_from(limits.effective_work_items()).map_err(|_| {
+        DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        )
+    })?;
+    let seen_slots = limits
+        .effective_seen_references()
+        .checked_mul(2)
+        .and_then(u64::checked_next_power_of_two)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            DocumentError::for_code(
                 DocumentErrorCode::InternalState,
                 Some(root),
                 Some(root_offset),
-            ),
-        })
+            )
+        })?;
+    let active_depth = usize::try_from(limits.max_depth()).map_err(|_| {
+        DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        )
+    })?;
+    let requested_bytes =
+        traversal_bytes(work_items, seen_slots, active_depth).ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(root),
+                Some(root_offset),
+            )
+        })?;
+    if requested_bytes > limits.max_retained_traversal_bytes() {
+        return Err(DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            0,
+            requested_bytes,
+            root,
+            Some(root_offset),
+        ));
     }
+
+    let mut work = Vec::new();
+    work.try_reserve_exact(work_items).map_err(|_| {
+        DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            0,
+            requested_bytes,
+            root,
+            Some(root_offset),
+        )
+    })?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(seen_slots).map_err(|_| {
+        DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            0,
+            requested_bytes,
+            root,
+            Some(root_offset),
+        )
+    })?;
+    seen.resize(seen_slots, 0_u64);
+    let mut active = Vec::new();
+    active.try_reserve_exact(active_depth).map_err(|_| {
+        DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            0,
+            requested_bytes,
+            root,
+            Some(root_offset),
+        )
+    })?;
+
+    let reserved_bytes = traversal_bytes(work.capacity(), seen.capacity(), active.capacity())
+        .ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(root),
+                Some(root_offset),
+            )
+        })?;
+    if reserved_bytes > limits.max_retained_traversal_bytes() {
+        return Err(DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            0,
+            reserved_bytes,
+            root,
+            Some(root_offset),
+        ));
+    }
+
+    Ok(CountPagesJob {
+        index,
+        snapshot,
+        context,
+        limits,
+        catalog: None,
+        work,
+        seen_slots: seen,
+        seen_count: 0,
+        active_pages_nodes: active,
+        current: None,
+        child: None,
+        stats: PageTreeStats {
+            reserved_traversal_bytes: reserved_bytes,
+            ..PageTreeStats::default()
+        },
+        state: JobState::Active,
+        terminal_error: DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(root),
+            Some(root_offset),
+        ),
+    })
 }
 
 fn traversal_bytes(work: usize, seen: usize, active: usize) -> Option<u64> {

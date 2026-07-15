@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use pdf_rs_bytes::{
     ByteRange, ByteSource, JobId, RangeResponse, RangeStore, RequestPriority, ResumeCheckpoint,
     SourceIdentity, SourceRevision, SourceSnapshot, SourceStableId, SourceValidator,
@@ -488,6 +490,40 @@ fn nested_outline_is_preorder_bound_counted_and_redacted() {
     }
     assert_eq!(job.phase(), OutlinePhase::Ready);
     assert_eq!(job.stats(), stats);
+}
+
+#[test]
+fn owned_outline_job_survives_handle_drop_and_preserves_cancellation() {
+    let fixture = nested_outline_fixture();
+    let shared = ready_index(&fixture).into_shared();
+    let mut owned: ReadOutlineJob<'static> = shared
+        .read_outline_owned(context(), compact_limits())
+        .unwrap();
+    drop(shared);
+
+    let store = supplied_store(&fixture);
+    let outline = match owned.poll(&store, &DocumentNeverCancelled) {
+        OutlinePoll::Ready(outline) => outline,
+        other => panic!("owned outline job must complete after caller handle drop: {other:?}"),
+    };
+    assert_eq!(outline.root(), Some(object_ref(3)));
+    assert_eq!(outline.items().len(), 3);
+
+    let shared = ready_index(&fixture).into_shared();
+    let mut cancelled: ReadOutlineJob<'static> = shared
+        .read_outline_owned(context(), compact_limits())
+        .unwrap();
+    drop(shared);
+    let cancellation = AtomicBool::new(true);
+    let failure = match cancelled.poll(&store, &cancellation) {
+        OutlinePoll::Failed(error) => error,
+        other => panic!("owned outline cancellation must remain terminal: {other:?}"),
+    };
+    assert_eq!(failure.code(), DocumentErrorCode::Cancelled);
+    assert!(matches!(
+        cancelled.poll(&store, &cancellation),
+        OutlinePoll::Failed(repeated) if repeated == failure
+    ));
 }
 
 #[test]

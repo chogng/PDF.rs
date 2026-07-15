@@ -83,7 +83,7 @@ pub use local_repair_open::{
 };
 pub use model::{
     AttestedRevisionIndex, CandidateRevisionIndex, DocumentIndexStats, ObjectAttestation,
-    ObjectAttestationKind, PhysicalObjectInterval, RevisionId,
+    ObjectAttestationKind, PhysicalObjectInterval, RevisionId, SharedAttestedRevisionIndex,
 };
 pub use outline::{
     Outline, OutlineItem, OutlineJobContext, OutlinePhase, OutlinePoll, OutlineStats,

@@ -78,6 +78,40 @@ fn product_document_core_has_only_approved_sibling_dependencies_and_no_platform_
 }
 
 #[test]
+fn shared_service_ownership_preserves_the_attestation_proof_boundary() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let model = fs::read_to_string(crate_root.join("src/model.rs"))
+        .expect("document model source must be readable");
+    let page_tree = fs::read_to_string(crate_root.join("src/page_tree.rs"))
+        .expect("page-tree source must be readable");
+    let outline = fs::read_to_string(crate_root.join("src/outline.rs"))
+        .expect("outline source must be readable");
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("document library source must be readable");
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md"))
+        .expect("document provenance must be readable");
+    let shared_impl = model
+        .split_once("impl SharedAttestedRevisionIndex {")
+        .and_then(|(_, tail)| tail.split_once("impl fmt::Debug for SharedAttestedRevisionIndex"))
+        .map(|(body, _)| body)
+        .expect("shared attested handle has one bounded public implementation");
+
+    assert!(model.contains("pub struct SharedAttestedRevisionIndex(Arc<AttestedRevisionIndex>);"));
+    assert!(model.contains("pub fn into_shared(self) -> SharedAttestedRevisionIndex"));
+    assert!(!model.contains("impl From<CandidateRevisionIndex> for SharedAttestedRevisionIndex"));
+    assert!(!shared_impl.contains("pub fn new("));
+    assert!(library.contains("SharedAttestedRevisionIndex"));
+    assert!(page_tree.contains("AttestedRevisionIndexOwner<'index>"));
+    assert!(page_tree.contains("pub fn count_pages_owned("));
+    assert!(page_tree.contains("Result<CountPagesJob<'static>, DocumentError>"));
+    assert!(outline.contains("AttestedRevisionIndexOwner<'index>"));
+    assert!(outline.contains("pub fn read_outline_owned("));
+    assert!(outline.contains("Result<ReadOutlineJob<'static>, DocumentError>"));
+    assert!(provenance.contains("There is no constructor from a candidate"));
+    assert!(provenance.contains("without adding a Session, registry"));
+}
+
+#[test]
 fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -289,8 +323,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.47.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.47.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.48.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.48.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
@@ -311,6 +345,22 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         assert!(
             feature.contains(required),
             "feature must contain {required:?}"
+        );
+    }
+
+    let ownership = record_with_id(&feature_map, "feature", "core.shared-attested-service-jobs")
+        .expect("shared attested service-job feature must exist");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m1.shared-attested-service-jobs.v1\"",
+        "RPE-ARCH-001/9.1",
+        "core/document::page_tree_count",
+        "core/document::outline",
+        "core/document::repository_policy",
+    ] {
+        assert!(
+            ownership.contains(required),
+            "owned service-job feature must contain {required:?}"
         );
     }
 
@@ -337,6 +387,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "not a registered page-count differential",
         "not a registered baseline or correctness oracle",
         "feature state remains PLANNED",
+        "sealed cloneable handle",
+        "not a Session, scheduler, cache, request lifecycle, or alternate proof source",
         "do not claim M1 or M2 exit",
         "status = \"partial\"",
     ] {
