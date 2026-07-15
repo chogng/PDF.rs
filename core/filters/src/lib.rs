@@ -15,6 +15,7 @@ mod error;
 mod flate;
 mod limits;
 mod model;
+mod predictor;
 
 pub use decode::{DecodeCancellation, NeverCancelled, decode_stream};
 pub use error::{
@@ -24,5 +25,6 @@ pub use error::{
 pub use limits::{DecodeLimitConfig, DecodeLimits};
 pub use model::{
     DecodeAttestation, DecodeFuelScheduleVersion, DecodeProfile, DecodeRequest, DecodedOffset,
-    DecodedRange, DecodedStream, FilterPlan, StreamFilter,
+    DecodedRange, DecodedStream, FilterDecodeParameters, FilterPlan, FilterStage,
+    PredictorParameters, StreamFilter,
 };

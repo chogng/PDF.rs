@@ -264,7 +264,7 @@ fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
     let feature_map = include_str!("../../../docs/traceability/feature-map.toml");
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
     for map in [feature_map, spec_map] {
-        assert_line(map, "version = \"0.54.0\"");
+        assert_line(map, "version = \"0.55.0\"");
         assert!(map.contains("tools/baseline::pdfium_outline_real_adapter"));
         assert!(map.contains("tools/baseline::repository_pdfium_outline_probe"));
     }

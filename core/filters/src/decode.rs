@@ -1,7 +1,8 @@
 use crate::flate::decode_flate;
+use crate::predictor::decode_predictor;
 use crate::{
     DecodeAttestation, DecodeError, DecodeErrorCode, DecodeFuelScheduleVersion, DecodeLimitKind,
-    DecodeLimits, DecodeRequest, DecodedStream, StreamFilter,
+    DecodeLimits, DecodeRequest, DecodedStream, FilterDecodeParameters, StreamFilter,
 };
 
 const INITIAL_OUTPUT_RESERVE: usize = 4 * 1024;
@@ -74,7 +75,7 @@ pub fn decode_stream<C: DecodeCancellation + ?Sized>(
         decode_identity(encoded.bytes(), &mut budget, cancellation)?
     } else {
         let mut current: Option<Vec<u8>> = None;
-        for (index, filter) in plan.filters().iter().copied().enumerate() {
+        for (index, stage) in plan.stages().iter().copied().enumerate() {
             let filter_index =
                 u16::try_from(index).expect("validated hard filter count always fits u16");
             let is_final = index + 1 == plan.len();
@@ -83,15 +84,33 @@ pub fn decode_stream<C: DecodeCancellation + ?Sized>(
                 Some(bytes) => (bytes.as_slice(), bytes.capacity()),
                 None => (encoded.bytes(), 0),
             };
-            let output = decode_layer(
-                filter,
+            let applies_predictor = matches!(
+                stage.decode_parameters(),
+                FilterDecodeParameters::Predictor(parameters) if parameters.predictor() != 1
+            );
+            let mut output = decode_layer(
+                stage.filter(),
                 input,
                 input_capacity,
-                is_final,
+                is_final && !applies_predictor,
                 filter_index,
                 &mut budget,
                 cancellation,
             )?;
+            drop(current.take());
+            if let FilterDecodeParameters::Predictor(parameters) = stage.decode_parameters()
+                && parameters.predictor() != 1
+            {
+                output = decode_predictor(
+                    &output,
+                    output.capacity(),
+                    is_final,
+                    filter_index,
+                    parameters,
+                    &mut budget,
+                    cancellation,
+                )?;
+            }
             current = Some(output);
         }
         current.ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InternalState, None))?
@@ -750,6 +769,25 @@ impl<'a> OutputBuffer<'a> {
     pub(crate) fn byte_at_distance(&self, distance: usize) -> Option<u8> {
         let index = self.bytes.len().checked_sub(distance)?;
         self.bytes.get(index).copied()
+    }
+
+    pub(crate) fn bit_at(&self, bit: usize) -> Option<u8> {
+        let byte = *self.bytes.get(bit / 8)?;
+        let shift = 7_usize.checked_sub(bit % 8)?;
+        Some((byte >> shift) & 1)
+    }
+
+    pub(crate) fn replace_bit(&mut self, bit: usize, value: u8) -> bool {
+        let byte_index = bit / 8;
+        let Some(byte) = self.bytes.get_mut(byte_index) else {
+            return false;
+        };
+        let Some(shift) = 7_usize.checked_sub(bit % 8) else {
+            return false;
+        };
+        let mask = 1_u8 << shift;
+        *byte = (*byte & !mask) | ((value & 1) << shift);
+        true
     }
 
     pub(crate) fn finish(self) -> Vec<u8> {

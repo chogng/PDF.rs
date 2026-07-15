@@ -39,14 +39,27 @@ impl StreamFilter {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilterPlan {
     filters: Vec<StreamFilter>,
+    stages: Vec<FilterStage>,
 }
 
 impl FilterPlan {
     /// Builds an ordered plan from already canonical filter identifiers.
     pub fn new(filters: &[StreamFilter]) -> Result<Self, DecodeError> {
         validate_hard_filter_count(filters.len())?;
-        let mut owned = Vec::new();
-        owned.try_reserve_exact(filters.len()).map_err(|_| {
+        let mut owned_filters = Vec::new();
+        owned_filters
+            .try_reserve_exact(filters.len())
+            .map_err(|_| {
+                DecodeError::resource(
+                    DecodeLimitKind::Allocation,
+                    u64::from(HARD_MAX_FILTERS),
+                    0,
+                    u64::try_from(filters.len()).unwrap_or(u64::MAX),
+                    None,
+                )
+            })?;
+        let mut stages = Vec::new();
+        stages.try_reserve_exact(filters.len()).map_err(|_| {
             DecodeError::resource(
                 DecodeLimitKind::Allocation,
                 u64::from(HARD_MAX_FILTERS),
@@ -55,8 +68,50 @@ impl FilterPlan {
                 None,
             )
         })?;
-        owned.extend_from_slice(filters);
-        Ok(Self { filters: owned })
+        for filter in filters.iter().copied() {
+            owned_filters.push(filter);
+            stages.push(FilterStage::without_parameters(filter));
+        }
+        Ok(Self {
+            filters: owned_filters,
+            stages,
+        })
+    }
+
+    /// Builds an ordered plan whose stages retain their canonical decode parameters.
+    pub fn from_stages(stages: &[FilterStage]) -> Result<Self, DecodeError> {
+        validate_hard_filter_count(stages.len())?;
+        let mut owned_stages = Vec::new();
+        owned_stages.try_reserve_exact(stages.len()).map_err(|_| {
+            DecodeError::resource(
+                DecodeLimitKind::Allocation,
+                u64::from(HARD_MAX_FILTERS),
+                0,
+                u64::try_from(stages.len()).unwrap_or(u64::MAX),
+                None,
+            )
+        })?;
+        let mut filters = Vec::new();
+        filters.try_reserve_exact(stages.len()).map_err(|_| {
+            DecodeError::resource(
+                DecodeLimitKind::Allocation,
+                u64::from(HARD_MAX_FILTERS),
+                0,
+                u64::try_from(stages.len()).unwrap_or(u64::MAX),
+                None,
+            )
+        })?;
+        for (index, stage) in stages.iter().enumerate() {
+            stage.validate(Some(
+                u16::try_from(index).expect("hard filter count fits u16"),
+            ))?;
+            owned_stages.push(*stage);
+            filters.push(stage.filter);
+        }
+        Ok(Self {
+            filters,
+            stages: owned_stages,
+        })
     }
 
     /// Canonicalizes strict full PDF filter names in source order.
@@ -90,12 +145,17 @@ impl FilterPlan {
             };
             filters.push(filter);
         }
-        Ok(Self { filters })
+        Self::new(&filters)
     }
 
     /// Returns the canonical filters in decode order.
     pub fn filters(&self) -> &[StreamFilter] {
         &self.filters
+    }
+
+    /// Returns canonical filter stages, including per-layer decode parameters.
+    pub fn stages(&self) -> &[FilterStage] {
+        &self.stages
     }
 
     /// Returns the number of explicit PDF filters.
@@ -106,6 +166,156 @@ impl FilterPlan {
     /// Reports whether no explicit PDF filter is present.
     pub fn is_empty(&self) -> bool {
         self.filters.is_empty()
+    }
+}
+
+/// One canonical stream-filter layer and its bound decode parameters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilterStage {
+    filter: StreamFilter,
+    parameters: FilterDecodeParameters,
+}
+
+impl FilterStage {
+    /// Creates a stage and validates whether the parameters apply to its filter.
+    pub fn new(
+        filter: StreamFilter,
+        parameters: FilterDecodeParameters,
+    ) -> Result<Self, DecodeError> {
+        let stage = Self { filter, parameters };
+        stage.validate(None)?;
+        Ok(stage)
+    }
+
+    /// Creates a stage with no `/DecodeParms` entry.
+    pub const fn without_parameters(filter: StreamFilter) -> Self {
+        Self {
+            filter,
+            parameters: FilterDecodeParameters::None,
+        }
+    }
+
+    /// Returns the canonical filter identifier.
+    pub const fn filter(self) -> StreamFilter {
+        self.filter
+    }
+
+    /// Returns the canonical decode parameters for this layer.
+    pub const fn decode_parameters(self) -> FilterDecodeParameters {
+        self.parameters
+    }
+
+    fn validate(self, filter_index: Option<u16>) -> Result<(), DecodeError> {
+        if matches!(self.parameters, FilterDecodeParameters::Predictor(_))
+            && self.filter != StreamFilter::FlateDecode
+        {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::UnsupportedDecodeParameters,
+                filter_index,
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Canonical per-filter `/DecodeParms` supported by the M1 profile.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FilterDecodeParameters {
+    /// No decode-parameter dictionary is present for this filter layer.
+    #[default]
+    None,
+    /// TIFF or PNG prediction parameters applied after `FlateDecode`.
+    Predictor(PredictorParameters),
+}
+
+/// Validated TIFF/PNG predictor parameters with PDF defaults made explicit.
+///
+/// Positive PNG predictor integers are retained through `i64::MAX`, the upper
+/// bound of the syntax layer's PDF integer model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PredictorParameters {
+    predictor: i64,
+    colors: u32,
+    bits_per_component: u8,
+    columns: u32,
+}
+
+impl PredictorParameters {
+    /// Validates explicit predictor, color, component-width, and column values.
+    ///
+    /// Predictor 1 selects no transform, 2 selects TIFF horizontal
+    /// differencing, and every value from 10 through `i64::MAX` selects PNG
+    /// row-tag prediction.
+    pub fn new(
+        predictor: i64,
+        colors: i64,
+        bits_per_component: i64,
+        columns: i64,
+    ) -> Result<Self, DecodeError> {
+        if predictor <= 0 || colors <= 0 || columns <= 0 || bits_per_component <= 0 {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::InvalidDecodeParameters,
+                None,
+            ));
+        }
+        if (predictor != 1 && predictor != 2 && predictor < 10)
+            || !matches!(bits_per_component, 1 | 2 | 4 | 8 | 16)
+        {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::UnsupportedPredictor,
+                None,
+            ));
+        }
+        let bits_per_component = u8::try_from(bits_per_component)
+            .map_err(|_| DecodeError::for_code(DecodeErrorCode::UnsupportedPredictor, None))?;
+        let colors = u32::try_from(colors)
+            .map_err(|_| DecodeError::for_code(DecodeErrorCode::InvalidDecodeParameters, None))?;
+        let columns = u32::try_from(columns)
+            .map_err(|_| DecodeError::for_code(DecodeErrorCode::InvalidDecodeParameters, None))?;
+        let row_bits = u64::from(colors)
+            .checked_mul(u64::from(columns))
+            .and_then(|value| value.checked_mul(u64::from(bits_per_component)))
+            .ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InvalidDecodeParameters, None))?;
+        row_bits
+            .checked_add(7)
+            .ok_or_else(|| DecodeError::for_code(DecodeErrorCode::InvalidDecodeParameters, None))?;
+        Ok(Self {
+            predictor,
+            colors,
+            bits_per_component,
+            columns,
+        })
+    }
+
+    /// Returns the PDF `/Predictor` value.
+    pub const fn predictor(self) -> i64 {
+        self.predictor
+    }
+
+    /// Returns the positive PDF `/Colors` value.
+    pub const fn colors(self) -> u32 {
+        self.colors
+    }
+
+    /// Returns the supported PDF `/BitsPerComponent` value.
+    pub const fn bits_per_component(self) -> u8 {
+        self.bits_per_component
+    }
+
+    /// Returns the positive PDF `/Columns` value.
+    pub const fn columns(self) -> u32 {
+        self.columns
+    }
+}
+
+impl Default for PredictorParameters {
+    fn default() -> Self {
+        Self {
+            predictor: 1,
+            colors: 1,
+            bits_per_component: 8,
+            columns: 1,
+        }
     }
 }
 

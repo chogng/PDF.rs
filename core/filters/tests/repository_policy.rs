@@ -103,6 +103,56 @@ fn decoded_products_are_sealed_non_clone_and_identity_is_not_a_public_filter() {
 }
 
 #[test]
+fn predictor_support_is_parameter_attested_without_claiming_lzw_or_integration() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let model = fs::read_to_string(crate_root.join("src/model.rs")).unwrap();
+    let predictor = fs::read_to_string(crate_root.join("src/predictor.rs")).unwrap();
+    let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md")).unwrap();
+
+    for required in [
+        "pub struct FilterStage",
+        "pub enum FilterDecodeParameters",
+        "pub struct PredictorParameters",
+        "predictor: 1",
+        "colors: 1",
+        "bits_per_component: 8",
+        "columns: 1",
+    ] {
+        assert!(model.contains(required), "model must contain {required:?}");
+    }
+    for required in [
+        "fn decode_tiff",
+        "fn decode_png",
+        "fn paeth",
+        "output.charge_algorithm",
+        "InvalidPredictorData",
+    ] {
+        assert!(
+            predictor.contains(required),
+            "predictor implementation must contain {required:?}"
+        );
+    }
+    for required in [
+        "TIFF Predictor 2",
+        "Every PNG predictor value at or above 10",
+        "LZW, DCT, CCITT",
+        "The object layer does not yet call this crate",
+        "direct or indirect `/DecodeParms` mapping",
+        "read-only inspected",
+        "No PDFium code or table was copied",
+        "O4, unregistered, non-gating observer",
+        "derived from ISO 32000-1:2008 section 7.4.4.4",
+        "every packed input/output bit read",
+        "do not use bulk fuel charges",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "predictor provenance must contain {required:?}"
+        );
+    }
+}
+
+#[test]
 fn traceability_registers_basic_filters_without_claiming_stream_integration() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -113,8 +163,8 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml")).unwrap();
     let spec_map =
         fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml")).unwrap();
-    assert_eq!(top_level_version(&feature_map), Some("0.54.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.54.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.55.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.55.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.stream-filter-decode")
         .expect("basic stream-filter feature must exist");
@@ -124,6 +174,7 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         "RPE-ARCH-001/5.6",
         "modules = [\"core/filters\"]",
         "core/filters::decode_behavior",
+        "core/filters::predictor_behavior",
         "core/filters::repository_policy",
         "fuzz_targets = []",
         "benchmarks = []",
@@ -144,8 +195,11 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         "FlateDecode",
         "stored, fixed-Huffman, and dynamic-Huffman",
         "charges block, Huffman, input, output, and cancellation work",
+        "TIFF Predictor 2 over packed 1-, 2-, 4-, 8-, and 16-bit samples",
+        "every PNG predictor value at or above 10 through row tags 0 through 4",
         "The object and xref layers do not yet",
-        "Predictors, LZW",
+        "LZW, non-predictor decode parameters",
+        "object/xref integration",
         "feature is PLANNED",
         "does not claim general stream support or M1 exit",
         "status = \"partial\"",

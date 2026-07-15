@@ -90,6 +90,14 @@ pub enum DecodeErrorCode {
     InvalidFlate,
     /// A zlib preset dictionary was declared without an approved dictionary profile.
     UnsupportedFlateDictionary,
+    /// A decode-parameter value is zero, overflowed, or otherwise malformed.
+    InvalidDecodeParameters,
+    /// Decode parameters are recognized but do not apply to the selected filter.
+    UnsupportedDecodeParameters,
+    /// A predictor number or component width is outside the implemented profile.
+    UnsupportedPredictor,
+    /// TIFF/PNG predictor bytes have invalid row framing, tags, or state.
+    InvalidPredictorData,
     /// A deterministic decoding budget was exceeded.
     ResourceLimit,
     /// The physical bytes belong to a different immutable source revision.
@@ -201,6 +209,26 @@ impl DecodeError {
                 DecodeErrorCategory::Unsupported,
                 DecodeRecoverability::ReportUnsupported,
                 "RPE-FILTERS-0014",
+            ),
+            DecodeErrorCode::InvalidDecodeParameters => (
+                DecodeErrorCategory::Syntax,
+                DecodeRecoverability::CorrectInput,
+                "RPE-FILTERS-0015",
+            ),
+            DecodeErrorCode::UnsupportedDecodeParameters => (
+                DecodeErrorCategory::Unsupported,
+                DecodeRecoverability::ReportUnsupported,
+                "RPE-FILTERS-0016",
+            ),
+            DecodeErrorCode::UnsupportedPredictor => (
+                DecodeErrorCategory::Unsupported,
+                DecodeRecoverability::ReportUnsupported,
+                "RPE-FILTERS-0017",
+            ),
+            DecodeErrorCode::InvalidPredictorData => (
+                DecodeErrorCategory::Syntax,
+                DecodeRecoverability::CorrectInput,
+                "RPE-FILTERS-0018",
             ),
             DecodeErrorCode::ResourceLimit => (
                 DecodeErrorCategory::Resource,
