@@ -5,7 +5,9 @@ bootstrap discovers the final `startxref` marker of a known-length immutable sou
 bounded traditional xref table and trailer. A separate synchronous primitive validates one
 complete caller-supplied unfiltered xref-stream payload against source-bound dictionary metadata.
 A third synchronous primitive validates and composes already-parsed revision candidates from
-newest to oldest. None performs file, network, callback, filter-decoder, or async-runtime I/O.
+newest to oldest. An explicit local-repair sibling first runs the unchanged strict job, then
+handles only bounded fixed-width row whitespace and nearby final-anchor deviations. None performs
+file, network, callback, filter-decoder, or async-runtime I/O.
 
 # Semantic owner
 
@@ -98,6 +100,22 @@ coverage claim.
   fallible allocation. The traditional resumable job still rejects xref-stream targets because it
   does not yet own stream acquisition or decoding. Diagnostics expose stable codes, recovery
   policies, and distinct source/decoded offsets without logging source bytes.
+- The local-repair sibling enters repair only after strict `InvalidEntry` or
+  `InvalidXrefKeyword`; Unsupported, resource exhaustion, cancellation, source failure, and
+  internal errors remain terminal strict outcomes. It scans only a fixed delta around the final
+  tail declaration for token-boundary `xref` anchors, retains a bounded candidate set, and rejects
+  more than one normally validated candidate instead of choosing the first or nearest.
+- Row repair preserves every ten-digit offset, five-digit generation, entry status, and 20-byte
+  row width. Only PDF horizontal whitespace in the two field separators and the horizontal byte
+  before a CR/LF row ending may be canonicalized. Comments, arbitrary bytes, moved line endings,
+  digit/status damage, and subsection/trailer semantics are not repaired. The canonicalized view
+  is submitted to the existing section parser, whose source spans remain accessible only through
+  the proof-bearing local result that also owns every repair diagnostic.
+- Repair-only scan bytes, canonical-copy/row-evidence workspace, candidates, whitespace edits,
+  diagnostics, and allocator-reported diagnostic capacity have independent hard-bounded profiles.
+  Pending retries retain exact repair checkpoints without recharging a window; snapshot mismatch
+  and cancellation are stable terminal outcomes. Diagnostics contain only source identity,
+  coordinates, counts, and work cost, never source row or trailer content.
 
 # External observations
 
@@ -144,6 +162,14 @@ and root geometry; complete traditional-base versus sparse-update shape; equalit
 revision/section/entry/retained-capacity limits; cancellation; and stable recovery policy. They do
 not acquire or decode any xref section and are not a strict-open or document-service E2E.
 
+Local-repair tests pair canonical, whitespace-only, final-offset, and combined inputs; require an
+empty diagnostic ledger for strict success and one source-bound record per accepted repair; reject
+semantic row damage, illegal whitespace, ambiguous valid anchors, and out-of-delta candidates;
+exercise exact scan/workspace/edit/candidate/diagnostic budgets and hard limit configuration;
+resume the repair checkpoint without duplicate charging; and prove Unsupported, resource,
+cancellation, and snapshot failures never enter repair. This is an xref component, not object
+repair or a repaired document open.
+
 `core/xref::repository_policy` scans product source for forbidden filesystem, network,
 async-runtime, and external-engine tokens and verifies that the crate depends only on
 `core/bytes` and `core/syntax`. No registered coverage-guided fuzz target, pinned conformance
@@ -167,10 +193,11 @@ slice.
   completion/cancel/close arbitration, and browser/desktop E2E remain future runtime/platform
   work. The crate implements only the parser-side cooperative cancellation probe and terminal
   classification.
-- No R1 repair behavior is implemented or claimed. Executable strict-policy regressions prove that
-  noncanonical fixed-row whitespace and a nearby correct `xref` keyword remain failures instead of
-  triggering an implicit scan. Strict failure in this project bootstrap is
-  not a standards-conformance statement.
+- The explicit R1 xref sibling covers only fixed-row whitespace and the final traditional-xref
+  anchor. It does not repair subsection/trailer semantics, acquire xref streams, traverse
+  revisions, probe object headers, repair stream lengths, rebuild effective document geometry, or
+  publish a repaired document index. Strict APIs remain unchanged, and this component is not a
+  complete R0/R1 or standards-conformance claim.
 - Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or
   `ReleaseProfile` decision.
 - No fuzz, mutation, external corpus, or O4 differential evidence exists for this module yet.
@@ -187,3 +214,6 @@ slice.
 - 2026-07-15: Added bounded pure composition for already-parsed traditional, primary-stream, and
   hybrid revision candidates, including null/free masking and strict lookup precedence; parsing,
   proof-bearing acquisition, object resolution, and product integration remain outside this slice.
+- 2026-07-15: Added the explicit bounded local traditional-xref sibling with strict-first
+  allowlisting, unique nearby-anchor selection, fixed-row whitespace canonicalization, normal
+  parser revalidation, proof-bearing diagnostics, and independent repair budgets.

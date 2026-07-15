@@ -23,6 +23,18 @@ pub enum XrefLimitKind {
     Entries,
     /// Fallible bounded metadata allocation.
     Allocation,
+    /// Bytes examined only by the explicit local-repair path.
+    RepairScanBytes,
+    /// Canonical section copy plus row evidence retained during one repair attempt.
+    RepairWorkingBytes,
+    /// Candidate traditional-xref anchors retained by local repair.
+    RepairCandidates,
+    /// Noncanonical whitespace bytes changed in fixed-width xref rows.
+    RepairWhitespaceEdits,
+    /// Immutable repair diagnostics retained with a locally opened section.
+    RepairDiagnostics,
+    /// Allocator-reported bytes retained by repair diagnostics.
+    RepairDiagnosticBytes,
 }
 
 /// Structured resource-limit context without document bytes.
@@ -117,6 +129,14 @@ pub enum XrefErrorCode {
     InternalState,
     /// A completed one-shot xref job was polled again.
     JobAlreadyComplete,
+    /// Local-repair limits are zero, inconsistent, or above fixed hard ceilings.
+    InvalidRepairLimits,
+    /// Strict and repair checkpoints are not pairwise distinct.
+    InvalidRepairJobContext,
+    /// No unique locally repaired traditional xref passed normal validation.
+    LocalRepairFailed,
+    /// More than one local xref candidate passed normal validation.
+    AmbiguousRepair,
 }
 
 /// Coarse xref failure category.
@@ -290,6 +310,26 @@ impl XrefError {
                 XrefErrorCategory::Configuration,
                 XrefRecoverability::CorrectConfiguration,
                 "RPE-XREF-0022",
+            ),
+            XrefErrorCode::InvalidRepairLimits => (
+                XrefErrorCategory::Configuration,
+                XrefRecoverability::CorrectConfiguration,
+                "RPE-XREF-0023",
+            ),
+            XrefErrorCode::InvalidRepairJobContext => (
+                XrefErrorCategory::Configuration,
+                XrefRecoverability::CorrectConfiguration,
+                "RPE-XREF-0024",
+            ),
+            XrefErrorCode::LocalRepairFailed => (
+                XrefErrorCategory::Syntax,
+                XrefRecoverability::CorrectInput,
+                "RPE-XREF-0025",
+            ),
+            XrefErrorCode::AmbiguousRepair => (
+                XrefErrorCategory::Syntax,
+                XrefRecoverability::CorrectInput,
+                "RPE-XREF-0026",
             ),
         };
         Self {

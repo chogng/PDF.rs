@@ -163,6 +163,7 @@ pub struct OpenXrefJob {
     limits: XrefLimits,
     syntax_limits: SyntaxLimits,
     stats: XrefStats,
+    discovered_startxref: Option<u64>,
     state: JobState,
 }
 
@@ -203,6 +204,7 @@ impl OpenXrefJob {
             limits,
             syntax_limits,
             stats: XrefStats::default(),
+            discovered_startxref: None,
             state: JobState::Tail {
                 window,
                 charged: false,
@@ -228,6 +230,15 @@ impl OpenXrefJob {
     /// Returns cumulative work charged through the most recent poll.
     pub const fn stats(&self) -> XrefStats {
         self.stats
+    }
+
+    /// Returns the final tail-declared xref anchor after the tail phase succeeds.
+    ///
+    /// The value remains available after a section-phase failure so an explicit sibling repair
+    /// policy can reason about the rejected declaration without changing this strict job's
+    /// behavior.
+    pub const fn discovered_startxref(&self) -> Option<u64> {
+        self.discovered_startxref
     }
 
     /// Returns the job's current coarse phase.
@@ -343,6 +354,7 @@ impl OpenXrefJob {
                 }
                 match parse_tail(bytes.bytes(), start, self.source_len, cancellation) {
                     Ok(TailParse::Found(startxref)) => {
+                        self.discovered_startxref = Some(startxref);
                         let remaining = match self.source_len.checked_sub(startxref) {
                             Some(value) if value != 0 => value,
                             _ => return Some(self.fail_internal(Some(startxref))),
