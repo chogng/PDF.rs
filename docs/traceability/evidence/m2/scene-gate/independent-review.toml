@@ -1,0 +1,47 @@
+schema = 1
+type = "milestone-evidence"
+id = "evidence.m2.scene-gate.independent-review"
+milestone = "M2"
+work_item = "M2-07"
+profile = "m2.scene-gate.v1"
+feature = "quality.m2-scene-gate"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+reviewer_roles = ["parser-security", "spec-conformance"]
+reviewed_surfaces = ["core/content::vm", "tools/quality::m2_scene_gate", "tools/quality::m2_exit", "scripts/ci.sh", "M2 plan and trace closure"]
+reviewed_subjects = [
+  "core/content/src/vm.rs#sha256:2b866dca0b778c579a23db58f16b627fb338dcf83c4a34880c063c04c43c9eef",
+  "tools/quality/tests/m2_scene_gate_support/mod.rs#sha256:af3807fbbc93fa09ca135ca27e4eeafafaaefb595e8e0bef75cde600ffb5caec",
+  "tools/quality/tests/m2_exit.rs#sha256:2cdcb920fe52065d2f385f2b734ff874e91d1c1dff3eff8586b73a8d2960c4da",
+  "scripts/ci.sh#sha256:7dc3aecf35f0dd0800a3ee053e92f3601cd5a45fe7c53ff317133d81806e10d2",
+  "plan/m2.toml#sha256:b0378ae2c3388626871863462362649ee291ee11142bee7686ec909f4cced55a",
+  "plan/r0.toml#sha256:77a274e28193bf763bc964275b808dd7a94817f739d1e45c4f9aa1400bf719c0",
+  "docs/traceability/feature-map.toml#sha256:5fab896e6efc372fef9910a831fe32f455b7c61539f249530821080dc0cd9168",
+  "docs/traceability/spec-map.toml#sha256:9c7fb744920b771242d61f56fbd2cf55dea311150e88880cf6e714be1444861c",
+  "tests/cases/content/m2-scene/valid-state-and-marked-content/case.toml#sha256:113da47429ce11b8f0bc0b6234630b7852f6a35c3be2acc9c57f4e6b02375fb4",
+  "tests/cases/content/m2-scene/valid-state-and-marked-content/expected/scene.json#sha256:7a686fe3461e12fbc3d89f51a113cd10f3bd535a27be0624da21b65c402b3661",
+  "tests/cases/content/m2-scene/resource-marked-content-properties/case.toml#sha256:c9499da843fcbcab57ca671d203789fecdfd0ade036b7548c6c90738667c6c69",
+  "tests/cases/content/m2-scene/resource-marked-content-properties/expected/scene.json#sha256:b49a37d9c617a38cdfbc9ee3c3a86ef6e3a691220923f2403ac6bfa363d17b7c",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-content --test vm",
+  "cargo test --locked --release --package pdf-rs-content --test vm",
+  "cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+  "cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+  "cargo test --locked --package pdf-rs-quality --test m2_exit",
+  "cargo test --locked --package pdf-rs-quality --test m0_exit",
+  "bash -n scripts/ci.sh",
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+]
+review_rounds = ["M2-06 bounded Content VM", "M2-07 normative Scene gate", "M2-07 repository exit closure"]
+closed_findings = [
+  "P1 Content VM matrix composition: cm now computes current_ctm.checked_multiply(operand), matching current-times-operand Scene column semantics and the independent 16/28 translation oracle.",
+  "P1 Scene-gate output ownership: the writer no longer recursively deletes an arbitrary caller-selected path; an existing output directory must be empty, is never deleted, and the independent sentinel hash remained unchanged.",
+]
+open_p0_p2 = 0
+verdict = "SHIP"

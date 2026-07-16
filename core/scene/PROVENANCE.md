@@ -35,9 +35,10 @@ published immutable Scene.
   pre-work command/resource/depth/memory budgets and immutable Scene publication without partial
   success.
 
-The separately registered `m2.scene-v1.v1` and `m2.scene-semantic-diff.v1` profiles close the
+The separately registered `m2.scene-v1.v1` and `m2.scene-semantic-diff.v1` profiles own the
 bounded M2-04 foundation only. They do not claim an ISO 32000 conformance profile, complete
-sections 6.4-6.7, Content VM production, renderer integration, or the M2 normative Scene gate.
+sections 6.4-6.7, ownership of Content VM production, renderer integration, or ownership of the
+separate M2 normative Scene gate.
 
 # Traceability profile boundaries
 
@@ -51,7 +52,8 @@ sections 6.4-6.7, Content VM production, renderer integration, or the M2 normati
 - Both profiles remain `PLANNED` maturity records even though plan item M2-04 is complete.
   Completion means the bounded implementation, normative empty/structural/invalid/budget tests,
   provenance, and repository registration are present; it does not promote either capability to
-  REFERENCE or close the milestone.
+  REFERENCE. The bounded M2 milestone closes only through the separately owned M2-06 Content VM
+  producer and M2-07 normative Scene gate, and milestone completion is not a maturity promotion.
 
 # Algorithms and derivations
 
@@ -150,10 +152,11 @@ sections 6.4-6.7, Content VM production, renderer integration, or the M2 normati
   key must combine runtime binding with a hash of canonical semantic bytes; canonical bytes alone
   are not a cross-document authorization token.
 - Canonical Scene and Scene-diff JSON are write-only in this slice. Schema parsing, minor-version
-  skipping, IPC framing, and `tools/compare` integration remain later M2 work.
-- M2-05 content-stream acquisition, M2-06 Content VM command production, and M2-07 registered
-  normative exit evidence remain open. Scene v1 and its semantic diff therefore cannot close the
-  M2 exit gate by themselves.
+  skipping, IPC framing, and `tools/compare` integration remain future work beyond bounded M2.
+- Scene v1 and its semantic diff do not close the M2 exit gate by themselves. The separately owned
+  M2-05 content-stream acquisition, M2-06 Content VM producer, and M2-07 registered normative
+  Scene gate now close the bounded M2 milestone while every Scene and quality feature remains
+  `PLANNED`.
 
 # History
 
@@ -168,4 +171,6 @@ sections 6.4-6.7, Content VM production, renderer integration, or the M2 normati
   JSON.
 - 2026-07-16: Completed the bounded M2-04 foundation by registering independent Scene v1 and
   semantic-diff profiles, executable normative case families, exact scope exclusions, and the
-  still-open Content VM and M2 exit-gate dependencies.
+  then-open Content VM and M2 exit-gate dependencies.
+- 2026-07-16: Closed the bounded M2 milestone through the separately owned Content VM and
+  profile-stable normative Scene gate without promoting the Scene profiles beyond `PLANNED`.

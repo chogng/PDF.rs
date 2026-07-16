@@ -126,7 +126,7 @@ fn product_sources_exclude_unsafe_and_platform_io() {
 }
 
 #[test]
-fn m2_scanner_and_sealed_vm_are_traceable_while_the_normative_gate_stays_open() {
+fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
         .parent()
@@ -153,8 +153,8 @@ fn m2_scanner_and_sealed_vm_are_traceable_while_the_normative_gate_stays_open() 
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.69.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.69.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -435,9 +435,10 @@ fn m2_scanner_and_sealed_vm_are_traceable_while_the_normative_gate_stays_open() 
     let scene_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/6.4-6.7")
         .expect("Scene requirement is registered");
     assert!(scene_requirement.contains("core.content-vm-scene-v1"));
-    assert!(scene_requirement.contains("M2-06 now supplies one bounded producer"));
-    assert!(scene_requirement.contains("required by M2-07 also remain open"));
-    assert!(scene_requirement.contains("do not yet close the M2 exit gate"));
+    assert!(scene_requirement.contains("M2-06 supplies one bounded producer"));
+    assert!(scene_requirement.contains("quality.m2-scene-gate"));
+    assert!(scene_requirement.contains("M2-07 now closes the bounded M2 exit gate"));
+    assert!(scene_requirement.contains("All component and quality feature records remain PLANNED"));
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement is registered");
@@ -445,15 +446,18 @@ fn m2_scanner_and_sealed_vm_are_traceable_while_the_normative_gate_stays_open() 
         "core.content-operator-scanner",
         "core.page-property-lookup",
         "core.content-vm-scene-v1",
+        "quality.m2-scene-gate",
         "core/content::scanner",
         "core/content::vm",
+        "tools/quality::m2_scene_gate",
+        "tools/quality::m2_exit",
         "M2-05 is complete as two bounded PLANNED profiles",
         "M2-06 is complete as two additional bounded PLANNED profiles",
         "no-I/O page-property resolver",
         "sealed Content VM consumes only strict-attested AcquiredPageContent",
-        "M2-07 registered normative Scene cases",
-        "M2 exit gate is not closed",
-        "status = \"partial\"",
+        "M2-07 completes the bounded exit",
+        "All nine M2 feature records remain PLANNED",
+        "status = \"covered\"",
     ] {
         assert!(
             milestone.contains(required),
@@ -468,10 +472,12 @@ fn m2_scanner_and_sealed_vm_are_traceable_while_the_normative_gate_stays_open() 
     assert!(m2_06.contains("status = \"complete\""));
     assert!(m2_06.contains("completed_at = 2026-07-16"));
     let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
-    assert!(m2_07.contains("status = \"planned\""));
+    assert!(m2_07.contains("status = \"complete\""));
+    assert!(m2_07.contains("completed_at = 2026-07-16"));
     let milestone_header = plan
         .split("[[work_item]]")
         .next()
         .expect("M2 plan has a top-level milestone header");
-    assert!(milestone_header.contains("status = \"in_progress\""));
+    assert!(milestone_header.contains("status = \"complete\""));
+    assert!(milestone_header.contains("completed_at = 2026-07-16"));
 }

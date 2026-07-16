@@ -1,5 +1,5 @@
 schema = 1
-version = "0.68.0"
+version = "0.69.0"
 status = "active"
 
 [[feature]]
@@ -94,6 +94,18 @@ profile = "m2.scene-semantic-diff.v1"
 clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-8", "RPE-STD-005/4-6"]
 modules = ["core/scene"]
 tests = ["core/scene::scene_diff", "core/scene::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.m2-scene-gate"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m2.scene-gate.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-003/7-8", "RPE-STD-004/5-6"]
+modules = ["tools/quality", "docs/traceability"]
+tests = ["tools/quality::m2_scene_gate", "tools/quality::m2_exit"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

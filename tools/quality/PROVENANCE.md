@@ -37,6 +37,13 @@ PLANNED-to-REFERENCE with the independent implementation, O0/O1, boundaries, bud
 and independent review, then satisfies REFERENCE-to-DIFFERENTIAL with O2, disjoint holdouts,
 fuzz/minimizer, raw performance distribution, full-session comparison, and fingerprints. No
 intermediate product or CANARY exposure occurred.
+The separate M2 Scene exit is milestone evidence, not a maturity promotion. It binds exactly six
+self-authored cases—valid, invalid, unsupported, resource, cancellation, and source change—to six
+input hashes and two canonical Scene hashes. Every gate invocation runs two fresh strict pipelines,
+and CI repeats that gate in two debug and two release processes before byte-comparing normalized
+outputs for profile-stable replay. The evidence closes only the bounded initial marked-content
+Scene producer; paths, painting, clipping, text showing, fonts, images, Forms, rendering, broader
+resources, product Session/IPC, and browser or desktop integration remain excluded.
 
 # Semantic owner
 
@@ -124,6 +131,16 @@ discarded before the next, cannot exceed 4,096 bytes, and is decoded twice under
 an explicit 2,048-byte codec input limit. Accepted artifacts and complete error
 fingerprints must repeat exactly; internal/hash failures and content-bearing
 diagnostics are rejected.
+
+The `m2.scene-gate.v1` integration test reads the exact six registered case manifests and executes
+strict open, cold page indexing, Page materialization, ordered content acquisition, and the sealed
+Content VM without consulting an external process. The two Ready cases must equal both an
+independently built Scene model and their raw canonical JSON goldens with zero semantic diff. The
+four non-Ready cases must return their exact invalid, unsupported, cancellation, or source-change
+diagnostic and must not publish a Scene. Two fresh pipelines per case must normalize identically.
+When CI selects an output directory, the test writes deterministic result, Scene, and diff bytes
+only below an absent or empty dedicated directory; CI owns a fixed guarded root, performs two debug
+and two release invocations, and compares all same-profile repeats plus debug-to-release output.
 
 The `m1.native-object-loop.v1` integration test regenerates the canonical
 612-byte input and binds its exact SHA-256 to an immutable in-memory RangeStore.

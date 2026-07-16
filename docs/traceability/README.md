@@ -36,3 +36,11 @@ bounded local R1 are registered at `REFERENCE`; strict page-count and outline ar
 `DIFFERENTIAL` through an atomic two-gate review with no product or CANARY exposure. The other M1
 component profiles remain `PLANNED`. PDFium observations remain outside this graph as unregistered,
 non-gating O4 probes and are not correctness or release oracles.
+
+The M2 Scene gate is milestone evidence, not a maturity promotion. It registers exactly six
+self-authored valid, invalid, unsupported, resource, cancellation, and source-change cases, with
+six input hashes and two canonical Scene hashes. Each gate invocation uses two fresh strict
+pipelines; CI performs two debug and two release invocations and byte-compares the normalized
+artifacts for profile-stable replay. The linked features therefore remain `PLANNED`. This closure
+does not include paths, painting, clipping, text showing, fonts, images, Forms, rendering, broader
+resources, product Session/IPC, or browser and desktop integration.

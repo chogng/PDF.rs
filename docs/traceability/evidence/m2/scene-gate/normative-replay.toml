@@ -1,0 +1,56 @@
+schema = 1
+type = "milestone-evidence"
+id = "evidence.m2.scene-gate.normative-replay"
+milestone = "M2"
+work_item = "M2-07"
+profile = "m2.scene-gate.v1"
+feature = "quality.m2-scene-gate"
+role = "normative-replay"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+reviewer_roles = ["parser-security", "spec-conformance"]
+runner = "tools/quality::m2_scene_gate"
+exit_test = "tools/quality::m2_exit"
+commands = [
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+  "diff --recursive --brief target/ci-artifacts/m2-scene-gate/debug-1 target/ci-artifacts/m2-scene-gate/debug-2",
+  "diff --recursive --brief target/ci-artifacts/m2-scene-gate/release-1 target/ci-artifacts/m2-scene-gate/release-2",
+  "diff --recursive --brief target/ci-artifacts/m2-scene-gate/debug-1 target/ci-artifacts/m2-scene-gate/release-1",
+  "cargo test --locked --package pdf-rs-quality --test m2_exit",
+]
+case_count = 6
+ready_case_count = 2
+non_ready_case_count = 4
+case_manifests = [
+  "tests/cases/content/m2-scene/valid-state-and-marked-content/case.toml",
+  "tests/cases/content/m2-scene/invalid-unbalanced-graphics-state/case.toml",
+  "tests/cases/content/m2-scene/unsupported-marked-point/case.toml",
+  "tests/cases/content/m2-scene/resource-marked-content-properties/case.toml",
+  "tests/cases/content/m2-scene/cancel-before-publication/case.toml",
+  "tests/cases/content/m2-scene/source-change-before-resume/case.toml",
+]
+input_hashes = [
+  "tests/cases/content/m2-scene/valid-state-and-marked-content/input.pdf#sha256:0cf75dfe46eae052c87ead1d833eb2f5f326ce33022fc7fe55aeff3360c70280",
+  "tests/cases/content/m2-scene/invalid-unbalanced-graphics-state/input.pdf#sha256:ff6f0896c84db5e92595d1ea4544953d04d9eacb5953f9cf27f70a6bdcb9c303",
+  "tests/cases/content/m2-scene/unsupported-marked-point/input.pdf#sha256:f31b1e863d90ff8a47c0a1ae195e901bac3bc305ab45f0e2e244b129c2fddac8",
+  "tests/cases/content/m2-scene/resource-marked-content-properties/input.pdf#sha256:50081ce0272a5698781ee760db6034b255742e74156b143d35141bd601ccba00",
+  "tests/cases/content/m2-scene/cancel-before-publication/input.pdf#sha256:d9cdbfcc62b9addbb5c82e32dd0405232f50c4ba97d19e4644882733741f364f",
+  "tests/cases/content/m2-scene/source-change-before-resume/input.pdf#sha256:d9cdbfcc62b9addbb5c82e32dd0405232f50c4ba97d19e4644882733741f364f",
+]
+scene_goldens = [
+  "tests/cases/content/m2-scene/valid-state-and-marked-content/expected/scene.json#sha256:7a686fe3461e12fbc3d89f51a113cd10f3bd535a27be0624da21b65c402b3661",
+  "tests/cases/content/m2-scene/resource-marked-content-properties/expected/scene.json#sha256:b49a37d9c617a38cdfbc9ee3c3a86ef6e3a691220923f2403ac6bfa363d17b7c",
+]
+non_ready_diagnostics = ["RPE-CONTENT-VM-0007", "RPE-CONTENT-UNSUPPORTED-0002", "RPE-CONTENT-VM-0011", "RPE-CONTENT-VM-0014"]
+fresh_replays = ["debug-1", "debug-2", "release-1", "release-2"]
+comparisons = ["debug-1=debug-2", "release-1=release-2", "debug-1=release-1"]
+canonical_result_bytes = 1150
+canonical_result_sha256 = "sha256:3692ef689f479ef6bb94ecd9976f78e46d5a5ecd50992cc53a2b08014a8eabe5"
+output_root_policy = "absent-or-empty dedicated directory; never recursively delete caller-selected content"
+verdict = "pass"

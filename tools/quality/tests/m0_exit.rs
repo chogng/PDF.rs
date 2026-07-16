@@ -19,7 +19,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         .expect("the plan has a top-level header");
     assert_line(plan_header, "version = \"0.3.0\"");
     assert_line(plan_header, "status = \"active\"");
-    assert_line(plan_header, "last_updated = 2026-07-15");
+    assert_line(plan_header, "last_updated = 2026-07-16");
 
     let m0 = array_record(PLAN, "[[milestone]]", "M0");
     for required in [
@@ -59,8 +59,8 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
     }
     assert!(date_value(m1, "start_date") <= date_value(m1, "completed_at"));
 
-    assert_line(SPEC_MAP, "version = \"0.68.0\"");
-    assert_line(FEATURE_MAP, "version = \"0.68.0\"");
+    assert_line(SPEC_MAP, "version = \"0.69.0\"");
+    assert_line(FEATURE_MAP, "version = \"0.69.0\"");
     let requirement = array_record(SPEC_MAP, "[[requirement]]", "RPE-ARCH-001/15.3/M0");
     for required in [
         "status = \"covered\"",

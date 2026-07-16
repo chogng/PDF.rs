@@ -3,7 +3,7 @@ id = "r0-development-plan"
 version = "0.3.0"
 status = "active"
 planning_basis = "RPE-ARCH-001 v0.3, sections 2.6 and 15.3"
-last_updated = 2026-07-15
+last_updated = 2026-07-16
 max_parallel_milestones = 2
 max_parallel_work_items_per_milestone = 3
 
@@ -118,9 +118,23 @@ deliverables = [
   "Scene v1",
 ]
 exit_gate = "Scene normative cases and canonical diff are stable."
-status = "in_progress"
+status = "complete"
 started_at = 2026-07-16
+completed_at = 2026-07-16
+reviewed_by_roles = ["parser-security", "spec-conformance"]
 execution_plan = "plan/m2.toml"
+evidence = [
+  "bounded page, content, and Scene components: cargo test --locked --package pdf-rs-document --test page_index --test page_materialization --test page_properties --test page_content; cargo test --locked --package pdf-rs-content --test scanner --test vm; cargo test --locked --package pdf-rs-scene --test scene_v1 --test scene_diff",
+  "six hash-bound valid, invalid, unsupported, resource, cancellation, and source-change cases with two canonical Scene goldens: cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+  "four fresh debug/release Scene-gate replays and three recursive byte comparisons: scripts/ci.sh",
+  "independent SHIP review and repository-only exit closure: docs/traceability/evidence/m2/scene-gate/independent-review.toml, docs/traceability/evidence/m2/scene-gate/normative-replay.toml, and cargo test --locked --package pdf-rs-quality --test m2_exit",
+]
+remaining_non_blocking = [
+  "paths, painting, clipping, full graphics and text showing, fonts, glyphs, images, Forms, rendering, and broader resources",
+  "acquired-chain page indexing, materialization, and content acquisition plus nested component aliases",
+  "generic Session, Worker, IPC, renderer adapters, and product browser or desktop integration",
+  "feature maturity promotion beyond PLANNED, broader corpus and fuzz campaigns, and fixed-pool performance evidence",
+]
 
 [[milestone]]
 id = "M3"

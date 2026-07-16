@@ -187,7 +187,7 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement must be registered");
-    assert!(milestone.contains("status = \"partial\""));
+    assert!(milestone.contains("status = \"covered\""));
     assert!(milestone.contains("M2-02 is complete"));
     assert!(milestone.contains("DeclaredCount"));
     assert!(milestone.contains("ValidatedPartition"));
@@ -234,8 +234,8 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.69.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.69.0"));
     for required in [
         "pub struct MaterializedPage",
         "pub struct MaterializePageJob",
@@ -309,7 +309,7 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
         .expect("M2 requirement must exist");
     assert!(milestone.contains("M2-03 is complete"));
     assert!(milestone.contains("Acquired-chain page indexing/materialization"));
-    assert!(milestone.contains("M2 exit gate is not closed"));
+    assert!(milestone.contains("All nine M2 feature records remain PLANNED"));
 
     let m2_03 = record_with_id(&plan, "work_item", "M2-03").expect("M2-03 work item must exist");
     assert!(m2_03.contains("status = \"complete\""));
@@ -339,8 +339,8 @@ fn m2_page_property_lookup_is_no_io_bounded_and_traceable() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.69.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.69.0"));
     for required in [
         "pub struct PagePropertyReference",
         "pub struct PagePropertyResolver",
@@ -477,14 +477,16 @@ fn m2_page_property_lookup_is_no_io_bounded_and_traceable() {
     assert!(milestone.contains("core.page-property-lookup"));
     assert!(milestone.contains("core/document::page_properties"));
     assert!(milestone.contains("M2-06 is complete as two additional bounded PLANNED profiles"));
-    assert!(milestone.contains("M2-07 registered normative Scene cases"));
-    assert!(milestone.contains("M2 exit gate is not closed"));
+    assert!(milestone.contains("quality.m2-scene-gate"));
+    assert!(milestone.contains("M2-07 completes the bounded exit"));
+    assert!(milestone.contains("All nine M2 feature records remain PLANNED"));
 
     let m2_06 = record_with_id(&plan, "work_item", "M2-06").expect("M2-06 work item exists");
     assert!(m2_06.contains("status = \"complete\""));
     assert!(m2_06.contains("completed_at = 2026-07-16"));
     let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
-    assert!(m2_07.contains("status = \"planned\""));
+    assert!(m2_07.contains("status = \"complete\""));
+    assert!(m2_07.contains("completed_at = 2026-07-16"));
 }
 
 #[test]
@@ -510,8 +512,8 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.69.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.69.0"));
     for required in [
         "pub struct PageContentJobContext",
         "pub enum PageContentPhase",
@@ -690,8 +692,9 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
         "Acquired-chain page indexing/materialization/content acquisition",
         "M2-06 is complete as two additional bounded PLANNED profiles",
         "sealed Content VM consumes only strict-attested AcquiredPageContent",
-        "M2-07 registered normative Scene cases",
-        "M2 exit gate is not closed",
+        "quality.m2-scene-gate",
+        "M2-07 completes the bounded exit",
+        "All nine M2 feature records remain PLANNED",
     ] {
         assert!(
             milestone.contains(required),
@@ -706,7 +709,8 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     assert!(m2_06.contains("status = \"complete\""));
     assert!(m2_06.contains("completed_at = 2026-07-16"));
     let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
-    assert!(m2_07.contains("status = \"planned\""));
+    assert!(m2_07.contains("status = \"complete\""));
+    assert!(m2_07.contains("completed_at = 2026-07-16"));
 }
 
 #[test]
@@ -1262,8 +1266,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.69.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.69.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
