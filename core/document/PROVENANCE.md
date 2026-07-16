@@ -45,19 +45,28 @@ xref row. A compressed indirect `/Length` dependency remains explicitly unsuppor
 would recursively require another object-stream acquisition inside the container-framing phase.
 The acquired page-count slice interprets only Catalog and Page/Pages structural fields, while the
 acquired outline slice interprets only the optional Catalog `Outlines` reference and strict linked
-outline dictionaries reachable from it. Neither publishes page handles, inherited resources, a
-reusable object graph, resolved destinations, or executable actions. All source access is
-synchronous polling through an injected `ByteSource`; all long-running CPU work uses an injected
-cooperative cancellation probe. A separate pure document-semantic helper decodes already lexical
-PDF strings under the bounded ISO 32000-1 text-string rules used by the outline slice and available
-to future metadata services.
+outline dictionaries reachable from it. M2 adds immutable proof-bound `PageIndex` storage with an
+allocator-reported segment budget. `BuildPageIndexJob` first consumes the unchanged M1 page-tree
+validator and admits one root frontier covering its recomputed page count. `LookupPageJob` then
+reopens and refines only unresolved frontier segments on the requested path, retaining direct Kids,
+exact Parent links, subtree ranges, and Count values already covered by that complete proof. Each
+successful lookup returns a refined immutable index plus a `PageHandle` carrying its zero-based
+logical index, exact Page object, source snapshot, Catalog, and revision binding. A handle can be
+validated across sibling refinements of the same immutable index binding and is rejected as stale
+for another source, revision, Catalog, or logical order. This slice does not yet materialize
+inherited page values or resources, index acquired revision chains, coalesce concurrent lookup
+work, or install the index in a reusable Session cache. All source access is synchronous polling
+through an injected `ByteSource`; all long-running CPU work uses an injected cooperative
+cancellation probe. A separate pure document-semantic helper decodes already lexical PDF strings
+under the bounded ISO 32000-1 text-string rules used by the outline slice and available to future
+metadata services.
 
 # Semantic owner
 
 Parser/Security owns revision composition, physical object indexing, and top-level attestation.
-It also owns this strict-base Catalog, outline-enumeration, and page-count validation slice;
-broader page indexing, resource inheritance, destination resolution, action interpretation, and
-page services remain future document-model work.
+It also owns this strict-base Catalog, outline-enumeration, and page-count validation. Graphics/Color
+owns the proof-bound segmented page-index and PageHandle evolution, resource inheritance, Content
+VM, and Scene services.
 `core/xref` owns traditional xref parsing, `core/syntax` owns the supported header and direct-object
 grammar, `core/object` owns bounded indirect-object framing, and `core/bytes` owns immutable
 snapshot-bound exact reads. This crate composes those sibling results without moving their lower
@@ -845,16 +854,17 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   page-count and outline jobs, but no runtime actor currently selects R1 as an opening policy; this
   core service integration alone does not establish M1 exit.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
-  chain job can follow top-level whole-object aliases, and the count job can traverse strict
-  Page/Pages dictionaries. They are not a complete resolver or reusable lazy document model:
-  general nested semantic references, persistent dependency states, concurrent work coalescing,
-  retained-value caching, negative caching, admission/reservation, eviction, and cross-job/session
-  resident ownership remain unsupported. Successful footprints are measurement evidence only.
+  chain job can follow top-level whole-object aliases, and the count/index jobs can validate and
+  refine strict Page/Pages dictionaries. The current segmented index performs one complete,
+  unchanged M1 topology-and-Count proof before lazy frontier refinement; cold construction is
+  therefore not yet requested-range-only. Persistent dependency states, concurrent lookup
+  coalescing, negative caching, eviction, and cross-job/session resident ownership remain
+  unsupported. Successful footprints are measurement evidence only.
 - Indirect stream `/Length` is supported only when the effective dependency is an uncompressed
   direct nonnegative integer in the separate revision-aware job. Compressed or aliased Length,
-  repair, encrypted object interpretation, filters, decoded stream payloads, random-access page
-  indexing, inherited resources, page handles, name-tree services, writer behavior, and document
-  actions remain unsupported.
+  repair, encrypted object interpretation, filters, decoded stream payloads, acquired-chain page
+  indexing, inherited resources, name-tree services, writer behavior, and document actions remain
+  unsupported.
 - The separate page-count O4 comparison covers only two fixed valid counts and one mismatched
   positive root Count. It is exact and repeatable on the valid fixtures, but remains non-gating and
   unregistered and cannot adjudicate the Native validator's Parent, cycle, duplicate, or recursive
@@ -877,6 +887,14 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
 
 # History
 
+- 2026-07-16: Started M2 with an immutable proof-bound ordered `PageIndex` model and bounded
+  admission from a crate-private sealed traversal result, retaining logical Page identities,
+  Catalog binding, traversal statistics, and an independent allocator-reported index budget while
+  keeping the content-addressed M1 page-count implementation and tests unchanged.
+- 2026-07-16: Started M2-02 by wrapping the unchanged M1 page-tree proof in a bounded page-index
+  build job, adding immutable lazy frontier refinement, retained subtree range/Count/Kids
+  summaries, source- and revision-bound PageHandles, cached random access, and stable
+  out-of-range/stale-handle outcomes while preserving the accepted M1 file hashes.
 - 2026-07-13: Added candidate-only single-revision physical indexing, bounded cancellable sort,
   exact lookup errors, and crate-private five-field object-target construction.
 - 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,

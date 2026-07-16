@@ -1,0 +1,115 @@
+schema = 1
+milestone = "M2"
+title = "Document and content"
+status = "in_progress"
+depends_on = ["M1"]
+exit_gate = "Scene normative cases and canonical diff are stable."
+max_parallel_work_items = 3
+
+principles = [
+  "Keep document semantics proof-bound to one immutable source snapshot and revision.",
+  "Build page, content, and Scene services as bounded resumable or pure jobs without platform I/O.",
+  "Keep canonical Scene output deterministic and independent of allocator, thread, path, and environment state.",
+  "Treat unsupported operators and resources as structured capability outcomes, never blank output.",
+]
+
+[[work_item]]
+id = "M2-01"
+title = "Proof-bound page index model and admission"
+lane = "document-model"
+status = "complete"
+completed_at = 2026-07-16
+depends_on = []
+outcome = "A sealed validated traversal product can be admitted as exact leaf Page identities in logical order under an independent retained-memory budget."
+acceptance = [
+  "Existing scalar page-count behavior and maturity evidence remain unchanged.",
+  "The immutable model retains Catalog, source snapshot, revision, traversal evidence, and logical order.",
+  "Only a crate-private sealed order can construct the public PageIndex.",
+  "Admission rejects count, authority, missing-object, page-count, and retained-capacity mismatches.",
+  "M1 content-addressed page-count implementation and tests remain byte-for-byte unchanged.",
+]
+
+[[work_item]]
+id = "M2-02"
+title = "Page-tree integration, lazy segments, and page handles"
+lane = "document-model"
+status = "in_progress"
+depends_on = ["M2-01"]
+outcome = "Page lookup validates only requested ranges and publishes source-bound PageHandle values."
+acceptance = [
+  "The page-tree traversal mints the sealed order without changing accepted M1 evidence.",
+  "Segment summaries retain subtree ranges and validated Count evidence.",
+  "Random access does not rebuild the complete page tree.",
+  "PageHandle carries zero-based index, exact Page object identity, and revision binding.",
+  "Cancellation, source change, cycles, duplicate children, and stale handles remain stable failures.",
+]
+
+[[work_item]]
+id = "M2-03"
+title = "Inherited page boxes, rotation, and resource scopes"
+lane = "document-model"
+status = "planned"
+depends_on = ["M2-02"]
+outcome = "PageHandle materializes inherited MediaBox, CropBox, Rotate, and Resources with provenance."
+acceptance = [
+  "Inheritance walks the validated ancestor chain with depth and object-work budgets.",
+  "Resource scopes retain the defining object and lookup chain.",
+  "Invalid boxes, rotation, aliases, missing resources, and duplicate keys have structured outcomes.",
+  "No renderer, platform I/O, or global object graph is introduced.",
+]
+
+[[work_item]]
+id = "M2-04"
+title = "Scene v1 schema and canonical diff"
+lane = "scene"
+status = "planned"
+depends_on = []
+outcome = "An immutable backend-neutral Scene v1 has deterministic canonical serialization and semantic diff."
+acceptance = [
+  "Schema version, page geometry, commands, resources, features, and provenance have bounded ownership.",
+  "Canonical output normalizes numeric edge cases, ordering, and stable identifiers.",
+  "Diff reports semantic command/resource changes without allocator or environment noise.",
+  "Normative empty, structural, invalid, and budget cases are registered.",
+]
+
+[[work_item]]
+id = "M2-05"
+title = "Content stream acquisition and operator scanner"
+lane = "content-vm"
+status = "planned"
+depends_on = ["M2-03", "M2-04"]
+outcome = "Page content streams are acquired in order and scanned into bounded operands and operators."
+acceptance = [
+  "Contents accepts the supported direct or indirect stream and array forms.",
+  "Each decoded stream retains exact source, object, filter, and decoded-coordinate evidence.",
+  "Operand, token, nesting, decoded-byte, fuel, and cancellation budgets are enforced.",
+  "Unknown and malformed operators remain distinct from unsupported resources.",
+]
+
+[[work_item]]
+id = "M2-06"
+title = "Content VM state and initial operator families"
+lane = "content-vm"
+status = "planned"
+depends_on = ["M2-05"]
+outcome = "A bounded VM interprets initial graphics, text-object, marked-content, and compatibility state into Scene v1."
+acceptance = [
+  "The operator table declares operand shape, context, cost, and failure policy.",
+  "q/Q, BT/ET, BX/EX, and marked-content stacks enforce balance and depth.",
+  "Resource lookup uses the PageHandle scope chain and records provenance.",
+  "Metamorphic and model tests cover stack balance, matrix composition, and deterministic replay.",
+]
+
+[[work_item]]
+id = "M2-07"
+title = "M2 normative Scene gate"
+lane = "quality"
+status = "planned"
+depends_on = ["M2-03", "M2-04", "M2-06"]
+outcome = "Registered normative cases and canonical Scene diff close the bounded M2 exit gate."
+acceptance = [
+  "Valid, invalid, unsupported, resource, cancellation, and source-change cases are registered.",
+  "Canonical Scene goldens are content-addressed and independently reviewed.",
+  "Scene diff is stable across repeat runs and supported build profiles.",
+  "The milestone record is marked complete only after every required child is complete.",
+]

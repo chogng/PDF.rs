@@ -11,7 +11,11 @@
 //! Page/Pages tree. The outline job checks linked-list topology, signed
 //! visible-item counts, decoded titles, and direct target shape; the page job
 //! publishes a scalar page count with exact Parent, Count, cycle, and
-//! duplicate-child checks. The crate also owns bounded ISO 32000-1 text-string
+//! duplicate-child checks. M2 wraps that unchanged proof in a bounded page-index
+//! build job, then refines immutable subtree segments only along requested lookup
+//! paths and publishes source- and revision-bound Page handles. The cold build
+//! still performs the complete M1 proof before lookup refinement. The crate also
+//! owns bounded ISO 32000-1 text-string
 //! decoding from lexical PDF strings into UTF-8 without exposing source content
 //! in diagnostics. Other dictionary, array, stream, and nested-reference
 //! semantics remain outside a complete object-graph resolver.
@@ -61,6 +65,8 @@ mod local_repair_open;
 mod model;
 mod outline;
 mod outline_limits;
+mod page_index;
+mod page_index_job;
 mod page_tree;
 mod page_tree_limits;
 mod reference_chain;
@@ -114,6 +120,13 @@ pub use outline::{
     OutlineTargetKind, ReadOutlineJob,
 };
 pub use outline_limits::{OutlineLimitConfig, OutlineLimits};
+pub use page_index::{
+    PageHandle, PageIndex, PageIndexLimits, PageIndexSegmentKind, PageSegmentSummary,
+};
+pub use page_index_job::{
+    BuildPageIndexJob, LookupPageJob, PageIndexBuildPoll, PageLookup, PageLookupPhase,
+    PageLookupPoll, PageLookupStats,
+};
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
 };

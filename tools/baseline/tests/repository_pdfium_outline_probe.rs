@@ -263,8 +263,8 @@ fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
 
     let feature_map = include_str!("../../../docs/traceability/feature-map.toml");
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
-    assert_line(feature_map, "version = \"0.63.0\"");
-    assert_line(spec_map, "version = \"0.63.0\"");
+    assert_line(feature_map, "version = \"0.64.0\"");
+    assert_line(spec_map, "version = \"0.64.0\"");
     let outline = array_record(feature_map, "feature", "core.strict-outline");
     assert_line(outline, "state = \"DIFFERENTIAL\"");
     assert!(!outline.contains("tools/baseline::pdfium_outline_real_adapter"));

@@ -108,7 +108,7 @@ title = "Document and content"
 owner_role = "graphics-color"
 reviewer_roles = ["parser-security", "spec-conformance"]
 planned_fte = 4.5
-start_date = 2026-11-02
+start_date = 2026-07-16
 target_date = 2027-01-29
 dependencies = ["M1"]
 max_parallel_work_items = 3
@@ -118,6 +118,9 @@ deliverables = [
   "Scene v1",
 ]
 exit_gate = "Scene normative cases and canonical diff are stable."
+status = "in_progress"
+started_at = 2026-07-16
+execution_plan = "plan/m2.toml"
 
 [[milestone]]
 id = "M3"

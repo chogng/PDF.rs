@@ -113,6 +113,88 @@ fn shared_service_ownership_preserves_the_attestation_proof_boundary() {
 }
 
 #[test]
+fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let page_index =
+        fs::read_to_string(crate_root.join("src/page_index.rs")).expect("page index is readable");
+    let page_index_job = fs::read_to_string(crate_root.join("src/page_index_job.rs"))
+        .expect("page index jobs are readable");
+    let provenance =
+        fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance is readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature map is readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map is readable");
+    let plan =
+        fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
+
+    for required in [
+        "pub struct PageIndex",
+        "pub struct PageIndexLimits",
+        "pub struct PageHandle",
+        "pub struct PageSegmentSummary",
+        "pub enum PageIndexSegmentKind",
+        "pub(crate) struct ValidatedPageOrder",
+        "pub(crate) fn admit(",
+        "DocumentLimitKind::PageIndexBytes",
+        "DocumentErrorCode::StalePageHandle",
+    ] {
+        assert!(
+            page_index.contains(required),
+            "page-index foundation must contain {required:?}"
+        );
+    }
+    for required in [
+        "pub struct BuildPageIndexJob",
+        "pub struct LookupPageJob",
+        "pub enum PageIndexBuildPoll",
+        "pub enum PageLookupPoll",
+        "pub fn build_page_index(",
+        "pub fn build_page_index_owned(",
+        "pub fn lookup_page(",
+        "pub fn lookup_page_owned(",
+        "DocumentErrorCode::PageIndexOutOfBounds",
+    ] {
+        assert!(
+            page_index_job.contains(required),
+            "page-index integration must contain {required:?}"
+        );
+    }
+    assert!(provenance.contains("unchanged M1 page-tree"));
+    assert!(provenance.contains("refines only unresolved frontier segments"));
+    assert!(provenance.contains("cold construction is"));
+    assert!(provenance.contains("therefore not yet requested-range-only"));
+
+    let feature = record_with_id(&feature_map, "feature", "core.ordered-page-index")
+        .expect("ordered page-index feature must be registered");
+    assert!(feature.contains("profile = \"m2.ordered-page-index.v1\""));
+    assert!(feature.contains("state = \"PLANNED\""));
+    assert!(feature.contains("RPE-ARCH-001/15.3/M2"));
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
+        .expect("M2 requirement must be registered");
+    assert!(milestone.contains("status = \"partial\""));
+    assert!(milestone.contains("M2-02 is in progress"));
+    assert!(milestone.contains("requested-range-only initial proof"));
+
+    let m2_01 =
+        record_with_id(&plan, "work_item", "M2-01").expect("M2-01 work item must be planned");
+    assert!(m2_01.contains("status = \"complete\""));
+    assert!(m2_01.contains("completed_at = 2026-07-16"));
+    let m2_02 =
+        record_with_id(&plan, "work_item", "M2-02").expect("M2-02 work item must be planned");
+    assert!(m2_02.contains("status = \"in_progress\""));
+    let m2_03 =
+        record_with_id(&plan, "work_item", "M2-03").expect("M2-03 work item must be planned");
+    assert!(m2_03.contains("status = \"planned\""));
+}
+
+#[test]
 fn source_xref_stream_acquisition_stays_proof_bound_and_partial() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -665,8 +747,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.63.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.63.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.64.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.64.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

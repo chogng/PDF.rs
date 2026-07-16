@@ -1,6 +1,18 @@
 schema = 1
-version = "0.63.0"
+version = "0.64.0"
 status = "active"
+
+[[feature]]
+id = "core.ordered-page-index"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.ordered-page-index.v1"
+clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M2", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::page_index", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
 
 [[feature]]
 id = "core.strict-repair-policy"
