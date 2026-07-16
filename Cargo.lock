@@ -124,6 +124,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-raster"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-scene",
+ "pdf-rs-syntax",
+]
+
+[[package]]
 name = "pdf-rs-scene"
 version = "0.1.0"
 dependencies = [

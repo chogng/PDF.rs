@@ -97,6 +97,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-xref \
     --package pdf-rs-object \
     --package pdf-rs-document \
+    --package pdf-rs-raster \
     --package pdf-rs-scene \
     --package pdf-rs-cache \
     --package pdf-rs-session

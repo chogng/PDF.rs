@@ -19,7 +19,8 @@ struct ProductPackage {
     crate_name: &'static str,
 }
 
-const PRODUCT_PACKAGES: &[ProductPackage] = &[
+const PRODUCT_PACKAGE_COUNT: usize = 11;
+const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
         package_name: "pdf-rs-bytes",
@@ -44,6 +45,11 @@ const PRODUCT_PACKAGES: &[ProductPackage] = &[
         manifest: "core/object/Cargo.toml",
         package_name: "pdf-rs-object",
         crate_name: "pdf_rs_object",
+    },
+    ProductPackage {
+        manifest: "core/raster/Cargo.toml",
+        package_name: "pdf-rs-raster",
+        crate_name: "pdf_rs_raster",
     },
     ProductPackage {
         manifest: "core/scene/Cargo.toml",
@@ -1053,11 +1059,16 @@ mod tests {
 
     #[test]
     fn ignores_tool_only_baseline_and_accepts_native_product_manifests() {
-        assert_eq!(PRODUCT_PACKAGES.len(), 10);
+        assert_eq!(PRODUCT_PACKAGES.len(), PRODUCT_PACKAGE_COUNT);
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "core/content/Cargo.toml",
             package_name: "pdf-rs-content",
             crate_name: "pdf_rs_content",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "core/raster/Cargo.toml",
+            package_name: "pdf-rs-raster",
+            crate_name: "pdf_rs_raster",
         }));
         let root = temp_dir("isolated");
         write_product_manifests(&root);
@@ -1123,6 +1134,22 @@ mod tests {
         let violations = check_product_manifests(&root).unwrap_err();
         assert!(violations.iter().any(|value| {
             value.code == "RPE-PURITY-0004" && value.token == "unexpected-product-manifest"
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_raster_manifest_from_bidirectional_allowlist() {
+        let root = temp_dir("missing-raster");
+        write_product_manifests(&root);
+        let raster_manifest = root.join("core/raster/Cargo.toml");
+        fs::remove_file(&raster_manifest).unwrap();
+
+        let violations = check_product_manifests(&root).unwrap_err();
+        assert!(violations.iter().any(|value| {
+            value.code == "RPE-PURITY-0004"
+                && value.manifest == raster_manifest
+                && value.token == "missing-allowlisted-product-manifest"
         }));
         fs::remove_dir_all(root).unwrap();
     }
@@ -1198,6 +1225,39 @@ mod tests {
         assert!(violations.iter().any(|value| {
             value.code == "RPE-PURITY-0108" && value.token == "unexpected-deps-artifact"
         }));
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_release_closure_missing_raster_outputs() {
+        let root = temp_dir("missing-raster-build-repository");
+        let proof_root = temp_dir("missing-raster-build-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-raster").unwrap();
+        write_valid_build_inventory(&target);
+        fs::remove_file(target.join(format!("release/deps/pdf_rs_raster-{HASH}.d"))).unwrap();
+        fs::remove_file(target.join(format!("release/deps/libpdf_rs_raster-{HASH}.rlib"))).unwrap();
+        fs::remove_file(target.join(format!("release/deps/libpdf_rs_raster-{HASH}.rmeta")))
+            .unwrap();
+        fs::remove_dir_all(target.join(format!("release/.fingerprint/pdf-rs-raster-{HASH}")))
+            .unwrap();
+
+        let violations = check_product_build_closure(&root, &target, "proof-raster").unwrap_err();
+        for token in [
+            "missing-depfile=pdf_rs_raster",
+            "missing-rust-artifact=pdf_rs_raster",
+            "missing-fingerprint=pdf-rs-raster",
+        ] {
+            assert!(
+                violations
+                    .iter()
+                    .any(|value| value.code == "RPE-PURITY-0109" && value.token == token),
+                "missing expected raster closure violation {token:?}: {violations:?}"
+            );
+        }
 
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(proof_root).unwrap();
