@@ -66,6 +66,8 @@ mod local_repair_open;
 mod model;
 mod outline;
 mod outline_limits;
+mod page_content;
+mod page_content_limits;
 mod page_geometry;
 mod page_index;
 mod page_index_job;
@@ -125,6 +127,11 @@ pub use outline::{
     OutlineTargetKind, ReadOutlineJob,
 };
 pub use outline_limits::{OutlineLimitConfig, OutlineLimits};
+pub use page_content::{
+    AcquirePageContentJob, AcquiredPageContent, AcquiredPageContentStream, EmptyIdentityContent,
+    PageContentDecode, PageContentJobContext, PageContentPhase, PageContentPoll, PageContentStats,
+};
+pub use page_content_limits::{PageContentLimitConfig, PageContentLimits};
 pub use page_geometry::{
     InheritedPageValue, PageBoxes, PageCoordinate, PageRectangle, PageRotation, PageValueProvenance,
 };

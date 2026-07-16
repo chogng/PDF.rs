@@ -109,6 +109,44 @@ pub enum DocumentLimitKind {
     PageMaterializationObjectParseBytes,
     /// Allocator-reported state and proof-bearing value capacity retained by materialization.
     PageMaterializationStateBytes,
+    /// Ordered content streams published for one exact Page.
+    PageContentStreams,
+    /// Entries admitted from one direct or aliased Page Contents array.
+    PageContentArrayEntries,
+    /// Whole-object Contents aliases active on one resolution chain.
+    PageContentAliasDepth,
+    /// Proof-preserving Page, alias, and stream object jobs started during acquisition.
+    PageContentObjects,
+    /// Whole-object Contents alias and array-entry reference edges followed.
+    PageContentReferenceEdges,
+    /// Cumulative exact object-read bytes across one page-content acquisition job.
+    PageContentObjectReadBytes,
+    /// Cumulative object-parser window bytes across one page-content acquisition job.
+    PageContentObjectParseBytes,
+    /// Cumulative exact encoded stream-payload bytes acquired for one Page.
+    PageContentEncodedBytes,
+    /// Cumulative final decoded content bytes retained for one Page.
+    PageContentDecodedBytes,
+    /// Cumulative deterministic stream-decoder fuel consumed for one Page.
+    PageContentDecodeFuel,
+    /// Allocator-reported acquisition state and proof-bearing decoded capacity retained.
+    PageContentRetainedStateBytes,
+    /// Encoded input bytes admitted by one stream's intrinsic decoder profile.
+    PageContentStreamInputBytes,
+    /// Filter stages admitted by one stream's intrinsic decoder profile.
+    PageContentStreamFilters,
+    /// Canonical filter-plan bytes admitted by one stream's intrinsic decoder profile.
+    PageContentStreamFilterPlanBytes,
+    /// One filter layer's output bytes admitted by one stream's intrinsic decoder profile.
+    PageContentStreamLayerOutputBytes,
+    /// Cumulative filter output bytes admitted by one stream's intrinsic decoder profile.
+    PageContentStreamTotalOutputBytes,
+    /// Final output bytes admitted by one stream's intrinsic decoder profile.
+    PageContentStreamFinalOutputBytes,
+    /// Deterministic fuel admitted by one stream's intrinsic decoder profile.
+    PageContentStreamDecodeFuel,
+    /// Decoder-owned retained capacity admitted by one stream's intrinsic profile.
+    PageContentStreamRetainedBytes,
     /// Distinct outline item identities scheduled by one bounded outline job.
     OutlineItems,
     /// Greatest root-relative outline item depth accepted by one outline job.
@@ -267,6 +305,20 @@ pub enum DocumentErrorCode {
     PageValueAliasCycle,
     /// An inherited value uses a valid alias or nested representation outside this bounded profile.
     UnsupportedPageValueRepresentation,
+    /// Runtime identity or child checkpoints for page-content acquisition are invalid.
+    InvalidPageContentJobContext,
+    /// The exact Page dictionary contains more than one Contents key.
+    DuplicatePageContents,
+    /// Contents or one referenced content stream has an invalid semantic shape.
+    InvalidPageContents,
+    /// Contents uses a valid representation outside the bounded acquisition profile.
+    UnsupportedPageContentsRepresentation,
+    /// A whole-object Contents alias revisited an active reference.
+    PageContentAliasCycle,
+    /// A supported content stream failed canonical filter planning or decoding.
+    PageContentDecodeFailure,
+    /// A content stream names a filter outside the bounded foundational decoder profile.
+    UnsupportedPageContentFilter,
     /// Runtime identity or child checkpoints for outline traversal are inconsistent.
     InvalidOutlineJobContext,
     /// The Catalog outline entry or outline root dictionary has the wrong shape.
@@ -614,6 +666,41 @@ impl DocumentError {
                 DocumentRecoverability::UseSupportedFeature,
                 "RPE-DOCUMENT-0067",
             ),
+            DocumentErrorCode::InvalidPageContentJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0068",
+            ),
+            DocumentErrorCode::DuplicatePageContents => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0069",
+            ),
+            DocumentErrorCode::InvalidPageContents => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0070",
+            ),
+            DocumentErrorCode::UnsupportedPageContentsRepresentation => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0071",
+            ),
+            DocumentErrorCode::PageContentAliasCycle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0072",
+            ),
+            DocumentErrorCode::PageContentDecodeFailure => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0073",
+            ),
+            DocumentErrorCode::UnsupportedPageContentFilter => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0074",
+            ),
             DocumentErrorCode::InvalidOutlineJobContext => (
                 DocumentErrorCategory::Configuration,
                 DocumentRecoverability::CorrectConfiguration,
@@ -804,6 +891,27 @@ impl DocumentError {
     }
 
     pub(crate) const fn page_materialization_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn page_content_resource(
         kind: DocumentLimitKind,
         limit: u64,
         consumed: u64,

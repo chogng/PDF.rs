@@ -66,12 +66,59 @@ whole-value alias chains, and the terminal proof-bearing resource dictionary. Cr
 MediaBox, Rotate defaults to zero, and the nearest Resources dictionary becomes one scope without
 ancestor merging. Independent ancestor, object, reference-edge, object-read, object-parse, and
 retained-state limits bound the resumable job before immutable `MaterializedPage` publication.
-This slice does not index or materialize acquired revision chains, resolve nested component
-references, coalesce concurrent lookup/materialization work, or install either result in a reusable
-Session cache. All source access is synchronous polling through an injected `ByteSource`; all
-long-running CPU work uses an injected cooperative cancellation probe. A separate pure
-document-semantic helper decodes already lexical PDF strings under the bounded ISO 32000-1
-text-string rules used by the outline slice and available to future metadata services.
+`AcquirePageContentJob` consumes that exact `MaterializedPage`, revalidates its handle against the
+paired `PageIndex` and strict attested authority, and retains the page beside every
+ordered content-stream proof. It accepts one unique Contents value: absence, null, and an empty
+array publish empty content; one whole-object alias may terminate in null, a stream, or a direct
+reference array; array entries must directly reference framed stream objects. Each nonempty payload
+is requested as its exact source-owned `ByteSlice`. Filter metadata is first validated by the
+filters-owned allocation-free preflight, whose exact declared count derives a nonzero lower profile
+and the `FilterPlan::retained_heap_upper_bound` charged before plan allocation; the actual retained
+plan heap is rechecked after construction. The resulting plan is decoded through the foundational
+filter crate before atomic publication. A valid zero-length unfiltered stream instead retains an
+explicit empty-identity proof because the lower `ByteSlice` range model is nonempty; a zero-length
+filtered stream is a structured decode failure.
+Page-content retained-state accounting includes alias and array queues, active or pending child
+heap, ordered result-vector capacity, retained stream-object syntax, canonical plans, and
+conservative decoded-output capacity. A separate hard-bounded alias-depth limit caps the linear
+cycle-path scan independently from the broader reference-edge budget. The retained-state budget
+excludes the consumed `MaterializedPage`'s lower-owner
+heap: that inseparable value retains its own validated `PageMaterializationLimits` and measured
+stats, so the two independently sealed budgets are not double-counted. Encoded backing storage
+remains owned and bounded by the injected byte source; the retained `ByteSlice` proof header is
+inline in the result-vector element.
+The public statistics are parent-committed, poll-boundary-observable accounting rather than a
+reconstruction of every lower transient. In particular, failed lower parser transients and failed
+decode output, fuel, or retained-capacity transients are not backfilled when the lower layer does
+not publish them; rejected work remains represented by the terminal lower and aggregate limit
+evidence.
+Before each proof-preserving child object job starts, Page content lends the smaller of its current
+remaining retained-state budget and the authority syntax profile's checked owned-plus-container
+intrinsic ceiling through `ObjectWorkCaps::new_with_retained_bytes`; zero remains a valid
+allocation-free loan. A lower `SyntaxLimitKind::RetainedBytes` failure maps back to the Page
+aggregate only when that loan actually tightened the intrinsic ceiling. For a boundary parse, the
+aggregate consumed value adds the Page state outside the taken child, the envelope already retained
+before the lower remaining cap, and the lower parser's own consumption, while preserving the
+lower attempted allocation.
+Per-stream input, filter count, plan heap, layer output, cumulative output, final output, fuel, and
+decoder-retained failures remain distinguishable intrinsic document limit kinds with their lower
+limit evidence intact. Only the lower final-output limit is tightened by the Page-wide cumulative
+final decoded-byte remainder; lower layer and cumulative output ceilings remain intrinsic. A final
+limit tightened by Page retained-state records whether decoded or retained remainder selected the
+effective cap, and aggregate errors add lower in-stream consumption while reporting only the
+rejected delta. Empty identity still requires a nonzero lower retained profile, but that validation
+permit is not counted as allocator-retained peak state.
+After lower source polling, object work, metadata walks, and decoding, terminal precedence is a
+retained lower or observed source-snapshot mismatch, then lower or observed cancellation, then the
+semantic/resource fallback. Runtime checks sample the snapshot again after a cancellation probe so
+a source mutation caused during that probe cannot be misreported as cancellation.
+This Page-content slice does not acquire through locally repaired or acquired-chain authorities,
+index or materialize acquired revision chains, resolve nested component references, coalesce
+concurrent lookup/materialization work, or install either result in a reusable Session cache. All
+source access is synchronous polling through an injected `ByteSource`; all long-running CPU work
+uses an injected cooperative cancellation probe. A separate pure document-semantic helper decodes
+already lexical PDF strings under the bounded ISO 32000-1 text-string rules used by the outline
+slice and available to future metadata services.
 
 # Semantic owner
 
@@ -969,6 +1016,11 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   materialization over exact PageHandle ancestor chains, whole-value alias provenance, fixed-point
   geometry, nearest resource-scope ownership, independent aggregate work/retention limits, and
   stable resumable failure policy for strict and locally repaired authorities.
+- 2026-07-16: Added M2-05 proof-bound Page content acquisition that consumes and retains an exact
+  `MaterializedPage`, resolves bounded whole-object Contents aliases, opens array streams in order,
+  acquires exact payload slices, applies canonical foundational filters, preserves explicit empty
+  identity proof, and publishes only a complete move-only decoded sequence under independent
+  structure, object-work, payload, decode-fuel, and retained-state budgets.
 - 2026-07-13: Added candidate-only single-revision physical indexing, bounded cancellable sort,
   exact lookup errors, and crate-private five-field object-target construction.
 - 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,
