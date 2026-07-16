@@ -19,7 +19,6 @@ reviewed_subjects = [
   "tools/quality/tests/m2_exit.rs#sha256:2cdcb920fe52065d2f385f2b734ff874e91d1c1dff3eff8586b73a8d2960c4da",
   "scripts/ci.sh#sha256:7dc3aecf35f0dd0800a3ee053e92f3601cd5a45fe7c53ff317133d81806e10d2",
   "plan/m2.toml#sha256:b0378ae2c3388626871863462362649ee291ee11142bee7686ec909f4cced55a",
-  "plan/r0.toml#sha256:77a274e28193bf763bc964275b808dd7a94817f739d1e45c4f9aa1400bf719c0",
   "docs/traceability/feature-map.toml#sha256:5fab896e6efc372fef9910a831fe32f455b7c61539f249530821080dc0cd9168",
   "docs/traceability/spec-map.toml#sha256:9c7fb744920b771242d61f56fbd2cf55dea311150e88880cf6e714be1444861c",
   "tests/cases/content/m2-scene/valid-state-and-marked-content/case.toml#sha256:113da47429ce11b8f0bc0b6234630b7852f6a35c3be2acc9c57f4e6b02375fb4",
@@ -27,6 +26,7 @@ reviewed_subjects = [
   "tests/cases/content/m2-scene/resource-marked-content-properties/case.toml#sha256:c9499da843fcbcab57ca671d203789fecdfd0ade036b7548c6c90738667c6c69",
   "tests/cases/content/m2-scene/resource-marked-content-properties/expected/scene.json#sha256:b49a37d9c617a38cdfbc9ee3c3a86ef6e3a691220923f2403ac6bfa363d17b7c",
 ]
+mutable_plan_policy = "plan/r0.toml is semantically checked by tools/quality::m2_exit but is intentionally not content-addressed because later milestone status and execution-plan records update it"
 commands = [
   "cargo test --locked --package pdf-rs-content --test vm",
   "cargo test --locked --release --package pdf-rs-content --test vm",

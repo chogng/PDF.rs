@@ -151,7 +151,10 @@ deliverables = [
   "basic text, images, and transparency",
   "reference-raster-v1",
 ]
-exit_gate = "O0/O1 cases validate Reference; reviewed O3 goldens cover R0 Native graphics."
+exit_gate = "O0/O1 cases validate the registered M3 Reference profiles; independently reviewed O3 goldens cover that bounded Native graphics subset and establish the Reference baseline for later R0 closure."
+status = "in_progress"
+started_at = 2026-07-16
+execution_plan = "plan/m3.toml"
 
 [[milestone]]
 id = "M4"
