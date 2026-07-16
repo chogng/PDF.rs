@@ -75,6 +75,18 @@ benchmarks = []
 introduced_in = "0.1.0"
 
 [[feature]]
+id = "core.content-graphics-v2"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m3.content-graphics-v2.v1"
+clauses = ["ISO-32000-1:2008/7.8.2", "ISO-32000-1:2008/8.4.2", "ISO-32000-1:2008/8.4.3", "ISO-32000-1:2008/8.5", "ISO-32000-1:2008/8.6", "RPE-ARCH-001/6.1-6.2", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-005/4-7"]
+modules = ["core/content", "core/scene"]
+tests = ["core/content::scanner", "core/content::vm_graphics", "core/content::repository_policy", "core/scene::scene_v2", "tools/quality::m3_content_graphics_trace"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
 id = "core.scene-v1"
 owner = "graphics-color"
 state = "PLANNED"

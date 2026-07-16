@@ -11,10 +11,16 @@ gating = true
 external_observation = false
 maturity_promotion = false
 reviewed_at = 2026-07-16
+implementation_commit = "ee6720f615cc3042638a957b85b377b3e0ab054c"
+reviewed_subject_commit = "ee6720f615cc3042638a957b85b377b3e0ab054c"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-for-versioned-product-subjects"
+reviewed_subject_commit_map = [
+  "core/content/src/vm.rs@ee6720f615cc3042638a957b85b377b3e0ab054c",
+]
 reviewer_roles = ["parser-security", "spec-conformance"]
 reviewed_surfaces = ["core/content::vm", "tools/quality::m2_scene_gate", "tools/quality::m2_exit", "scripts/ci.sh", "M2 plan and trace closure"]
 reviewed_subjects = [
-  "core/content/src/vm.rs#sha256:2b866dca0b778c579a23db58f16b627fb338dcf83c4a34880c063c04c43c9eef",
+  "core/content/src/vm.rs@ee6720f615cc3042638a957b85b377b3e0ab054c#sha256:2b866dca0b778c579a23db58f16b627fb338dcf83c4a34880c063c04c43c9eef",
   "tools/quality/tests/m2_scene_gate_support/mod.rs#sha256:af3807fbbc93fa09ca135ca27e4eeafafaaefb595e8e0bef75cde600ffb5caec",
   "docs/traceability/evidence/m2/scene-gate/subjects/tools-quality-m2-exit.rs#sha256:2cdcb920fe52065d2f385f2b734ff874e91d1c1dff3eff8586b73a8d2960c4da",
   "docs/traceability/evidence/m2/scene-gate/subjects/scripts-ci-m2.sh#sha256:7dc3aecf35f0dd0800a3ee053e92f3601cd5a45fe7c53ff317133d81806e10d2",

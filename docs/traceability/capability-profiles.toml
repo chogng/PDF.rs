@@ -62,11 +62,11 @@ o1_cases = ["docs/traceability/evidence/m1/page-count/o1.toml#sha256:b6dbfd05a9e
 o2_adjudications = ["docs/traceability/evidence/m1/page-count/o2.toml#sha256:9945b9c8d23c68880063a705df14314a55bbe16c00a3ce4c423837d3f39ed6e8"]
 independent_review = "docs/traceability/evidence/m1/page-count/independent-review.toml#sha256:6d53ac6c9433bbd0b6737b05ab56f347134f2aa8e6f1e7caefde0950683b3a40"
 fuzz_targets = ["fuzz.m1documentservices"]
-fuzz_minimizer = "docs/traceability/evidence/m1/page-count/fuzz-minimizer.toml#sha256:a9b580af36f1a92c1c8940905e59320775641ab28a1ad8f06c46a7fb56124691"
+fuzz_minimizer = "docs/traceability/evidence/m1/page-count/fuzz-minimizer.toml#sha256:01f8e02e9301e0b28d63f1ab49cbdd3a30fac137ffd571fd0cde7cbf19107e5d"
 holdout_manifest = "docs/traceability/evidence/m1/page-count/holdout.toml#sha256:6f79c3fa57adee803f970ebe08618564d452ff3a4b57ed52d7e97b23a2cbef78"
 benchmark_report = "docs/traceability/evidence/m1/page-count/benchmark.toml#sha256:6ba9c9d527b106326bae832c131759e475434c7f435fdd3c21a85af9dedc246e"
-differential_report = "docs/traceability/evidence/m1/page-count/differential.toml#sha256:dd4cd8b14cc580a6a59e497a4d18f2e58cee440ec8a4b1a9b125222b7d5bc0ed"
-baseline_fingerprint = "docs/traceability/evidence/m1/page-count/reference-fingerprint.toml#sha256:cd1c6a7918b6aa6caa6405f34092500efabb28a5c8578c3b616045405d2bdd29"
+differential_report = "docs/traceability/evidence/m1/page-count/differential.toml#sha256:e0b53178d1c25da67f2a130d75d55b66c6df3eeb3131c7ab59631ee9ea8b443b"
+baseline_fingerprint = "docs/traceability/evidence/m1/page-count/reference-fingerprint.toml#sha256:1ec2e883eacb96862b7bd3231ab866482229da5b6aae039777d98e0afa98a40d"
 
 [[profile]]
 id = "m1.strict-outline.v1"
@@ -84,8 +84,8 @@ o1_cases = ["docs/traceability/evidence/m1/outline/o1.toml#sha256:d997eed5add00c
 o2_adjudications = ["docs/traceability/evidence/m1/outline/o2.toml#sha256:162c1dbb6ae3423ff0ffd79c4738c56de64a697ca931d99241699e444dc59e06"]
 independent_review = "docs/traceability/evidence/m1/outline/independent-review.toml#sha256:2854435724f5c51acf0b23d1a7137688403749f0c88a59b824cc2e412bce535b"
 fuzz_targets = ["fuzz.m1documentservices"]
-fuzz_minimizer = "docs/traceability/evidence/m1/outline/fuzz-minimizer.toml#sha256:a4246f78a50b82eeae1f4a696c16cc6c0d103556f7271478d63e94dddb9965b4"
+fuzz_minimizer = "docs/traceability/evidence/m1/outline/fuzz-minimizer.toml#sha256:d80665a60e6faeda9fd86f3024bbf929d1691bc018c2a1fd067520448b4e6813"
 holdout_manifest = "docs/traceability/evidence/m1/outline/holdout.toml#sha256:ef4dabebd9b596ba31d1f64f940aec0f0f2d0cea1683fc89c20450926160eeb7"
 benchmark_report = "docs/traceability/evidence/m1/outline/benchmark.toml#sha256:915bef88fdf01508e1e31556b2de7b9e6b405b1233f073bfe2b8378f14359b31"
-differential_report = "docs/traceability/evidence/m1/outline/differential.toml#sha256:3f734be55a3c284fc0a7ed207b72c0f81989b11d56aa86f33564a5b2a2b2f06c"
-baseline_fingerprint = "docs/traceability/evidence/m1/outline/reference-fingerprint.toml#sha256:1a1338b22c116de9c570fb45d3a58aa0770b3797709cfab58fb70464f5276920"
+differential_report = "docs/traceability/evidence/m1/outline/differential.toml#sha256:4d5c52dc0bcd4535cbcd7793de3e3b49f3dc87fe32c7aa2a845bb39d5d7598d1"
+baseline_fingerprint = "docs/traceability/evidence/m1/outline/reference-fingerprint.toml#sha256:078310bc4613a25457e59fe64ba5d1d02ff3b0b6e76bb607ced3c013b439afd4"

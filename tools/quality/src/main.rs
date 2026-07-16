@@ -31,12 +31,12 @@ fn selection_for(lane: &str) -> Option<Selection> {
         "local" => Some(Selection {
             lane: "local",
             reason: "pre-submit feedback for code and deterministic T0 infrastructure",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
         }),
         "pr" => Some(Selection {
             lane: "pr",
             reason: "merge gate for the complete required Rust quality baseline",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
         }),
         _ => None,
     }

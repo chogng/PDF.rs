@@ -12,7 +12,20 @@ external_observation = false
 target = "core/document::AttestedRevisionIndex::read_outline"
 requirements = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1"]
 subject_kind = "fuzz-target-and-minimized-corpus"
-subjects = ["tools/quality/tests/m1_document_service_fuzz.rs#sha256:301e3efadce97170313ba2d77ca3d73048ba950d0456fa9bce8dd69aa744466d", "tools/quality/fuzz/fuzz_targets/m1_document_services.rs#sha256:f7143f6b47c158fab2caf637674465282f165579ba29e1a95809459837ce183b", "tools/quality/fuzz/Cargo.toml#sha256:876aaa03e8b6fecc5bddd32cba51203e8e43c4830b7e63e70263a05dbda564da", "tools/quality/fuzz/Cargo.lock#sha256:e1c1a40a80d8f3388db6e75768cdac130de1ea33527111f0e7dca542b484844f", "docs/traceability/dependency-ledger.toml#sha256:659fd7ad48ae1bf7e0c5c4fb9ece76fee92a9694968176869c9595c6adc64368", ".github/workflows/ci.yml#sha256:7e4d18fd8c6ee8901731ecbec5533352c663b0076ca0e7cf6a34d8320f218291", "tools/quality/fuzz/corpus/m1_document_services/minimal.pdf#sha256:1d9575155aee9da157652b5388796e6819c1f55cfd83e0f3b07dd7cf78e6b446", "tools/quality/fuzz/corpus/m1_document_services/truncated-header.pdf#sha256:d34338cd4825af16e7be1f0e0eb9732bc87a426a413e44cf90b733336b8a82d0", "tools/quality/fuzz/corpus/m1_document_services/nested-outline.pdf#sha256:ccfb1b1deb755ace8a2b59d9e4f006d0686d89b69b0ea74b1544873b3fb9629f", "tools/quality/fuzz/dictionaries/pdf.dict#sha256:f36cc6e8a742e216c0792a657519c43eb2880771410ea797c8b10d4e24ced99f", "docs/traceability/evidence/m1/subjects/outline-fuzz-minimizer.toml#sha256:4d20405a6f5a4f46856724cfe6bd8c6b463c6f32f60c2ccc6b807a874bac5b4c", "docs/traceability/evidence/m1/subjects/fuzz-replay-scope.md#sha256:4b5308169b3a284d16681538f01c883a9d5f8e4a8bd534c23dd9547d8766897e"]
+subjects = [
+  "tools/quality/tests/m1_document_service_fuzz.rs#sha256:301e3efadce97170313ba2d77ca3d73048ba950d0456fa9bce8dd69aa744466d",
+  "tools/quality/fuzz/fuzz_targets/m1_document_services.rs#sha256:f7143f6b47c158fab2caf637674465282f165579ba29e1a95809459837ce183b",
+  "tools/quality/fuzz/Cargo.toml#sha256:876aaa03e8b6fecc5bddd32cba51203e8e43c4830b7e63e70263a05dbda564da",
+  "tools/quality/fuzz/Cargo.lock#sha256:e1c1a40a80d8f3388db6e75768cdac130de1ea33527111f0e7dca542b484844f",
+  "docs/traceability/dependency-ledger.toml#sha256:659fd7ad48ae1bf7e0c5c4fb9ece76fee92a9694968176869c9595c6adc64368",
+  ".github/workflows/ci.yml#sha256:b0a6450f87a9d0f07155d13ebf0c46a67123f31eaa08159b34a631ad285636ce",
+  "tools/quality/fuzz/corpus/m1_document_services/minimal.pdf#sha256:1d9575155aee9da157652b5388796e6819c1f55cfd83e0f3b07dd7cf78e6b446",
+  "tools/quality/fuzz/corpus/m1_document_services/truncated-header.pdf#sha256:d34338cd4825af16e7be1f0e0eb9732bc87a426a413e44cf90b733336b8a82d0",
+  "tools/quality/fuzz/corpus/m1_document_services/nested-outline.pdf#sha256:ccfb1b1deb755ace8a2b59d9e4f006d0686d89b69b0ea74b1544873b3fb9629f",
+  "tools/quality/fuzz/dictionaries/pdf.dict#sha256:f36cc6e8a742e216c0792a657519c43eb2880771410ea797c8b10d4e24ced99f",
+  "docs/traceability/evidence/m1/subjects/outline-fuzz-minimizer.toml#sha256:4d20405a6f5a4f46856724cfe6bd8c6b463c6f32f60c2ccc6b807a874bac5b4c",
+  "docs/traceability/evidence/m1/subjects/fuzz-replay-scope.md#sha256:4b5308169b3a284d16681538f01c883a9d5f8e4a8bd534c23dd9547d8766897e",
+]
 executed_tests = ["tools/quality::m1_document_service_fuzz"]
 cross_references = ["docs/traceability/evidence/m1/outline/o2.toml#sha256:162c1dbb6ae3423ff0ffd79c4738c56de64a697ca931d99241699e444dc59e06"]
 fuzz_targets = ["fuzz.m1documentservices"]

@@ -126,7 +126,7 @@ fn product_sources_exclude_unsafe_and_platform_io() {
 }
 
 #[test]
-fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
+fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
         .parent()
@@ -145,13 +145,20 @@ fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
         fs::read_to_string(crate_root.join("src/vm_error.rs")).expect("VM errors are readable");
     let vm_limits =
         fs::read_to_string(crate_root.join("src/vm_limits.rs")).expect("VM limits are readable");
+    let graphics_limits = fs::read_to_string(crate_root.join("src/graphics_limits.rs"))
+        .expect("graphics limits are readable");
+    let graphics_vm =
+        fs::read_to_string(crate_root.join("src/vm/graphics.rs")).expect("graphics VM is readable");
     let feature_map =
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
             .expect("feature map is readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec map is readable");
-    let plan =
+    let m2_plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
+    let m3_plan =
+        fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan is readable");
+    let ci = fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI is readable");
 
     assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
     assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
@@ -356,6 +363,62 @@ fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
         );
     }
 
+    let graphics_feature = record_with_id(&feature_map, "feature", "core.content-graphics-v2")
+        .expect("Content graphics-v2 feature is registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m3.content-graphics-v2.v1\"",
+        "ISO-32000-1:2008/7.8.2",
+        "ISO-32000-1:2008/8.4.2",
+        "ISO-32000-1:2008/8.4.3",
+        "ISO-32000-1:2008/8.5",
+        "ISO-32000-1:2008/8.6",
+        "RPE-ARCH-001/6.1-6.2",
+        "RPE-ARCH-001/6.4-6.7",
+        "RPE-ARCH-001/15.3/M3",
+        "modules = [\"core/content\", \"core/scene\"]",
+        "core/content::vm_graphics",
+        "core/scene::scene_v2",
+        "tools/quality::m3_content_graphics_trace",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            graphics_feature.contains(required),
+            "Content graphics-v2 feature must contain {required:?}"
+        );
+    }
+    for required in [
+        "max_path_segments",
+        "max_path_retained_bytes",
+        "max_dash_entries",
+        "max_dash_retained_bytes",
+    ] {
+        assert!(
+            graphics_limits.contains(required),
+            "graphics limits must contain {required:?}"
+        );
+    }
+    for required in [
+        "struct GraphicsState",
+        "struct CurrentPath",
+        "PathResourceBuilder",
+        "geometric_capacity",
+        "accounting.charge_fuel",
+        "OperatorKind::SetLineDash",
+        "OperatorKind::ClipEvenOdd",
+        "OperatorKind::FillStrokeEvenOdd",
+    ] {
+        assert!(
+            graphics_vm.contains(required),
+            "graphics VM must contain {required:?}"
+        );
+    }
+    assert!(
+        vm.contains("DashPatternBuilder"),
+        "sealed Content VM must incrementally build dash patterns"
+    );
+
     let content_stream = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.8.2")
         .expect("content-stream requirement is registered");
     for required in [
@@ -400,14 +463,53 @@ fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
         .expect("matrix-concatenation requirement is registered");
     for required in [
         "core.content-vm-scene-v1",
+        "core.content-graphics-v2",
         "current × operand in the Scene column-matrix representation",
         "equivalent to PDF operand-prepend row semantics",
         "current_ctm.checked_multiply(operand)",
         "translation components 16 and 28",
+        "construction operator",
+        "stroke state separately retains the paint-time transform",
     ] {
         assert!(
             matrix.contains(required),
             "matrix mapping must contain {required:?}"
+        );
+    }
+
+    let paths = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/8.5")
+        .expect("path requirement is registered");
+    for required in [
+        "core.content-graphics-v2",
+        "core.scene-graphics-v2",
+        "m, l, c, v, y, h, re",
+        "S, s, f, F, f*, B, B*, b, b*, n, W, and W*",
+        "current path is never part of q/Q",
+        "Path segments, retained path bytes, dash entries and unique retained dash bytes",
+        "failed-publication peaks",
+        "does not yet rasterize these commands",
+    ] {
+        assert!(
+            paths.contains(required),
+            "path mapping must contain {required:?}"
+        );
+    }
+
+    let colors = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/8.6")
+        .expect("device-color requirement is registered");
+    for required in [
+        "core.content-graphics-v2",
+        "core.scene-graphics-v2",
+        "G, g, RG, rg, K, and k",
+        "stroking and nonstroking channels remain distinct",
+        "q/Q restores both channels",
+        "DeviceGray, DeviceRGB, or DeviceCMYK",
+        "out-of-range clamping",
+        "deterministic conversion to Reference pixels is owned by M3-07",
+    ] {
+        assert!(
+            colors.contains(required),
+            "device-color mapping must contain {required:?}"
         );
     }
 
@@ -417,13 +519,15 @@ fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
         "core.content-operator-scanner",
         "core.page-property-lookup",
         "core.content-vm-scene-v1",
+        "core.content-graphics-v2",
         "strict-attested AcquiredPageContent",
         "q/Q/cm, BT/ET, BX/EX, BMC, name-based BDC, and EMC",
         "independent operator, fuel, graphics-depth, compatibility-depth, marked-depth, property-use, allocation, and retained-state limits",
         "Unknown operators are ignored only inside compatibility sections",
         "MP, DP, direct BDC property dictionaries",
         "retain their original lower DocumentError",
-        "M2-06 is complete",
+        "M2-06 mapping",
+        "M3-04 adds an explicit GraphicsV2 execution profile",
         "status = \"partial\"",
     ] {
         assert!(
@@ -435,10 +539,12 @@ fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
     let scene_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/6.4-6.7")
         .expect("Scene requirement is registered");
     assert!(scene_requirement.contains("core.content-vm-scene-v1"));
+    assert!(scene_requirement.contains("core.content-graphics-v2"));
     assert!(scene_requirement.contains("M2-06 supplies one bounded producer"));
     assert!(scene_requirement.contains("quality.m2-scene-gate"));
     assert!(scene_requirement.contains("M2-07 now closes the bounded M2 exit gate"));
     assert!(scene_requirement.contains("All component and quality feature records remain PLANNED"));
+    assert!(scene_requirement.contains("M3-04 adds the first bounded producer"));
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement is registered");
@@ -465,19 +571,29 @@ fn m2_scanner_and_sealed_vm_remain_planned_after_the_bounded_gate_closes() {
         );
     }
 
-    let m2_05 = record_with_id(&plan, "work_item", "M2-05").expect("M2-05 work item exists");
+    let m2_05 = record_with_id(&m2_plan, "work_item", "M2-05").expect("M2-05 work item exists");
     assert!(m2_05.contains("status = \"complete\""));
     assert!(m2_05.contains("completed_at = 2026-07-16"));
-    let m2_06 = record_with_id(&plan, "work_item", "M2-06").expect("M2-06 work item exists");
+    let m2_06 = record_with_id(&m2_plan, "work_item", "M2-06").expect("M2-06 work item exists");
     assert!(m2_06.contains("status = \"complete\""));
     assert!(m2_06.contains("completed_at = 2026-07-16"));
-    let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
+    let m2_07 = record_with_id(&m2_plan, "work_item", "M2-07").expect("M2-07 work item exists");
     assert!(m2_07.contains("status = \"complete\""));
     assert!(m2_07.contains("completed_at = 2026-07-16"));
-    let milestone_header = plan
+    let milestone_header = m2_plan
         .split("[[work_item]]")
         .next()
         .expect("M2 plan has a top-level milestone header");
     assert!(milestone_header.contains("status = \"complete\""));
     assert!(milestone_header.contains("completed_at = 2026-07-16"));
+
+    let m3_04 = record_with_id(&m3_plan, "work_item", "M3-04").expect("M3-04 work item exists");
+    assert!(m3_04.contains("status = \"complete\""));
+    assert!(m3_04.contains("completed_at = 2026-07-16"));
+    assert!(
+        ci.contains(
+            "cargo test --locked --package pdf-rs-quality --test m3_content_graphics_trace"
+        ),
+        "M3-04 commit-bound evidence must have an explicit CI gate"
+    );
 }

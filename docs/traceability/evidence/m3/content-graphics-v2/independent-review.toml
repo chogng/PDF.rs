@@ -1,0 +1,76 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.content-graphics-v2.independent-review"
+milestone = "M3"
+work_item = "M3-04"
+profile = "m3.content-graphics-v2.v1"
+feature = "core.content-graphics-v2"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "b2a0b88ce3c0f4d186f450a793909d1f72a75230"
+reviewed_subject_commit = "b2a0b88ce3c0f4d186f450a793909d1f72a75230"
+reviewed_subject_tree = "b22d0ae88ced2194d884ec781b30f0c5ff367747"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-not-working-tree"
+reviewed_subject_commit_map = [
+  "core/content/src/graphics_limits.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/src/lib.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/src/model.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/src/vm.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/src/vm/graphics.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/src/vm_error.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/src/vm_model.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/tests/scanner.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/content/tests/vm_graphics.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/scene/src/graphics.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "core/scene/src/lib.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+  "docs/traceability/spec-map.toml@b2a0b88ce3c0f4d186f450a793909d1f72a75230",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = [
+  "Content graphics limits, operator metadata, VM execution, structured failures, statistics, and public exports",
+  "Scene incremental path and dash builders plus graphics exports",
+  "exact, one-less, aggregate-retention, cancellation, source-priority, metamorphic, and failed-publication regressions",
+  "frozen M2 Scene-policy wording required by exact-tree repository checks",
+]
+reviewed_subjects = [
+  "core/content/src/graphics_limits.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:a04af90e907643594fe7142ccdd19b6c72e7e5b238ed237709584a56cfd93d42",
+  "core/content/src/lib.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:3edd246755ea0305fe38f8e228fcc0fafe1105ce25354836628a8dff5dc40021",
+  "core/content/src/model.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:e44d7416a860a763fac8c6fabc9c7883f0af09d75795d50b06849381ea468611",
+  "core/content/src/vm.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:4abe742364c3a4f566ef092a923693004672bced49c68ef59df3e4a0e2525d25",
+  "core/content/src/vm/graphics.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:8d3418bb9e8ed51f76f7fd6a0d5ba36ff60d34fbc160eca8b7a4fa99e76a2df6",
+  "core/content/src/vm_error.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:b665c263308d326098237e8583828376e0686907549ef3368362f2883a3b3a5f",
+  "core/content/src/vm_model.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:ba754f408a98cbdbdd5a8ef587cb8ef1603bcdb533ce18008487c8f6852b0222",
+  "core/content/tests/scanner.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:e23d70503a50ea5c77ab72ff4fbdeb8a1efa55a639a5d3e12b5d504cfb0e22a0",
+  "core/content/tests/vm_graphics.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:2d5a763768320153546010fbbc53f71595f823feafa7ecd27e9b629d9a55389b",
+  "core/scene/src/graphics.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:85b8613c15404494dda1b13b3f2f334d8aede0206aa9b1b292ca837398e39242",
+  "core/scene/src/lib.rs@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:2f343e0e8d1c649dd6b153e4f9c077fa14b57044578b8637a9586c6e89272f0a",
+  "docs/traceability/spec-map.toml@b2a0b88ce3c0f4d186f450a793909d1f72a75230#sha256:6b1279c8efaf02ea892b5ae20559bb323da2446eeb50332c6e08cbd46b2ed972",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-content --package pdf-rs-scene --all-targets",
+  "cargo clippy --locked --package pdf-rs-content --package pdf-rs-scene --all-targets -- -D warnings",
+  "cargo fmt --all -- --check",
+  "git show --check b2a0b88",
+  "git diff-tree --check b2a0b88^ b2a0b88",
+]
+verification_summary = "Content 64/64 and Scene 41/41 passed from the exact reviewed tree; combined 105/105 passed, including both repository-policy suites."
+review_scope = "M3-04 only; excludes unmounted raster files, M3-05 and later geometry/color/image/text work, integrated rendering, O0/O1/O3 pixel authority, maturity promotion, and M3 exit"
+review_rounds = [
+  "operator, state, path, and retained-resource review",
+  "adversarial dash conversion, cancellation, aggregate retention, and long-path review",
+  "post-fix working-tree review",
+  "exact commit-tree repository-policy re-review",
+]
+closed_findings = [
+  "P1 dash admission and cancellation: complete fuel, entry, graphics-retention, and VM-retention admission now precedes a single conversion pass with source/cancellation guards every 256 entries and candidate peak accounting on failure.",
+  "P1 aggregate retained state: live path capacity, unique current/saved dash payloads, saved graphics states, and property proofs are counted without omission or double charging across q, d, Q, path, and BDC combinations.",
+  "P1 unaccounted quadratic copying: path, saved-state, and property vectors grow geometrically, precharge live-element relocation fuel, and postflight allocator-reported capacity.",
+  "P1 path publication: incremental PathResource and DashPattern builders validate each append and finish in O(1) without copying the element buffer; failed Scene publication retains the pre-handoff VM peak.",
+  "P1 exact-tree trace closure: the frozen M2 Scene-policy wording needed by repository checks is included in the reviewed implementation commit.",
+]
+open_p0_p2 = 0
+verdict = "SHIP"

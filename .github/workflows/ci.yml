@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install locked fuzz toolchain
         run: |
           cargo install --locked --version 0.13.2 cargo-fuzz
