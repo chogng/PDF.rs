@@ -35,6 +35,11 @@ Scene and pixel meaning; Specification/Conformance reviews oracle usage.
   checked counters. The semantic diff retains all four deltas; its visualization
   stores RGB deltas and makes changed pixels opaque so equal input alpha cannot
   hide a real difference. Alpha-only changes are visualized as neutral intensity.
+- Canonical pixel artifacts have one strict schema-1 decoder matching the writer's
+  exact field order, integer spelling, lowercase hexadecimal bytes, and absence
+  of whitespace or trailing data. The caller supplies a decoded-byte ceiling
+  checked before fallible allocation, and dimensions still pass the shared
+  four-bytes-per-pixel value contract.
 - PNG output is deliberately minimal: RGBA8, filter 0 on each row, one IDAT
   chunk, zlib header `0x78 0x01`, stored DEFLATE blocks of at most 65,535 bytes,
   Adler-32 payload checksum, and IEEE CRC-32 chunk checksums.
@@ -56,6 +61,9 @@ embedded corpus data.
 - Exact and changed Parse/Scene/Text summaries.
 - Exact RGBA comparison, channel/pixel statistics, dimension mismatch, buffer
   mismatch, zero dimensions, and arithmetic overflow.
+- Canonical pixel decoding round-trip plus rejection of alternate field order,
+  whitespace, trailing bytes, uppercase, odd or invalid hex, leading-zero
+  integers, unsupported schemas, byte limits, and RGBA-length mismatch.
 - PNG signature, chunk order, dimensions, CRC-32, Adler-32, stored-block
   reconstruction, multi-block output, visible diff alpha, and byte determinism.
 - Debug formatting for Text/Pixel/PNG values exposes only schemas, dimensions,
@@ -74,4 +82,6 @@ No fuzz target is registered in this initial M0 package.
 
 # History
 
+- 2026-07-16: Added the strict bounded decoder used to validate committed M3
+  canonical pixel authorities without accepting equivalent alternate JSON.
 - 2026-07-13: initial M0 canonical comparison and PNG artifact implementation.

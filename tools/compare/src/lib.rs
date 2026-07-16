@@ -19,7 +19,8 @@ pub use artifact::{
 };
 pub use json::{CanonicalJson, canonical_json_string};
 pub use pixel::{
-    PixelArtifact, PixelBufferRole, PixelDiff, PixelDiffSummary, PixelError, compare_pixels,
+    PixelArtifact, PixelArtifactDecodeError, PixelBufferRole, PixelDiff, PixelDiffSummary,
+    PixelError, compare_pixels, decode_canonical_pixel_artifact,
 };
 pub use png::{
     PixelPngBundle, PngError, adler32, crc32, encode_pixel_comparison_pngs, encode_rgba_png,

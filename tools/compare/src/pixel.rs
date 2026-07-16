@@ -111,6 +111,69 @@ impl fmt::Display for PixelError {
 
 impl Error for PixelError {}
 
+/// Failure to decode one canonical schema-1 pixel artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PixelArtifactDecodeError {
+    /// The input is not the exact canonical JSON encoding or contains invalid lowercase hex.
+    InvalidEncoding,
+    /// The input declares a schema other than schema 1.
+    UnsupportedSchema {
+        /// Parsed unsupported schema number.
+        schema: u32,
+    },
+    /// The encoded RGBA buffer exceeds the caller's preflight limit.
+    RgbaLimitExceeded {
+        /// Maximum permitted decoded RGBA bytes.
+        limit: usize,
+        /// Decoded RGBA bytes requested by the artifact.
+        actual: usize,
+    },
+    /// The decoder could not reserve the validated RGBA output.
+    AllocationFailed {
+        /// Requested decoded RGBA capacity.
+        requested: usize,
+    },
+    /// The decoded dimensions and RGBA bytes violate the pixel value contract.
+    Pixel(PixelError),
+}
+
+impl fmt::Display for PixelArtifactDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidEncoding => {
+                formatter.write_str("pixel artifact is not canonical schema-1 JSON")
+            }
+            Self::UnsupportedSchema { schema } => {
+                write!(formatter, "unsupported pixel artifact schema {schema}")
+            }
+            Self::RgbaLimitExceeded { limit, actual } => write!(
+                formatter,
+                "pixel artifact requests {actual} RGBA bytes, exceeding limit {limit}"
+            ),
+            Self::AllocationFailed { requested } => write!(
+                formatter,
+                "could not reserve {requested} bytes for decoded pixel artifact"
+            ),
+            Self::Pixel(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for PixelArtifactDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Pixel(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<PixelError> for PixelArtifactDecodeError {
+    fn from(error: PixelError) -> Self {
+        Self::Pixel(error)
+    }
+}
+
 /// Validated row-major, eight-bit RGBA output.
 #[derive(Clone, Eq, PartialEq)]
 pub struct PixelArtifact {
@@ -177,6 +240,85 @@ impl CanonicalJson for PixelArtifact {
         output.push_str(",\"width\":");
         push_number(output, self.width);
         output.push('}');
+    }
+}
+
+/// Decodes the exact canonical schema-1 JSON representation of a pixel artifact.
+///
+/// The parser deliberately accepts neither alternate JSON field order nor insignificant
+/// whitespace. The RGBA limit is checked before allocation and the resulting dimensions and
+/// byte count are validated by [`PixelArtifact::new`].
+///
+/// # Errors
+///
+/// Returns a stable decoding, schema, resource-limit, allocation, or pixel-value error.
+pub fn decode_canonical_pixel_artifact(
+    input: &[u8],
+    max_rgba_bytes: usize,
+) -> Result<PixelArtifact, PixelArtifactDecodeError> {
+    let input =
+        std::str::from_utf8(input).map_err(|_| PixelArtifactDecodeError::InvalidEncoding)?;
+    let remainder = input
+        .strip_prefix("{\"height\":")
+        .ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    let (height, remainder) = remainder
+        .split_once(",\"rgba_hex\":\"")
+        .ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    let (rgba_hex, remainder) = remainder
+        .split_once("\",\"schema\":")
+        .ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    let (schema, remainder) = remainder
+        .split_once(",\"width\":")
+        .ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    let width = remainder
+        .strip_suffix('}')
+        .ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+
+    let height = parse_canonical_u32(height).ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    let width = parse_canonical_u32(width).ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    let schema = parse_canonical_u32(schema).ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+    if schema != PIXEL_SCHEMA {
+        return Err(PixelArtifactDecodeError::UnsupportedSchema { schema });
+    }
+    if rgba_hex.len() % 2 != 0 {
+        return Err(PixelArtifactDecodeError::InvalidEncoding);
+    }
+    let rgba_len = rgba_hex.len() / 2;
+    if rgba_len > max_rgba_bytes {
+        return Err(PixelArtifactDecodeError::RgbaLimitExceeded {
+            limit: max_rgba_bytes,
+            actual: rgba_len,
+        });
+    }
+
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(rgba_len)
+        .map_err(|_| PixelArtifactDecodeError::AllocationFailed {
+            requested: rgba_len,
+        })?;
+    for pair in rgba_hex.as_bytes().chunks_exact(2) {
+        let high = decode_lower_hex(pair[0]).ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+        let low = decode_lower_hex(pair[1]).ok_or(PixelArtifactDecodeError::InvalidEncoding)?;
+        rgba.push((high << 4) | low);
+    }
+    PixelArtifact::new(width, height, rgba).map_err(Into::into)
+}
+
+fn parse_canonical_u32(value: &str) -> Option<u32> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+const fn decode_lower_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -374,7 +516,10 @@ fn expected_rgba_len(width: u32, height: u32) -> Result<usize, PixelError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PixelArtifact, PixelBufferRole, PixelError, compare_pixels};
+    use super::{
+        PixelArtifact, PixelArtifactDecodeError, PixelBufferRole, PixelError, compare_pixels,
+        decode_canonical_pixel_artifact,
+    };
     use crate::CanonicalJson;
 
     #[test]
@@ -384,6 +529,70 @@ mod tests {
         assert_eq!(
             artifact.to_canonical_json(),
             "{\"height\":1,\"rgba_hex\":\"000f10ff\",\"schema\":1,\"width\":1}"
+        );
+    }
+
+    #[test]
+    fn canonical_pixel_artifact_round_trips_without_json_ambiguity() {
+        let encoded = b"{\"height\":1,\"rgba_hex\":\"000f10ff\",\"schema\":1,\"width\":1}";
+        let artifact =
+            decode_canonical_pixel_artifact(encoded, 4).expect("canonical artifact decodes");
+        assert_eq!(artifact.width(), 1);
+        assert_eq!(artifact.height(), 1);
+        assert_eq!(artifact.rgba(), &[0, 15, 16, 255]);
+        assert_eq!(artifact.to_canonical_json().as_bytes(), encoded);
+    }
+
+    #[test]
+    fn canonical_pixel_decoder_rejects_alternate_json_and_hex_forms() {
+        for invalid in [
+            "{\"width\":1,\"height\":1,\"rgba_hex\":\"00000000\",\"schema\":1}",
+            "{\"height\":1, \"rgba_hex\":\"00000000\",\"schema\":1,\"width\":1}",
+            "{\"height\":01,\"rgba_hex\":\"00000000\",\"schema\":1,\"width\":1}",
+            "{\"height\":1,\"rgba_hex\":\"0000000F\",\"schema\":1,\"width\":1}",
+            "{\"height\":1,\"rgba_hex\":\"0000000\",\"schema\":1,\"width\":1}",
+            "{\"height\":1,\"rgba_hex\":\"0000000g\",\"schema\":1,\"width\":1}",
+            "{\"height\":1,\"rgba_hex\":\"00000000\",\"schema\":1,\"width\":1}\n",
+        ] {
+            assert_eq!(
+                decode_canonical_pixel_artifact(invalid.as_bytes(), 4),
+                Err(PixelArtifactDecodeError::InvalidEncoding),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_pixel_decoder_distinguishes_schema_limit_and_value_failures() {
+        assert_eq!(
+            decode_canonical_pixel_artifact(
+                b"{\"height\":1,\"rgba_hex\":\"00000000\",\"schema\":2,\"width\":1}",
+                4
+            ),
+            Err(PixelArtifactDecodeError::UnsupportedSchema { schema: 2 })
+        );
+        assert_eq!(
+            decode_canonical_pixel_artifact(
+                b"{\"height\":1,\"rgba_hex\":\"00000000\",\"schema\":1,\"width\":1}",
+                3
+            ),
+            Err(PixelArtifactDecodeError::RgbaLimitExceeded {
+                limit: 3,
+                actual: 4,
+            })
+        );
+        assert_eq!(
+            decode_canonical_pixel_artifact(
+                b"{\"height\":1,\"rgba_hex\":\"000000\",\"schema\":1,\"width\":1}",
+                4
+            ),
+            Err(PixelArtifactDecodeError::Pixel(
+                PixelError::BufferLengthMismatch {
+                    role: PixelBufferRole::Artifact,
+                    expected: 4,
+                    actual: 3,
+                }
+            ))
         );
     }
 
