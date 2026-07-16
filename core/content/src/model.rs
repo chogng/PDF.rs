@@ -417,6 +417,8 @@ pub enum OperatorContext {
     LineState,
     /// Changes a registered device-color value in the current graphics state.
     DeviceColor,
+    /// Paints one named external object outside a text object.
+    XObject,
 }
 
 /// Exact top-level operand shape required before an initial known operator can execute.
@@ -555,6 +557,8 @@ pub enum OperatorKind {
     SetStrokingCmyk,
     /// Set nonstroking DeviceCMYK (`k`).
     SetNonstrokingCmyk,
+    /// Paint one named external object (`Do`).
+    PaintXObject,
 }
 
 /// Declarative scanner/VM metadata for one known operator.
@@ -651,6 +655,7 @@ impl OperatorKind {
             b"rg" => Some(Self::SetNonstrokingRgb),
             b"K" => Some(Self::SetStrokingCmyk),
             b"k" => Some(Self::SetNonstrokingCmyk),
+            b"Do" => Some(Self::PaintXObject),
             _ => None,
         }
     }
@@ -951,6 +956,13 @@ impl OperatorKind {
                 OperatorContext::DeviceColor,
                 OperatorFailurePolicy::Execute,
                 5,
+            ),
+            Self::PaintXObject => spec(
+                b"Do",
+                OperatorOperandShape::Name,
+                OperatorContext::XObject,
+                OperatorFailurePolicy::Execute,
+                3,
             ),
         }
     }

@@ -1,35 +1,39 @@
 # Scope
 
-`core/content` owns the bounded M2-05 scanner and the sealed M2-06 initial Content VM. The scanner
-accepts an exact zero-based, caller-ordered sequence of borrowed, already-decoded content streams.
-Each input carries the indirect stream `ObjectRef`, stream ordinal, and complete decoded byte
-slice. A successful scan atomically publishes an immutable owned `ContentProgram` containing
-source-ordered operands and operators with decoded-coordinate provenance.
+`core/content` owns the bounded M2-05 scanner, the sealed M2-06 initial Content VM, and the
+graphics-capable M3 Content profile. The scanner accepts an exact zero-based, caller-ordered
+sequence of borrowed, already-decoded content streams. Each input carries the indirect stream
+`ObjectRef`, stream ordinal, and complete decoded byte slice. A successful scan atomically
+publishes an immutable owned `ContentProgram` containing source-ordered operands and operators
+with decoded-coordinate provenance.
 
 The only public VM entry consumes an exact move-only document-layer `AcquiredPageContent`. It
-derives the scanner inputs internally, interprets the resulting transient program against the
-same materialized Page and inherited Resources proof, and atomically publishes one
-`Arc<InterpretedPage>`. That value owns the acquisition, immutable Scene, resolved property
-reference proofs, final CTM, and scanner/VM/property statistics. There is no public API that
+derives the scanner inputs internally, interprets the resulting program against the same
+materialized Page and inherited Resources proof, and atomically publishes one
+`Arc<InterpretedPage>`. That value owns the acquisition, immutable Scene, resolved property and
+Image XObject proofs, final CTM, and scanner/VM/resource statistics. There is no public API that
 accepts an arbitrary `ContentProgram` together with a separate Page.
 
-The crate performs no content-stream acquisition, filter decoding, encryption, arbitrary object
-opening, platform I/O, async scheduling, cache insertion, rendering, or external-engine fallback.
+The crate performs no Page-content acquisition, encryption, platform I/O, async scheduling,
+shared-cache insertion, rendering, or external-engine fallback. The M3 image profile may drive
+document-owned, proof-bound Image XObject acquisition and filter decoding through its sealed
+resumable job; Content does not implement filters or open arbitrary objects itself.
 
 # Semantic owner
 
 The document layer owns `/Contents` direct/indirect shape validation, stream acquisition,
-proof-bearing object and filter evidence, materialized page geometry, and inherited resource
-scopes. Its no-I/O `PagePropertyResolver` validates the exact `/Properties` dictionary occurrence
-and returns fixed-size `PagePropertyReference` evidence without opening the selected target. The
-filter layer owns decoded stream production. The Scene layer owns fixed-point geometry and matrix
+proof-bearing object and filter evidence, materialized page geometry, inherited resource scopes,
+Page XObject lookup proofs, and resumable Image XObject decoding. Its no-I/O resource resolvers
+validate exact inherited dictionary occurrences before a selected target is acquired. The filter
+layer owns decoded stream production. The Scene layer owns fixed-point geometry and matrix
 arithmetic, bounded semantic command/resource construction, canonical resource interning, and
 immutable Scene publication.
 
 `core/content` owns decoded lexical scanning, operator classification, known-operator operand
-validation, exact content-number conversion, VM state, compatibility policy, property-use
-coordination, final CTM, and the atomic interpreted-Page boundary. Scanner, document resolver,
-Scene, and VM failures retain their original structured types rather than being flattened.
+validation, exact content-number conversion, graphics/path state, compatibility policy,
+property/image-use coordination, immutable semantic execution planning, final CTM, and the atomic
+interpreted-Page boundary. Scanner, document resolver, Scene, and VM failures retain their
+original structured types rather than being flattened.
 
 # Normative sources
 
@@ -58,9 +62,10 @@ Scene, and VM failures retain their original structured types rather than being 
   hexadecimal strings, ordered arrays, and ordered dictionaries preserving duplicate keys.
   Literal escapes, line continuation, CR/CRLF normalization, nested parentheses, name `#xx`
   escapes, odd hexadecimal nibbles, and dictionary-name keys are handled explicitly.
-- The stable initial table recognizes `q`, `Q`, `cm`, `BT`, `ET`, `BX`, `EX`, `MP`, `DP`, `BMC`,
-  `BDC`, and `EMC`. Each `OperatorKind` exposes its exact token, operand range, structural context,
-  base VM fuel declaration, exact operand shape, and post-validation failure policy. Scanner
+- The stable table recognizes the initial state and marked-content operators plus the registered
+  M3 path construction, path painting, clipping, line-state, DeviceGray/RGB/CMYK, and `Do`
+  operators. Each `OperatorKind` exposes its exact token, operand range, structural context, base
+  VM fuel declaration, exact operand shape, and post-validation failure policy. Scanner
   publication does not enforce those semantic arities.
 - Any nonempty regular token that is neither an operand keyword nor a number is a lexically valid
   operator. A token absent from the stable table is published as `ContentOperator::Unknown` with
@@ -90,14 +95,37 @@ Scene, and VM failures retain their original structured types rather than being 
   additional scanner work.
 - `InterpretPageJob` first checks source identity, cancellation, and source identity again. It
   builds exact borrowed descriptors from the acquired ordered streams and runs the same scanner
-  internally. A scanner failure is published intact before any VM retained-program admission can
-  replace it. Only a successful transient program is charged beside descriptor capacity to the VM
-  retained peak.
-- Every operator repeats the source-cancellation-source guard. Known operand count, type, and
-  number conversion are validated before operator/fuel budgets, state changes, resource lookup, or
-  unsupported classification. Any fallback is rechecked through the same guard so source change
-  precedes cancellation and cancellation precedes malformed, unsupported, resource, or state
-  outcomes.
+  internally exactly once. A scanner failure is published intact before any VM retained-program
+  admission can replace it. Only a successful program is charged beside descriptor capacity to
+  the VM retained peak.
+- Every operator repeats the source-cancellation-source guard. Known operand count and type are
+  validated before operator admission. Operator-specific numeric conversion follows its registered
+  pre-admission rule: scalar operators convert before admission, while `d` admits the complete
+  operator/fuel and dash-array traversal before converting individual entries. Conversion always
+  precedes state mutation, resource lookup, or unsupported classification. Any fallback is
+  rechecked through the same guard so source change precedes cancellation and cancellation
+  precedes malformed, unsupported, resource, or state outcomes.
+- The graphics profile performs that semantic VM traversal exactly once and freezes an immutable
+  `ExecutionPlan`. The plan contains source-ordered marked-content, graphics save/restore, path,
+  clip, paint, and image actions together with property proofs, Image XObject invocations, final
+  CTM, and the committed VM accounting. Deterministic operand, numeric, state, and budget failures
+  therefore precede every image lookup or decode and cannot be replaced by a later resource
+  outcome.
+- Plan retention charges nested graphics ownership in addition to action-container and copied-name
+  capacity. Each `PathResource` allocator capacity transfers into the immutable plan once at path
+  handoff; a `FillStroke` action and its pending `Clip` action share that single charge.
+  Each `DashPattern` payload is charged once per unique dash ownership across every stroke action,
+  remains charged after later dash changes or graphics-state restores, and stays stable while image
+  acquisition is `Pending`.
+- Image lookup walks only the plan's recorded image invocations; it never rescans the
+  `ContentProgram`. Exact proof/decode keys select unique acquisition slots while repeated uses
+  retain their own operator and lookup evidence. Unique jobs resume from one exact cursor across
+  `Pending`, and successful decoded bytes are copied into bounded Scene image resources only after
+  aggregate decoded-byte, cache-retention, probe, poll, and allocation checks pass.
+- After all required images are Ready, one Scene materialization pass consumes the immutable plan.
+  It does not repeat VM semantics, source lookup, or image polling. A failed, unsupported,
+  cancelled, source-changed, or resource-limited outcome drops the plan/cache/builder and never
+  publishes a partial Scene.
 - The initial state profile supports `q`/`Q`, `cm`, `BT`/`ET`, `BX`/`EX`, `BMC`, name-based `BDC`,
   and `EMC`. Graphics saves retain the current CTM; `cm` applies the PDF prepend rule as
   `current × operand` in Scene's column-matrix representation; text objects
@@ -110,19 +138,21 @@ Scene, and VM failures retain their original structured types rather than being 
   Name-based `BDC` preflights property-use and VM retention before invoking the document resolver.
   Unsupported indirect `/Properties` and direct selected property dictionaries preserve the lower
   document error; invalid or duplicate resource syntax remains a document failure.
-- Scene construction emits commands only for marked-content begin/end operations. Command
-  provenance uses the exact stream object, stream ordinal, decoded operator span, and page-global
-  ordinal. Repeated property targets are interned by Scene while every `BDC` still retains its own
-  `ResolvedPropertyUse`.
+- Scene construction emits the registered marked-content, path, clip, paint, and basic image
+  commands. Command provenance uses the exact stream object, stream ordinal, decoded operator
+  span, and page-global ordinal. Repeated property, path, and image targets follow Scene's stable
+  first-command-use interning while every `BDC` and `Do` retains its own resolved proof.
 - Independent VM limits cover operators, deterministic fuel, graphics depth, compatibility depth,
-  marked-content depth, property-use count, and VM retention. VM peak retention includes the
-  descriptor vector, transient `ContentProgram`, graphics stack, and property proof vector.
-  Acquired content and Scene capacities remain governed by their sealed lower budgets and are not
-  counted again. A successful result retains only property proof vector capacity under the VM
-  retained metric.
-- `ContentVmPoll` has no Pending state because acquisition and decoding are complete before VM
-  construction. Ready, Unsupported, and Failed outcomes replay exactly without source polling or
-  additional work. Only Ready owns a Scene; every other path drops partial builder state.
+  marked-content depth, property/image-use counts, graphics/path/dash state, action-plan capacity,
+  and VM retention. Independent image limits cover planning operators, lookup/acquisition polls,
+  cache probes, unique images, aggregate decoded bytes, plan/cache retention, and allocations.
+  Acquired content, lower document jobs, decoded payloads, and Scene capacities remain governed by
+  their sealed budgets and are not counted again.
+- `ContentVmPoll::Pending` exposes only the lower proof-bound acquisition ticket, missing ranges,
+  and checkpoint. Once semantic planning succeeds the scanned program is dropped; repeated polls
+  retain only the immutable plan, exact cache, active acquisition, and cursor without repeating
+  completed work. Ready, Unsupported, and Failed outcomes replay exactly without source polling or
+  additional work. Only Ready owns a Scene; every other path drops unpublished state.
 - Diagnostics retain stable codes, policy categories, recovery guidance, decoded coordinates, and
   numeric budget context only. They never retain or format names, strings, operator bytes,
   comments, or decoded content. Sensitive model `Debug` output is similarly redacted.
@@ -150,6 +180,11 @@ Scene, and VM failures retain their original structured types rather than being 
   terminal replay; ownership beyond source lifetimes; and content-redacted Debug output.
 - Exact-measured and one-less tests for every VM budget, plus intact scanner, document-resolver,
   and Scene resource failure evidence.
+- Graphics-v2 tests cover every registered path, paint, clip, line, color, matrix, `q`/`Q`, and
+  `Do` operator; equivalent path/matrix formulations; first-use Scene interning; image
+  identity/Flate acquisition; duplicate exact-cache uses; multiple consecutive Pending outcomes;
+  semantic-failure-before-resource ordering; cancellation between distant non-image operators;
+  terminal replay; and exact/one-less aggregate image budgets.
 - Repository policy checks the approved one-way bytes/document/Scene/syntax dependency boundary,
   test-only strict-fixture dependencies, no external-engine marker, no unsafe block, and no
   filesystem, network, or process API in product sources.
@@ -167,9 +202,10 @@ Scene, and VM failures retain their original structured types rather than being 
   operator after its preceding numeric operands.
 - The scanner preserves duplicate dictionary keys for later VM/resource policy. It does not decide
   last-wins semantics.
-- Text showing, path construction/painting, clipping, color, shadings, images, forms, fonts, and
-  general graphics-state parameters are outside the initial M2-06 VM. Their operator tokens are
-  lexically unknown and therefore Unsupported outside `BX` or ignored inside `BX`.
+- Text showing, shadings, inline images, Form XObjects, fonts, masks, patterns, advanced color
+  spaces, and transparency groups remain outside this bounded profile. Unsupported Image
+  XObject filters, masks, decode arrays, interpolation modes, color spaces, and bit depths retain
+  structured document/content capability outcomes rather than fabricated pixels.
 - `MP` and `DP` are registered structured Unsupported outcomes. Direct `BDC` property dictionaries,
   indirect Page `/Properties` dictionaries, and direct selected property dictionaries are also
   outside this bounded profile.
@@ -186,3 +222,9 @@ Scene, and VM failures retain their original structured types rather than being 
   bounded state stacks, inherited marked-content property proofs, semantic Scene production,
   structured Unsupported outcomes, lower-error preservation, independent VM budgets, atomic
   terminal replay, and real strict-pipeline integration tests.
+- 2026-07-16: Added the M3 graphics-v2 path, clip, paint, line, and device-color VM with complete
+  graphics-state restoration, checked fixed-point conversion, exact command provenance, and
+  bounded Scene-v2 publication.
+- 2026-07-16: Added proof-bound basic Image XObjects through one immutable semantic execution
+  plan, exact-key resumable acquisition, single Scene materialization, aggregate image/cache
+  limits, deterministic Pending replay, and semantic-failure-before-resource ordering.

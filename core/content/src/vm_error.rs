@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use pdf_rs_document::{DocumentError, DocumentErrorCode};
+use pdf_rs_document::{DocumentError, DocumentErrorCode, ImageXObjectUnsupported};
 
 use crate::ContentOperatorSource;
 
@@ -37,6 +37,33 @@ pub enum ContentGraphicsLimitKind {
     DashEntries,
     /// Aggregate unique dash-array capacity retained by active graphics states.
     DashRetainedBytes,
+}
+
+/// Deterministic Image XObject budget that rejected aggregate work or cache state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContentImageLimitKind {
+    /// Executed `Do` operators retained by the interpreted result.
+    ImageUses,
+    /// Distinct proof-bound images acquired into the exact cache.
+    UniqueImages,
+    /// Aggregate decoded bytes copied into distinct Scene image resources.
+    DecodedBytes,
+    /// Operators structurally inspected by the one image-planning pass.
+    PlanningOperators,
+    /// Exact-cache key comparisons admitted during image planning.
+    CacheProbes,
+    /// Allocator-reported operator/proof planning capacity.
+    PlanRetainedBytes,
+    /// An operator/proof planning allocation failed inside an already validated bound.
+    PlanAllocation,
+    /// Allocator-reported exact-cache metadata capacity.
+    CacheRetainedBytes,
+    /// Calls admitted into the lower resumable Image XObject acquisition job.
+    AcquisitionPolls,
+    /// An exact-cache metadata allocation failed inside an already validated bound.
+    CacheAllocation,
+    /// A decoded Scene-resource copy allocation failed inside an already validated bound.
+    DecodedAllocation,
 }
 
 /// Structured Content VM resource-limit context without content bytes.
@@ -129,10 +156,56 @@ impl ContentGraphicsLimit {
     }
 }
 
+/// Structured Content Image XObject resource context without image or content bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContentImageLimit {
+    kind: ContentImageLimitKind,
+    limit: u64,
+    consumed: u64,
+    attempted: u64,
+}
+
+impl ContentImageLimit {
+    pub(crate) const fn new(
+        kind: ContentImageLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+    ) -> Self {
+        Self {
+            kind,
+            limit,
+            consumed,
+            attempted,
+        }
+    }
+
+    /// Returns the rejected Image XObject budget dimension.
+    pub const fn kind(self) -> ContentImageLimitKind {
+        self.kind
+    }
+
+    /// Returns the configured ceiling.
+    pub const fn limit(self) -> u64 {
+        self.limit
+    }
+
+    /// Returns the amount charged before the rejected work.
+    pub const fn consumed(self) -> u64 {
+        self.consumed
+    }
+
+    /// Returns the additional amount or complete amount that was rejected.
+    pub const fn attempted(self) -> u64 {
+        self.attempted
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContentResourceLimit {
     Vm(ContentVmLimit),
     Graphics(ContentGraphicsLimit),
+    Image(ContentImageLimit),
 }
 
 /// Stable machine-readable Content VM failure.
@@ -267,6 +340,20 @@ impl ContentVmError {
         }
     }
 
+    pub(crate) const fn image_resource(
+        limit: ContentImageLimit,
+        source: Option<ContentOperatorSource>,
+    ) -> Self {
+        Self {
+            code: ContentVmErrorCode::ResourceLimit,
+            category: ContentVmErrorCategory::Resource,
+            recoverability: ContentVmRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-CONTENT-VM-0012",
+            source,
+            resource_limit: Some(ContentResourceLimit::Image(limit)),
+        }
+    }
+
     pub(crate) const fn with_source(mut self, source: ContentOperatorSource) -> Self {
         self.source = Some(source);
         self
@@ -301,7 +388,7 @@ impl ContentVmError {
     pub const fn limit(self) -> Option<ContentVmLimit> {
         match self.resource_limit {
             Some(ContentResourceLimit::Vm(limit)) => Some(limit),
-            Some(ContentResourceLimit::Graphics(_)) | None => None,
+            Some(ContentResourceLimit::Graphics(_) | ContentResourceLimit::Image(_)) | None => None,
         }
     }
 
@@ -309,7 +396,15 @@ impl ContentVmError {
     pub const fn graphics_limit(self) -> Option<ContentGraphicsLimit> {
         match self.resource_limit {
             Some(ContentResourceLimit::Graphics(limit)) => Some(limit),
-            Some(ContentResourceLimit::Vm(_)) | None => None,
+            Some(ContentResourceLimit::Vm(_) | ContentResourceLimit::Image(_)) | None => None,
+        }
+    }
+
+    /// Returns Image XObject resource context when this is an image budget failure.
+    pub const fn image_limit(self) -> Option<ContentImageLimit> {
+        match self.resource_limit {
+            Some(ContentResourceLimit::Image(limit)) => Some(limit),
+            Some(ContentResourceLimit::Vm(_) | ContentResourceLimit::Graphics(_)) | None => None,
         }
     }
 }
@@ -435,6 +530,10 @@ pub enum ContentUnsupportedKind {
     DirectPagePropertyDictionary,
     /// A registered graphics operator requires the explicit graphics-v2 profile.
     GraphicsV2Operator,
+    /// A registered `Do` operator requires an explicit proof-bound Content image profile.
+    ImageProfileRequired,
+    /// The selected Page XObject or Image XObject representation is outside the registered subset.
+    ImageXObject,
 }
 
 /// Content-redacted structured unsupported outcome.
@@ -443,6 +542,7 @@ pub struct ContentUnsupported {
     kind: ContentUnsupportedKind,
     source: ContentOperatorSource,
     document_error: Option<DocumentError>,
+    image_xobject: Option<ImageXObjectUnsupported>,
 }
 
 impl ContentUnsupported {
@@ -451,6 +551,7 @@ impl ContentUnsupported {
             kind,
             source,
             document_error: None,
+            image_xobject: None,
         }
     }
 
@@ -471,7 +572,20 @@ impl ContentUnsupported {
             kind,
             source,
             document_error: Some(error),
+            image_xobject: None,
         })
+    }
+
+    pub(crate) const fn from_image(
+        unsupported: ImageXObjectUnsupported,
+        source: ContentOperatorSource,
+    ) -> Self {
+        Self {
+            kind: ContentUnsupportedKind::ImageXObject,
+            source,
+            document_error: None,
+            image_xobject: Some(unsupported),
+        }
     }
 
     /// Returns the stable unsupported feature identity.
@@ -489,6 +603,11 @@ impl ContentUnsupported {
         self.document_error
     }
 
+    /// Returns the preserved lower Image XObject capability reason.
+    pub const fn image_xobject(self) -> Option<ImageXObjectUnsupported> {
+        self.image_xobject
+    }
+
     /// Returns the stable content-layer unsupported diagnostic identifier.
     pub const fn diagnostic_id(self) -> &'static str {
         match self.kind {
@@ -501,6 +620,8 @@ impl ContentUnsupported {
             ContentUnsupportedKind::IndirectPageProperties => "RPE-CONTENT-UNSUPPORTED-0005",
             ContentUnsupportedKind::DirectPagePropertyDictionary => "RPE-CONTENT-UNSUPPORTED-0006",
             ContentUnsupportedKind::GraphicsV2Operator => "RPE-CONTENT-UNSUPPORTED-0007",
+            ContentUnsupportedKind::ImageProfileRequired => "RPE-CONTENT-UNSUPPORTED-0008",
+            ContentUnsupportedKind::ImageXObject => "RPE-CONTENT-UNSUPPORTED-0009",
         }
     }
 }
@@ -514,6 +635,12 @@ impl fmt::Debug for ContentUnsupported {
             .field(
                 "document_diagnostic_id",
                 &self.document_error.map(DocumentError::diagnostic_id),
+            )
+            .field(
+                "image_diagnostic_id",
+                &self
+                    .image_xobject
+                    .map(ImageXObjectUnsupported::diagnostic_id),
             )
             .field("content", &"[REDACTED]")
             .finish()

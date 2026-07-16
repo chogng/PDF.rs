@@ -1,13 +1,17 @@
 use std::mem::size_of;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use pdf_rs_scene::{
-    BlendMode, DashPattern, DeviceColor, FillRule, GraphicsSceneBuilder, LineCap, LineJoin,
-    LineStyle, Matrix, Paint, PathResource, PathResourceBuilder, PathSegment, SceneBounds,
-    SceneError, ScenePoint, SceneScalar, SceneUnit,
+    BlendMode, DashPattern, DeviceColor, FillRule, LineCap, LineJoin, LineStyle, Matrix, Paint,
+    PathResource, PathResourceBuilder, PathSegment, SceneBounds, SceneError, ScenePoint,
+    SceneScalar, SceneUnit,
 };
 
-use super::{Accounting, ValidatedOperands, command_source, geometric_capacity, vm_error};
+use super::{
+    Accounting, ExecutionAction, ValidatedOperands, command_source, geometric_capacity,
+    reserve_vm_additional, vm_error,
+};
 use crate::{
     ContentGraphicsLimitKind, ContentGraphicsLimits, ContentNumber, ContentOperatorSource,
     ContentVmError, ContentVmErrorCode, ContentVmLimit, ContentVmLimitKind, ContentVmLimits,
@@ -45,8 +49,34 @@ pub(super) struct GraphicsState {
     clip_depth: u32,
 }
 
+const DASH_ACTION_RETAINED: u64 = 1_u64 << 63;
+
 struct DashOwnership {
-    retained_bytes: u64,
+    retained_and_flags: AtomicU64,
+}
+
+impl DashOwnership {
+    fn new(retained_bytes: u64) -> Self {
+        debug_assert_eq!(retained_bytes & DASH_ACTION_RETAINED, 0);
+        Self {
+            retained_and_flags: AtomicU64::new(retained_bytes),
+        }
+    }
+
+    fn retained_bytes(&self) -> u64 {
+        self.retained_and_flags.load(Ordering::Relaxed) & !DASH_ACTION_RETAINED
+    }
+
+    fn action_published(&self) -> bool {
+        self.retained_and_flags.load(Ordering::Relaxed) & DASH_ACTION_RETAINED != 0
+    }
+
+    fn publish_action(&self) -> bool {
+        self.retained_and_flags
+            .fetch_or(DASH_ACTION_RETAINED, Ordering::Relaxed)
+            & DASH_ACTION_RETAINED
+            == 0
+    }
 }
 
 impl GraphicsState {
@@ -65,7 +95,7 @@ impl GraphicsState {
             line_join: LineJoin::Miter,
             miter_limit: SceneScalar::from_scaled(10_000_000_000),
             dash,
-            dash_ownership: Arc::new(DashOwnership { retained_bytes: 0 }),
+            dash_ownership: Arc::new(DashOwnership::new(0)),
             stroking: black,
             nonstroking: black,
             clip_depth: 0,
@@ -341,6 +371,8 @@ pub(super) struct GraphicsVm {
     saved: Vec<GraphicsState>,
     path: CurrentPath,
     dash_retained_bytes: u64,
+    action_path_retained_bytes: u64,
+    action_dash_retained_bytes: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -420,11 +452,22 @@ impl GraphicsVm {
             saved: Vec::new(),
             path: CurrentPath::default(),
             dash_retained_bytes: 0,
+            action_path_retained_bytes: 0,
+            action_dash_retained_bytes: 0,
         }
+    }
+
+    pub(super) fn action_payload_retained_bytes(&self) -> Option<u64> {
+        self.action_path_retained_bytes
+            .checked_add(self.action_dash_retained_bytes)
     }
 
     pub(super) const fn current_ctm(&self) -> Matrix {
         self.current.ctm
+    }
+
+    pub(super) const fn image_paint(&self) -> Paint {
+        self.current.nonstroking
     }
 
     pub(super) fn set_ctm(&mut self, value: Matrix) {
@@ -446,8 +489,10 @@ impl GraphicsVm {
         let Some(restored) = self.saved.pop() else {
             return Ok(None);
         };
-        let released = if Arc::strong_count(&self.current.dash_ownership) == 1 {
-            self.current.dash_ownership.retained_bytes
+        let released = if Arc::strong_count(&self.current.dash_ownership) == 1
+            && !self.current.dash_ownership.action_published()
+        {
+            self.current.dash_ownership.retained_bytes()
         } else {
             0
         };
@@ -473,6 +518,7 @@ impl GraphicsVm {
             .checked_add(retention.property_bytes)
             .and_then(|value| value.checked_add(path_bytes))
             .and_then(|value| value.checked_add(self.dash_retained_bytes))
+            .and_then(|value| value.checked_add(self.action_path_retained_bytes))
             .unwrap_or(u64::MAX);
         if self.saved.len() == self.saved.capacity() {
             let required_capacity = self
@@ -537,6 +583,7 @@ impl GraphicsVm {
                     .and_then(|path| saved.checked_add(path))
             })
             .and_then(|value| value.checked_add(self.dash_retained_bytes))
+            .and_then(|value| value.checked_add(self.action_path_retained_bytes))
             .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))
     }
 
@@ -581,7 +628,8 @@ impl GraphicsVm {
         operands: &ValidatedOperands<'_>,
         limits: ContentGraphicsLimits,
         retention: VmRetention,
-        builder: &mut GraphicsSceneBuilder,
+        action_other_capacity: u64,
+        actions: &mut Vec<ExecutionAction>,
         source: ContentOperatorSource,
         accounting: &mut Accounting,
     ) -> Result<u64, GraphicsExecutionError> {
@@ -592,6 +640,7 @@ impl GraphicsVm {
                 retained_bytes(&self.saved).and_then(|saved| value.checked_add(saved))
             })
             .and_then(|value| value.checked_add(self.dash_retained_bytes))
+            .and_then(|value| value.checked_add(self.action_path_retained_bytes))
             .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
         let mut transient_machine_bytes = 0;
         match kind {
@@ -729,7 +778,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -741,7 +791,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -753,7 +804,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -765,7 +817,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -777,7 +830,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -789,7 +843,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -801,7 +856,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -813,7 +869,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -825,7 +882,8 @@ impl GraphicsVm {
                     limits,
                     retention,
                     path_vm_consumed,
-                    builder,
+                    action_other_capacity,
+                    actions,
                     source,
                     accounting,
                 )?;
@@ -935,7 +993,8 @@ impl GraphicsVm {
             | OperatorKind::MarkedContentPointProperties
             | OperatorKind::BeginMarkedContent
             | OperatorKind::BeginMarkedContentProperties
-            | OperatorKind::EndMarkedContent => {
+            | OperatorKind::EndMarkedContent
+            | OperatorKind::PaintXObject => {
                 return Err(vm_error(ContentVmErrorCode::InternalState, source).into());
             }
         }
@@ -1010,8 +1069,10 @@ impl GraphicsVm {
         let retained_bytes = pattern
             .retained_bytes()
             .map_err(|_| vm_error(ContentVmErrorCode::InternalState, source))?;
-        let released = if Arc::strong_count(&self.current.dash_ownership) == 1 {
-            self.current.dash_ownership.retained_bytes
+        let released = if Arc::strong_count(&self.current.dash_ownership) == 1
+            && !self.current.dash_ownership.action_published()
+        {
+            self.current.dash_ownership.retained_bytes()
         } else {
             0
         };
@@ -1021,7 +1082,7 @@ impl GraphicsVm {
             .and_then(|value| value.checked_add(retained_bytes))
             .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
         self.current.dash = pattern;
-        self.current.dash_ownership = Arc::new(DashOwnership { retained_bytes });
+        self.current.dash_ownership = Arc::new(DashOwnership::new(retained_bytes));
         self.dash_retained_bytes = next;
         Ok(())
     }
@@ -1037,7 +1098,8 @@ impl GraphicsVm {
         limits: ContentGraphicsLimits,
         retention: VmRetention,
         vm_consumed_without_path: u64,
-        builder: &mut GraphicsSceneBuilder,
+        action_other_capacity: u64,
+        actions: &mut Vec<ExecutionAction>,
         source: ContentOperatorSource,
         accounting: &mut Accounting,
     ) -> Result<u64, GraphicsExecutionError> {
@@ -1052,45 +1114,93 @@ impl GraphicsVm {
         }
         let retained_before_handoff = self.retained_capacity_bytes(source)?;
         accounting.observe_retained(retention.total_with(retained_before_handoff));
-        let (path, transform, bounds, pending_clip) = self.path.take_resource();
+        let action_slots = usize::from(!matches!(operation, PaintOperation::None))
+            + usize::from(self.path.pending_clip.is_some());
+        if action_slots != 0 {
+            reserve_vm_additional(
+                actions,
+                action_slots,
+                retention.program_bytes,
+                action_other_capacity.saturating_add(retained_before_handoff),
+                retention.limits,
+                source,
+                accounting,
+            )?;
+        }
         let paint_source = command_source(source)?;
+        let line_style = match operation {
+            PaintOperation::Stroke | PaintOperation::FillStroke(_) => Some(self.line_style()?),
+            PaintOperation::None | PaintOperation::Fill(_) => None,
+        };
+        let pending_clip = self.path.pending_clip;
+        let clip_source = match pending_clip {
+            Some(pending) => Some(command_source(pending.source)?),
+            None => None,
+        };
+        let path_retained_bytes = self.path.retained_bytes(source)?;
+        let next_action_path_retained_bytes = if action_slots == 0 {
+            self.action_path_retained_bytes
+        } else {
+            self.action_path_retained_bytes
+                .checked_add(path_retained_bytes)
+                .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?
+        };
+        let publishes_dash = matches!(
+            operation,
+            PaintOperation::Stroke | PaintOperation::FillStroke(_)
+        );
+        let first_dash_action = publishes_dash && !self.current.dash_ownership.action_published();
+        let next_action_dash_retained_bytes = if first_dash_action {
+            self.action_dash_retained_bytes
+                .checked_add(self.current.dash_ownership.retained_bytes())
+                .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?
+        } else {
+            self.action_dash_retained_bytes
+        };
+        let (path, transform, bounds, pending_clip) = self.path.take_resource();
+        self.action_path_retained_bytes = next_action_path_retained_bytes;
+        if first_dash_action {
+            let newly_published = self.current.dash_ownership.publish_action();
+            debug_assert!(newly_published);
+        }
+        self.action_dash_retained_bytes = next_action_dash_retained_bytes;
         match operation {
             PaintOperation::None => {}
-            PaintOperation::Stroke => builder.append_stroke(
-                path.clone(),
-                self.current.stroking,
-                self.line_style()?,
+            PaintOperation::Stroke => actions.push(ExecutionAction::Stroke {
+                path: path.clone(),
+                paint: self.current.stroking,
+                style: line_style.expect("stroke planning retains one line style"),
                 transform,
                 bounds,
-                paint_source,
-            )?,
-            PaintOperation::Fill(rule) => builder.append_fill(
-                path.clone(),
+                source: paint_source,
+            }),
+            PaintOperation::Fill(rule) => actions.push(ExecutionAction::Fill {
+                path: path.clone(),
                 rule,
-                self.current.nonstroking,
+                paint: self.current.nonstroking,
                 transform,
                 bounds,
-                paint_source,
-            )?,
-            PaintOperation::FillStroke(rule) => builder.append_fill_stroke(
-                path.clone(),
+                source: paint_source,
+            }),
+            PaintOperation::FillStroke(rule) => actions.push(ExecutionAction::FillStroke {
+                path: path.clone(),
                 rule,
-                self.current.nonstroking,
-                self.current.stroking,
-                self.line_style()?,
+                fill: self.current.nonstroking,
+                stroke: self.current.stroking,
+                style: line_style.expect("fill-stroke planning retains one line style"),
                 transform,
                 bounds,
-                paint_source,
-            )?,
+                source: paint_source,
+            }),
         }
         if let Some(pending) = pending_clip {
-            builder.append_clip(
+            actions.push(ExecutionAction::Clip {
                 path,
-                pending.rule,
+                rule: pending.rule,
                 transform,
                 bounds,
-                command_source(pending.source)?,
-            )?;
+                source: clip_source.expect("pending clips retain decoded provenance"),
+            });
             self.current.clip_depth = self
                 .current
                 .clip_depth
@@ -1363,6 +1473,143 @@ mod tests {
         assert_eq!(
             saved_accounting.fuel,
             u64::try_from(initial_saved_capacity).unwrap()
+        );
+    }
+
+    #[test]
+    fn action_payload_retention_counts_unique_path_and_dash_allocations_once() {
+        fn append_path(machine: &mut GraphicsVm, source: ContentOperatorSource) -> u64 {
+            let start = ScenePoint::new(SceneScalar::ZERO, SceneScalar::ZERO);
+            let end = ScenePoint::new(SceneScalar::ONE, SceneScalar::ONE);
+            machine
+                .path
+                .segments
+                .try_reserve_exact(2)
+                .expect("path reserve");
+            machine
+                .path
+                .segments
+                .try_push(PathSegment::MoveTo(start))
+                .expect("path move");
+            machine
+                .path
+                .segments
+                .try_push(PathSegment::LineTo(end))
+                .expect("path line");
+            machine.path.current_point = Some(end);
+            machine.path.subpath_start = Some(start);
+            machine.path.retained_bytes(source).expect("path bytes")
+        }
+
+        let source =
+            ContentOperatorSource::new(DecodedSpan::new(ObjectRef::new(4, 0).unwrap(), 0, 0, 1), 0);
+        let vm_limits = ContentVmLimits::default();
+        let retention = VmRetention::new(0, 0, vm_limits);
+        let mut accounting = Accounting::default();
+        let mut actions = Vec::new();
+        let mut machine = GraphicsVm::new();
+
+        let first_dash = DashPattern::new(
+            vec![SceneScalar::ONE, SceneScalar::from_scaled(2_000_000_000)],
+            SceneScalar::ZERO,
+        )
+        .expect("first dash");
+        let first_dash_bytes = first_dash.retained_bytes().expect("first dash bytes");
+        machine
+            .set_dash(first_dash, source)
+            .expect("set first dash");
+        let first_path_bytes = append_path(&mut machine, source);
+        machine.path.pending_clip = Some(PendingClip {
+            rule: FillRule::Nonzero,
+            source,
+        });
+        assert!(
+            machine
+                .paint(
+                    PaintOperation::FillStroke(FillRule::Nonzero),
+                    false,
+                    ContentGraphicsLimits::default(),
+                    retention,
+                    0,
+                    0,
+                    &mut actions,
+                    source,
+                    &mut accounting,
+                )
+                .is_ok(),
+            "fill-stroke and clip plan"
+        );
+        assert_eq!(actions.len(), 2);
+        assert_eq!(
+            machine.action_payload_retained_bytes(),
+            Some(first_path_bytes + first_dash_bytes)
+        );
+
+        let second_path_bytes = append_path(&mut machine, source);
+        assert!(
+            machine
+                .paint(
+                    PaintOperation::Stroke,
+                    false,
+                    ContentGraphicsLimits::default(),
+                    retention,
+                    0,
+                    0,
+                    &mut actions,
+                    source,
+                    &mut accounting,
+                )
+                .is_ok(),
+            "shared-dash stroke plan"
+        );
+        assert_eq!(
+            machine.action_payload_retained_bytes(),
+            Some(first_path_bytes + second_path_bytes + first_dash_bytes)
+        );
+
+        let second_dash = DashPattern::new(
+            vec![
+                SceneScalar::from_scaled(3_000_000_000),
+                SceneScalar::from_scaled(4_000_000_000),
+                SceneScalar::from_scaled(5_000_000_000),
+            ],
+            SceneScalar::ZERO,
+        )
+        .expect("second dash");
+        let second_dash_bytes = second_dash.retained_bytes().expect("second dash bytes");
+        machine
+            .set_dash(second_dash, source)
+            .expect("set second dash");
+        let third_path_bytes = append_path(&mut machine, source);
+        assert!(
+            machine
+                .paint(
+                    PaintOperation::Stroke,
+                    false,
+                    ContentGraphicsLimits::default(),
+                    retention,
+                    0,
+                    0,
+                    &mut actions,
+                    source,
+                    &mut accounting,
+                )
+                .is_ok(),
+            "distinct-dash stroke plan"
+        );
+        assert_eq!(
+            machine.action_payload_retained_bytes(),
+            Some(
+                first_path_bytes
+                    + second_path_bytes
+                    + third_path_bytes
+                    + first_dash_bytes
+                    + second_dash_bytes
+            )
+        );
+        assert_eq!(
+            machine.dash_retained_bytes,
+            first_dash_bytes + second_dash_bytes
         );
     }
 }

@@ -607,6 +607,30 @@ fn m3_graphics_operator_table_is_exact_and_scanner_classifies_every_token() {
     assert_eq!(program.stats().unknown_operators(), 0);
 }
 
+#[test]
+fn image_xobject_operator_is_registered_with_exact_shape_and_context() {
+    let program = scan(&[b"/Im0 Do"]).expect("registered Image XObject operator scans");
+    let [operator] = program.operators() else {
+        panic!("one Image XObject operator expected");
+    };
+    assert_eq!(
+        operator.operator().known(),
+        Some(OperatorKind::PaintXObject)
+    );
+    assert_eq!(operator.operator().token(), b"Do");
+    assert_eq!(operator.operands().len(), 1);
+
+    let spec = OperatorKind::PaintXObject.spec();
+    assert_eq!(spec.token(), b"Do");
+    assert_eq!(spec.min_operands(), 1);
+    assert_eq!(spec.max_operands(), 1);
+    assert_eq!(spec.operand_shape(), OperatorOperandShape::Name);
+    assert_eq!(spec.context(), OperatorContext::XObject);
+    assert_eq!(spec.failure_policy(), OperatorFailurePolicy::Execute);
+    assert_eq!(spec.base_fuel(), 3);
+    assert_eq!(program.stats().unknown_operators(), 0);
+}
+
 fn budget_fixture() -> Vec<DecodedContentStream<'static>> {
     streams(&[b"[[1] 2] 3 VeryLongUnknown", b"4 5 6 q"])
 }

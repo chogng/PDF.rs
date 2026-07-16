@@ -863,12 +863,10 @@ fn every_vm_budget_accepts_exact_measured_work_and_rejects_one_less() {
             PagePropertyLookupLimits::default(),
             SceneLimits::default(),
         );
+        let exact_outcome = exact_job.poll(&exact_store, &DocumentNeverCancelled);
         assert!(
-            matches!(
-                exact_job.poll(&exact_store, &DocumentNeverCancelled),
-                ContentVmPoll::Ready(_)
-            ),
-            "exact {kind:?}"
+            matches!(exact_outcome, ContentVmPoll::Ready(_)),
+            "exact {kind:?}: {exact_outcome:?}"
         );
 
         let tight_input = acquire(

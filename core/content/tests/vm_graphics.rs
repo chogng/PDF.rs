@@ -7,23 +7,25 @@ use pdf_rs_bytes::{
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentGraphicsLimitConfig, ContentGraphicsLimitKind, ContentGraphicsLimits, ContentLimits,
-    ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure,
+    ContentGraphicsLimitConfig, ContentGraphicsLimitKind, ContentGraphicsLimits,
+    ContentImageLimitConfig, ContentImageLimitKind, ContentImageLimits, ContentImageProfile,
+    ContentLimits, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure,
     ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
-    NeverCancelled as DocumentNeverCancelled, PageContentJobContext, PageContentLimits,
-    PageContentPoll, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
-    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
-    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
-    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelled as DocumentNeverCancelled,
+    PageContentJobContext, PageContentLimits, PageContentPoll, PageIndexBuildPoll, PageIndexLimits,
+    PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
+    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig,
+    PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
     BlendMode, DashPatternBuilder, DeviceColor, FillRule, GraphicsCommand, GraphicsResource,
-    GraphicsSceneLimitConfig, GraphicsSceneLimits, LineCap, LineJoin, Matrix, PathSegment,
-    SceneScalar, SceneUnit, SceneVersion,
+    GraphicsSceneLimitConfig, GraphicsSceneLimits, ImageColorSpace, LineCap, LineJoin, Matrix,
+    PathResourceBuilder, PathSegment, SceneScalar, SceneUnit, SceneVersion,
 };
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{
@@ -43,6 +45,7 @@ struct Fixture {
 
 struct VmInput {
     acquired: AcquiredPageContent,
+    authority: SharedAttestedRevisionIndex,
     store: RangeStore,
 }
 
@@ -58,6 +61,15 @@ fn snapshot(len: u64, salt: u8) -> SourceSnapshot {
 }
 
 fn fixture(content: &[u8], resources: &[u8], salt: u8) -> Fixture {
+    fixture_with_objects(content, resources, &[], salt)
+}
+
+fn fixture_with_objects(
+    content: &[u8],
+    resources: &[u8],
+    extra_objects: &[(u32, Vec<u8>)],
+    salt: u8,
+) -> Fixture {
     let mut page =
         b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources ".to_vec();
     page.extend_from_slice(resources);
@@ -66,13 +78,19 @@ fn fixture(content: &[u8], resources: &[u8], salt: u8) -> Fixture {
     stream.extend_from_slice(content);
     stream.extend_from_slice(b"\nendstream\nendobj\n");
 
-    let bodies = [
+    let mut bodies = vec![
         (1_u32, CATALOG.to_vec()),
         (2, PAGE_ROOT.to_vec()),
         (3, page),
         (4, stream),
     ];
-    let size = 8_u32;
+    bodies.extend(extra_objects.iter().cloned());
+    let size = bodies
+        .iter()
+        .map(|(number, _)| number.saturating_add(1))
+        .max()
+        .unwrap_or(1)
+        .max(8);
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (number, body) in bodies {
@@ -166,6 +184,24 @@ fn acquire(content: &[u8], salt: u8) -> VmInput {
 
 fn acquire_with_resources(content: &[u8], resources: &[u8], salt: u8) -> VmInput {
     let fixture = fixture(content, resources, salt);
+    acquire_fixture(fixture)
+}
+
+fn acquire_with_objects(
+    content: &[u8],
+    resources: &[u8],
+    extra_objects: &[(u32, Vec<u8>)],
+    salt: u8,
+) -> VmInput {
+    acquire_fixture(fixture_with_objects(
+        content,
+        resources,
+        extra_objects,
+        salt,
+    ))
+}
+
+fn acquire_fixture(fixture: Fixture) -> VmInput {
     let store = supplied_store(&fixture);
     let mut xref = OpenXrefJob::new(
         fixture.snapshot,
@@ -206,9 +242,10 @@ fn acquire_with_resources(content: &[u8], resources: &[u8], salt: u8) -> VmInput
     let authority = match attest.poll(&store, &DocumentNeverCancelled) {
         RevisionAttestationPoll::Ready(index) => index,
         outcome => panic!("strict revision must attest: {outcome:?}"),
-    };
+    }
+    .into_shared();
     let mut build = authority
-        .build_page_index(
+        .build_page_index_owned(
             tree_context(30_021),
             tree_limits(),
             PageIndexLimits::new(4, 16 << 10).expect("index limits"),
@@ -219,7 +256,7 @@ fn acquire_with_resources(content: &[u8], resources: &[u8], salt: u8) -> VmInput
         outcome => panic!("strict Page index must build: {outcome:?}"),
     };
     let mut lookup = authority
-        .lookup_page(&cold, 0, tree_context(30_031), tree_limits())
+        .lookup_page_owned(&cold, 0, tree_context(30_031), tree_limits())
         .expect("lookup job");
     let lookup = match lookup.poll(&store, &DocumentNeverCancelled) {
         PageLookupPoll::Ready(lookup) => lookup,
@@ -227,7 +264,7 @@ fn acquire_with_resources(content: &[u8], resources: &[u8], salt: u8) -> VmInput
     };
     let (index, handle) = lookup.into_parts();
     let mut materialize = authority
-        .materialize_page(
+        .materialize_page_owned(
             &index,
             handle,
             materialization_context(30_041),
@@ -239,7 +276,7 @@ fn acquire_with_resources(content: &[u8], resources: &[u8], salt: u8) -> VmInput
         outcome => panic!("strict Page materialization must finish: {outcome:?}"),
     };
     let mut content_job = authority
-        .acquire_page_content(
+        .acquire_page_content_owned(
             &index,
             page,
             content_context(30_051),
@@ -250,7 +287,11 @@ fn acquire_with_resources(content: &[u8], resources: &[u8], salt: u8) -> VmInput
         PageContentPoll::Ready(content) => content,
         outcome => panic!("strict Page content acquisition must finish: {outcome:?}"),
     };
-    VmInput { acquired, store }
+    VmInput {
+        acquired,
+        authority,
+        store,
+    }
 }
 
 fn graphics_job(
@@ -305,6 +346,100 @@ fn graphics_ready(content: &[u8], salt: u8) -> Arc<pdf_rs_content::InterpretedPa
     }
 }
 
+fn image_object(number: u32, dictionary_entries: &[u8], decoded: &[u8]) -> Vec<u8> {
+    let mut object = format!(
+        "{number} 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 1 \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} ",
+        decoded.len()
+    )
+    .into_bytes();
+    object.extend_from_slice(dictionary_entries);
+    object.extend_from_slice(b" >>\nstream\n");
+    object.extend_from_slice(decoded);
+    object.extend_from_slice(b"\nendstream\nendobj\n");
+    object
+}
+
+fn image_job(
+    content: &[u8],
+    resources: &[u8],
+    extra_objects: &[(u32, Vec<u8>)],
+    salt: u8,
+    image_limits: ContentImageLimits,
+) -> (InterpretPageJob, RangeStore) {
+    image_job_with_vm_limits(
+        content,
+        resources,
+        extra_objects,
+        salt,
+        image_limits,
+        ContentVmLimits::default(),
+    )
+}
+
+fn image_job_with_vm_limits(
+    content: &[u8],
+    resources: &[u8],
+    extra_objects: &[(u32, Vec<u8>)],
+    salt: u8,
+    image_limits: ContentImageLimits,
+    vm_limits: ContentVmLimits,
+) -> (InterpretPageJob, RangeStore) {
+    let input = acquire_with_objects(content, resources, extra_objects, salt);
+    let profile = ContentImageProfile::new(
+        input.authority,
+        PageXObjectLookupLimits::default(),
+        ImageXObjectJobContext::new(
+            JobId::new(31_001),
+            ResumeCheckpoint::new(31_002),
+            ResumeCheckpoint::new(31_003),
+            ResumeCheckpoint::new(31_004),
+            RequestPriority::VisiblePage,
+        ),
+        ImageXObjectLimits::default(),
+        image_limits,
+    );
+    (
+        InterpretPageJob::new_graphics_v2_with_images(
+            input.acquired,
+            ContentLimits::default(),
+            vm_limits,
+            ContentGraphicsLimits::default(),
+            PagePropertyLookupLimits::default(),
+            profile,
+            GraphicsSceneLimits::default(),
+        ),
+        input.store,
+    )
+}
+
+fn default_image_job(content: &[u8], salt: u8) -> (InterpretPageJob, RangeStore) {
+    image_job(
+        content,
+        b"<< /XObject << /Im0 5 0 R /Alias 5 0 R >> >>",
+        &[(5, image_object(5, b"", &[10, 20, 30, 40, 50, 60]))],
+        salt,
+        ContentImageLimits::default(),
+    )
+}
+
+fn three_unique_image_job(
+    salt: u8,
+    image_limits: ContentImageLimits,
+) -> (InterpretPageJob, RangeStore) {
+    image_job(
+        b"/First Do /Second Do /Third Do",
+        b"<< /XObject << /First 5 0 R /Second 6 0 R /Third 7 0 R >> >>",
+        &[
+            (5, image_object(5, b"", &[1, 2, 3, 4, 5, 6])),
+            (6, image_object(6, b"", &[7, 8, 9, 10, 11, 12])),
+            (7, image_object(7, b"", &[13, 14, 15, 16, 17, 18])),
+        ],
+        salt,
+        image_limits,
+    )
+}
+
 fn graphics_failure(content: &[u8], salt: u8, limits: ContentGraphicsLimits) -> ContentVmError {
     let (mut job, store) = graphics_job(content, salt, limits);
     match job.poll(&store, &DocumentNeverCancelled) {
@@ -335,6 +470,12 @@ fn dash_capacity(entries: usize) -> u64 {
     builder.retained_bytes().expect("test dash bytes")
 }
 
+fn path_capacity(slots: usize) -> u64 {
+    let mut builder = PathResourceBuilder::new();
+    builder.try_reserve_exact(slots).expect("test path reserve");
+    builder.retained_bytes().expect("test path bytes")
+}
+
 fn dash_content(entries: usize, malformed_tail: bool) -> Vec<u8> {
     let mut content = b"[".to_vec();
     for index in 0..entries {
@@ -356,6 +497,33 @@ struct GuardedSnapshotSource {
     snapshot_calls: AtomicUsize,
 }
 
+struct CountingStoreSource<'source> {
+    complete: &'source RangeStore,
+    snapshot_calls: AtomicUsize,
+}
+
+impl ByteSource for CountingStoreSource<'_> {
+    fn snapshot(&self) -> SourceSnapshot {
+        self.snapshot_calls.fetch_add(1, Ordering::AcqRel);
+        self.complete.snapshot()
+    }
+
+    fn poll(&self, request: ReadRequest) -> ReadPoll<ByteSlice> {
+        self.complete.poll(request)
+    }
+}
+
+struct CancelAtSnapshotCall<'source> {
+    source: &'source CountingStoreSource<'source>,
+    trigger: usize,
+}
+
+impl DocumentCancellation for CancelAtSnapshotCall<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.source.snapshot_calls.load(Ordering::Acquire) >= self.trigger
+    }
+}
+
 impl ByteSource for GuardedSnapshotSource {
     fn snapshot(&self) -> SourceSnapshot {
         self.snapshot_calls.fetch_add(1, Ordering::AcqRel);
@@ -368,6 +536,71 @@ impl ByteSource for GuardedSnapshotSource {
 
     fn poll(&self, _request: ReadRequest) -> ReadPoll<ByteSlice> {
         panic!("sealed graphics VM must not reacquire content bytes")
+    }
+}
+
+struct BlockPayloadAfter<'source> {
+    complete: &'source RangeStore,
+    missing: &'source RangeStore,
+    checkpoint: ResumeCheckpoint,
+    admitted_payload_polls: usize,
+    payload_polls: AtomicUsize,
+}
+
+impl ByteSource for BlockPayloadAfter<'_> {
+    fn snapshot(&self) -> SourceSnapshot {
+        self.complete.snapshot()
+    }
+
+    fn poll(&self, request: ReadRequest) -> ReadPoll<ByteSlice> {
+        if request.checkpoint() == self.checkpoint {
+            let poll = self.payload_polls.fetch_add(1, Ordering::AcqRel);
+            if poll >= self.admitted_payload_polls {
+                return self.missing.poll(request);
+            }
+        }
+        self.complete.poll(request)
+    }
+}
+
+struct StagedPayloadSource<'source> {
+    complete: &'source RangeStore,
+    missing: &'source RangeStore,
+    checkpoint: ResumeCheckpoint,
+    admitted_payload_polls: AtomicUsize,
+}
+
+impl StagedPayloadSource<'_> {
+    fn admit_one(&self) {
+        self.admitted_payload_polls.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl ByteSource for StagedPayloadSource<'_> {
+    fn snapshot(&self) -> SourceSnapshot {
+        self.complete.snapshot()
+    }
+
+    fn poll(&self, request: ReadRequest) -> ReadPoll<ByteSlice> {
+        if request.checkpoint() == self.checkpoint
+            && self
+                .admitted_payload_polls
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_err()
+        {
+            return self.missing.poll(request);
+        }
+        self.complete.poll(request)
+    }
+}
+
+struct AlwaysCancelled;
+
+impl DocumentCancellation for AlwaysCancelled {
+    fn is_cancelled(&self) -> bool {
+        true
     }
 }
 
@@ -457,6 +690,620 @@ fn legacy_profile_validates_registered_graphics_operands_then_rejects_v2() {
         }
         outcome => panic!("valid graphics operator must require explicit v2: {outcome:?}"),
     }
+}
+
+#[test]
+fn image_xobjects_publish_ctm_sampling_paint_provenance_and_exact_cache_identity() {
+    let (mut job, store) = default_image_job(b"q 2 0 0 3 4 5 cm /Im0 Do /Alias Do Q", 0x61);
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("basic Image XObjects must publish: {outcome:?}"),
+    };
+
+    let graphics = page.scene().graphics().expect("graphics-v2 Scene");
+    assert_eq!(graphics.commands().len(), 4);
+    assert_eq!(graphics.resources().len(), 1);
+    for (index, operator_index) in [(1, 2), (2, 3)] {
+        let GraphicsCommand::DrawImage {
+            image,
+            transform,
+            alpha,
+            blend_mode,
+        } = graphics.commands()[index].command()
+        else {
+            panic!("command {index} must draw the cached image");
+        };
+        assert_eq!(
+            *transform,
+            Matrix::new([
+                SceneScalar::from_scaled(2_000_000_000),
+                SceneScalar::ZERO,
+                SceneScalar::ZERO,
+                SceneScalar::from_scaled(3_000_000_000),
+                SceneScalar::from_scaled(4_000_000_000),
+                SceneScalar::from_scaled(5_000_000_000),
+            ])
+        );
+        assert_eq!(*alpha, SceneUnit::ONE);
+        assert_eq!(*blend_mode, BlendMode::Normal);
+        assert_eq!(
+            graphics.commands()[index].source().operator_index(),
+            operator_index
+        );
+        assert_eq!(image.value(), 0);
+    }
+
+    let GraphicsResource::Image(image) = graphics.resources()[0].resource() else {
+        panic!("the exact resource must be one image");
+    };
+    assert_eq!(image.width(), 2);
+    assert_eq!(image.height(), 1);
+    assert_eq!(image.color_space(), ImageColorSpace::DeviceRgb);
+    assert_eq!(image.bits_per_component(), 8);
+    assert!(!image.interpolate());
+    assert_eq!(image.decoded(), [10, 20, 30, 40, 50, 60]);
+    assert_eq!(image.source().object().number(), 5);
+    assert_ne!(image.source().decode_context(), 0);
+
+    assert_eq!(page.image_uses().len(), 2);
+    assert_eq!(page.image_uses()[0].xobject().target().number(), 5);
+    assert_eq!(page.image_uses()[1].xobject().target().number(), 5);
+    assert_ne!(
+        page.image_uses()[0].xobject().entry_key_offset(),
+        page.image_uses()[1].xobject().entry_key_offset()
+    );
+    assert_eq!(
+        page.image_uses()[0].resource_source(),
+        page.image_uses()[1].resource_source()
+    );
+    assert_eq!(page.vm_stats().image_uses(), 2);
+    assert_eq!(page.xobject_stats().lookups(), 2);
+    assert_eq!(page.image_stats().image_uses(), 2);
+    assert_eq!(page.image_stats().lookups(), 2);
+    assert_eq!(page.image_stats().cache_hits(), 1);
+    assert_eq!(page.image_stats().acquisitions(), 1);
+    assert_eq!(page.image_stats().unique_images(), 1);
+    assert!(page.image_stats().object_read_bytes() > 0);
+    assert!(page.image_stats().object_parse_bytes() > 0);
+    assert!(page.image_stats().metadata_entries() > 0);
+    assert_eq!(page.image_stats().encoded_bytes(), 6);
+    assert_eq!(page.image_stats().decoded_bytes(), 6);
+    assert!(page.image_stats().cache_retained_bytes() > 0);
+}
+
+#[test]
+fn image_profile_context_and_lower_capability_outcomes_are_structured_and_atomic() {
+    let input = acquire_with_resources(b"/Im0 Do", b"<< /XObject << /Im0 5 0 R >> >>", 0x62);
+    let mut without_profile = InterpretPageJob::new_graphics_v2(
+        input.acquired,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match without_profile.poll(&input.store, &DocumentNeverCancelled) {
+        ContentVmPoll::Unsupported(value) => {
+            assert_eq!(value.kind(), ContentUnsupportedKind::ImageProfileRequired);
+            assert!(value.image_xobject().is_none());
+        }
+        outcome => panic!("Do without proof authority must be unsupported: {outcome:?}"),
+    }
+
+    let (mut text_job, text_store) = default_image_job(b"BT /Im0 Do ET", 0x63);
+    match text_job.poll(&text_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            assert_eq!(error.code(), ContentVmErrorCode::InvalidOperatorContext);
+            assert_eq!(text_job.image_stats().lookups(), 0);
+            assert_eq!(text_job.image_stats().acquisition_polls(), 0);
+        }
+        outcome => panic!("Do inside a text object must fail before lookup: {outcome:?}"),
+    }
+
+    let resources = b"<< /XObject << /Good 5 0 R /Masked 6 0 R >> >>";
+    let objects = [
+        (5, image_object(5, b"", &[1, 2, 3, 4, 5, 6])),
+        (
+            6,
+            image_object(6, b"/ImageMask true", &[7, 8, 9, 10, 11, 12]),
+        ),
+    ];
+    let (mut unsupported, store) = image_job(
+        b"/Good Do /Masked Do",
+        resources,
+        &objects,
+        0x64,
+        ContentImageLimits::default(),
+    );
+    let first = unsupported.poll(&store, &DocumentNeverCancelled);
+    let lower = match first {
+        ContentVmPoll::Unsupported(value) => {
+            assert_eq!(value.kind(), ContentUnsupportedKind::ImageXObject);
+            assert_eq!(value.source().page_operator_ordinal(), 1);
+            value.image_xobject().expect("lower image reason")
+        }
+        outcome => panic!("masked image must suppress the complete Scene: {outcome:?}"),
+    };
+    assert_eq!(
+        lower.kind(),
+        pdf_rs_document::ImageXObjectUnsupportedKind::ImageMask
+    );
+    match unsupported.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Unsupported(value) => {
+            assert_eq!(value.image_xobject().expect("replayed lower reason"), lower)
+        }
+        outcome => panic!("terminal unsupported outcome must replay: {outcome:?}"),
+    }
+}
+
+#[test]
+fn semantic_plan_failures_precede_every_image_lookup_and_acquisition() {
+    let (mut underflow, store) = image_job(
+        b"Q /Masked Do",
+        b"<< /XObject << /Masked 6 0 R >> >>",
+        &[(
+            6,
+            image_object(6, b"/ImageMask true", &[7, 8, 9, 10, 11, 12]),
+        )],
+        0x76,
+        ContentImageLimits::default(),
+    );
+    match underflow.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            assert_eq!(error.code(), ContentVmErrorCode::InvalidGraphicsState);
+            assert_eq!(error.source().expect("Q source").page_operator_ordinal(), 0);
+        }
+        outcome => panic!("Q underflow must precede the masked image: {outcome:?}"),
+    }
+    assert_eq!(underflow.image_stats().planning_operators(), 1);
+    assert_eq!(underflow.image_stats().lookups(), 0);
+    assert_eq!(underflow.image_stats().acquisition_polls(), 0);
+
+    let (mut operator_limited, store) = image_job_with_vm_limits(
+        b"q BT",
+        b"<< >>",
+        &[],
+        0x77,
+        ContentImageLimits::default(),
+        vm_limits(|config| config.max_operators = 1),
+    );
+    match operator_limited.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.limit().expect("operator limit context");
+            assert_eq!(limit.kind(), ContentVmLimitKind::Operators);
+            assert_eq!(
+                error.source().expect("BT source").page_operator_ordinal(),
+                1
+            );
+        }
+        outcome => panic!("BT operator admission must precede terminal imbalance: {outcome:?}"),
+    }
+    assert_eq!(operator_limited.image_stats().planning_operators(), 2);
+    assert_eq!(operator_limited.image_stats().lookups(), 0);
+    assert_eq!(operator_limited.image_stats().acquisition_polls(), 0);
+}
+
+#[test]
+fn long_non_image_semantic_planning_is_single_pass_and_cancellable() {
+    let mut content = Vec::new();
+    for _ in 0..300 {
+        content.extend_from_slice(b"q Q ");
+    }
+    let (mut job, store) = image_job(&content, b"<< >>", &[], 0x78, ContentImageLimits::default());
+    let source = CountingStoreSource {
+        complete: &store,
+        snapshot_calls: AtomicUsize::new(0),
+    };
+    let cancellation = CancelAtSnapshotCall {
+        source: &source,
+        trigger: 20,
+    };
+    match job.poll(&source, &cancellation) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            assert_eq!(error.code(), ContentVmErrorCode::Cancelled);
+        }
+        outcome => panic!("long semantic planning must observe cancellation: {outcome:?}"),
+    }
+    assert_eq!(job.image_stats().scan_passes(), 1);
+    assert!(job.image_stats().planning_operators() > 0);
+    assert!(job.image_stats().planning_operators() < 600);
+    assert_eq!(job.image_stats().lookups(), 0);
+    assert_eq!(job.image_stats().acquisition_polls(), 0);
+    assert_eq!(job.image_stats().execution_passes(), 0);
+}
+
+#[test]
+fn aggregate_image_use_and_decoded_byte_limits_reject_exactly_before_publication() {
+    let use_limits = ContentImageLimits::validate(ContentImageLimitConfig {
+        max_image_uses: 1,
+        ..ContentImageLimitConfig::default()
+    })
+    .expect("one-use limit");
+    let (mut use_job, store) = image_job(
+        b"/Im0 Do /Alias Do",
+        b"<< /XObject << /Im0 5 0 R /Alias 5 0 R >> >>",
+        &[(5, image_object(5, b"", &[1, 2, 3, 4, 5, 6]))],
+        0x65,
+        use_limits,
+    );
+    match use_job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.image_limit().expect("image-use context");
+            assert_eq!(limit.kind(), ContentImageLimitKind::ImageUses);
+            assert_eq!(limit.limit(), 1);
+            assert_eq!(limit.consumed(), 1);
+            assert_eq!(limit.attempted(), 1);
+        }
+        outcome => panic!("second image use must suppress publication: {outcome:?}"),
+    }
+
+    let decoded_limits = ContentImageLimits::validate(ContentImageLimitConfig {
+        max_decoded_bytes: 5,
+        ..ContentImageLimitConfig::default()
+    })
+    .expect("five-byte aggregate limit");
+    let (mut decoded_job, store) = image_job(
+        b"/Im0 Do",
+        b"<< /XObject << /Im0 5 0 R >> >>",
+        &[(5, image_object(5, b"", &[1, 2, 3, 4, 5, 6]))],
+        0x66,
+        decoded_limits,
+    );
+    match decoded_job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.image_limit().expect("decoded-byte context");
+            assert_eq!(limit.kind(), ContentImageLimitKind::DecodedBytes);
+            assert_eq!(limit.limit(), 5);
+            assert_eq!(limit.consumed(), 0);
+            assert_eq!(limit.attempted(), 6);
+        }
+        outcome => panic!("decoded aggregate one-less must suppress Scene: {outcome:?}"),
+    }
+}
+
+#[test]
+fn every_aggregate_image_budget_accepts_exact_and_rejects_one_less() {
+    let (mut measured_job, measured_store) =
+        three_unique_image_job(0x6b, ContentImageLimits::default());
+    let measured = match measured_job.poll(&measured_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.image_stats(),
+        outcome => panic!("measurement fixture must publish: {outcome:?}"),
+    };
+    assert_eq!(measured.image_uses(), 3);
+    assert_eq!(measured.unique_images(), 3);
+    assert_eq!(measured.decoded_bytes(), 18);
+    assert_eq!(measured.planning_operators(), 3);
+    assert_eq!(measured.cache_probes(), 3);
+    assert_eq!(measured.acquisition_polls(), 3);
+    assert!(measured.plan_retained_bytes() > 1);
+    assert!(measured.cache_retained_bytes() > 1);
+
+    let exact = ContentImageLimits::validate(ContentImageLimitConfig {
+        max_image_uses: measured.image_uses(),
+        max_unique_images: measured.unique_images(),
+        max_decoded_bytes: measured.decoded_bytes(),
+        max_planning_operators: measured.planning_operators(),
+        max_cache_probes: measured.cache_probes(),
+        max_plan_retained_bytes: measured.plan_retained_bytes(),
+        max_cache_retained_bytes: measured.cache_retained_bytes(),
+        max_acquisition_polls: measured.acquisition_polls(),
+    })
+    .expect("measured exact image limits validate");
+    let (mut exact_job, exact_store) = three_unique_image_job(0x6c, exact);
+    match exact_job.poll(&exact_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => assert_eq!(page.image_stats(), measured),
+        outcome => panic!("every exact aggregate image budget must publish: {outcome:?}"),
+    }
+
+    macro_rules! rejects_one_less {
+        ($salt:expr, $field:ident, $measured:expr, $kind:expr) => {{
+            let limits = ContentImageLimits::validate(ContentImageLimitConfig {
+                $field: $measured - 1,
+                ..ContentImageLimitConfig::default()
+            })
+            .expect("positive one-less image limit validates");
+            let (mut job, store) = three_unique_image_job($salt, limits);
+            match job.poll(&store, &DocumentNeverCancelled) {
+                ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                    let limit = error.image_limit().expect("aggregate image limit context");
+                    assert_eq!(limit.kind(), $kind);
+                    assert_eq!(limit.limit(), $measured - 1);
+                }
+                outcome => panic!("one-less aggregate image budget must fail: {outcome:?}"),
+            }
+            job
+        }};
+    }
+
+    let image_use_job = rejects_one_less!(
+        0x6d,
+        max_image_uses,
+        measured.image_uses(),
+        ContentImageLimitKind::ImageUses
+    );
+    assert_eq!(image_use_job.image_stats().lookups(), 0);
+    assert_eq!(image_use_job.image_stats().acquisition_polls(), 0);
+
+    let unique_job = rejects_one_less!(
+        0x6e,
+        max_unique_images,
+        measured.unique_images(),
+        ContentImageLimitKind::UniqueImages
+    );
+    assert_eq!(unique_job.image_stats().acquisitions(), 0);
+
+    let decoded_job = rejects_one_less!(
+        0x6f,
+        max_decoded_bytes,
+        measured.decoded_bytes(),
+        ContentImageLimitKind::DecodedBytes
+    );
+    assert_eq!(decoded_job.image_stats().acquisitions(), 2);
+
+    let planning_job = rejects_one_less!(
+        0x70,
+        max_planning_operators,
+        measured.planning_operators(),
+        ContentImageLimitKind::PlanningOperators
+    );
+    assert_eq!(planning_job.image_stats().lookups(), 0);
+
+    let cache_probe_job = rejects_one_less!(
+        0x71,
+        max_cache_probes,
+        measured.cache_probes(),
+        ContentImageLimitKind::CacheProbes
+    );
+    assert_eq!(cache_probe_job.image_stats().cache_probes(), 2);
+    assert_eq!(cache_probe_job.image_stats().acquisitions(), 0);
+    assert_eq!(cache_probe_job.image_stats().execution_passes(), 0);
+
+    let plan_job = rejects_one_less!(
+        0x72,
+        max_plan_retained_bytes,
+        measured.plan_retained_bytes(),
+        ContentImageLimitKind::PlanRetainedBytes
+    );
+    assert_eq!(plan_job.image_stats().lookups(), 0);
+
+    let cache_job = rejects_one_less!(
+        0x73,
+        max_cache_retained_bytes,
+        measured.cache_retained_bytes(),
+        ContentImageLimitKind::CacheRetainedBytes
+    );
+    assert_eq!(cache_job.image_stats().acquisitions(), 0);
+
+    let polls_job = rejects_one_less!(
+        0x74,
+        max_acquisition_polls,
+        measured.acquisition_polls(),
+        ContentImageLimitKind::AcquisitionPolls
+    );
+    assert_eq!(polls_job.image_stats().acquisitions(), 2);
+    assert_eq!(polls_job.image_stats().execution_passes(), 0);
+}
+
+#[test]
+fn cache_comparisons_are_probe_bounded_and_cooperatively_cancellable() {
+    let mut observed = None;
+    for trigger in 1..128 {
+        let (mut job, store) = three_unique_image_job(0x75, ContentImageLimits::default());
+        let source = CountingStoreSource {
+            complete: &store,
+            snapshot_calls: AtomicUsize::new(0),
+        };
+        let cancellation = CancelAtSnapshotCall {
+            source: &source,
+            trigger,
+        };
+        let outcome = job.poll(&source, &cancellation);
+        if matches!(
+            outcome,
+            ContentVmPoll::Failed(ContentVmFailure::Vm(error))
+                if error.code() == ContentVmErrorCode::Cancelled
+        ) && job.image_stats().cache_probes() > 0
+            && job.image_stats().cache_probes() < 3
+            && job.image_stats().acquisition_polls() == 0
+        {
+            observed = Some(job.image_stats());
+            break;
+        }
+    }
+    let stats = observed.expect("one deterministic guard boundary lies inside cache comparison");
+    assert_eq!(stats.scan_passes(), 1);
+    assert_eq!(stats.planning_operators(), 3);
+    assert_eq!(stats.execution_passes(), 0);
+}
+
+#[test]
+fn image_payload_pending_resumes_without_partial_publication() {
+    let objects = [
+        (5, image_object(5, b"", &[1, 2, 3, 4, 5, 6])),
+        (6, image_object(6, b"", &[7, 8, 9, 10, 11, 12])),
+    ];
+    let resources = b"<< /XObject << /First 5 0 R /Second 6 0 R >> >>";
+    let (mut job, store) = image_job(
+        b"/First Do /Second Do",
+        resources,
+        &objects,
+        0x67,
+        ContentImageLimits::default(),
+    );
+    let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+    let source = BlockPayloadAfter {
+        complete: &store,
+        missing: &missing,
+        checkpoint: ResumeCheckpoint::new(31_004),
+        admitted_payload_polls: 1,
+        payload_polls: AtomicUsize::new(0),
+    };
+    match job.poll(&source, &DocumentNeverCancelled) {
+        ContentVmPoll::Pending { checkpoint, .. } => {
+            assert_eq!(checkpoint, ResumeCheckpoint::new(31_004));
+        }
+        outcome => panic!("second image payload must suspend: {outcome:?}"),
+    }
+    assert_eq!(job.image_stats().image_uses(), 0);
+    assert_eq!(job.image_stats().acquisitions(), 1);
+    assert_eq!(job.image_stats().acquisition_polls(), 2);
+    assert!(job.image_stats().cache_retained_bytes() > 0);
+    assert_eq!(
+        job.image_stats().cache_retained_bytes(),
+        job.image_stats().peak_cache_retained_bytes()
+    );
+    assert_eq!(job.image_stats().scan_passes(), 1);
+    assert_eq!(job.image_stats().planning_operators(), 2);
+    assert_eq!(job.image_stats().lookups(), 2);
+    assert_eq!(job.image_stats().cache_probes(), 1);
+    assert_eq!(job.image_stats().execution_passes(), 0);
+    assert_eq!(job.xobject_stats().lookups(), 2);
+
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("supplied second payload must resume atomically: {outcome:?}"),
+    };
+    assert_eq!(page.image_uses().len(), 2);
+    assert_eq!(page.image_stats().image_uses(), 2);
+    assert_eq!(page.image_stats().acquisitions(), 2);
+    assert_eq!(page.image_stats().cache_hits(), 0);
+    assert_eq!(page.image_stats().acquisition_polls(), 3);
+    assert_eq!(page.image_stats().scan_passes(), 1);
+    assert_eq!(page.image_stats().planning_operators(), 2);
+    assert_eq!(page.image_stats().lookups(), 2);
+    assert_eq!(page.image_stats().cache_probes(), 1);
+    assert_eq!(page.image_stats().execution_passes(), 1);
+    assert_eq!(page.xobject_stats().lookups(), 2);
+}
+
+#[test]
+fn multiple_images_resume_from_the_exact_acquisition_cursor_without_replanning() {
+    let objects = [
+        (5, image_object(5, b"", &[1, 2, 3, 4, 5, 6])),
+        (6, image_object(6, b"", &[7, 8, 9, 10, 11, 12])),
+    ];
+    let (mut job, store) = image_job(
+        b"/First Do /Second Do",
+        b"<< /XObject << /First 5 0 R /Second 6 0 R >> >>",
+        &objects,
+        0x6a,
+        ContentImageLimits::default(),
+    );
+    let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+    let source = StagedPayloadSource {
+        complete: &store,
+        missing: &missing,
+        checkpoint: ResumeCheckpoint::new(31_004),
+        admitted_payload_polls: AtomicUsize::new(0),
+    };
+
+    assert!(matches!(
+        job.poll(&source, &DocumentNeverCancelled),
+        ContentVmPoll::Pending { .. }
+    ));
+    assert_eq!(job.image_stats().scan_passes(), 1);
+    assert_eq!(job.image_stats().planning_operators(), 2);
+    assert_eq!(job.image_stats().lookups(), 2);
+    assert_eq!(job.image_stats().acquisitions(), 0);
+    assert_eq!(job.image_stats().acquisition_polls(), 1);
+    assert_eq!(job.image_stats().execution_passes(), 0);
+
+    source.admit_one();
+    assert!(matches!(
+        job.poll(&source, &DocumentNeverCancelled),
+        ContentVmPoll::Pending { .. }
+    ));
+    assert_eq!(job.image_stats().scan_passes(), 1);
+    assert_eq!(job.image_stats().planning_operators(), 2);
+    assert_eq!(job.image_stats().lookups(), 2);
+    assert_eq!(job.image_stats().acquisitions(), 1);
+    assert_eq!(job.image_stats().acquisition_polls(), 3);
+    assert_eq!(job.image_stats().execution_passes(), 0);
+
+    source.admit_one();
+    let page = match job.poll(&source, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("second staged payload must finish exactly once: {outcome:?}"),
+    };
+    assert_eq!(page.image_stats().scan_passes(), 1);
+    assert_eq!(page.image_stats().planning_operators(), 2);
+    assert_eq!(page.image_stats().lookups(), 2);
+    assert_eq!(page.image_stats().cache_probes(), 1);
+    assert_eq!(page.image_stats().acquisitions(), 2);
+    assert_eq!(page.image_stats().acquisition_polls(), 4);
+    assert_eq!(page.image_stats().execution_passes(), 1);
+    assert_eq!(page.image_uses().len(), 2);
+    assert_eq!(page.xobject_stats().lookups(), 2);
+}
+
+#[test]
+fn early_runtime_failure_after_image_pending_preserves_unexecuted_stats() {
+    let make_pending = |salt| {
+        image_job(
+            b"/First Do /Second Do",
+            b"<< /XObject << /First 5 0 R /Second 6 0 R >> >>",
+            &[
+                (5, image_object(5, b"", &[1, 2, 3, 4, 5, 6])),
+                (6, image_object(6, b"", &[7, 8, 9, 10, 11, 12])),
+            ],
+            salt,
+            ContentImageLimits::default(),
+        )
+    };
+
+    let (mut changed_job, changed_store) = make_pending(0x68);
+    let changed_missing = RangeStore::new(changed_store.snapshot(), Default::default()).unwrap();
+    let changed_source = BlockPayloadAfter {
+        complete: &changed_store,
+        missing: &changed_missing,
+        checkpoint: ResumeCheckpoint::new(31_004),
+        admitted_payload_polls: 1,
+        payload_polls: AtomicUsize::new(0),
+    };
+    assert!(matches!(
+        changed_job.poll(&changed_source, &DocumentNeverCancelled),
+        ContentVmPoll::Pending { .. }
+    ));
+    assert_eq!(changed_job.image_stats().image_uses(), 0);
+    let replacement = snapshot(
+        changed_store.snapshot().len().expect("fixture length"),
+        0x99,
+    );
+    let changed_guard = GuardedSnapshotSource {
+        original: changed_store.snapshot(),
+        replacement,
+        changed: AtomicBool::new(true),
+        snapshot_calls: AtomicUsize::new(0),
+    };
+    match changed_job.poll(&changed_guard, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            assert_eq!(error.code(), ContentVmErrorCode::SourceSnapshotMismatch);
+        }
+        outcome => panic!("source change after Pending must fail before replay: {outcome:?}"),
+    }
+    assert_eq!(changed_job.image_stats().image_uses(), 0);
+
+    let (mut cancelled_job, cancelled_store) = make_pending(0x69);
+    let cancelled_missing =
+        RangeStore::new(cancelled_store.snapshot(), Default::default()).unwrap();
+    let cancelled_source = BlockPayloadAfter {
+        complete: &cancelled_store,
+        missing: &cancelled_missing,
+        checkpoint: ResumeCheckpoint::new(31_004),
+        admitted_payload_polls: 1,
+        payload_polls: AtomicUsize::new(0),
+    };
+    assert!(matches!(
+        cancelled_job.poll(&cancelled_source, &DocumentNeverCancelled),
+        ContentVmPoll::Pending { .. }
+    ));
+    match cancelled_job.poll(&cancelled_store, &AlwaysCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            assert_eq!(error.code(), ContentVmErrorCode::Cancelled);
+        }
+        outcome => panic!("cancellation after Pending must fail before replay: {outcome:?}"),
+    }
+    assert_eq!(cancelled_job.image_stats().image_uses(), 0);
 }
 
 #[test]
@@ -959,6 +1806,174 @@ fn nested_distinct_dash_payloads_are_aggregate_charged_to_graphics_and_vm_retent
 }
 
 #[test]
+fn completed_path_actions_remain_aggregate_vm_charged_after_handoff() {
+    let content = b"0 0 m 1 0 l S 0 1 m 1 1 l f 0 2 m 1 2 l W n";
+    let (mut baseline, baseline_store) = graphics_job_with_vm_limits(
+        content,
+        0x79,
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+    );
+    assert!(matches!(
+        baseline.poll(&baseline_store, &DocumentNeverCancelled),
+        ContentVmPoll::Ready(_)
+    ));
+    let measured_peak = baseline.vm_stats().peak_retained_bytes();
+    let aggregate_path_bytes = path_capacity(4) * 3;
+    assert!(
+        measured_peak
+            >= baseline
+                .scan_stats()
+                .retained_bytes()
+                .saturating_add(aggregate_path_bytes),
+        "three completed nonempty paths must remain retained together"
+    );
+
+    let (mut exact, exact_store) = graphics_job_with_vm_limits(
+        content,
+        0x7a,
+        vm_limits(|config| config.max_retained_bytes = measured_peak),
+        ContentGraphicsLimits::default(),
+    );
+    let exact_outcome = exact.poll(&exact_store, &DocumentNeverCancelled);
+    assert!(
+        matches!(exact_outcome, ContentVmPoll::Ready(_)),
+        "exact action-path retention must publish: {exact_outcome:?}"
+    );
+
+    let (mut tight, tight_store) = graphics_job_with_vm_limits(
+        content,
+        0x7b,
+        vm_limits(|config| config.max_retained_bytes = measured_peak - 1),
+        ContentGraphicsLimits::default(),
+    );
+    match tight.poll(&tight_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.limit().expect("action-path retained context");
+            assert_eq!(limit.kind(), ContentVmLimitKind::RetainedBytes);
+            assert_eq!(limit.limit(), measured_peak - 1);
+        }
+        outcome => panic!("one-less action-path retention must fail: {outcome:?}"),
+    }
+}
+
+#[test]
+fn image_plan_retention_deduplicates_shared_paths_and_dashes_across_pending() {
+    let pending_plan_retained =
+        |content: &[u8], salt: u8, image_limits: ContentImageLimits| -> u64 {
+            let (mut job, store) = image_job(
+                content,
+                b"<< /XObject << /Im0 5 0 R >> >>",
+                &[(5, image_object(5, b"", &[1, 2, 3, 4, 5, 6]))],
+                salt,
+                image_limits,
+            );
+            let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+            let source = BlockPayloadAfter {
+                complete: &store,
+                missing: &missing,
+                checkpoint: ResumeCheckpoint::new(31_004),
+                admitted_payload_polls: 0,
+                payload_polls: AtomicUsize::new(0),
+            };
+            assert!(matches!(
+                job.poll(&source, &DocumentNeverCancelled),
+                ContentVmPoll::Pending { .. }
+            ));
+            let first = job.image_stats();
+            assert!(first.plan_retained_bytes() > 0);
+            assert_eq!(
+                first.plan_retained_bytes(),
+                first.peak_plan_retained_bytes()
+            );
+            assert_eq!(first.execution_passes(), 0);
+            assert!(matches!(
+                job.poll(&source, &DocumentNeverCancelled),
+                ContentVmPoll::Pending { .. }
+            ));
+            let second = job.image_stats();
+            assert_eq!(second.plan_retained_bytes(), first.plan_retained_bytes());
+            assert_eq!(
+                second.peak_plan_retained_bytes(),
+                first.peak_plan_retained_bytes()
+            );
+            assert_eq!(second.scan_passes(), first.scan_passes());
+            assert_eq!(second.planning_operators(), first.planning_operators());
+            assert_eq!(second.lookups(), first.lookups());
+            assert_eq!(second.execution_passes(), 0);
+            first.plan_retained_bytes()
+        };
+
+    let single = pending_plan_retained(
+        b"[1 2] 0 d 0 0 m 1 0 l S /Im0 Do",
+        0x7c,
+        ContentImageLimits::default(),
+    );
+    let shared_dash = pending_plan_retained(
+        b"[1 2] 0 d 0 0 m 1 0 l S 0 1 m 1 1 l S /Im0 Do",
+        0x7d,
+        ContentImageLimits::default(),
+    );
+    let distinct_dash = pending_plan_retained(
+        b"[1 2] 0 d 0 0 m 1 0 l S [3 4 5] 0 d 0 1 m 1 1 l S /Im0 Do",
+        0x7e,
+        ContentImageLimits::default(),
+    );
+    assert_eq!(shared_dash - single, path_capacity(4));
+    assert_eq!(distinct_dash - shared_dash, dash_capacity(3));
+
+    let fill_stroke = pending_plan_retained(
+        b"[1 2] 0 d 0 0 1 1 re B /Im0 Do",
+        0x7f,
+        ContentImageLimits::default(),
+    );
+    let fill_stroke_clip = pending_plan_retained(
+        b"[1 2] 0 d 0 0 1 1 re W B /Im0 Do",
+        0x80,
+        ContentImageLimits::default(),
+    );
+    assert_eq!(fill_stroke_clip, fill_stroke);
+
+    let exact_limits = ContentImageLimits::validate(ContentImageLimitConfig {
+        max_plan_retained_bytes: distinct_dash,
+        ..ContentImageLimitConfig::default()
+    })
+    .expect("exact image plan limit");
+    assert_eq!(
+        pending_plan_retained(
+            b"[1 2] 0 d 0 0 m 1 0 l S [3 4 5] 0 d 0 1 m 1 1 l S /Im0 Do",
+            0x81,
+            exact_limits,
+        ),
+        distinct_dash
+    );
+
+    let tight_limits = ContentImageLimits::validate(ContentImageLimitConfig {
+        max_plan_retained_bytes: distinct_dash - 1,
+        ..ContentImageLimitConfig::default()
+    })
+    .expect("one-less image plan limit");
+    let (mut tight, tight_store) = image_job(
+        b"[1 2] 0 d 0 0 m 1 0 l S [3 4 5] 0 d 0 1 m 1 1 l S /Im0 Do",
+        b"<< /XObject << /Im0 5 0 R >> >>",
+        &[(5, image_object(5, b"", &[1, 2, 3, 4, 5, 6]))],
+        0x82,
+        tight_limits,
+    );
+    match tight.poll(&tight_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.image_limit().expect("image plan retained context");
+            assert_eq!(limit.kind(), ContentImageLimitKind::PlanRetainedBytes);
+            assert_eq!(limit.limit(), distinct_dash - 1);
+        }
+        outcome => panic!("one-less image plan retention must fail: {outcome:?}"),
+    }
+    assert_eq!(tight.image_stats().lookups(), 0);
+    assert_eq!(tight.image_stats().acquisition_polls(), 0);
+    assert_eq!(tight.xobject_stats().lookups(), 0);
+}
+
+#[test]
 fn vm_retention_aggregates_live_path_dash_property_and_saved_state_exactly() {
     let content = b"[1 2 3] 0 d 0 0 m 1 0 l /Tag /P BDC q Q EMC";
     let (mut baseline, baseline_store) = graphics_job_with_resources_and_vm_limits(
@@ -989,10 +2004,11 @@ fn vm_retention_aggregates_live_path_dash_property_and_saved_state_exactly() {
         vm_limits(|config| config.max_retained_bytes = exact_retained),
         ContentGraphicsLimits::default(),
     );
-    assert!(matches!(
-        exact.poll(&exact_store, &DocumentNeverCancelled),
-        ContentVmPoll::Ready(_)
-    ));
+    let exact_outcome = exact.poll(&exact_store, &DocumentNeverCancelled);
+    assert!(
+        matches!(exact_outcome, ContentVmPoll::Ready(_)),
+        "exact aggregate retention must be ready: {exact_outcome:?}"
+    );
 
     let (mut tight, tight_store) = graphics_job_with_resources_and_vm_limits(
         content,

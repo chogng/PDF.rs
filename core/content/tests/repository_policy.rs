@@ -280,7 +280,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         );
     }
     for required in [
-        "pub use vm::{ContentVmPoll, InterpretPageJob};",
+        "pub use vm::{ContentImageProfile, ContentVmPoll, InterpretPageJob};",
         "ContentUnsupported",
         "ContentVmFailure",
         "InterpretedPage",

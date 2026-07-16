@@ -3,15 +3,17 @@
 //! The scanner accepts a caller-ordered borrowed stream sequence and publishes an immutable owned
 //! operator program. The only public interpretation entry consumes a proof-bearing
 //! [`pdf_rs_document::AcquiredPageContent`], scans its exact decoded streams internally, resolves
-//! bounded inherited marked-content properties, and atomically publishes an immutable Scene-bound
-//! interpreted Page. The crate performs no source acquisition, filter decoding, platform I/O,
-//! async scheduling, cache insertion, rendering, or external-engine fallback.
+//! bounded inherited marked-content properties, plans proof-bound Image XObjects, resumes their
+//! document-owned decoding, and atomically publishes an immutable Scene-bound interpreted Page.
+//! The crate performs no Page-content acquisition, platform I/O, async scheduling, shared-cache
+//! insertion, rendering, or external-engine fallback.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 mod error;
 mod graphics_limits;
+mod image_limits;
 mod limits;
 mod model;
 mod number;
@@ -26,6 +28,7 @@ pub use error::{
     ContentRecoverability,
 };
 pub use graphics_limits::{ContentGraphicsLimitConfig, ContentGraphicsLimits};
+pub use image_limits::{ContentImageLimitConfig, ContentImageLimits};
 pub use limits::{ContentLimitConfig, ContentLimits};
 pub use model::{
     ContentDictionaryEntry, ContentExtent, ContentName, ContentOperand, ContentOperator,
@@ -39,11 +42,15 @@ pub use scanner::{
     ContentCancellation, ContentScanJob, ContentScanPhase, ContentScanPoll, NeverCancelled,
     scan_content_streams,
 };
-pub use vm::{ContentVmPoll, InterpretPageJob};
+pub use vm::{ContentImageProfile, ContentVmPoll, InterpretPageJob};
 pub use vm_error::{
-    ContentGraphicsLimit, ContentGraphicsLimitKind, ContentUnsupported, ContentUnsupportedKind,
-    ContentVmError, ContentVmErrorCategory, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
-    ContentVmLimitKind, ContentVmRecoverability,
+    ContentGraphicsLimit, ContentGraphicsLimitKind, ContentImageLimit, ContentImageLimitKind,
+    ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCategory,
+    ContentVmErrorCode, ContentVmFailure, ContentVmLimit, ContentVmLimitKind,
+    ContentVmRecoverability,
 };
 pub use vm_limits::{ContentVmLimitConfig, ContentVmLimits};
-pub use vm_model::{ContentVmPhase, ContentVmStats, InterpretedPage, ResolvedPropertyUse};
+pub use vm_model::{
+    ContentImageStats, ContentVmPhase, ContentVmStats, InterpretedPage, ResolvedImageUse,
+    ResolvedPropertyUse,
+};

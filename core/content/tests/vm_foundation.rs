@@ -80,6 +80,7 @@ fn default_vm_stats_start_every_dimension_at_zero() {
     assert_eq!(stats.max_compatibility_depth(), 0);
     assert_eq!(stats.max_marked_content_depth(), 0);
     assert_eq!(stats.property_uses(), 0);
+    assert_eq!(stats.image_uses(), 0);
     assert_eq!(stats.retained_bytes(), 0);
 }
 
