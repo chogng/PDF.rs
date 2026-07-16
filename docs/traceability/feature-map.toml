@@ -99,6 +99,18 @@ benchmarks = []
 introduced_in = "0.1.0"
 
 [[feature]]
+id = "core.scene-graphics-v2"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m3.scene-graphics-v2.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-005/4-7"]
+modules = ["core/scene", "core/raster"]
+tests = ["core/scene::scene_v2", "core/scene::scene_diff_v2_budget", "core/raster::reference_scene_v2_boundary"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
 id = "quality.m2-scene-gate"
 owner = "quality-corpus"
 state = "PLANNED"
@@ -117,7 +129,7 @@ state = "PLANNED"
 profile = "m3.reference-pixel-foundation.v1"
 clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
 modules = ["core/raster"]
-tests = ["core/raster::reference_foundation", "core/raster::repository_policy"]
+tests = ["core/raster::reference_foundation", "core/raster::reference_scene_v2_boundary", "core/raster::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

@@ -1,0 +1,80 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.scene-graphics-schema.independent-review"
+milestone = "M3"
+work_item = "M3-03"
+profile = "m3.scene-graphics-v2.v1"
+feature = "core.scene-graphics-v2"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "6e1b4c05e0731b6ad1c6934329f450a77469c35a"
+reviewed_subject_commit = "6e1b4c05e0731b6ad1c6934329f450a77469c35a"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-not-working-tree"
+reviewed_subject_commit_map = [
+  "core/scene/src/graphics.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/graphics_builder.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/canonical.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/diff.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/error.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/lib.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/model.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/src/scalar.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/tests/scene_v2.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/tests/scene_diff_v2_budget.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/tests/scene_diff.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/scene/tests/repository_policy.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/src/reference/error.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/src/reference/limits.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/src/reference/model.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/src/reference/render.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/src/reference/mod.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/tests/reference_scene_v2_boundary.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/tests/reference_foundation.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+  "core/raster/tests/repository_policy.rs@6e1b4c05e0731b6ad1c6934329f450a77469c35a",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = ["Scene graphics-v2 schema and canonical output", "bounded capability graph and first-use resources", "semantic diff comparison budgets and provenance", "Reference raster fail-closed Scene-v2 boundary"]
+reviewed_subjects = [
+  "core/scene/src/graphics.rs#sha256:1029b17f064887f29d16a71b27ada4a795dfb5a072dfdba4ea14282dc73c5b31",
+  "core/scene/src/graphics_builder.rs#sha256:4f93cbc3cc71b4c3178575092d9b9be1af1425ddb8d5c894de65b3b09237f246",
+  "core/scene/src/canonical.rs#sha256:1ce8c5f7ad8f46778596aa742936c6515b2d7184b7b43af011593c32289cf5c0",
+  "core/scene/src/diff.rs#sha256:5106a4b7ac844ccde028e00320113124fbee2fce6b7568bd8e8a92349c03aef1",
+  "core/scene/src/error.rs#sha256:ed7bf76523a0caf922447691276d36b79a5ca5c6463f656f09f9eba3170ea090",
+  "core/scene/src/lib.rs#sha256:a913cb08c773fa405b681dae0e572d343a5b5410f84813e9f7172694738fd0f4",
+  "core/scene/src/model.rs#sha256:63689a573eeb52feb9e00f5bcce21223346ba1cd3e5b49ce8ffa1ff4f9c2a31b",
+  "core/scene/src/scalar.rs#sha256:33e20693883ca52d40ffddd8f0e39330d64e0c9069c71db009720542a3c8a062",
+  "core/scene/tests/scene_v2.rs#sha256:14d60cb4b130f2cf3be136193445afe9438b415493709295fe22b8068e72903f",
+  "core/scene/tests/scene_diff_v2_budget.rs#sha256:209c4fee0ef3bba6915f215483940081ced27042125f344db9356101c6379764",
+  "core/scene/tests/scene_diff.rs#sha256:4b452d6836f7c70c5ef729a26baf4b99b6193edc2521b7ad5c85cd22e4e0630c",
+  "core/scene/tests/repository_policy.rs#sha256:7ae0e44618efd0d5400787b8bb157a68fbc2d6659610ae3daeb9f10bae86aaf8",
+  "core/raster/src/reference/error.rs#sha256:790c88e9e44473d5fae003e7abf249cd84efda1b113fa09d26cd5cbfc0daa6cc",
+  "core/raster/src/reference/limits.rs#sha256:b56b0f647d804aae3bd1f918df7d723ef712437487d50c383257fd9526ce8710",
+  "core/raster/src/reference/model.rs#sha256:5e8e36b5f05d57d9fe2f7f3620a84eb630f8fd4c6a8205112c5fe54a978a39b5",
+  "core/raster/src/reference/render.rs#sha256:ee6a03c1b84d057d30f4a1d3e4170a11fe8fff050c64d93b6d0b48c3886ad3b3",
+  "core/raster/src/reference/mod.rs#sha256:ee39f0ed2e99a1c63cfc4e33e8105df144501d2a3b9c872b5a4ea5cde927af6f",
+  "core/raster/tests/reference_scene_v2_boundary.rs#sha256:ff919f6734a023293d8a51b317d436aa6ec360bf77ee7ba459b67dd32f91b13f",
+  "core/raster/tests/reference_foundation.rs#sha256:2d78ab9159e86f537a7cb38b7aac4de1d06e68394cf82b9b5052a8b1849152cd",
+  "core/raster/tests/repository_policy.rs#sha256:35f3123269aaa4bf13efad88c9a9aa660ab56247d19756c0360a3efe55089aef",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-scene --all-targets",
+  "cargo clippy --locked --package pdf-rs-scene --all-targets -- -D warnings",
+  "cargo test --locked --package pdf-rs-raster --test reference_foundation --test reference_scene_v2_boundary --test repository_policy",
+  "cargo clippy --locked --package pdf-rs-raster --all-targets -- -D warnings",
+  "cargo fmt --all --check",
+  "git diff --check",
+]
+review_scope = "M3-03 only; excludes Content graphics execution, color, geometry, coverage, stroke, images, glyph decoding, final reference-raster-v1 rendering, O0/O1/O3 pixel authority, maturity promotion, and M3 exit"
+review_rounds = ["schema and capability review", "adversarial retained-memory, comparison-work, identity, and bounds review", "post-fix commit-pinned re-review"]
+closed_findings = [
+  "P1 retained-memory bypass: Scene v2 now accounts actual outer and nested Vec capacity, compacts caller slack, preflights aggregate storage before allocation, and falls back from geometric to exact growth with exact and one-less tests.",
+  "P1 unbounded comparisons: first-use resource interning and semantic diff now precharge deep payload comparison work; source/decode identity conflicts fail closed.",
+  "P1 conservative bounds: fills and clips require proven control-hull containment, while strokes, images, glyphs, and groups require the conservative Page fallback.",
+  "P1 capability and raster traversal: explicit requirement construction avoids an O(n squared) uniqueness scan, dependencies are strictly increasing and backward-only, and Reference raster counts and fuels requirements before allocation.",
+]
+open_p0_p2 = 0
+verdict = "SHIP"
