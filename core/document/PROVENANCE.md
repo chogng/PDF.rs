@@ -59,12 +59,19 @@ revision binding, and current root-Count evidence. A handle can be validated acr
 refinements of the same immutable index binding and is rejected as stale for another source,
 revision, Catalog, or logical order. The separate M1 page-count service continues to provide the
 complete-tree recomputation profile and its content-addressed implementation remains unchanged.
-This slice does not yet materialize inherited page values or resources, index acquired revision
-chains, coalesce concurrent lookup work, or install the index in a reusable Session cache. All
-source access is synchronous polling through an injected `ByteSource`; all long-running CPU work
-uses an injected cooperative cancellation probe. A separate pure document-semantic helper decodes
-already lexical PDF strings under the bounded ISO 32000-1 text-string rules used by the outline
-slice and available to future metadata services.
+`MaterializePageJob` consumes one validated handle and its exact leaf-to-root Page/Pages chain to
+select inherited `MediaBox`, `CropBox`, `Rotate`, and `Resources` through the same strict or locally
+repaired proof owner. It retains exact defining offsets, ancestor lookup chains, complete supported
+whole-value alias chains, and the terminal proof-bearing resource dictionary. CropBox defaults to
+MediaBox, Rotate defaults to zero, and the nearest Resources dictionary becomes one scope without
+ancestor merging. Independent ancestor, object, reference-edge, object-read, object-parse, and
+retained-state limits bound the resumable job before immutable `MaterializedPage` publication.
+This slice does not index or materialize acquired revision chains, resolve nested component
+references, coalesce concurrent lookup/materialization work, or install either result in a reusable
+Session cache. All source access is synchronous polling through an injected `ByteSource`; all
+long-running CPU work uses an injected cooperative cancellation probe. A separate pure
+document-semantic helper decodes already lexical PDF strings under the bounded ISO 32000-1
+text-string rules used by the outline slice and available to future metadata services.
 
 # Semantic owner
 
@@ -87,7 +94,13 @@ semantic responsibilities.
   output/fuel/memory budgets, and cooperative cancellation.
 - [RPE-ARCH-001, sections 5.8-5.9](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires a lazy document boundary and page-tree protection against cycles, duplicate children,
-  false counts, excessive depth, and non-Page/Pages objects.
+  false counts, excessive depth, non-Page/Pages objects, and bounded inherited page semantics.
+- [ISO 32000-1:2008, section 7.7.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines Page/Pages inheritance for MediaBox, CropBox, Resources, and Rotate. The bounded M2
+  profile implements nearest non-null selection, the CropBox and Rotate defaults, exact supported
+  whole-value aliases, and one nearest Resources scope; it does not claim general indirect-value
+  equivalence or resource merging. The authorized Adobe snapshot acquired on 2026-07-14 has
+  SHA-256 `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
 - [ISO 32000-1:2008, 7.9.2.2 and Annex D.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines the `FE FF` UTF-16BE selection rule, supplementary-character requirement, and the
   PDFDocEncoding-to-Unicode mapping used by human-readable text strings. The authorized Adobe
@@ -315,6 +328,44 @@ repair or publish partially attested state.
   outline model. They do not claim top-level attestation, page handles, inherited resources,
   destination resolution, action execution, cache ownership, a general Session scheduler, or M1
   exit by themselves.
+
+## Proof-bound inherited page materialization
+
+- Construction first validates the caller's `PageHandle` against the exact immutable `PageIndex`
+  binding and asks the index for the already-discovered Page-to-root identity chain. No Parent
+  reference is rediscovered from an unrelated object graph, and no unrequested page-tree branch is
+  opened. The ancestor-depth and initial chain-capacity ceilings are checked before the first
+  object job starts.
+- Every Page or Pages dictionary is reopened through one strict or locally repaired attested
+  authority. The job scans the exact inheritable keys once per ancestor, rejects duplicate keys,
+  treats direct null as omitted, and stops ancestor work only after all four values are explicit.
+  If CropBox or Rotate never becomes explicit, final publication applies the MediaBox and zero
+  defaults respectively. MediaBox and Resources remain required.
+- Direct box arrays require exactly four integer or real numbers representable without rounding as
+  signed nine-decimal fixed-point values. Their horizontal and vertical extents must be positive
+  and representable. Rotate requires one exact integer multiple of ninety degrees and is normalized
+  to the canonical quarter turn. Nested references inside an array and other semantic shapes return
+  `UnsupportedPageValueRepresentation` rather than being guessed or flattened.
+- A supported indirect field follows only a whole-value top-level reference chain. The job records
+  every edge, rejects active cycles, reopens each target through the same proof owner, and retains
+  the complete first-reference-to-terminal chain with the defining Page/Pages object and exact field
+  offset. Boxes and rotation copy only the validated scalar value plus provenance. Resources retain
+  the direct defining object or the indirect terminal object itself, so M2-05 can borrow the
+  dictionary without an unbudgeted deep clone.
+- Resources inheritance selects the nearest non-null dictionary as one lexical scope. It does not
+  merge dictionaries from multiple ancestors. A direct field retains its defining ancestor object;
+  an indirect field retains the terminal dictionary object and complete alias chain. The published
+  `PageResourceScope` exposes only identities, offsets, chains, and bounded ownership, not an
+  unrestricted public syntax graph.
+- Aggregate limits independently cap ancestors, object jobs, alias edges, exact object-read bytes,
+  parser-window bytes, and allocator-reported retained chain/proof capacity. A lower object job is
+  lent only the remaining aggregate work. Source mismatch precedes cancellation, unchanged Pending
+  replay does not double-charge work, failure is terminal and stable, and no partial page values are
+  published.
+- `MaterializedPage` is a move-only proof-bearing result containing the original handle, effective
+  boxes, canonical rotation, resource scope, validated limit profile, and final accounting. This
+  profile does not materialize Contents, merge resources, resolve name trees, execute operators,
+  construct Scene commands, or provide persistent cache/session ownership.
 
 ## Strict base-revision opening
 
@@ -801,8 +852,14 @@ redacted diagnostics. Page-count tests cover strict Catalog shape, valid flat an
 zero pages, structural duplicate keys, wrong node shapes, exact parent links, self and multi-level
 cycles, duplicate children, per-node Count agreement, borrowed and owned proof handles, Pending
 idempotence, source change, cancellation, terminal replay, and every traversal limit boundary.
-Repository policy checks the sibling dependency
-allowlist and absence of platform/external-engine APIs. Resident-footprint tests cover checked
+Page-materialization tests cover direct and inherited values, CropBox and Rotate defaults, nearest
+resource-scope selection without merging, complete box/rotation/resource alias provenance,
+whole-value alias cycles, missing and invalid values, duplicate keys, exact and one-less ancestor,
+object, edge, read, parse, and retained-state ceilings, Pending/source/cancellation/terminal
+precedence, authority/handle/context rejection, and borrowed or owned strict and locally repaired
+factories. Repository policy checks the sibling dependency allowlist, absence of
+platform/external-engine APIs, and direct M2 feature/spec/plan registration. Resident-footprint
+tests cover checked
 component and capacity overflow, portable runtime inline sizes, scalar and allocated syntax values,
 identical small/large stream-dictionary footprints, nonzero pre-reserved root-chain capacity,
 multi-hop terminal-only syntax ownership, and exact component totals without fixed
@@ -863,14 +920,17 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   refine strict Page/Pages dictionaries. The segmented index now cold-opens only Catalog/root
   structure and validates requested range partitions lazily. Unopened subtree Counts remain
   explicitly provisional rather than being described as complete leaf proofs; callers needing
-  whole-tree Count recomputation use the unchanged M1 service. Persistent dependency states,
-  concurrent lookup coalescing, negative caching, eviction, and cross-job/session resident
-  ownership remain unsupported. Successful footprints are measurement evidence only.
+  whole-tree Count recomputation use the unchanged M1 service. Inherited page materialization now
+  consumes only an exact validated handle chain, but acquired-chain indexing/materialization,
+  nested component aliases, persistent dependency states, concurrent work coalescing, negative
+  caching, eviction, and cross-job/session resident ownership remain unsupported. Successful
+  footprints are measurement evidence only.
 - Indirect stream `/Length` is supported only when the effective dependency is an uncompressed
   direct nonnegative integer in the separate revision-aware job. Compressed or aliased Length,
   repair, encrypted object interpretation, filters, decoded stream payloads, acquired-chain page
-  indexing, inherited resources, name-tree services, writer behavior, and document actions remain
-  unsupported.
+  indexing/materialization, content streams, nested page-value references, name-tree services,
+  writer behavior, and document actions remain unsupported. Inherited Resources is one nearest
+  proof-bearing dictionary scope and is not an ancestor merge or general resource resolver.
 - The separate page-count O4 comparison covers only two fixed valid counts and one mismatched
   positive root Count. It is exact and repeatable on the valid fixtures, but remains non-gating and
   unregistered and cannot adjudicate the Native validator's Parent, cycle, duplicate, or recursive
@@ -905,6 +965,10 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   Catalog/root bootstrap, explicit declared/partitioned/complete Count evidence, cumulative
   discovered-node topology, requested-range-only descendant opening, atomic immutable refinement,
   and delayed stable failures for malformed unrequested ranges.
+- 2026-07-16: Completed M2-03 with proof-bound inherited MediaBox, CropBox, Rotate, and Resources
+  materialization over exact PageHandle ancestor chains, whole-value alias provenance, fixed-point
+  geometry, nearest resource-scope ownership, independent aggregate work/retention limits, and
+  stable resumable failure policy for strict and locally repaired authorities.
 - 2026-07-13: Added candidate-only single-revision physical indexing, bounded cancellable sort,
   exact lookup errors, and crate-private five-field object-target construction.
 - 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,

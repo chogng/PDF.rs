@@ -203,7 +203,117 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
     assert!(m2_02.contains("completed_at = 2026-07-16"));
     let m2_03 =
         record_with_id(&plan, "work_item", "M2-03").expect("M2-03 work item must be planned");
-    assert!(m2_03.contains("status = \"planned\""));
+    assert!(m2_03.contains("status = \"complete\""));
+    assert!(m2_03.contains("completed_at = 2026-07-16"));
+}
+
+#[test]
+fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let materialization = fs::read_to_string(crate_root.join("src/page_materialization.rs"))
+        .expect("page materialization source is readable");
+    let page_index =
+        fs::read_to_string(crate_root.join("src/page_index.rs")).expect("page index is readable");
+    let geometry = fs::read_to_string(crate_root.join("src/page_geometry.rs"))
+        .expect("page geometry source is readable");
+    let resources = fs::read_to_string(crate_root.join("src/page_resources.rs"))
+        .expect("page resource source is readable");
+    let limits = fs::read_to_string(crate_root.join("src/page_materialization_limits.rs"))
+        .expect("page materialization limits are readable");
+    let provenance =
+        fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance is readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature map is readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map is readable");
+    let plan =
+        fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
+
+    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
+    for required in [
+        "pub struct MaterializedPage",
+        "pub struct MaterializePageJob",
+        "pub enum PageMaterializationPoll",
+        "pub fn materialize_page(",
+        "pub fn materialize_page_owned(",
+        "DocumentLimitKind::PageMaterializationObjects",
+        "DocumentLimitKind::PageMaterializationReferenceEdges",
+        "DocumentLimitKind::PageMaterializationObjectReadBytes",
+        "DocumentLimitKind::PageMaterializationObjectParseBytes",
+        "DocumentLimitKind::PageMaterializationStateBytes",
+        "DocumentErrorCode::PageValueAliasCycle",
+        "DocumentErrorCode::UnsupportedPageValueRepresentation",
+    ] {
+        assert!(
+            materialization.contains(required),
+            "materialization profile must contain {required:?}"
+        );
+    }
+    assert!(page_index.contains("DocumentLimitKind::PageMaterializationAncestors"));
+    assert!(geometry.contains("pub struct PageValueProvenance"));
+    assert!(geometry.contains("pub struct PageBoxes"));
+    assert!(geometry.contains("pub enum PageRotation"));
+    assert!(resources.contains("pub struct PageResourceScope"));
+    assert!(resources.contains("ancestor_lookup_chain"));
+    assert!(resources.contains("alias_chain"));
+    assert!(limits.contains("pub struct PageMaterializationLimits"));
+    assert!(limits.contains("max_retained_state_bytes"));
+
+    for required in [
+        "Proof-bound inherited page materialization",
+        "already-discovered Page-to-root identity chain",
+        "merge dictionaries from multiple ancestors",
+        "whole-value top-level reference chain",
+        "Source mismatch precedes cancellation",
+        "does not materialize Contents",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "materialization provenance must state {required:?}"
+        );
+    }
+
+    let feature = record_with_id(&feature_map, "feature", "core.inherited-page-values")
+        .expect("inherited page-values feature must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m2.inherited-page-values.v1\"",
+        "ISO-32000-1:2008/7.7.3",
+        "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/15.3/M2",
+        "modules = [\"core/document\"]",
+        "core/document::page_materialization",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "inherited page-values feature must contain {required:?}"
+        );
+    }
+
+    let page_tree = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.7.3")
+        .expect("page-tree requirement must exist");
+    assert!(page_tree.contains("core.inherited-page-values"));
+    assert!(page_tree.contains("core/document::page_materialization"));
+    assert!(page_tree.contains("nearest non-null MediaBox, CropBox, Rotate, and Resources"));
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
+        .expect("M2 requirement must exist");
+    assert!(milestone.contains("M2-03 is complete"));
+    assert!(milestone.contains("Acquired-chain page indexing/materialization"));
+    assert!(milestone.contains("M2 exit gate is not closed"));
+
+    let m2_03 = record_with_id(&plan, "work_item", "M2-03").expect("M2-03 work item must exist");
+    assert!(m2_03.contains("status = \"complete\""));
+    assert!(m2_03.contains("completed_at = 2026-07-16"));
 }
 
 #[test]
@@ -759,8 +869,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.65.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.65.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

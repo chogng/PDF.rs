@@ -1,5 +1,5 @@
 schema = 1
-version = "0.65.0"
+version = "0.66.0"
 status = "active"
 
 [[feature]]
@@ -10,6 +10,42 @@ profile = "m2.ordered-page-index.v1"
 clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M2", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
 modules = ["core/document"]
 tests = ["core/document::page_index", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.inherited-page-values"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.inherited-page-values.v1"
+clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::page_materialization", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.scene-v1"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.scene-v1.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-8", "RPE-STD-005/4-6"]
+modules = ["core/scene"]
+tests = ["core/scene::scene_v1", "core/scene::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.scene-semantic-diff"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.scene-semantic-diff.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-8", "RPE-STD-005/4-6"]
+modules = ["core/scene"]
+tests = ["core/scene::scene_diff", "core/scene::repository_policy"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

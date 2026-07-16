@@ -1,6 +1,21 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn top_level_version(document: &str) -> Option<&str> {
+    document
+        .lines()
+        .take_while(|line| !line.starts_with("[["))
+        .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+}
+
+fn record_with_id<'a>(document: &'a str, kind: &str, id: &str) -> Option<&'a str> {
+    let header = format!("{kind}]]");
+    let id_line = format!("id = \"{id}\"");
+    document
+        .split("\n[[")
+        .find(|record| record.starts_with(&header) && record.lines().any(|line| line == id_line))
+}
+
 #[test]
 fn product_scene_has_only_lower_identity_dependencies_and_no_platform_io() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -97,6 +112,102 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
     assert!(diff.contains("SceneLimitKind::DiffCanonicalBytes"));
     assert!(!diff.contains("expected_binding.source()"));
     assert!(!diff.contains("actual_binding.source()"));
+}
+
+#[test]
+fn m2_scene_and_semantic_diff_are_independently_traceable_without_closing_the_gate() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/scene has a repository root two levels above it");
+    let provenance =
+        fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance is readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature map is readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map is readable");
+    let plan =
+        fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
+
+    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
+    assert_eq!(
+        top_level_version(&feature_map),
+        top_level_version(&spec_map),
+        "feature and specification maps advance as one traceability version"
+    );
+
+    for required in [
+        "Traceability profile boundaries",
+        "`m2.scene-v1.v1`",
+        "`m2.scene-semantic-diff.v1`",
+        "Both profiles remain `PLANNED`",
+        "M2 exit gate by themselves",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "Scene provenance must state {required:?}"
+        );
+    }
+
+    let scene = record_with_id(&feature_map, "feature", "core.scene-v1")
+        .expect("Scene v1 feature must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m2.scene-v1.v1\"",
+        "RPE-ARCH-001/6.4-6.7",
+        "RPE-ARCH-001/15.3/M2",
+        "modules = [\"core/scene\"]",
+        "core/scene::scene_v1",
+        "core/scene::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            scene.contains(required),
+            "Scene feature must contain {required:?}"
+        );
+    }
+
+    let diff = record_with_id(&feature_map, "feature", "core.scene-semantic-diff")
+        .expect("Scene semantic-diff feature must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m2.scene-semantic-diff.v1\"",
+        "RPE-ARCH-001/6.4-6.7",
+        "RPE-ARCH-001/15.3/M2",
+        "modules = [\"core/scene\"]",
+        "core/scene::scene_diff",
+        "core/scene::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            diff.contains(required),
+            "Scene diff feature must contain {required:?}"
+        );
+    }
+
+    let scene_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/6.4-6.7")
+        .expect("Scene architecture requirement must be registered");
+    assert!(scene_requirement.contains("core.scene-v1"));
+    assert!(scene_requirement.contains("core.scene-semantic-diff"));
+    assert!(scene_requirement.contains("fixed-size content-redacted"));
+    assert!(scene_requirement.contains("Content VM production"));
+    assert!(scene_requirement.contains("M2 normative Scene gate remain open"));
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
+        .expect("M2 requirement must be registered");
+    assert!(milestone.contains("M2-04 is complete as a foundation"));
+    assert!(milestone.contains("M2-05 content acquisition/operator scanning"));
+    assert!(milestone.contains("M2-07 registered normative Scene exit evidence remain open"));
+    assert!(milestone.contains("M2 exit gate is not closed"));
+
+    let m2_04 = record_with_id(&plan, "work_item", "M2-04").expect("M2-04 work item must exist");
+    assert!(m2_04.contains("status = \"complete\""));
+    assert!(m2_04.contains("completed_at = 2026-07-16"));
 }
 
 fn collect_rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {
