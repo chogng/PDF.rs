@@ -159,6 +159,30 @@ fn distinct_resources_follow_first_command_use_instead_of_object_order() {
     assert_eq!(scene.commands()[0].properties().unwrap().value(), 0);
     assert_eq!(scene.commands()[2].properties().unwrap().value(), 1);
     assert_eq!(scene.commands()[4].properties().unwrap().value(), 0);
+
+    let mut replay = SceneBuilder::new(binding(12), geometry(), SceneLimits::default());
+    replay
+        .begin_marked_content(b"First", Some(first), command_source(0))
+        .unwrap();
+    replay.end_marked_content(command_source(1)).unwrap();
+    replay
+        .begin_marked_content(b"Second", Some(second), command_source(2))
+        .unwrap();
+    replay.end_marked_content(command_source(3)).unwrap();
+    replay
+        .begin_marked_content(b"FirstAgain", Some(first), command_source(4))
+        .unwrap();
+    replay.end_marked_content(command_source(5)).unwrap();
+    let replay = replay.finish().unwrap();
+
+    assert_eq!(
+        scene.canonical_json_bytes().unwrap(),
+        replay.canonical_json_bytes().unwrap()
+    );
+    assert_eq!(
+        scene.stats().resource_index_work(),
+        replay.stats().resource_index_work()
+    );
 }
 
 #[test]
@@ -396,6 +420,100 @@ fn command_depth_name_resource_and_retention_limits_are_prepublication_failures(
     assert_eq!(error.limit().unwrap().kind(), SceneLimitKind::RetainedBytes);
     assert_eq!(error.command_index(), Some(0));
     assert!(retained_limited.finish().unwrap().commands().is_empty());
+}
+
+#[test]
+fn resource_index_capacity_has_exact_and_one_less_retained_boundaries() {
+    let properties = ObjectRef::new(10, 0).unwrap();
+    let mut measured = SceneBuilder::new(binding(13), geometry(), SceneLimits::default());
+    measured
+        .begin_marked_content(b"A", Some(properties), command_source(0))
+        .unwrap();
+    let exact_retained = measured.retained_bytes().unwrap();
+    assert!(exact_retained > 1);
+
+    let mut exact = SceneBuilder::new(
+        binding(13),
+        geometry(),
+        limits(|value| value.max_retained_bytes = exact_retained),
+    );
+    exact
+        .begin_marked_content(b"A", Some(properties), command_source(0))
+        .unwrap();
+    assert_eq!(exact.retained_bytes().unwrap(), exact_retained);
+
+    let mut one_less = SceneBuilder::new(
+        binding(13),
+        geometry(),
+        limits(|value| value.max_retained_bytes = exact_retained - 1),
+    );
+    let error = one_less
+        .begin_marked_content(b"A", Some(properties), command_source(0))
+        .unwrap_err();
+    let limit = error.limit().unwrap();
+    assert_eq!(limit.kind(), SceneLimitKind::RetainedBytes);
+    assert_eq!(limit.limit(), exact_retained - 1);
+    assert_eq!(limit.consumed(), 0);
+    assert_eq!(limit.attempted(), exact_retained);
+    assert_eq!(one_less.retained_bytes().unwrap(), 0);
+}
+
+#[test]
+fn resource_index_comparisons_and_shifts_have_exact_work_boundaries() {
+    let first = ObjectRef::new(20, 0).unwrap();
+    let second = ObjectRef::new(10, 0).unwrap();
+    let mut exact = SceneBuilder::new(
+        binding(14),
+        geometry(),
+        limits(|value| value.max_resource_index_work = 2),
+    );
+    exact
+        .begin_marked_content(b"First", Some(first), command_source(0))
+        .unwrap();
+    exact.end_marked_content(command_source(1)).unwrap();
+    exact
+        .begin_marked_content(b"Second", Some(second), command_source(2))
+        .unwrap();
+    exact.end_marked_content(command_source(3)).unwrap();
+    assert_eq!(exact.resource_index_work(), 2);
+    let exact = exact.finish().unwrap();
+    assert_eq!(exact.stats().resource_index_work(), 2);
+    assert_eq!(exact.resources()[0].object(), first);
+    assert_eq!(exact.resources()[1].object(), second);
+
+    let mut one_less = SceneBuilder::new(
+        binding(14),
+        geometry(),
+        limits(|value| value.max_resource_index_work = 1),
+    );
+    one_less
+        .begin_marked_content(b"First", Some(first), command_source(0))
+        .unwrap();
+    one_less.end_marked_content(command_source(1)).unwrap();
+    let error = one_less
+        .begin_marked_content(b"Second", Some(second), command_source(2))
+        .unwrap_err();
+    let limit = error.limit().unwrap();
+    assert_eq!(limit.kind(), SceneLimitKind::ResourceIndexWork);
+    assert_eq!(limit.limit(), 1);
+    assert_eq!(limit.consumed(), 1);
+    assert_eq!(limit.attempted(), 1);
+    assert_eq!(one_less.resource_index_work(), 1);
+    let one_less = one_less.finish().unwrap();
+    assert_eq!(one_less.commands().len(), 2);
+    assert_eq!(one_less.resources().len(), 1);
+}
+
+#[test]
+fn zero_resource_index_work_is_an_invalid_limit_profile() {
+    let config = SceneLimitConfig {
+        max_resource_index_work: 0,
+        ..SceneLimitConfig::default()
+    };
+    assert_eq!(
+        SceneLimits::validate(config).unwrap_err().code(),
+        SceneErrorCode::InvalidLimits
+    );
 }
 
 #[test]

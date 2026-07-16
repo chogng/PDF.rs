@@ -447,6 +447,7 @@ pub struct SceneStats {
     resources: u32,
     max_marked_content_depth: u32,
     retained_bytes: u64,
+    resource_index_work: u64,
 }
 
 impl SceneStats {
@@ -455,12 +456,14 @@ impl SceneStats {
         resources: u32,
         max_marked_content_depth: u32,
         retained_bytes: u64,
+        resource_index_work: u64,
     ) -> Self {
         Self {
             commands,
             resources,
             max_marked_content_depth,
             retained_bytes,
+            resource_index_work,
         }
     }
 
@@ -482,6 +485,11 @@ impl SceneStats {
     /// Returns allocator-reported retained vector and scalar-buffer capacity.
     pub const fn retained_bytes(self) -> u64 {
         self.retained_bytes
+    }
+
+    /// Returns charged resource-index comparison bounds and insertion shifts.
+    pub const fn resource_index_work(self) -> u64 {
+        self.resource_index_work
     }
 }
 

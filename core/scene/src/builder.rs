@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
 use std::fmt;
 use std::mem;
 
@@ -17,9 +17,10 @@ pub struct SceneBuilder {
     limits: SceneLimits,
     commands: Vec<SceneCommand>,
     resources: Vec<SceneResource>,
-    resource_ids: HashMap<ObjectRef, ResourceId>,
+    resource_ids: Vec<ResourceIndexEntry>,
     provenance: Vec<CommandSource>,
     name_retained_bytes: u64,
+    resource_index_work: u64,
     has_marked_content: bool,
     has_properties: bool,
     marked_content_depth: u32,
@@ -34,9 +35,10 @@ impl SceneBuilder {
             limits,
             commands: Vec::new(),
             resources: Vec::new(),
-            resource_ids: HashMap::new(),
+            resource_ids: Vec::new(),
             provenance: Vec::new(),
             name_retained_bytes: 0,
+            resource_index_work: 0,
             has_marked_content: false,
             has_properties: false,
             marked_content_depth: 0,
@@ -66,31 +68,49 @@ impl SceneBuilder {
                 Some(command_index),
             ));
         }
-        let existing_resource =
-            properties.and_then(|object| self.resource_ids.get(&object).copied());
-        let (resource_id, pending_resource) = match (properties, existing_resource) {
-            (_, Some(id)) => (Some(id), None),
-            (Some(object), None) => {
-                let resource_index = u32::try_from(self.resources.len()).map_err(|_| {
-                    SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
-                })?;
-                if resource_index >= self.limits.max_resources() {
-                    return Err(SceneError::resource(
-                        SceneLimitKind::Resources,
-                        u64::from(self.limits.max_resources()),
-                        u64::from(resource_index),
-                        1,
+        let resource_lookup = properties
+            .map(|object| self.lookup_resource(object, command_index))
+            .transpose()?;
+        let (resource_id, pending_resource, insertion_index, insertion_work) =
+            match (properties, resource_lookup) {
+                (_, Some(ResourceLookup::Existing(id))) => (Some(id), None, None, 0),
+                (Some(object), Some(ResourceLookup::Vacant(index))) => {
+                    let resource_index = u32::try_from(self.resources.len()).map_err(|_| {
+                        SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
+                    })?;
+                    if resource_index >= self.limits.max_resources() {
+                        return Err(SceneError::resource(
+                            SceneLimitKind::Resources,
+                            u64::from(self.limits.max_resources()),
+                            u64::from(resource_index),
+                            1,
+                            Some(command_index),
+                        ));
+                    }
+                    let id = ResourceId::new(resource_index);
+                    let shifted_entries =
+                        self.resource_ids.len().checked_sub(index).ok_or_else(|| {
+                            SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
+                        })?;
+                    let insertion_work = u64::try_from(shifted_entries).map_err(|_| {
+                        SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
+                    })?;
+                    (
+                        Some(id),
+                        Some(SceneResource::marked_content_properties(id, object)),
+                        Some(index),
+                        insertion_work,
+                    )
+                }
+                (None, None) => (None, None, None, 0),
+                _ => {
+                    return Err(SceneError::for_code(
+                        SceneErrorCode::InternalState,
                         Some(command_index),
                     ));
                 }
-                let id = ResourceId::new(resource_index);
-                (
-                    Some(id),
-                    Some(SceneResource::marked_content_properties(id, object)),
-                )
-            }
-            (None, None) => (None, None),
-        };
+            };
+        self.ensure_resource_index_work(insertion_work, command_index)?;
         let will_have_properties = self.has_properties || resource_id.is_some();
         self.preflight_append(
             tag.len(),
@@ -109,6 +129,11 @@ impl SceneBuilder {
                 self.limits.max_resources(),
                 command_index,
             )?;
+            reserve_one_geometric(
+                &mut self.resource_ids,
+                self.limits.max_resources(),
+                command_index,
+            )?;
         }
         self.ensure_actual_retained_after_append(
             pending_name_bytes,
@@ -124,25 +149,19 @@ impl SceneBuilder {
             })?;
 
         if let Some(resource) = pending_resource {
-            self.resource_ids.try_reserve(1).map_err(|_| {
-                SceneError::resource(
-                    SceneLimitKind::Allocation,
-                    u64::from(self.limits.max_resources()),
-                    u64::try_from(self.resource_ids.len()).unwrap_or(u64::MAX),
-                    1,
-                    Some(command_index),
-                )
+            let insertion_index = insertion_index.ok_or_else(|| {
+                SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
             })?;
-            if self
-                .resource_ids
-                .insert(resource.object(), resource.id())
-                .is_some()
-            {
-                return Err(SceneError::for_code(
-                    SceneErrorCode::InternalState,
-                    Some(command_index),
-                ));
-            }
+            self.resource_index_work = self
+                .resource_index_work
+                .checked_add(insertion_work)
+                .ok_or_else(|| {
+                    SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
+                })?;
+            self.resource_ids.insert(
+                insertion_index,
+                ResourceIndexEntry::new(resource.object(), resource.id()),
+            );
             self.resources.push(resource);
         }
         self.commands.push(SceneCommand::begin(tag, resource_id));
@@ -192,9 +211,36 @@ impl SceneBuilder {
             commands,
             resources,
             provenance,
+            resource_index_work,
             ..
         } = self;
-        finish_scene(binding, geometry, commands, resources, provenance, limits)
+        finish_scene(
+            binding,
+            geometry,
+            commands,
+            resources,
+            provenance,
+            resource_index_work,
+            limits,
+        )
+    }
+
+    /// Returns current charged retention, including builder capacity and final feature slots.
+    pub fn retained_bytes(&self) -> Result<u64, SceneError> {
+        retained_bytes_for_capacities(
+            self.commands.capacity(),
+            self.resources.capacity(),
+            self.resource_ids.capacity(),
+            self.provenance.capacity(),
+            self.name_retained_bytes,
+            self.has_marked_content,
+            self.has_properties,
+        )
+    }
+
+    /// Returns resource-index key comparisons and insertion shifts consumed so far.
+    pub const fn resource_index_work(&self) -> u64 {
+        self.resource_index_work
     }
 
     fn next_command_index(&self) -> Result<u32, SceneError> {
@@ -252,6 +298,15 @@ impl SceneBuilder {
         } else {
             self.resources.capacity()
         };
+        let resource_index_capacity = if adds_resource {
+            capacity_after_one(
+                self.resource_ids.len(),
+                self.resource_ids.capacity(),
+                self.limits.max_resources(),
+            )?
+        } else {
+            self.resource_ids.capacity()
+        };
         let pending_name_bytes = u64::try_from(pending_name_bytes).map_err(|_| {
             SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
         })?;
@@ -264,6 +319,7 @@ impl SceneBuilder {
         let prospective = retained_bytes_for_capacities(
             command_capacity,
             resource_capacity,
+            resource_index_capacity,
             provenance_capacity,
             name_retained_bytes,
             has_marked_content,
@@ -288,6 +344,7 @@ impl SceneBuilder {
         let prospective = retained_bytes_for_capacities(
             self.commands.capacity(),
             self.resources.capacity(),
+            self.resource_ids.capacity(),
             self.provenance.capacity(),
             name_retained_bytes,
             has_marked_content,
@@ -307,6 +364,7 @@ impl SceneBuilder {
         let consumed = retained_bytes_for_capacities(
             self.commands.capacity(),
             self.resources.capacity(),
+            self.resource_ids.capacity(),
             self.provenance.capacity(),
             self.name_retained_bytes,
             self.has_marked_content,
@@ -320,6 +378,82 @@ impl SceneBuilder {
             Some(command_index),
         ))
     }
+
+    fn lookup_resource(
+        &mut self,
+        object: ObjectRef,
+        command_index: u32,
+    ) -> Result<ResourceLookup, SceneError> {
+        let comparison_work = binary_search_comparison_bound(self.resource_ids.len());
+        self.ensure_resource_index_work(comparison_work, command_index)?;
+        self.resource_index_work = self
+            .resource_index_work
+            .checked_add(comparison_work)
+            .ok_or_else(|| {
+                SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
+            })?;
+
+        let mut left = 0_usize;
+        let mut right = self.resource_ids.len();
+        while left < right {
+            let middle = left + (right - left) / 2;
+            match self.resource_ids[middle].object.cmp(&object) {
+                Ordering::Less => left = middle + 1,
+                Ordering::Greater => right = middle,
+                Ordering::Equal => {
+                    return Ok(ResourceLookup::Existing(self.resource_ids[middle].id));
+                }
+            }
+        }
+        Ok(ResourceLookup::Vacant(left))
+    }
+
+    fn ensure_resource_index_work(
+        &self,
+        attempted: u64,
+        command_index: u32,
+    ) -> Result<(), SceneError> {
+        let prospective = self
+            .resource_index_work
+            .checked_add(attempted)
+            .ok_or_else(|| {
+                SceneError::for_code(SceneErrorCode::InternalState, Some(command_index))
+            })?;
+        if prospective <= self.limits.max_resource_index_work() {
+            return Ok(());
+        }
+        Err(SceneError::resource(
+            SceneLimitKind::ResourceIndexWork,
+            self.limits.max_resource_index_work(),
+            self.resource_index_work,
+            attempted,
+            Some(command_index),
+        ))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ResourceIndexEntry {
+    object: ObjectRef,
+    id: ResourceId,
+}
+
+impl ResourceIndexEntry {
+    const fn new(object: ObjectRef, id: ResourceId) -> Self {
+        Self { object, id }
+    }
+}
+
+enum ResourceLookup {
+    Existing(ResourceId),
+    Vacant(usize),
+}
+
+fn binary_search_comparison_bound(len: usize) -> u64 {
+    if len == 0 {
+        return 0;
+    }
+    u64::from(usize::BITS - len.leading_zeros())
 }
 
 fn capacity_after_one(len: usize, capacity: usize, max_items: u32) -> Result<usize, SceneError> {
@@ -367,6 +501,7 @@ fn reserve_one_geometric<T>(
 fn retained_bytes_for_capacities(
     command_capacity: usize,
     resource_capacity: usize,
+    resource_index_capacity: usize,
     provenance_capacity: usize,
     name_retained_bytes: u64,
     has_marked_content: bool,
@@ -375,6 +510,9 @@ fn retained_bytes_for_capacities(
     let feature_count = usize::from(has_marked_content) + usize::from(has_properties);
     capacity_bytes::<SceneCommand>(command_capacity)?
         .checked_add(capacity_bytes::<SceneResource>(resource_capacity)?)
+        .and_then(|value| {
+            value.checked_add(capacity_bytes::<ResourceIndexEntry>(resource_index_capacity).ok()?)
+        })
         .and_then(|value| {
             value.checked_add(capacity_bytes::<CommandSource>(provenance_capacity).ok()?)
         })
@@ -390,6 +528,7 @@ impl fmt::Debug for SceneBuilder {
             .field("page_index", &self.binding.page_index())
             .field("command_count", &self.commands.len())
             .field("resource_count", &self.resources.len())
+            .field("resource_index_work", &self.resource_index_work)
             .field("marked_content_depth", &self.marked_content_depth)
             .field("limits", &self.limits)
             .field("content", &"[REDACTED]")
@@ -403,6 +542,7 @@ fn finish_scene(
     commands: Vec<SceneCommand>,
     resources: Vec<SceneResource>,
     provenance: Vec<CommandSource>,
+    resource_index_work: u64,
     limits: SceneLimits,
 ) -> Result<Scene, SceneError> {
     if commands.len() != provenance.len() {
@@ -431,6 +571,15 @@ fn finish_scene(
             u64::from(limits.max_resources()),
             0,
             u64::from(resource_count),
+            None,
+        ));
+    }
+    if resource_index_work > limits.max_resource_index_work() {
+        return Err(SceneError::resource(
+            SceneLimitKind::ResourceIndexWork,
+            limits.max_resource_index_work(),
+            0,
+            resource_index_work,
             None,
         ));
     }
@@ -535,7 +684,13 @@ fn finish_scene(
             None,
         ));
     }
-    let stats = SceneStats::new(command_count, resource_count, max_depth, retained_bytes);
+    let stats = SceneStats::new(
+        command_count,
+        resource_count,
+        max_depth,
+        retained_bytes,
+        resource_index_work,
+    );
     Ok(Scene::new(
         binding, geometry, commands, resources, features, provenance, limits, stats,
     ))
@@ -616,6 +771,7 @@ mod tests {
             vec![command],
             Vec::new(),
             vec![source, source],
+            0,
             SceneLimits::default(),
         )
         .unwrap_err();

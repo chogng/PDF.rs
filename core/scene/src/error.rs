@@ -14,6 +14,8 @@ pub enum SceneLimitKind {
     NameBytes,
     /// Allocator-reported element and scalar-buffer capacity retained by one Scene.
     RetainedBytes,
+    /// Resource-index comparison bounds and insertion shifts during Scene construction.
+    ResourceIndexWork,
     /// Bytes emitted by canonical Scene JSON.
     CanonicalBytes,
     /// Semantic difference records retained by one Scene comparison.

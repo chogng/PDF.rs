@@ -77,13 +77,19 @@ sections 6.4-6.7, Content VM production, renderer integration, or the M2 normati
   rechecks one-to-one pairing, resource IDs, resource references, command balance, depth, count,
   name, and retained-capacity limits. An unclosed, underflowed, or over-budget marked-content
   sequence never publishes a partial Scene.
-- A fallibly reserved builder-only hash index makes exact marked-content-property reuse independent
-  of a quadratic resource-table scan. The index is never iterated, serialized, or retained by the
-  Scene, so randomized table placement cannot affect first-command-use IDs or canonical bytes.
-- Retained capacity covers allocator-visible command, resource, provenance, feature-tag, and
-  decoded-name element storage using actual vector capacities. Inline headers, `Arc` control
-  blocks, allocator metadata, document bytes, and runtime caches are outside this Scene-owned
-  metric.
+- A fallibly reserved builder-only index stores `(ObjectRef, ResourceId)` entries in `ObjectRef`
+  order. Hand-written binary search gives deterministic logarithmic lookup while resource IDs
+  remain the zero-based first-command-use order in the separate resource vector. Each lookup
+  charges its deterministic worst-case binary-search comparison bound, and each entry shifted by
+  ordered insertion consumes one additional unit from the independent
+  `max_resource_index_work` budget. This bounds repeated lookups and the index's linear insertion
+  path without relying on randomized hashing or hidden tree allocation.
+- Charged construction retention combines allocator-visible command, resource, resource-index,
+  provenance, and decoded-name storage using actual vector capacities with the exact final
+  feature-tag slot requirement. The resource index is dropped before immutable Scene publication,
+  so published `retained_bytes` covers only command, resource, provenance, feature-tag, and
+  decoded-name storage. Inline headers, `Arc` control blocks, allocator metadata, document bytes,
+  and runtime caches are outside this metric.
 - Canonical JSON uses fixed lexical field order, declared semantic array order, lowercase
   hexadecimal PDF name bytes, and scaled decimal integers. The runtime `SourceIdentity` is
   deliberately omitted; canonical binding retains only page index, exact Page object, and revision
@@ -134,10 +140,10 @@ sections 6.4-6.7, Content VM production, renderer integration, or the M2 normati
 - Scene v1 Stage A contains only begin/end marked-content commands and marked-content properties
   resources. Paths, clips, graphics state, text, glyphs, images, color, transparency, groups,
   optional content, spatial indexes, and renderer adapters remain future work.
-- The builder-only resource lookup table is fallibly allocated and count-bounded by
-  `max_resources`, but its transient bucket allocation is not part of the published Scene
-  `retained_bytes` metric. The future Content VM job budget must charge builder scratch storage
-  separately from immutable Scene ownership.
+- The builder-only resource lookup index is transient and therefore absent from the published
+  Scene `retained_bytes` statistic, but its actual vector capacity is charged while the builder is
+  live and is exposed by `SceneBuilder::retained_bytes` for a future combined Content VM state
+  budget.
 - `FeatureReport` currently publishes only supported Stage A tags. Structured unsupported
   requirements and compatibility warnings arrive with the Content VM capability boundary.
 - Source identity remains runtime metadata on `SceneBinding` but is not serialized. A future cache
@@ -151,6 +157,9 @@ sections 6.4-6.7, Content VM production, renderer integration, or the M2 normati
 
 # History
 
+- 2026-07-16: Replaced the builder-only hash table with a deterministic ordered resource index,
+  charged its actual vector capacity to retained memory, and bounded comparison and insertion
+  work independently.
 - 2026-07-16: Added immutable bounded Scene v1 Stage A with fixed-point geometry, semantic
   marked-content commands, first-use resource IDs, paired provenance, feature reporting, and
   deterministic source-identity-free canonical JSON.
