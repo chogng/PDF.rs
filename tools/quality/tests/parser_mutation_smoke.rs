@@ -307,17 +307,29 @@ fn mutation_profile_remains_test_only_and_not_fuzz_evidence() {
         "profile={PROFILE} invariant=m0-spec-test-trace"
     );
     assert!(
-        milestone.contains("registered coverage-guided and continuous fuzzing")
+        milestone.contains("continuous and wider fuzzing")
+            && milestone.contains("minimization beyond the registered bounded campaigns")
             && milestone.contains("remain open"),
         "profile={PROFILE} invariant=continuous-fuzz-open"
     );
 
+    let m1 = array_record(spec_map, "[[requirement]]", "RPE-ARCH-001/15.3/M1");
+    assert!(
+        m1.lines().any(|line| line == "status = \"covered\"")
+            && m1.contains("three-seed fixed 64-run libFuzzer replay with real cmin")
+            && m1.contains("continuous fuzzing")
+            && m1.contains("remain non-blocking"),
+        "profile={PROFILE} invariant=bounded-m1-fuzz-versus-continuous-open"
+    );
+
     let registry = include_str!("../../../tests/fuzz/README.md");
     for boundary in [
-        "No fuzz target is registered in M0",
+        "No fuzz target was registered for the completed M0 gate",
         "no coverage guidance",
         "not continuous-fuzz evidence",
         "does not satisfy a release fuzz gate",
+        "fixed 64-run coverage-guided replay",
+        "continuous or nightly fuzzing",
     ] {
         assert!(
             registry.contains(boundary),

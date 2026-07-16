@@ -113,9 +113,9 @@ The hash-bound result is in
 
 This is a real but non-gating and unregistered Native/PDFium O4 comparison over the scalar page
 count of three fixed, self-authored inputs. It does not turn PDFium into a correctness oracle,
-weaken Native's Parent/Count/cycle/duplicate checks, advance `core.strict-page-count` beyond
-`PLANNED`, or establish M1 exit. No helper binary, PDF bytes, canonical JSON bytes, PDFium source,
-dependency payload, or raw log is committed.
+weaken Native's Parent/Count/cycle/duplicate checks, or contribute to the project-owned
+`core.strict-page-count` DIFFERENTIAL promotion and bounded M1 exit gate. No helper binary, PDF
+bytes, canonical JSON bytes, PDFium source, dependency payload, or raw log is committed.
 
 A separate release-mode boundary-performance probe then reused that exact helper at PDF.rs
 revision `0f6cbde39e8e49dbcd3f784a07684a2ff7302c2c` from a clean detached local clone. One hash-fixed

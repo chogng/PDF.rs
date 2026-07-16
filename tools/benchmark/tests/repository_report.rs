@@ -22,6 +22,10 @@ fn repository_report_is_canonical_non_verdict_and_ledger_bound() {
     let ledger_path = repository.join("docs/traceability/data-ledger.toml");
     let feature_map_path = repository.join("docs/traceability/feature-map.toml");
     let spec_map_path = repository.join("docs/traceability/spec-map.toml");
+    let page_count_m1_benchmark =
+        repository.join("docs/traceability/evidence/m1/subjects/page-count-benchmark.toml");
+    let outline_m1_benchmark =
+        repository.join("docs/traceability/evidence/m1/subjects/outline-benchmark.toml");
     let ci_path = repository.join("scripts/ci.sh");
 
     let report = load_report_file(&report_path, BenchmarkReportLimits::default()).unwrap();
@@ -89,7 +93,15 @@ fn repository_report_is_canonical_non_verdict_and_ledger_bound() {
 
     let spec_map = fs::read_to_string(spec_map_path).unwrap();
     let milestone = array_record(&spec_map, "[[requirement]]", "RPE-ARCH-001/15.3/M0");
-    assert!(milestone.contains("performance-eligible fixed-pool benchmark evidence"));
+    assert!(milestone.contains("fixed-pool release benchmark evidence"));
+    for report_path in [page_count_m1_benchmark, outline_m1_benchmark] {
+        let report = fs::read_to_string(report_path).unwrap();
+        assert_line(&report, "performance_eligible = true");
+        assert_line(&report, "release_gate_eligible = false");
+        assert_line(&report, "regression_threshold_eligible = false");
+        assert_line(&report, "external_comparison = false");
+        assert_line(&report, "sample_count = 21");
+    }
     let benchmark_requirement = array_record(&spec_map, "[[requirement]]", "RPE-ARCH-001/12.21");
     assert_line(
         benchmark_requirement,

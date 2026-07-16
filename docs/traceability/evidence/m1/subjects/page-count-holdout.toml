@@ -1,0 +1,11 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.page-count.holdout"
+evidence_kind = "holdout-manifest"
+feature = "core.strict-page-count"
+target = "core/document::AttestedRevisionIndex::count_pages"
+executed_tests = ["tools/quality::m1_document_service_maturity"]
+fuzz_targets = []
+benchmarks = []
+case_ids = ["document/m1-maturity-holdout/nested-four-pages", "document/m1-maturity-holdout/flat-two-pages-single-outline"]
+verdict = "pass"

@@ -92,9 +92,10 @@ The hash-bound result is recorded in
 `evidence/pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1.toml`.
 
 The page-count comparison is real but remains non-gating and unregistered. It is not a golden,
-product-correctness evidence, a release gate, or a claim that the `core.strict-page-count` feature
-has advanced beyond `PLANNED` or that M1 exit is complete. The older one-page
-`pdfium_test --show-pageinfo` execution remains a separate build-readiness smoke observation.
+product-correctness evidence, a release gate, or a contributor to the separately registered
+project-owned `core.strict-page-count` DIFFERENTIAL promotion and bounded M1 exit gate. The older
+one-page `pdfium_test --show-pageinfo` execution remains a separate build-readiness smoke
+observation.
 
 A release-mode follow-up at PDF.rs revision
 `0f6cbde39e8e49dbcd3f784a07684a2ff7302c2c` reused the exact hash-bound page-count helper on one

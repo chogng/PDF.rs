@@ -1,0 +1,12 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.page-count.differential"
+evidence_kind = "full-session-differential-result"
+feature = "core.strict-page-count"
+target = "core/document::AttestedRevisionIndex::count_pages"
+executed_tests = ["tools/quality::m1_document_service_differential"]
+fuzz_targets = []
+benchmarks = []
+case_ids = ["document/m1-services/single-page-no-outline", "document/m1-services/nested-valid", "document/m1-services/page-count-mismatch", "document/m1-services/outline-wrong-prev"]
+full_session = true
+verdict = "pass"

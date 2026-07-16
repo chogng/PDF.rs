@@ -110,8 +110,47 @@ const SUBJECT_REPORT_KEYS: &[&str] = &[
     "independent",
     "raw_samples_ns",
     "performance_eligible",
+    "release_gate_eligible",
+    "external_comparison",
+    "regression_threshold_eligible",
     "full_session",
     "fingerprint",
+    "fingerprint_components",
+    "minimizer",
+    "dictionary",
+    "crash_minimization",
+    "owner",
+    "invariant",
+    "cargo_fuzz_version",
+    "correction_commit",
+    "pre_fix_output",
+    "native_output",
+    "reference_output",
+    "commit",
+    "cargo_profile",
+    "cargo_flags",
+    "rustc",
+    "os",
+    "cpu",
+    "gpu",
+    "memory_bytes",
+    "browser",
+    "renderer_epoch",
+    "font_epoch",
+    "color_epoch",
+    "timing_scope",
+    "memory_scope",
+    "support_scope",
+    "corpus_sha256",
+    "cache_policy",
+    "sample_count",
+    "median_ns",
+    "p95_ns",
+    "p99_ns",
+    "median_ci95_ns",
+    "reference_checked",
+    "commit_scope",
+    "worktree_scope",
     "verdict",
 ];
 
@@ -660,6 +699,7 @@ fn validate_promoted_evidence(
         state,
         &uses,
         &artifacts,
+        repository_root,
         &profile_fuzz_targets,
         &feature_benchmarks,
         diagnostics,
@@ -1071,6 +1111,7 @@ fn validate_evidence_graph(
     state: MaturityState,
     uses: &[EvidenceUse],
     artifacts: &BTreeMap<String, EvidenceArtifact>,
+    repository_root: &Path,
     profile_fuzz_targets: &[String],
     feature_benchmarks: &[String],
     diagnostics: &mut Vec<MaturityDiagnostic>,
@@ -1164,6 +1205,163 @@ fn validate_evidence_graph(
             "evidence_graph",
         ));
     }
+    if state == MaturityState::Differential {
+        validate_holdout_case_separation(identity, uses, artifacts, repository_root, diagnostics);
+        validate_commit_anchor_consistency(identity, uses, artifacts, repository_root, diagnostics);
+    }
+}
+
+fn validate_commit_anchor_consistency(
+    identity: &str,
+    uses: &[EvidenceUse],
+    artifacts: &BTreeMap<String, EvidenceArtifact>,
+    repository_root: &Path,
+    diagnostics: &mut Vec<MaturityDiagnostic>,
+) {
+    let benchmark_values = uses
+        .iter()
+        .find(|evidence_use| evidence_use.role == "benchmark-report")
+        .and_then(|evidence_use| artifacts.get(&evidence_use.reference))
+        .and_then(|artifact| artifact_report_values(repository_root, artifact, false));
+    let environment_values = uses
+        .iter()
+        .find(|evidence_use| evidence_use.role == "reference-fingerprint")
+        .and_then(|evidence_use| artifacts.get(&evidence_use.reference))
+        .and_then(|artifact| artifact_report_values(repository_root, artifact, true));
+    let anchors_match =
+        benchmark_values
+            .zip(environment_values)
+            .is_some_and(|(benchmark, environment)| {
+                [
+                    "commit",
+                    "commit_scope",
+                    "worktree_scope",
+                    "cargo_profile",
+                    "cargo_flags",
+                    "rustc",
+                    "os",
+                    "cpu",
+                    "gpu",
+                    "memory_bytes",
+                    "browser",
+                ]
+                .iter()
+                .all(|field| benchmark.get(*field) == environment.get(*field))
+            });
+    if !anchors_match {
+        diagnostics.push(MaturityDiagnostic::profile(
+            "RPE-MATURITY-0025",
+            identity,
+            "benchmark_report:commit_anchor",
+        ));
+    }
+}
+
+fn artifact_report_values(
+    repository_root: &Path,
+    artifact: &EvidenceArtifact,
+    run_environment: bool,
+) -> Option<BTreeMap<String, String>> {
+    artifact.subjects.iter().find_map(|subject| {
+        let reference = parse_content_reference(subject).ok()?;
+        let bytes = fs::read(repository_root.join(reference.relative)).ok()?;
+        let input = std::str::from_utf8(&bytes).ok()?;
+        if run_environment {
+            let lines = logical_lines(input).ok()?;
+            let values: BTreeMap<_, _> = lines
+                .into_iter()
+                .filter_map(|(_, line)| {
+                    split_assignment(&line).map(|(key, value)| (key.to_owned(), value.to_owned()))
+                })
+                .collect();
+            (string(values.get("type")) == Some("m1-run-environment")).then_some(values)
+        } else {
+            let values = parse_subject_report(input).ok()?;
+            (string(values.get("evidence_kind")) == Some("raw-sample-benchmark-report"))
+                .then_some(values)
+        }
+    })
+}
+
+fn validate_holdout_case_separation(
+    identity: &str,
+    uses: &[EvidenceUse],
+    artifacts: &BTreeMap<String, EvidenceArtifact>,
+    repository_root: &Path,
+    diagnostics: &mut Vec<MaturityDiagnostic>,
+) {
+    let holdout_case_ids: BTreeSet<_> = uses
+        .iter()
+        .filter(|evidence_use| evidence_use.role == "holdout-manifest")
+        .filter_map(|evidence_use| artifacts.get(&evidence_use.reference))
+        .flat_map(|artifact| artifact_case_ids(repository_root, artifact))
+        .collect();
+    let development_case_ids: BTreeSet<_> = uses
+        .iter()
+        .filter(|evidence_use| {
+            matches!(
+                evidence_use.role,
+                "reference-implementation" | "o0-case" | "o1-case" | "o2-adjudication"
+            )
+        })
+        .filter_map(|evidence_use| artifacts.get(&evidence_use.reference))
+        .flat_map(|artifact| artifact_case_ids(repository_root, artifact))
+        .collect();
+    if !holdout_case_ids.is_disjoint(&development_case_ids) {
+        diagnostics.push(MaturityDiagnostic::profile(
+            "RPE-MATURITY-0023",
+            identity,
+            "holdout_manifest:case_overlap",
+        ));
+    }
+
+    let holdout_pdf_digests: BTreeSet<_> = uses
+        .iter()
+        .filter(|evidence_use| evidence_use.role == "holdout-manifest")
+        .filter_map(|evidence_use| artifacts.get(&evidence_use.reference))
+        .flat_map(|artifact| artifact_pdf_digests(artifact, "tests/cases/"))
+        .collect();
+    let fuzz_pdf_digests: BTreeSet<_> = uses
+        .iter()
+        .filter(|evidence_use| evidence_use.role == "fuzz-minimizer")
+        .filter_map(|evidence_use| artifacts.get(&evidence_use.reference))
+        .flat_map(|artifact| {
+            artifact_pdf_digests(artifact, "tools/quality/fuzz/corpus/m1_document_services/")
+        })
+        .collect();
+    if !holdout_pdf_digests.is_disjoint(&fuzz_pdf_digests) {
+        diagnostics.push(MaturityDiagnostic::profile(
+            "RPE-MATURITY-0024",
+            identity,
+            "holdout_manifest:fuzz_digest_overlap",
+        ));
+    }
+}
+
+fn artifact_case_ids(repository_root: &Path, artifact: &EvidenceArtifact) -> Vec<String> {
+    artifact
+        .subjects
+        .iter()
+        .filter_map(|subject| {
+            let reference = parse_content_reference(subject).ok()?;
+            reference.relative.ends_with("/case.toml").then_some(())?;
+            let input = fs::read_to_string(repository_root.join(reference.relative)).ok()?;
+            crate::manifest::validate_manifest(&input)
+                .ok()
+                .map(|manifest| manifest.case_id().to_owned())
+        })
+        .collect()
+}
+
+fn artifact_pdf_digests<'a>(
+    artifact: &'a EvidenceArtifact,
+    prefix: &'a str,
+) -> impl Iterator<Item = String> + 'a {
+    artifact.subjects.iter().filter_map(move |subject| {
+        let reference = parse_content_reference(subject).ok()?;
+        (reference.relative.starts_with(prefix) && reference.relative.ends_with(".pdf"))
+            .then_some(reference.digest)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1320,8 +1518,28 @@ fn shareable_subject(relative: &str, bytes: &[u8], previous_role: &str, role: &s
         "o1-case",
         "fuzz-minimizer",
         "differential-report",
+        "reference-fingerprint",
+        "o2-adjudication",
+        "holdout-manifest",
+        "benchmark-report",
+        "independent-review",
+    ];
+    let multi_service_roles = [
+        "o2-adjudication",
+        "fuzz-minimizer",
+        "holdout-manifest",
+        "benchmark-report",
+        "reference-fingerprint",
     ];
     is_executable_test_source(relative, bytes)
+        || (previous_role == role && multi_service_roles.contains(&role))
+        || ((previous_role == "reference-fingerprint" || role == "reference-fingerprint")
+            && relative.starts_with("tests/cases/"))
+        || ((matches!(previous_role, "holdout-manifest" | "o2-adjudication")
+            && role == "benchmark-report"
+            || previous_role == "benchmark-report"
+                && matches!(role, "holdout-manifest" | "o2-adjudication"))
+            && relative.starts_with("tests/cases/"))
         || (is_rust_source(relative, bytes)
             && source_roles.contains(&previous_role)
             && source_roles.contains(&role))
@@ -1367,7 +1585,15 @@ fn subject_binding_matches(
             subjects.iter().any(|subject| {
                 case_manifest_binds(subject, "O2", feature_id, &artifact.executed_tests)
                     && case_reviewers(subject).is_some_and(|reviewers| reviewers.len() >= 2)
-            }) || subjects.iter().any(|subject| {
+            }) && subjects.iter().any(|subject| {
+                executable_test_binds(subject, &artifact.executed_tests)
+                    && rust_source(subject).is_some_and(|source| {
+                        source.contains("frozen_pre_fix_projection")
+                            && source.contains("run_native_bytes")
+                            && source.contains("reference_result")
+                            && source.contains("ill-typed-optional-references")
+                    })
+            }) && subjects.iter().any(|subject| {
                 report_binds(
                     subject,
                     subject_kind_for_role(evidence_use.role),
@@ -1378,15 +1604,20 @@ fn subject_binding_matches(
                     feature_benchmarks,
                     ReportRequirement::Adjudication,
                 )
-            })
+            }) && adjudication_test_binds_report(subjects, artifact)
         }
         "fuzz-minimizer" => {
             profile_fuzz_targets
                 .iter()
                 .all(|target| fuzz_target_is_registered(subjects, target))
-                && subjects
-                    .iter()
-                    .any(|subject| fuzz_build_test_binds(subject, &artifact.executed_tests))
+                && subjects.iter().any(|subject| {
+                    fuzz_build_test_binds(subject, &artifact.executed_tests, profile_fuzz_targets)
+                })
+                && subjects.iter().any(|subject| {
+                    subject.relative.contains("/fuzz/dictionaries/")
+                        && subject.relative.ends_with(".dict")
+                        && !subject.bytes.is_empty()
+                })
                 && subjects.iter().any(|subject| {
                     report_binds(
                         subject,
@@ -1400,30 +1631,45 @@ fn subject_binding_matches(
                     )
                 })
         }
-        "holdout-manifest" => subjects.iter().any(|subject| {
-            report_binds(
-                subject,
-                subject_kind_for_role(evidence_use.role),
-                feature_id,
-                target,
-                artifact,
-                profile_fuzz_targets,
-                feature_benchmarks,
-                ReportRequirement::Holdout,
-            )
-        }),
-        "benchmark-report" => subjects.iter().any(|subject| {
-            report_binds(
-                subject,
-                subject_kind_for_role(evidence_use.role),
-                feature_id,
-                target,
-                artifact,
-                profile_fuzz_targets,
-                feature_benchmarks,
-                ReportRequirement::Benchmark,
-            )
-        }),
+        "holdout-manifest" => {
+            subjects.iter().any(|subject| {
+                executable_test_binds(subject, &artifact.executed_tests)
+                    && rust_source(subject).is_some_and(|source| {
+                        source.contains("run_native_bytes")
+                            && source.contains("reference_result")
+                            && source.contains("assert_case_hashes")
+                            && source.contains("m1-maturity-holdout")
+                    })
+            }) && subjects.iter().any(|subject| {
+                report_binds(
+                    subject,
+                    subject_kind_for_role(evidence_use.role),
+                    feature_id,
+                    target,
+                    artifact,
+                    profile_fuzz_targets,
+                    feature_benchmarks,
+                    ReportRequirement::Holdout,
+                )
+            }) && holdout_cases_bind(subjects, artifact, feature_id)
+        }
+        "benchmark-report" => {
+            subjects
+                .iter()
+                .any(|subject| benchmark_test_binds(subject, &artifact.executed_tests))
+                && subjects.iter().any(|subject| {
+                    report_binds(
+                        subject,
+                        subject_kind_for_role(evidence_use.role),
+                        feature_id,
+                        target,
+                        artifact,
+                        profile_fuzz_targets,
+                        feature_benchmarks,
+                        ReportRequirement::Benchmark,
+                    )
+                })
+        }
         "differential-report" => {
             subjects
                 .iter()
@@ -1441,18 +1687,20 @@ fn subject_binding_matches(
                     )
                 })
         }
-        "reference-fingerprint" => subjects.iter().any(|subject| {
-            report_binds(
-                subject,
-                subject_kind_for_role(evidence_use.role),
-                feature_id,
-                target,
-                artifact,
-                profile_fuzz_targets,
-                feature_benchmarks,
-                ReportRequirement::Fingerprint,
-            )
-        }),
+        "reference-fingerprint" => {
+            subjects.iter().any(|subject| {
+                report_binds(
+                    subject,
+                    subject_kind_for_role(evidence_use.role),
+                    feature_id,
+                    target,
+                    artifact,
+                    profile_fuzz_targets,
+                    feature_benchmarks,
+                    ReportRequirement::Fingerprint,
+                )
+            }) && run_environment_binds(subjects)
+        }
         _ => false,
     }
 }
@@ -1512,14 +1760,63 @@ fn fuzz_target_is_registered(subjects: &[VerifiedSubject], target: &str) -> bool
     })
 }
 
-fn fuzz_build_test_binds(subject: &VerifiedSubject, executed_tests: &[String]) -> bool {
+fn fuzz_build_test_binds(
+    subject: &VerifiedSubject,
+    executed_tests: &[String],
+    fuzz_targets: &[String],
+) -> bool {
     executable_test_binds(subject, executed_tests)
         && rust_source(subject).is_some_and(|source| {
             source.contains("Command::new(\"cargo\")")
                 && source.contains("\"check\"")
+                && source.contains("\"--locked\"")
                 && source.contains("\"--manifest-path\"")
                 && source.contains("fuzz/Cargo.toml")
+                && source.contains("\"fuzz\"")
+                && source.contains("\"run\"")
+                && source.contains("\"cmin\"")
+                && source.contains("\"--version\"")
+                && source.contains("cargo-fuzz 0.13.2")
+                && source.contains(".github/workflows/ci.yml")
+                && source.contains("cargo install --locked --version 0.13.2 cargo-fuzz")
+                && source.contains("./scripts/ci.sh pr")
+                && source.contains("\"--fuzz-dir\"")
+                && source.contains("\"--sanitizer\"")
+                && source.contains("\"none\"")
+                && source.contains("-seed=424242")
+                && source.contains("-runs=64")
+                && source.contains("-max_len=1048576")
+                && source.contains("-timeout=1")
+                && source.contains("-rss_limit_mb=512")
+                && source.contains("-dict=")
+                && source.matches("-artifact_prefix=").count() >= 2
+                && source.contains("pdf-rs-m1-fuzz-cmin-artifacts")
+                && source.contains("get_args()")
+                && source.contains("exactly one corpus positional argument")
+                && ["minimal.pdf", "truncated-header.pdf", "nested-outline.pdf"]
+                    .iter()
+                    .all(|seed| source.contains(seed))
+                && source.matches("for seed in FUZZ_SEEDS").count() >= 2
+                && source.contains("m1-services/nested-valid/input.pdf")
+                && fuzz_targets.iter().all(|target| {
+                    registration_leaf(target).is_some_and(|target| source.contains(target))
+                })
                 && source.contains(".success()")
+        })
+}
+
+fn benchmark_test_binds(subject: &VerifiedSubject, executed_tests: &[String]) -> bool {
+    executable_test_binds(subject, executed_tests)
+        && rust_source(subject).is_some_and(|source| {
+            source.contains("Instant::now()")
+                && source.contains("Vec::with_capacity(21)")
+                && source.contains("for _ in 0..21")
+                && source.contains("run_native_bytes")
+                && source.contains("reference_result")
+                && source.contains("benchmark warmup")
+                && source.contains("assert_eq!(result, expected")
+                && source.contains("samples.push")
+                && source.contains("black_box")
         })
 }
 
@@ -1572,7 +1869,7 @@ fn parse_fuzz_registrations(input: &str) -> Option<BTreeMap<String, String>> {
         }
         if section == "dependencies" {
             let (key, value) = line.split_once('=')?;
-            if key.trim() == "libfuzzer-sys" && unquote(value.trim()).is_some() {
+            if key.trim() == "libfuzzer-sys" && unquote(value.trim()) == Some("=0.4.13") {
                 libfuzzer_dependency = true;
             }
             continue;
@@ -1752,7 +2049,10 @@ fn case_manifest_binds(
                     .iter()
                     .all(|test| runners.contains(&test.as_str()))
             })
-        && case_reviewers(subject).is_some_and(|reviewers| !reviewers.is_empty())
+        && case_reviewers(subject).is_some_and(|reviewers| {
+            let reviewers: Vec<_> = reviewers.iter().map(String::as_str).collect();
+            actual_reviewers(&reviewers)
+        })
 }
 
 fn case_reviewers(subject: &VerifiedSubject) -> Option<Vec<String>> {
@@ -1761,6 +2061,155 @@ fn case_reviewers(subject: &VerifiedSubject) -> Option<Vec<String>> {
     manifest
         .string_array("oracle", "reviewers")
         .map(|reviewers| reviewers.into_iter().map(str::to_owned).collect())
+}
+
+fn holdout_cases_bind(
+    subjects: &[VerifiedSubject],
+    artifact: &EvidenceArtifact,
+    feature_id: &str,
+) -> bool {
+    let case_ids = subjects.iter().find_map(|subject| {
+        let input = std::str::from_utf8(&subject.bytes).ok()?;
+        let values = parse_subject_report(input).ok()?;
+        (string(values.get("evidence_kind")) == Some("holdout-manifest"))
+            .then(|| owned_array(values.get("case_ids")))
+    });
+    let Some(case_ids) = case_ids else {
+        return false;
+    };
+    if case_ids.len() < 2 || has_owned_duplicates(&case_ids) {
+        return false;
+    }
+    case_ids.iter().all(|case_id| {
+        let prefix = format!("tests/cases/{case_id}");
+        let manifest_path = format!("{prefix}/case.toml");
+        let input_path = format!("{prefix}/input.pdf");
+        let expected_path = format!("{prefix}/expected/service.json");
+        let Some(manifest_subject) = subjects
+            .iter()
+            .find(|subject| subject.relative == manifest_path)
+        else {
+            return false;
+        };
+        let Some(input_subject) = subjects
+            .iter()
+            .find(|subject| subject.relative == input_path)
+        else {
+            return false;
+        };
+        let Some(expected_subject) = subjects
+            .iter()
+            .find(|subject| subject.relative == expected_path)
+        else {
+            return false;
+        };
+        let Ok(manifest_input) = std::str::from_utf8(&manifest_subject.bytes) else {
+            return false;
+        };
+        let Ok(manifest) = crate::manifest::validate_manifest(manifest_input) else {
+            return false;
+        };
+        let input_hash = hex_digest(&sha256(&input_subject.bytes).expect("bounded subject hash"));
+        let expected_hash =
+            hex_digest(&sha256(&expected_subject.bytes).expect("bounded subject hash"));
+        manifest.case_id() == case_id
+            && manifest.source_sha256() == format!("sha256:{input_hash}")
+            && manifest.string("expected", "service") == Some("expected/service.json")
+            && manifest.string("expected", "service_sha256")
+                == Some(format!("sha256:{expected_hash}").as_str())
+            && manifest
+                .string_array("features", "ids")
+                .is_some_and(|features| features.contains(&feature_id))
+            && manifest
+                .string("oracle", "level")
+                .is_some_and(|oracle| matches!(oracle, "O1" | "O2"))
+            && manifest
+                .string_array("oracle", "reviewers")
+                .is_some_and(|reviewers| actual_reviewers(&reviewers))
+            && manifest
+                .string_array("runners", "native")
+                .is_some_and(|runners| {
+                    artifact
+                        .executed_tests
+                        .iter()
+                        .all(|test| runners.contains(&test.as_str()))
+                })
+    })
+}
+
+fn adjudication_test_binds_report(
+    subjects: &[VerifiedSubject],
+    artifact: &EvidenceArtifact,
+) -> bool {
+    let report_values = subjects.iter().find_map(|subject| {
+        let input = std::str::from_utf8(&subject.bytes).ok()?;
+        let values = parse_subject_report(input).ok()?;
+        (string(values.get("evidence_kind")) == Some("adjudication-report")).then_some(values)
+    });
+    let Some(report_values) = report_values else {
+        return false;
+    };
+    let bound_values: Vec<_> = [
+        "correction_commit",
+        "pre_fix_output",
+        "native_output",
+        "reference_output",
+    ]
+    .iter()
+    .filter_map(|field| string(report_values.get(*field)))
+    .collect();
+    bound_values.len() == 4
+        && subjects.iter().any(|subject| {
+            executable_test_binds(subject, &artifact.executed_tests)
+                && rust_source(subject)
+                    .is_some_and(|source| bound_values.iter().all(|value| source.contains(value)))
+        })
+}
+
+fn run_environment_binds(subjects: &[VerifiedSubject]) -> bool {
+    subjects.iter().any(|subject| {
+        if !subject.relative.contains("run-environment") || !subject.relative.ends_with(".toml") {
+            return false;
+        }
+        let Ok(input) = std::str::from_utf8(&subject.bytes) else {
+            return false;
+        };
+        let Ok(lines) = logical_lines(input) else {
+            return false;
+        };
+        let mut values = BTreeMap::new();
+        for (_, line) in lines {
+            let Some((key, value)) = split_assignment(&line) else {
+                return false;
+            };
+            if values.insert(key.to_owned(), value.to_owned()).is_some() {
+                return false;
+            }
+        }
+        values.get("schema").map(String::as_str) == Some("1")
+            && string(values.get("type")) == Some("m1-run-environment")
+            && string(values.get("commit")).is_some_and(valid_commit_id)
+            && string(values.get("cargo_profile")) == Some("release")
+            && string(values.get("cargo_flags"))
+                .is_some_and(|flags| flags.contains("--release") && flags.contains("--locked"))
+            && [
+                "rustc",
+                "os",
+                "cpu",
+                "gpu",
+                "browser",
+                "commit_scope",
+                "worktree_scope",
+            ]
+            .iter()
+            .all(|field| string(values.get(*field)).is_some_and(|value| !value.is_empty()))
+            && values
+                .get("memory_bytes")
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|value| value > 0)
+            && string(values.get("cargo_fuzz_version")) == Some("0.13.2")
+            && boolean(values.get("external_observation")) == Some(false)
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1811,42 +2260,126 @@ fn report_binds(
     match requirement {
         ReportRequirement::IndependentReview => {
             boolean(values.get("independent")) == Some(true)
-                && nonempty_unique_array(values.get("reviewers"))
+                && actual_reviewer_array(values.get("reviewers"))
         }
-        ReportRequirement::Adjudication => string_array(values.get("reviewers"))
-            .is_some_and(|reviewers| reviewers.len() >= 2 && !has_duplicates(&reviewers)),
+        ReportRequirement::Adjudication => {
+            string_array(values.get("reviewers"))
+                .is_some_and(|reviewers| reviewers.len() >= 2 && actual_reviewers(&reviewers))
+                && nonempty_unique_array(values.get("case_ids"))
+                && string(values.get("correction_commit")).is_some_and(valid_commit_id)
+                && ["pre_fix_output", "native_output", "reference_output"]
+                    .iter()
+                    .all(|field| string(values.get(*field)).is_some_and(valid_prefixed_digest))
+                && string(values.get("pre_fix_output")) != string(values.get("native_output"))
+                && string(values.get("pre_fix_output")) != string(values.get("reference_output"))
+        }
         ReportRequirement::Minimizer => {
             let fuzz_targets = owned_array(values.get("fuzz_targets"));
             !fuzz_targets.is_empty()
                 && !has_owned_duplicates(&fuzz_targets)
                 && as_set(&fuzz_targets) == as_set(profile_fuzz_targets)
-                && nonempty_unique_array(values.get("case_ids"))
+                && fuzz_seed_case_ids_bind(&values, artifact)
+                && string(values.get("minimizer")) == Some("cargo-fuzz-cmin")
+                && string(values.get("dictionary")).is_some_and(|dictionary| {
+                    parse_content_reference(dictionary).is_ok()
+                        && artifact
+                            .subjects
+                            .iter()
+                            .any(|subject| subject == dictionary)
+                })
+                && string(values.get("crash_minimization"))
+                    == Some("not-applicable:no-crash-observed")
+                && string(values.get("owner")).is_some_and(|owner| !owner.is_empty())
+                && string(values.get("invariant")).is_some_and(|invariant| !invariant.is_empty())
+                && string(values.get("cargo_fuzz_version")) == Some("0.13.2")
         }
-        ReportRequirement::Holdout => nonempty_unique_array(values.get("case_ids")),
+        ReportRequirement::Holdout => string_array(values.get("case_ids"))
+            .is_some_and(|cases| cases.len() >= 2 && !has_duplicates(&cases)),
         ReportRequirement::Benchmark => {
             let benchmarks = owned_array(values.get("benchmarks"));
+            let samples = parse_u64_array(
+                values
+                    .get("raw_samples_ns")
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            );
             !benchmarks.is_empty()
                 && !has_owned_duplicates(&benchmarks)
                 && as_set(&benchmarks) == as_set(feature_benchmarks)
-                && parse_u64_array(
-                    values
-                        .get("raw_samples_ns")
-                        .map(String::as_str)
-                        .unwrap_or(""),
-                )
-                .is_some_and(|samples| {
-                    !samples.is_empty() && samples.iter().all(|sample| *sample > 0)
+                && samples.as_ref().is_some_and(|samples| {
+                    samples.len() == 21
+                        && samples.iter().all(|sample| *sample > 0)
+                        && benchmark_statistics_bind(&values, samples)
                 })
                 && boolean(values.get("performance_eligible")) == Some(true)
+                && boolean(values.get("release_gate_eligible")) == Some(false)
+                && boolean(values.get("external_comparison")) == Some(false)
+                && boolean(values.get("regression_threshold_eligible")) == Some(false)
+                && boolean(values.get("reference_checked")) == Some(true)
+                && string(values.get("commit")).is_some_and(valid_commit_id)
+                && string(values.get("cargo_profile")) == Some("release")
+                && string(values.get("cargo_flags"))
+                    .is_some_and(|flags| flags.contains("--release") && flags.contains("--locked"))
+                && [
+                    "rustc",
+                    "os",
+                    "cpu",
+                    "gpu",
+                    "browser",
+                    "renderer_epoch",
+                    "font_epoch",
+                    "color_epoch",
+                    "timing_scope",
+                    "memory_scope",
+                    "support_scope",
+                    "cache_policy",
+                    "commit_scope",
+                    "worktree_scope",
+                ]
+                .iter()
+                .all(|field| string(values.get(*field)).is_some_and(|value| !value.is_empty()))
+                && values
+                    .get("memory_bytes")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .is_some_and(|value| value > 0)
+                && string(values.get("corpus_sha256")).is_some_and(valid_prefixed_digest)
+                && string(values.get("corpus_sha256")).is_some_and(|corpus_hash| {
+                    artifact.subjects.iter().any(|subject| {
+                        parse_content_reference(subject).is_ok_and(|reference| {
+                            reference.relative.ends_with("/input.pdf")
+                                && corpus_hash == format!("sha256:{}", reference.digest)
+                        })
+                    })
+                })
         }
         ReportRequirement::Differential => {
             boolean(values.get("full_session")) == Some(true)
                 && nonempty_unique_array(values.get("case_ids"))
         }
-        ReportRequirement::Fingerprint => {
-            string(values.get("fingerprint")).is_some_and(valid_prefixed_digest)
-        }
+        ReportRequirement::Fingerprint => reference_fingerprint_binds(&values, artifact),
     }
+}
+
+fn fuzz_seed_case_ids_bind(values: &BTreeMap<String, String>, artifact: &EvidenceArtifact) -> bool {
+    let case_ids = owned_array(values.get("case_ids"));
+    let expected_ids: BTreeSet<_> = ["minimal.pdf", "truncated-header.pdf", "nested-outline.pdf"]
+        .iter()
+        .map(|seed| format!("fuzz.m1-document-services.{seed}"))
+        .collect();
+    let subject_ids: BTreeSet<_> = artifact
+        .subjects
+        .iter()
+        .filter_map(|subject| parse_content_reference(subject).ok())
+        .filter_map(|reference| {
+            reference
+                .relative
+                .strip_prefix("tools/quality/fuzz/corpus/m1_document_services/")
+                .map(|seed| format!("fuzz.m1-document-services.{seed}"))
+        })
+        .collect();
+    !has_owned_duplicates(&case_ids)
+        && as_set(&case_ids) == expected_ids.iter().map(String::as_str).collect()
+        && subject_ids == expected_ids
 }
 
 fn parse_subject_report(input: &str) -> Result<BTreeMap<String, String>, ()> {
@@ -1854,7 +2387,7 @@ fn parse_subject_report(input: &str) -> Result<BTreeMap<String, String>, ()> {
     let mut values = BTreeMap::new();
     for (_, line) in logical_lines(input).map_err(|_| ())? {
         let (key, value) = split_assignment(&line).ok_or(())?;
-        let valid = if key == "raw_samples_ns" {
+        let valid = if matches!(key, "raw_samples_ns" | "median_ci95_ns") {
             parse_u64_array(value).is_some()
         } else {
             valid_value(value)
@@ -1884,6 +2417,21 @@ fn nonempty_unique_array(value: Option<&String>) -> bool {
     string_array(value).is_some_and(|values| !values.is_empty() && !has_duplicates(&values))
 }
 
+fn actual_reviewer_array(value: Option<&String>) -> bool {
+    string_array(value).is_some_and(|reviewers| actual_reviewers(&reviewers))
+}
+
+fn actual_reviewers(reviewers: &[&str]) -> bool {
+    !reviewers.is_empty()
+        && !has_duplicates(reviewers)
+        && reviewers.iter().all(|reviewer| {
+            let normalized = reviewer.to_ascii_lowercase();
+            !["pending", "required", "todo", "tbd"]
+                .iter()
+                .any(|placeholder| normalized.contains(placeholder))
+        })
+}
+
 fn valid_prefixed_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64
@@ -1891,6 +2439,83 @@ fn valid_prefixed_digest(value: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     })
+}
+
+fn valid_commit_id(value: &str) -> bool {
+    (7..=40).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn benchmark_statistics_bind(values: &BTreeMap<String, String>, samples: &[u64]) -> bool {
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let percentile = |percent: usize| {
+        let rank = percent
+            .checked_mul(sorted.len())
+            .and_then(|value| value.checked_add(99))
+            .map(|value| value / 100)
+            .unwrap_or(0)
+            .max(1);
+        sorted[rank - 1]
+    };
+    let median = sorted[sorted.len() / 2];
+    let ci = values
+        .get("median_ci95_ns")
+        .and_then(|value| parse_u64_array(value));
+    values
+        .get("sample_count")
+        .and_then(|value| value.parse::<usize>().ok())
+        == Some(samples.len())
+        && values
+            .get("median_ns")
+            .and_then(|value| value.parse::<u64>().ok())
+            == Some(median)
+        && values
+            .get("p95_ns")
+            .and_then(|value| value.parse::<u64>().ok())
+            == Some(percentile(95))
+        && values
+            .get("p99_ns")
+            .and_then(|value| value.parse::<u64>().ok())
+            == Some(percentile(99))
+        && ci.is_some_and(|ci| ci == [sorted[5], sorted[15]])
+}
+
+fn reference_fingerprint_binds(
+    values: &BTreeMap<String, String>,
+    artifact: &EvidenceArtifact,
+) -> bool {
+    let components = owned_array(values.get("fingerprint_components"));
+    if components.len() < 5
+        || has_owned_duplicates(&components)
+        || components.iter().any(|component| {
+            parse_content_reference(component).is_err() || !artifact.subjects.contains(component)
+        })
+    {
+        return false;
+    }
+    let paths: Vec<_> = components
+        .iter()
+        .filter_map(|component| parse_content_reference(component).ok())
+        .map(|component| component.relative)
+        .collect();
+    if !paths.iter().any(|path| path.ends_with("/reference.rs"))
+        || !paths.iter().any(|path| path.ends_with("/case.toml"))
+        || !paths.iter().any(|path| path.ends_with("/input.pdf"))
+        || !paths
+            .iter()
+            .any(|path| path.contains("/expected/") && path.ends_with(".json"))
+        || !paths.iter().any(|path| path.contains("run-environment"))
+    {
+        return false;
+    }
+    let mut canonical = components;
+    canonical.sort();
+    let canonical = canonical.join("\n") + "\n";
+    let digest = hex_digest(&sha256(canonical.as_bytes()).expect("bounded fingerprint framing"));
+    string(values.get("fingerprint")) == Some(format!("sha256:{digest}").as_str())
 }
 
 fn derive_repository_root(path: &Path) -> Result<PathBuf, MaturityDiagnostic> {
@@ -2271,8 +2896,9 @@ fn as_set(values: &[String]) -> BTreeSet<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_repository_root, parse_content_reference, parse_fuzz_registrations,
-        subject_kind_for_role, valid_symbolic_target, validate_maturity, validate_maturity_file,
+        VerifiedSubject, benchmark_test_binds, derive_repository_root, fuzz_build_test_binds,
+        parse_content_reference, parse_fuzz_registrations, subject_kind_for_role,
+        valid_symbolic_target, validate_maturity, validate_maturity_file,
     };
     use pdf_rs_digest::{hex_digest, sha256};
     use std::fs;
@@ -2306,6 +2932,10 @@ mod tests {
         WrongSubjectKind,
         UnregisteredTest,
         FuzzCargoRegistration,
+        HoldoutCaseOverlap,
+        HoldoutFuzzDigestOverlap,
+        PlaceholderReviewer,
+        CommitAnchorMismatch,
     }
 
     struct TestRepository {
@@ -2367,6 +2997,10 @@ mod tests {
                         "tools/quality::registered_test"
                     },
                     fuzz_registration_drift: false,
+                    holdout_case_overlap: false,
+                    holdout_fuzz_overlap: false,
+                    placeholder_reviewer: false,
+                    commit_anchor_mismatch: false,
                     cross_references: &[],
                     fuzz_targets: &[],
                     benchmarks: &[],
@@ -2387,11 +3021,10 @@ mod tests {
             } else {
                 vec![reference.clone(), o0.clone(), o1.clone()]
             };
-            let review = emit_artifact(
-                &root,
-                &mut ledger,
-                ArtifactSpec::new("review", "independent-review", "INTERNAL", &review_cross),
-            );
+            let mut review_spec =
+                ArtifactSpec::new("review", "independent-review", "INTERNAL", &review_cross);
+            review_spec.placeholder_reviewer = mutation == Mutation::PlaceholderReviewer;
+            let review = emit_artifact(&root, &mut ledger, review_spec);
             let o2_cross = vec![reference.clone(), o0.clone(), o1.clone()];
             let o2 = emit_artifact(
                 &root,
@@ -2406,11 +3039,12 @@ mod tests {
             minimizer_spec.fuzz_registration_drift = mutation == Mutation::FuzzCargoRegistration;
             let minimizer = emit_artifact(&root, &mut ledger, minimizer_spec);
             let holdout_cross = vec![o0.clone(), o1.clone()];
-            let holdout = emit_artifact(
-                &root,
-                &mut ledger,
-                ArtifactSpec::new("holdout", "holdout-manifest", "INTERNAL", &holdout_cross),
-            );
+            let mut holdout_spec =
+                ArtifactSpec::new("holdout", "holdout-manifest", "INTERNAL", &holdout_cross);
+            holdout_spec.holdout_case_overlap = mutation == Mutation::HoldoutCaseOverlap;
+            holdout_spec.holdout_fuzz_overlap = mutation == Mutation::HoldoutFuzzDigestOverlap;
+            holdout_spec.placeholder_reviewer = mutation == Mutation::PlaceholderReviewer;
+            let holdout = emit_artifact(&root, &mut ledger, holdout_spec);
             let benchmark_cross = vec![reference.clone()];
             let mut benchmark_spec = ArtifactSpec::new(
                 "benchmark",
@@ -2419,6 +3053,7 @@ mod tests {
                 &benchmark_cross,
             );
             benchmark_spec.benchmarks = &["bench.m1"];
+            benchmark_spec.executed_test = "tools/quality::registered_benchmark_test";
             let benchmark = emit_artifact(&root, &mut ledger, benchmark_spec);
             let differential_cross = vec![
                 reference.clone(),
@@ -2438,16 +3073,14 @@ mod tests {
                 ),
             );
             let fingerprint_cross = vec![reference.clone(), differential.clone()];
-            let fingerprint = emit_artifact(
-                &root,
-                &mut ledger,
-                ArtifactSpec::new(
-                    "fingerprint",
-                    "reference-fingerprint",
-                    "O1",
-                    &fingerprint_cross,
-                ),
+            let mut fingerprint_spec = ArtifactSpec::new(
+                "fingerprint",
+                "reference-fingerprint",
+                "O1",
+                &fingerprint_cross,
             );
+            fingerprint_spec.commit_anchor_mismatch = mutation == Mutation::CommitAnchorMismatch;
+            let fingerprint = emit_artifact(&root, &mut ledger, fingerprint_spec);
 
             if mutation == Mutation::LedgerHash {
                 ledger[0].digest = "0".repeat(64);
@@ -2469,7 +3102,7 @@ mod tests {
             fs::write(
                 traceability.join("feature-map.toml"),
                 format!(
-                    "schema = 1\nversion = \"test\"\nstatus = \"active\"\n\n[[feature]]\nid = \"core.test\"\nstate = \"{feature_state}\"\nprofile = \"m1.test.v1\"\ntests = [\"tools/quality::registered_test\", \"tools/quality::registered_fuzz_test\"]\nfuzz_targets = [\"{feature_fuzz}\"]\nbenchmarks = [\"bench.m1\"]\n"
+                    "schema = 1\nversion = \"test\"\nstatus = \"active\"\n\n[[feature]]\nid = \"core.test\"\nstate = \"{feature_state}\"\nprofile = \"m1.test.v1\"\ntests = [\"tools/quality::registered_test\", \"tools/quality::registered_fuzz_test\", \"tools/quality::registered_benchmark_test\"]\nfuzz_targets = [\"{feature_fuzz}\"]\nbenchmarks = [\"bench.m1\"]\n"
                 ),
             )
             .unwrap();
@@ -2539,6 +3172,10 @@ mod tests {
         subject_hash_mismatch: bool,
         executed_test: &'a str,
         fuzz_registration_drift: bool,
+        holdout_case_overlap: bool,
+        holdout_fuzz_overlap: bool,
+        placeholder_reviewer: bool,
+        commit_anchor_mismatch: bool,
         cross_references: &'a [String],
         fuzz_targets: &'a [&'a str],
         benchmarks: &'a [&'a str],
@@ -2565,6 +3202,10 @@ mod tests {
                 subject_hash_mismatch: false,
                 executed_test: "tools/quality::registered_test",
                 fuzz_registration_drift: false,
+                holdout_case_overlap: false,
+                holdout_fuzz_overlap: false,
+                placeholder_reviewer: false,
+                commit_anchor_mismatch: false,
                 cross_references,
                 fuzz_targets: &[],
                 benchmarks: &[],
@@ -2627,10 +3268,19 @@ mod tests {
             .expect("test identity has a final component");
         let test_source = if spec.role == "fuzz-minimizer" {
             format!(
-                "#[test]\nfn {test_name}() {{\n    let status = std::process::Command::new(\"cargo\")\n        .arg(\"check\")\n        .arg(\"--manifest-path\")\n        .arg(\"tools/quality/fuzz/Cargo.toml\")\n        .status()\n        .unwrap();\n    assert!(status.success());\n}}\n"
+                "const FUZZ_SEEDS: [&str; 3] = [\"minimal.pdf\", \"truncated-header.pdf\", \"nested-outline.pdf\"];\n#[test]\nfn {test_name}() {{\n    for seed in FUZZ_SEEDS {{ let _ = seed; }}\n    for seed in FUZZ_SEEDS {{ let _ = seed; }}\n    let registered_outline = \"m1-services/nested-valid/input.pdf\";\n    let ci_workflow = \".github/workflows/ci.yml cargo install --locked --version 0.13.2 cargo-fuzz ./scripts/ci.sh pr\";\n    let artifact_prefixes = [\"-artifact_prefix=/tmp/run/\", \"-artifact_prefix=/tmp/cmin/\"];\n    let cmin_artifact_directory = \"pdf-rs-m1-fuzz-cmin-artifacts\";\n    let check = std::process::Command::new(\"cargo\")\n        .arg(\"check\").arg(\"--locked\").arg(\"--manifest-path\")\n        .arg(\"tools/quality/fuzz/Cargo.toml\").status().unwrap();\n    assert!(check.success());\n    let version = std::process::Command::new(\"cargo\").arg(\"fuzz\").arg(\"--version\").output().unwrap();\n    assert_eq!(String::from_utf8(version.stdout).unwrap().trim(), \"cargo-fuzz 0.13.2\");\n    for mode in [\"run\", \"cmin\"] {{\n        let mut command = std::process::Command::new(\"cargo\");\n        command.arg(\"fuzz\").arg(mode).arg(\"--fuzz-dir\").arg(\"tools/quality/fuzz\")\n            .arg(\"--sanitizer\").arg(\"none\").arg(\"m1\").arg(\"corpus\").arg(\"--\")\n            .arg(\"-seed=424242\").arg(\"-runs=64\").arg(\"-max_len=1048576\")\n            .arg(\"-timeout=1\").arg(\"-rss_limit_mb=512\").arg(\"-dict=pdf.dict\");\n        assert_eq!(command.get_args().filter(|arg| *arg == \"corpus\").count(), 1, \"exactly one corpus positional argument\");\n        assert!(command.status().unwrap().success());\n    }}\n    let _ = (registered_outline, ci_workflow, artifact_prefixes, cmin_artifact_directory);\n}}\n"
+            )
+        } else if spec.role == "benchmark-report" {
+            format!(
+                "#[test]\nfn {test_name}() {{\n    let expected = reference_result(input, contract);\n    let warmup = run_native_bytes(1, input, contract).expect(\"benchmark warmup\");\n    assert_eq!(warmup, expected);\n    black_box(warmup);\n    let mut samples = Vec::with_capacity(21);\n    for _ in 0..21 {{\n        let start = Instant::now();\n        let result = run_native_bytes(1, input, contract).unwrap();\n        let elapsed = start.elapsed().as_nanos();\n        assert_eq!(result, expected, \"every timed result matches reference\");\n        black_box(result);\n        samples.push(elapsed);\n    }}\n}}\n"
             )
         } else {
-            format!("#[test]\nfn {test_name}() {{}}\n")
+            format!(
+                "#[test]\nfn {test_name}() {{\n    let frozen_pre_fix_projection = \"sha256:{}\";\n    let native_output = \"sha256:{}\";\n    let reference_output = \"sha256:{}\";\n    let correction_commit = \"a5ec35b\";\n    let adjudication = \"m1-adjudication/ill-typed-optional-references\";\n    let holdout = \"m1-maturity-holdout\";\n    let _ = (frozen_pre_fix_projection, native_output, reference_output, correction_commit, adjudication, holdout);\n    let _ = (run_native_bytes, reference_result, assert_case_hashes);\n}}\n",
+                "a".repeat(64),
+                "b".repeat(64),
+                "c".repeat(64),
+            )
         };
         let test_subject = emit_subject(
             root,
@@ -2645,33 +3295,156 @@ mod tests {
             "o0-case" | "o1-case" => {
                 vec![test_subject, emit_case_manifest_subject(root, spec)]
             }
-            "fuzz-minimizer" => vec![
+            "o2-adjudication" => vec![
                 test_subject,
-                emit_subject(
-                    root,
-                    "tools/quality/fuzz/fuzz_targets/m1.rs",
-                    "#![no_main]\nuse libfuzzer_sys::fuzz_target;\nfuzz_target!(|data: &[u8]| { let _ = data; });\n",
-                ),
-                emit_subject(
-                    root,
-                    "tools/quality/fuzz/Cargo.toml",
-                    &format!(
-                        "[package]\nname = \"fixture-fuzz\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[package.metadata]\ncargo-fuzz = true\n\n[dependencies]\nlibfuzzer-sys = \"0.4\"\n\n[[bin]]\nname = \"{}\"\npath = \"fuzz_targets/m1.rs\"\ntest = false\ndoc = false\nbench = false\n",
-                        if spec.fuzz_registration_drift {
-                            "other"
-                        } else {
-                            "m1"
-                        }
-                    ),
-                ),
-                emit_report_subject(root, spec),
+                emit_case_manifest_subject(root, spec),
+                emit_report_subject(root, spec, None, None, &[]),
             ],
-            "differential-report" => vec![test_subject, emit_report_subject(root, spec)],
-            _ => vec![test_subject, emit_report_subject(root, spec)],
+            "fuzz-minimizer" => {
+                let dictionary = emit_subject(
+                    root,
+                    "tools/quality/fuzz/dictionaries/pdf.dict",
+                    "header=\"%PDF-1.7\\x0a\"\n",
+                );
+                let seed_subjects: Vec<_> =
+                    ["minimal.pdf", "truncated-header.pdf", "nested-outline.pdf"]
+                        .iter()
+                        .map(|seed| {
+                            emit_subject(
+                                root,
+                                &format!("tools/quality/fuzz/corpus/m1_document_services/{seed}"),
+                                &format!("%PDF-1.7\n% fuzz seed {seed}\n%%EOF\n"),
+                            )
+                        })
+                        .collect();
+                let mut subjects = vec![
+                    test_subject,
+                    emit_subject(
+                        root,
+                        "tools/quality/fuzz/fuzz_targets/m1.rs",
+                        "#![no_main]\nuse libfuzzer_sys::fuzz_target;\nfuzz_target!(|data: &[u8]| { let _ = data; });\n",
+                    ),
+                    emit_subject(
+                        root,
+                        "tools/quality/fuzz/Cargo.toml",
+                        &format!(
+                            "[package]\nname = \"fixture-fuzz\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[package.metadata]\ncargo-fuzz = true\n\n[dependencies]\nlibfuzzer-sys = \"=0.4.13\"\n\n[[bin]]\nname = \"{}\"\npath = \"fuzz_targets/m1.rs\"\ntest = false\ndoc = false\nbench = false\n",
+                            if spec.fuzz_registration_drift {
+                                "other"
+                            } else {
+                                "m1"
+                            }
+                        ),
+                    ),
+                    dictionary.clone(),
+                ];
+                subjects.extend(seed_subjects);
+                subjects.push(emit_report_subject(
+                    root,
+                    spec,
+                    Some(&dictionary),
+                    None,
+                    &[],
+                ));
+                subjects
+            }
+            "holdout-manifest" => {
+                let first_case_id = if spec.holdout_case_overlap {
+                    "document/o2"
+                } else {
+                    "document/holdout-a"
+                };
+                let mut subjects = vec![test_subject];
+                subjects.extend(emit_holdout_case_subjects(
+                    root,
+                    first_case_id,
+                    spec.executed_test,
+                    "O1",
+                    spec.holdout_fuzz_overlap
+                        .then_some("%PDF-1.7\n% fuzz seed minimal.pdf\n%%EOF\n"),
+                    spec.placeholder_reviewer,
+                ));
+                subjects.extend(emit_holdout_case_subjects(
+                    root,
+                    "document/holdout-b",
+                    spec.executed_test,
+                    "O2",
+                    None,
+                    spec.placeholder_reviewer,
+                ));
+                subjects.push(emit_report_subject(root, spec, None, None, &[]));
+                subjects
+            }
+            "benchmark-report" => {
+                let input = emit_subject(
+                    root,
+                    "tests/cases/document/benchmark/input.pdf",
+                    "%PDF-1.7\n%%EOF\n",
+                );
+                vec![
+                    test_subject,
+                    input.clone(),
+                    emit_report_subject(root, spec, None, Some(&input), &[]),
+                ]
+            }
+            "reference-fingerprint" => {
+                let components = vec![
+                    emit_subject(
+                        root,
+                        "tools/quality/tests/support/reference.rs",
+                        "pub fn reference_result() {}\n",
+                    ),
+                    emit_subject(
+                        root,
+                        "tests/cases/document/fingerprint/case.toml",
+                        "fingerprint case manifest\n",
+                    ),
+                    emit_subject(
+                        root,
+                        "tests/cases/document/fingerprint/input.pdf",
+                        "%PDF-1.7\n%%EOF\n",
+                    ),
+                    emit_subject(
+                        root,
+                        "tests/cases/document/fingerprint/expected/service.json",
+                        "{}\n",
+                    ),
+                    emit_subject(
+                        root,
+                        "evidence/run-environment.toml",
+                        &format!(
+                            "schema = 1\ntype = \"m1-run-environment\"\ncommit = \"{}\"\ncommit_scope = \"Native implementation anchor only\"\nworktree_scope = \"test harness and evidence are separately content-addressed\"\ncargo_profile = \"release\"\ncargo_flags = \"--release --locked\"\nrustc = \"rustc fixture\"\nos = \"fixture-os\"\ncpu = \"fixture-cpu\"\ngpu = \"not-applicable\"\nmemory_bytes = 1024\nbrowser = \"not-applicable\"\ncargo_fuzz_version = \"0.13.2\"\nexternal_observation = false\n",
+                            if spec.commit_anchor_mismatch {
+                                "e".repeat(40)
+                            } else {
+                                "d".repeat(40)
+                            }
+                        ),
+                    ),
+                ];
+                let mut subjects = vec![test_subject];
+                subjects.extend(components.clone());
+                subjects.push(emit_report_subject(root, spec, None, None, &components));
+                subjects
+            }
+            "differential-report" => vec![
+                test_subject,
+                emit_report_subject(root, spec, None, None, &[]),
+            ],
+            _ => vec![
+                test_subject,
+                emit_report_subject(root, spec, None, None, &[]),
+            ],
         }
     }
 
-    fn emit_report_subject(root: &Path, spec: &ArtifactSpec<'_>) -> String {
+    fn emit_report_subject(
+        root: &Path,
+        spec: &ArtifactSpec<'_>,
+        dictionary: Option<&str>,
+        benchmark_input: Option<&str>,
+        fingerprint_components: &[String],
+    ) -> String {
         let fuzz_targets = quoted_array(spec.fuzz_targets.iter().copied());
         let benchmarks = quoted_array(spec.benchmarks.iter().copied());
         let mut contents = format!(
@@ -2684,27 +3457,63 @@ mod tests {
         );
         match spec.role {
             "independent-review" => {
-                contents.push_str("reviewers = [\"independent-reviewer\"]\nindependent = true\n");
+                let reviewer = if spec.placeholder_reviewer {
+                    "pending-independent-review"
+                } else {
+                    "independent-reviewer"
+                };
+                contents.push_str(&format!(
+                    "reviewers = [\"{reviewer}\"]\nindependent = true\n"
+                ));
             }
             "o2-adjudication" => {
-                contents.push_str("reviewers = [\"spec-reviewer\", \"quality-reviewer\"]\n");
+                contents.push_str(&format!(
+                    "case_ids = [\"document/o2\"]\nreviewers = [\"spec-reviewer\", \"quality-reviewer\"]\ncorrection_commit = \"a5ec35b\"\npre_fix_output = \"sha256:{}\"\nnative_output = \"sha256:{}\"\nreference_output = \"sha256:{}\"\n",
+                    "a".repeat(64),
+                    "b".repeat(64),
+                    "c".repeat(64),
+                ));
             }
             "fuzz-minimizer" => {
-                contents.push_str("case_ids = [\"minimized-case\"]\n");
+                contents.push_str(&format!(
+                    "case_ids = [\"fuzz.m1-document-services.minimal.pdf\", \"fuzz.m1-document-services.truncated-header.pdf\", \"fuzz.m1-document-services.nested-outline.pdf\"]\nminimizer = \"cargo-fuzz-cmin\"\ndictionary = \"{}\"\ncrash_minimization = \"not-applicable:no-crash-observed\"\nowner = \"quality-corpus\"\ninvariant = \"bounded Native parser invariant\"\ncargo_fuzz_version = \"0.13.2\"\n",
+                    dictionary.expect("minimizer fixture has a dictionary")
+                ));
             }
             "holdout-manifest" => {
-                contents.push_str("case_ids = [\"holdout-case\"]\n");
+                let first_case_id = if spec.holdout_case_overlap {
+                    "document/o2"
+                } else {
+                    "document/holdout-a"
+                };
+                contents.push_str(&format!(
+                    "case_ids = [\"{first_case_id}\", \"document/holdout-b\"]\n"
+                ));
             }
             "benchmark-report" => {
-                contents.push_str(
-                    "raw_samples_ns = [100, 110, 120, 130, 140]\nperformance_eligible = true\n",
-                );
+                let input = parse_content_reference(
+                    benchmark_input.expect("benchmark fixture has an input subject"),
+                )
+                .unwrap();
+                contents.push_str(&format!(
+                    "raw_samples_ns = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100]\nsample_count = 21\nmedian_ns = 1100\np95_ns = 2000\np99_ns = 2100\nmedian_ci95_ns = [600, 1600]\nperformance_eligible = true\nrelease_gate_eligible = false\nexternal_comparison = false\nregression_threshold_eligible = false\nreference_checked = true\ncommit = \"{}\"\ncargo_profile = \"release\"\ncargo_flags = \"--release --locked\"\nrustc = \"rustc fixture\"\nos = \"fixture-os\"\ncpu = \"fixture-cpu\"\ngpu = \"not-applicable\"\nmemory_bytes = 1024\nbrowser = \"not-applicable\"\nrenderer_epoch = \"not-applicable\"\nfont_epoch = \"not-applicable\"\ncolor_epoch = \"not-applicable\"\ntiming_scope = \"Native full in-memory document-service session\"\nmemory_scope = \"bounded session resources\"\nsupport_scope = \"every sample matches reference\"\ncorpus_sha256 = \"sha256:{}\"\ncache_policy = \"one untimed warmup; timed samples use fresh sessions\"\ncommit_scope = \"Native implementation anchor only\"\nworktree_scope = \"test harness and evidence are separately content-addressed\"\n",
+                    "d".repeat(40),
+                    input.digest,
+                ));
             }
             "differential-report" => {
                 contents.push_str("case_ids = [\"full-session-case\"]\nfull_session = true\n");
             }
             "reference-fingerprint" => {
-                contents.push_str(&format!("fingerprint = \"sha256:{}\"\n", "a".repeat(64)));
+                let mut canonical = fingerprint_components.to_vec();
+                canonical.sort();
+                let canonical_input = canonical.join("\n") + "\n";
+                let fingerprint =
+                    hex_digest(&sha256(canonical_input.as_bytes()).expect("fixture fingerprint"));
+                contents.push_str(&format!(
+                    "fingerprint_components = {}\nfingerprint = \"sha256:{fingerprint}\"\n",
+                    quoted_array(fingerprint_components.iter().map(String::as_str)),
+                ));
             }
             _ => {}
         }
@@ -2712,9 +3521,18 @@ mod tests {
     }
 
     fn emit_case_manifest_subject(root: &Path, spec: &ArtifactSpec<'_>) -> String {
-        let oracle = if spec.role == "o0-case" { "O0" } else { "O1" };
+        let oracle = match spec.role {
+            "o0-case" => "O0",
+            "o2-adjudication" => "O2",
+            _ => "O1",
+        };
+        let reviewers = if spec.role == "o2-adjudication" {
+            "[\"spec-reviewer\", \"quality-reviewer\"]"
+        } else {
+            "[\"independent-reviewer\"]"
+        };
         let contents = format!(
-            "schema = 1\n\n[identity]\nid = \"document/{}\"\ntitle = \"Maturity subject case\"\nowner = \"quality-corpus\"\nstatus = \"active\"\nintroduced_in = \"0.1.0\"\n\n[specification]\ndocument = \"RPE-TEST\"\nversion = \"1\"\nclauses = [\"RPE-TEST/1\"]\ninterpretation = \"Exercise the registered maturity subject.\"\n\n[provenance]\nkind = \"self-authored-generated\"\nsource = \"tools/quality/tests/registered_test.rs\"\nsha256 = \"sha256:{}\"\nlicense = \"LicenseRef-PDF.rs-SelfAuthored-Test\"\nredistributable = false\naccess = \"repository\"\n\n[features]\nids = [\"core.test\"]\nrequirements = [\"RPE-TEST/1\"]\n\n[validity]\nclass = \"valid\"\nstrict_expected = \"success\"\nrecovery_expected = \"not-applicable\"\n\n[expected]\nparse = true\nscene = true\ntext = true\npixel = true\ndiagnostic = true\ncapability = true\nerror = false\n\n[oracle]\nlevel = \"{oracle}\"\nderivation = \"Finite project-authored case.\"\nreviewers = [\"independent-reviewer\"]\nreference_may_generate = false\nlast_reviewed = \"2026-07-15\"\n\n[budget]\nmax_input_bytes = 4096\nmax_objects = 16\nmax_resolve_depth = 8\nmax_stream_output_bytes = 4096\nmax_total_decode_bytes = 4096\nmax_image_pixels = 16\nmax_path_segments = 16\nmax_scene_commands = 16\nmax_group_depth = 4\noperator_fuel = 100\ndecode_fuel = 100\nwatchdog_ms = 500\n\n[render]\nwidth = 1\nheight = 1\ndpr_milli = 1000\ncolor_profile = \"srgb-reference-v1\"\nalpha = \"straight\"\nantialias = \"reference-v1\"\nrenderer_epoch = \"test-v1\"\n\n[tolerance]\nmode = \"exact\"\n\n[runners]\nnative = [\"{}\"]\nexternal_observation = []\n\n[history]\nentries = [\"2026-07-15: activated\"]\n",
+            "schema = 1\n\n[identity]\nid = \"document/{}\"\ntitle = \"Maturity subject case\"\nowner = \"quality-corpus\"\nstatus = \"active\"\nintroduced_in = \"0.1.0\"\n\n[specification]\ndocument = \"RPE-TEST\"\nversion = \"1\"\nclauses = [\"RPE-TEST/1\"]\ninterpretation = \"Exercise the registered maturity subject.\"\n\n[provenance]\nkind = \"self-authored-generated\"\nsource = \"tools/quality/tests/registered_test.rs\"\nsha256 = \"sha256:{}\"\nlicense = \"LicenseRef-PDF.rs-SelfAuthored-Test\"\nredistributable = false\naccess = \"repository\"\n\n[features]\nids = [\"core.test\"]\nrequirements = [\"RPE-TEST/1\"]\n\n[validity]\nclass = \"valid\"\nstrict_expected = \"success\"\nrecovery_expected = \"not-applicable\"\n\n[expected]\nparse = true\nscene = true\ntext = true\npixel = true\ndiagnostic = true\ncapability = true\nerror = false\n\n[oracle]\nlevel = \"{oracle}\"\nderivation = \"Finite project-authored case.\"\nreviewers = {reviewers}\nreference_may_generate = false\nlast_reviewed = \"2026-07-15\"\n\n[budget]\nmax_input_bytes = 4096\nmax_objects = 16\nmax_resolve_depth = 8\nmax_stream_output_bytes = 4096\nmax_total_decode_bytes = 4096\nmax_image_pixels = 16\nmax_path_segments = 16\nmax_scene_commands = 16\nmax_group_depth = 4\noperator_fuel = 100\ndecode_fuel = 100\nwatchdog_ms = 500\n\n[render]\nwidth = 1\nheight = 1\ndpr_milli = 1000\ncolor_profile = \"srgb-reference-v1\"\nalpha = \"straight\"\nantialias = \"reference-v1\"\nrenderer_epoch = \"test-v1\"\n\n[tolerance]\nmode = \"exact\"\n\n[runners]\nnative = [\"{}\"]\nexternal_observation = []\n\n[history]\nentries = [\"2026-07-15: activated\"]\n",
             spec.name,
             "1".repeat(64),
             spec.executed_test
@@ -2724,6 +3542,36 @@ mod tests {
             &format!("tests/cases/{}/case.toml", spec.name),
             &contents,
         )
+    }
+
+    fn emit_holdout_case_subjects(
+        root: &Path,
+        case_id: &str,
+        executed_test: &str,
+        oracle: &str,
+        input_override: Option<&str>,
+        placeholder_reviewer: bool,
+    ) -> Vec<String> {
+        let prefix = format!("tests/cases/{case_id}");
+        let input_contents = input_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("%PDF-1.7\n% holdout {case_id}\n%%EOF\n"));
+        let input = emit_subject(root, &format!("{prefix}/input.pdf"), &input_contents);
+        let expected = emit_subject(root, &format!("{prefix}/expected/service.json"), "{}\n");
+        let input_digest = parse_content_reference(&input).unwrap().digest;
+        let expected_digest = parse_content_reference(&expected).unwrap().digest;
+        let reviewers = if placeholder_reviewer {
+            "[\"pending-final-independent-review\"]"
+        } else if oracle == "O2" {
+            "[\"spec-reviewer\", \"quality-reviewer\"]"
+        } else {
+            "[\"independent-reviewer\"]"
+        };
+        let manifest = format!(
+            "schema = 1\n\n[identity]\nid = \"{case_id}\"\ntitle = \"Independent maturity holdout\"\nowner = \"quality-corpus\"\nstatus = \"active\"\nintroduced_in = \"0.1.0\"\n\n[specification]\ndocument = \"RPE-TEST\"\nversion = \"1\"\nclauses = [\"RPE-TEST/1\"]\ninterpretation = \"Independent content-addressed holdout.\"\n\n[provenance]\nkind = \"self-authored-generated\"\nsource = \"{prefix}/input.pdf\"\nsha256 = \"sha256:{input_digest}\"\nlicense = \"LicenseRef-PDF.rs-SelfAuthored-Test\"\nredistributable = false\naccess = \"repository\"\n\n[features]\nids = [\"core.test\"]\nrequirements = [\"RPE-TEST/1\"]\n\n[validity]\nclass = \"valid\"\nstrict_expected = \"success\"\nrecovery_expected = \"not-applicable\"\n\n[expected]\nparse = true\nscene = false\ntext = false\npixel = false\ndiagnostic = false\ncapability = false\nerror = false\nservice = \"expected/service.json\"\nservice_sha256 = \"sha256:{expected_digest}\"\n\n[oracle]\nlevel = \"{oracle}\"\nderivation = \"Finite holdout evaluation.\"\nreviewers = {reviewers}\nreference_may_generate = false\nlast_reviewed = \"2026-07-15\"\n\n[budget]\nmax_input_bytes = 4096\nmax_objects = 16\nmax_resolve_depth = 8\nmax_stream_output_bytes = 4096\nmax_total_decode_bytes = 4096\nmax_image_pixels = 1\nmax_path_segments = 1\nmax_scene_commands = 1\nmax_group_depth = 1\noperator_fuel = 100\ndecode_fuel = 100\nwatchdog_ms = 500\nmax_pages = 8\nmax_outline_items = 8\nmax_range_resident_bytes = 4096\n\n[render]\nwidth = 1\nheight = 1\ndpr_milli = 1000\ncolor_profile = \"not-applicable\"\nalpha = \"not-applicable\"\nantialias = \"not-applicable\"\nrenderer_epoch = \"test-v1\"\n\n[tolerance]\nmode = \"exact\"\n\n[runners]\nnative = [\"{executed_test}\"]\nexternal_observation = []\n\n[history]\nentries = [\"2026-07-15: activated\"]\n"
+        );
+        let manifest = emit_subject(root, &format!("{prefix}/case.toml"), &manifest);
+        vec![manifest, input, expected]
     }
 
     fn emit_subject(root: &Path, name: &str, contents: &str) -> String {
@@ -2769,6 +3617,38 @@ mod tests {
         format!("{path}#sha256:{digest}")
     }
 
+    fn replace_profile_field(
+        document: &str,
+        profile_id: &str,
+        field: &str,
+        replacement: &str,
+    ) -> String {
+        let profile_marker = format!("[[profile]]\nid = \"{profile_id}\"");
+        let profile_start = document
+            .find(&profile_marker)
+            .unwrap_or_else(|| panic!("missing profile {profile_id}"));
+        let profile_end = document[profile_start + profile_marker.len()..]
+            .find("\n[[profile]]")
+            .map_or(document.len(), |offset| {
+                profile_start + profile_marker.len() + offset
+            });
+        let field_marker = format!("\n{field} = ");
+        let field_start = document[profile_start..profile_end]
+            .find(&field_marker)
+            .map(|offset| profile_start + offset + 1)
+            .unwrap_or_else(|| panic!("missing {field} in profile {profile_id}"));
+        let field_end = document[field_start..profile_end]
+            .find('\n')
+            .map_or(profile_end, |offset| field_start + offset);
+        format!(
+            "{}{} = {}{}",
+            &document[..field_start],
+            field,
+            replacement,
+            &document[field_end..]
+        )
+    }
+
     fn assert_rejected(mutation: Mutation, code: &str) {
         let repository = TestRepository::differential(mutation);
         let diagnostics = repository.diagnostics();
@@ -2779,22 +3659,29 @@ mod tests {
     }
 
     #[test]
-    fn repository_profiles_are_valid_and_truthfully_planned() {
+    fn repository_profiles_are_valid_and_truthfully_promoted() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/traceability/capability-profiles.toml");
         let report = validate_maturity_file(&path).unwrap();
         assert_eq!(report.profiles, 4);
-        assert_eq!(report.planned, 4);
-        assert_eq!(report.reference, 0);
-        assert_eq!(report.differential, 0);
+        assert_eq!(report.planned, 0);
+        assert_eq!(report.reference, 2);
+        assert_eq!(report.differential, 2);
     }
 
     #[test]
     fn rejects_paper_reference_promotion() {
-        let input = include_str!("../../../docs/traceability/capability-profiles.toml").replacen(
-            "state = \"PLANNED\"",
-            "state = \"REFERENCE\"",
-            1,
+        let input = replace_profile_field(
+            include_str!("../../../docs/traceability/capability-profiles.toml"),
+            "m1.r0-strict.v1",
+            "o0_cases",
+            "[]",
+        );
+        let input = replace_profile_field(
+            &input,
+            "m1.r0-strict.v1",
+            "independent_review",
+            "\"REQUIRED_BEFORE_REFERENCE\"",
         );
         let diagnostics = validate_maturity(&input).unwrap_err();
         assert!(diagnostics.iter().any(|value| {
@@ -2808,23 +3695,32 @@ mod tests {
 
     #[test]
     fn rejects_paper_differential_promotion() {
-        let input = include_str!("../../../docs/traceability/capability-profiles.toml").replacen(
-            "state = \"PLANNED\"",
-            "state = \"DIFFERENTIAL\"",
-            1,
-        );
+        let profile_id = "m1.strict-page-count.v1";
+        let mut input =
+            include_str!("../../../docs/traceability/capability-profiles.toml").to_owned();
+        for (field, replacement) in [
+            ("o2_adjudications", "[]"),
+            ("fuzz_targets", "[]"),
+            ("fuzz_minimizer", "\"REQUIRED_BEFORE_DIFFERENTIAL\""),
+            ("holdout_manifest", "\"REQUIRED_BEFORE_DIFFERENTIAL\""),
+            ("benchmark_report", "\"REQUIRED_BEFORE_DIFFERENTIAL\""),
+            ("differential_report", "\"REQUIRED_BEFORE_DIFFERENTIAL\""),
+            ("baseline_fingerprint", "\"REQUIRED_BEFORE_DIFFERENTIAL\""),
+        ] {
+            input = replace_profile_field(&input, profile_id, field, replacement);
+        }
         let diagnostics = validate_maturity(&input).unwrap_err();
         for field in [
             "o2_adjudications",
             "fuzz_targets",
+            "fuzz_minimizer",
             "holdout_manifest",
             "benchmark_report",
             "differential_report",
             "baseline_fingerprint",
         ] {
             assert!(diagnostics.iter().any(|value| {
-                value.to_string()
-                    == format!("RPE-MATURITY-0011 profile=m1.r0-strict.v1 field={field}")
+                value.to_string() == format!("RPE-MATURITY-0011 profile={profile_id} field={field}")
             }));
         }
     }
@@ -2844,6 +3740,35 @@ mod tests {
         assert_rejected(Mutation::MissingPath, "RPE-MATURITY-0014");
         assert_rejected(Mutation::NonRegularPath, "RPE-MATURITY-0014");
         assert_rejected(Mutation::HashMismatch, "RPE-MATURITY-0014");
+    }
+
+    #[test]
+    fn rejects_holdout_cases_reused_by_o0_o1_or_o2_evidence() {
+        assert_rejected(Mutation::HoldoutCaseOverlap, "RPE-MATURITY-0023");
+    }
+
+    #[test]
+    fn rejects_holdout_bytes_reused_by_the_fuzz_training_corpus() {
+        assert_rejected(Mutation::HoldoutFuzzDigestOverlap, "RPE-MATURITY-0024");
+    }
+
+    #[test]
+    fn rejects_placeholder_reviewer_identities() {
+        let repository = TestRepository::differential(Mutation::PlaceholderReviewer);
+        let diagnostics = repository.diagnostics();
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RPE-MATURITY-0021"
+                && diagnostic.field.as_deref() == Some("holdout_manifest:subject_binding")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RPE-MATURITY-0021"
+                && diagnostic.field.as_deref() == Some("independent_review:subject_binding")
+        }));
+    }
+
+    #[test]
+    fn rejects_benchmark_and_run_environment_commit_mismatch() {
+        assert_rejected(Mutation::CommitAnchorMismatch, "RPE-MATURITY-0025");
     }
 
     #[test]
@@ -2887,7 +3812,7 @@ mod tests {
 
     #[test]
     fn rejects_ambiguous_fuzz_bin_registrations() {
-        let prefix = "[package]\npublish = false\n\n[package.metadata]\ncargo-fuzz = true\n\n[dependencies]\nlibfuzzer-sys = \"0.4\"\n\n";
+        let prefix = "[package]\npublish = false\n\n[package.metadata]\ncargo-fuzz = true\n\n[dependencies]\nlibfuzzer-sys = \"=0.4.13\"\n\n";
         let duplicate_name = format!(
             "{prefix}[[bin]]\nname = \"one\"\npath = \"fuzz_targets/one.rs\"\n\n[[bin]]\nname = \"one\"\npath = \"fuzz_targets/two.rs\"\n"
         );
@@ -2900,6 +3825,47 @@ mod tests {
         for manifest in [&duplicate_name, &duplicate_path, &unknown_key] {
             assert!(parse_fuzz_registrations(manifest).is_none());
         }
+    }
+
+    #[test]
+    fn fuzz_binding_rejects_compile_only_paper_evidence() {
+        let executed_tests = vec!["tools/quality::m1_document_service_fuzz".to_owned()];
+        let fuzz_targets = vec!["fuzz.m1documentservices".to_owned()];
+        let real = VerifiedSubject {
+            relative: "tools/quality/tests/m1_document_service_fuzz.rs".to_owned(),
+            bytes: include_bytes!("../tests/m1_document_service_fuzz.rs").to_vec(),
+            package_registered: true,
+        };
+        assert!(fuzz_build_test_binds(&real, &executed_tests, &fuzz_targets));
+
+        let compile_only = VerifiedSubject {
+            relative: real.relative.clone(),
+            bytes: b"#[test]\nfn paper() { let status = std::process::Command::new(\"cargo\").arg(\"check\").arg(\"--manifest-path\").arg(\"fuzz/Cargo.toml\").status().unwrap(); assert!(status.success()); }\n".to_vec(),
+            package_registered: true,
+        };
+        assert!(!fuzz_build_test_binds(
+            &compile_only,
+            &executed_tests,
+            &fuzz_targets
+        ));
+    }
+
+    #[test]
+    fn benchmark_binding_rejects_raw_sample_only_paper_evidence() {
+        let executed_tests = vec!["tools/quality::m1_document_service_maturity".to_owned()];
+        let real = VerifiedSubject {
+            relative: "tools/quality/tests/m1_document_service_maturity.rs".to_owned(),
+            bytes: include_bytes!("../tests/m1_document_service_maturity.rs").to_vec(),
+            package_registered: true,
+        };
+        assert!(benchmark_test_binds(&real, &executed_tests));
+
+        let paper = VerifiedSubject {
+            relative: real.relative,
+            bytes: b"#[test]\nfn paper() { let raw_samples_ns = [1_u64; 21]; assert_eq!(raw_samples_ns.len(), 21); }\n".to_vec(),
+            package_registered: true,
+        };
+        assert!(!benchmark_test_binds(&paper, &executed_tests));
     }
 
     #[test]

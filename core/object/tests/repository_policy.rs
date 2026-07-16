@@ -195,8 +195,8 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.63.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.63.0"));
 
     let anchor_feature = record_with_id(&feature_map, "feature", "core.source-xref-anchor")
         .expect("source xref-anchor feature record must exist");
@@ -246,8 +246,10 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
         assert!(requirement.contains("core/object::staged_length"));
         assert!(requirement.contains("same-snapshot"));
         assert!(requirement.contains("resolver"));
-        assert!(requirement.contains("M1 exit"));
     }
+    assert!(syntax_requirement.contains("contribute to the covered M1 byte-and-object gate"));
+    assert!(object_requirement.contains("contribute to the covered M1 byte-and-object gate"));
+    assert!(milestone.contains("these bounded gates cover M1"));
     assert!(syntax_requirement.contains("does not itself resolve or attest"));
     assert!(object_requirement.contains("m1.revision-aware-uncompressed-resolver.v1"));
     assert!(object_requirement.contains("effective uncompressed direct nonnegative integer"));
@@ -264,12 +266,12 @@ fn traceability_registers_staged_stream_length_without_claiming_a_resolver() {
     ));
     assert!(milestone.contains("indirect-Length xref streams"));
     assert!(milestone.contains("source-acquired document owner now closes"));
-    assert!(milestone.contains("all affected profiles remain unpromoted"));
+    assert!(milestone.contains("strict R0 and bounded local R1 at REFERENCE"));
 
     let repair = record_with_id(&feature_map, "feature", "core.local-repair")
         .expect("local-repair feature record must exist");
     for required in [
-        "state = \"PLANNED\"",
+        "state = \"REFERENCE\"",
         "profile = \"m1.r1-local-repair.v1\"",
         "core/object::local_repair",
         "core/object::object_behavior",

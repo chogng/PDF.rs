@@ -140,18 +140,9 @@ pub fn case_contract(case: ServiceCase) -> CaseContract {
 }
 
 pub fn case_contract_from_manifest(case: ServiceCase, input: &str) -> CaseContract {
+    let contract = contract_from_manifest(input, "tools/quality::m1_document_service_differential");
     let manifest = validate_manifest(input).expect("document-service case manifest validates");
     assert_eq!(manifest.case_id(), case.id);
-    assert_eq!(
-        manifest.string("expected", "service"),
-        Some("expected/service.json")
-    );
-    assert!(
-        manifest
-            .string_array("runners", "native")
-            .expect("validated manifest has Native runners")
-            .contains(&"tools/quality::m1_document_service_differential")
-    );
     let oracle_level = manifest
         .string("oracle", "level")
         .expect("validated manifest has an oracle level");
@@ -162,6 +153,25 @@ pub fn case_contract_from_manifest(case: ServiceCase, input: &str) -> CaseContra
         }
     };
     assert_eq!(oracle_level, expected_oracle);
+
+    contract
+}
+
+pub fn contract_from_manifest(input: &str, required_runner: &str) -> CaseContract {
+    let manifest = validate_manifest(input).expect("document-service case manifest validates");
+    assert_eq!(
+        manifest.string("expected", "service"),
+        Some("expected/service.json")
+    );
+    assert!(
+        manifest
+            .string_array("runners", "native")
+            .expect("validated manifest has Native runners")
+            .contains(&required_runner)
+    );
+    let oracle_level = manifest
+        .string("oracle", "level")
+        .expect("validated manifest has an oracle level");
 
     CaseContract {
         input_sha256: manifest.source_sha256().to_owned(),
@@ -332,9 +342,13 @@ pub fn build_fixture(case: ServiceCase) -> Fixture {
         CaseKind::MismatchedRootPageCount => nested_objects(true, false),
         CaseKind::WrongOutlinePrev => nested_objects(false, true),
     };
+    build_fixture_from_objects(case.seed, &objects)
+}
+
+pub fn build_fixture_from_objects(seed: u8, objects: &[(u32, String)]) -> Fixture {
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
-    for (number, body) in &objects {
+    for (number, body) in objects {
         offsets.push((
             *number,
             u64::try_from(bytes.len()).expect("fixture offset fits u64"),
@@ -365,18 +379,22 @@ pub fn build_fixture(case: ServiceCase) -> Fixture {
         format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{startxref}\n%%EOF\n")
             .as_bytes(),
     );
+    fixture_from_bytes(seed, bytes)
+}
+
+pub fn fixture_from_bytes(seed: u8, bytes: Vec<u8>) -> Fixture {
     let len = u64::try_from(bytes.len()).expect("fixture length fits u64");
     Fixture {
         bytes,
         snapshot: SourceSnapshot::new(
             SourceIdentity::new(
-                SourceStableId::new([case.seed; 32]),
-                SourceRevision::new(u64::from(case.seed)),
+                SourceStableId::new([seed; 32]),
+                SourceRevision::new(u64::from(seed)),
             ),
             Some(len),
             SourceValidator::new(
                 SourceValidatorKind::FrozenResponse,
-                [case.seed.wrapping_add(1); 32],
+                [seed.wrapping_add(1); 32],
             ),
         ),
     }
@@ -387,16 +405,34 @@ pub fn run_native(
     contract: &CaseContract,
 ) -> Result<ServiceResult, &'static str> {
     let fixture = build_fixture(case);
+    run_native_fixture(case.seed, &fixture, contract)
+}
+
+#[allow(dead_code)]
+pub fn run_native_bytes(
+    seed: u8,
+    bytes: &[u8],
+    contract: &CaseContract,
+) -> Result<ServiceResult, &'static str> {
+    let fixture = fixture_from_bytes(seed, bytes.to_vec());
+    run_native_fixture(seed, &fixture, contract)
+}
+
+fn run_native_fixture(
+    seed: u8,
+    fixture: &Fixture,
+    contract: &CaseContract,
+) -> Result<ServiceResult, &'static str> {
     let mut session = M1StrictDocumentSession::new(
-        ReadyStoreSessionId::new(0xd1_0000 + u64::from(case.seed)),
+        ReadyStoreSessionId::new(0xd1_0000 + u64::from(seed)),
         OPEN_REQUEST,
-        strict_job(&fixture, contract),
+        strict_job(fixture, contract),
         range_limits(contract),
         ReadyStoreEpoch::new(1),
         Default::default(),
     )
     .expect("M1 service session limits validate");
-    drive_open_ready(&mut session, &fixture, contract)?;
+    drive_open_ready(&mut session, fixture, contract)?;
     session
         .request_page_count(PAGE_REQUEST, page_context(), page_limits(contract))
         .expect("the page-count slot is available");
@@ -456,7 +492,7 @@ pub fn run_native(
                 }
             },
             M1SessionRun::WaitingForData { missing, .. } => {
-                supply_reverse(&mut session, &fixture, missing, contract);
+                supply_reverse(&mut session, fixture, missing, contract);
             }
             other => panic!("both bounded services must reach a terminal result: {other:?}"),
         }

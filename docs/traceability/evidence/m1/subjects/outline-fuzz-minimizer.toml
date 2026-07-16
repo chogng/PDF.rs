@@ -1,0 +1,17 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.outline.fuzz-minimizer"
+evidence_kind = "fuzz-target-and-minimized-corpus"
+feature = "core.strict-outline"
+target = "core/document::AttestedRevisionIndex::read_outline"
+executed_tests = ["tools/quality::m1_document_service_fuzz"]
+fuzz_targets = ["fuzz.m1documentservices"]
+benchmarks = []
+case_ids = ["fuzz.m1-document-services.minimal.pdf", "fuzz.m1-document-services.truncated-header.pdf", "fuzz.m1-document-services.nested-outline.pdf"]
+minimizer = "cargo-fuzz-cmin"
+dictionary = "tools/quality/fuzz/dictionaries/pdf.dict#sha256:f36cc6e8a742e216c0792a657519c43eb2880771410ea797c8b10d4e24ced99f"
+crash_minimization = "not-applicable:no-crash-observed"
+owner = "quality-corpus"
+invariant = "All bytes drive bounded Native strict-open and, when Ready, page-count and outline services without panic or resource escape."
+cargo_fuzz_version = "0.13.2"
+verdict = "pass"

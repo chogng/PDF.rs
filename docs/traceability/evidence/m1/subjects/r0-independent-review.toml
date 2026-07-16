@@ -1,0 +1,12 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.r0.independent-review"
+evidence_kind = "independent-review-report"
+feature = "core.strict-repair-policy"
+target = "core/document::OpenStrictBaseRevisionJob"
+executed_tests = ["core/document::strict_base_open"]
+fuzz_targets = []
+benchmarks = []
+reviewers = ["review-xref-repair", "revision-semantics-review"]
+independent = true
+verdict = "pass"

@@ -728,9 +728,10 @@ strictness difference because PDFium does not expose that backlink. A separate p
 probe matched Native exactly and repeatably on valid one-page and nested three-page fixtures. On an
 otherwise identical nested fixture whose positive root Count was 4 rather than the recomputed 3,
 Native returned `RPE-DOCUMENT-0033` while PDFium produced `page_count=4`, an expected strictness
-difference. Both probes are non-gating and unregistered; the relevant feature states remain
-`PLANNED`, and there is no canonical broad corpus, registered/contained PDFium baseline, or M1 exit
-claim in this slice.
+difference. Both probes are non-gating and unregistered and do not contribute to the current
+project-owned page-count/outline DIFFERENTIAL profiles or the bounded M1 exit gate. Broad external
+corpus coverage, baseline-ledger registration, and platform-enforced isolation remain open for any
+future registered PDFium observation.
 
 # Dependencies and generated data
 
@@ -829,8 +830,11 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
 - The product strict-open path still accepts only one traditional base revision. A separate
   already-composed-chain resolver implements latest-wins uncompressed lookup and binds validated
   unfiltered object streams. The source coordinator can opt into foundational filtered
-  direct-Length `/Prev` and `/XRefStm` chains, but indirect-Length xref streams, product attestation
-  of that chain, object-stream scheduling/ownership, and service integration remain unsupported.
+  direct-Length `/Prev` and `/XRefStm` chains, but indirect-Length xref streams and product
+  attestation of that chain remain unsupported there. That coordinator itself does not own
+  object-stream scheduling or services; the separate source-acquired owner now provides bounded
+  filtered/unfiltered object-stream scheduling plus page-count and outline integration without
+  converting the acquired chain into strict or repaired typestate.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
@@ -854,12 +858,13 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
 - The separate page-count O4 comparison covers only two fixed valid counts and one mismatched
   positive root Count. It is exact and repeatable on the valid fixtures, but remains non-gating and
   unregistered and cannot adjudicate the Native validator's Parent, cycle, duplicate, or recursive
-  Count evidence. It does not advance the feature from `PLANNED` or establish M1 exit.
+  Count evidence. It does not contribute to the project-owned DIFFERENTIAL promotion or the bounded
+  M1 exit gate, both of which rely on the separately registered internal evidence graph.
 - Outline enumeration is limited to the direct-semantic-value `m1.strict-outline.v1` bootstrap.
   Indirect outline-root `Type`, indirect `Title`, `Count`, `Dest`, and `A` values, indirect root or
   item aliases, undefined-reference and reference-to-null omission semantics, styles, destination
-  resolution, action inspection or execution, persistent outline ownership, canonical corpus
-  fixtures, registered/contained PDFium baseline execution, and broad Native/PDFium Outline
+  resolution, action inspection or execution, persistent outline ownership, broad corpus fixtures,
+  baseline-ledger registration, platform-enforced PDFium isolation, and broad Native/PDFium Outline
   differential evidence remain unsupported. The separate non-gating O4 probe covers only the
   normalized public-bookmark intersection and one expected `/Prev` strictness difference.
 - Text-string decoding implements the ISO 32000-1:2008 PDFDocEncoding and UTF-16BE profile only. It

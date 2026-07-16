@@ -6,7 +6,7 @@ use pdf_rs_digest::sha256;
 
 const REPORT_ID: &str = "pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1";
 const REPORT_HASH: &str = "bdd25b8d8843e62b500987a87080f0956ac8fe6ee7cdc351b6dc1689acd06e31";
-const DATA_LEDGER_VERSION: &str = "0.10.0";
+const DATA_LEDGER_VERSION: &str = "0.11.0";
 const REPORT: &[u8] = include_bytes!(
     "../pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1.toml"
 );
@@ -224,11 +224,12 @@ fn page_count_boundary_performance_evidence_is_traced_but_not_registered() {
     let feature_map = include_str!("../../../docs/traceability/feature-map.toml");
     let page_count = array_record(feature_map, "feature", "core.strict-page-count");
     let boundary = array_record(feature_map, "feature", "quality.baseline-protocol-boundary");
-    for record in [page_count, boundary] {
-        assert!(record.contains("tools/baseline::pdfium_page_count_performance"));
-        assert!(record.contains("tools/baseline::repository_pdfium_page_count_performance_probe"));
-        assert!(record.contains("state = \"PLANNED\""));
-    }
+    assert!(page_count.contains("state = \"DIFFERENTIAL\""));
+    assert!(!page_count.contains("tools/baseline::pdfium_page_count_performance"));
+    assert!(!page_count.contains("tools/baseline::repository_pdfium_page_count_performance_probe"));
+    assert!(boundary.contains("tools/baseline::pdfium_page_count_performance"));
+    assert!(boundary.contains("tools/baseline::repository_pdfium_page_count_performance_probe"));
+    assert!(boundary.contains("state = \"PLANNED\""));
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
     assert!(spec_map.contains("tools/baseline::pdfium_page_count_performance"));
     assert!(spec_map.contains("tools/baseline::repository_pdfium_page_count_performance_probe"));

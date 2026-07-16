@@ -25,6 +25,18 @@ A separate four-case document-service suite binds each self-authored PDF and can
 by SHA-256, drives the bounded `M1StrictDocumentSession` through reverse Range delivery, page-count
 and outline requests, deterministic replay, and explicit close, and compares the complete declared
 Native service projection with an independently encoded finite O0/O1 case model.
+The M1 promotion layer binds R0 and R1 to reviewed Native implementation and O0/O1 cases, and binds
+page-count and outline to the independent reference, the two-role optional-field adjudication,
+two independent content-addressed holdout PDFs, reference-checked release timing samples, one
+registered `libfuzzer-sys` target, a fixed 64-run coverage-guided replay, real `cargo fuzz cmin`
+coverage minimization with a content-addressed PDF dictionary, full-session differential results,
+and canonical project-reference fingerprints that bind their inputs and run environment. Every
+promotion artifact excludes external observation and O4.
+Page-count and outline use an atomic two-gate promotion: the same reviewed change first satisfies
+PLANNED-to-REFERENCE with the independent implementation, O0/O1, boundaries, budgets, provenance,
+and independent review, then satisfies REFERENCE-to-DIFFERENTIAL with O2, disjoint holdouts,
+fuzz/minimizer, raw performance distribution, full-session comparison, and fingerprints. No
+intermediate product or CANARY exposure occurred.
 
 # Semantic owner
 
@@ -84,15 +96,23 @@ artifact must bind its registered test to that executable Cargo target; other Ru
 limited to source-backed roles. REFERENCE subjects bind the symbolic target to a registered workspace
 implementation source and integration test. O0/O1 subjects must pass the canonical case-manifest
 validator and bind the exact oracle level, feature, Native runner, independent review, and
-reference-generation prohibition; O2 binds a two-reviewer adjudicated case or report. Review,
+reference-generation prohibition; O2 requires a two-reviewer adjudicated O2 case, an executable
+same-input Native/reference/pre-fix replay, correction identity, and three content hashes. Review,
 minimizer, holdout, benchmark, differential, and fingerprint roles require separate canonical
 subject reports. The minimizer additionally hash-binds a workspace package's canonical cargo-fuzz
 manifest (`publish = false`, cargo-fuzz metadata, `libfuzzer-sys`, and unique `[[bin]]` name/path),
 its exact `fuzz_targets` source with the no-main libFuzzer entry, a registered integration test that
-runs `cargo check --manifest-path` for that fuzz package, and minimized case IDs. The benchmark binds
-registered scenario IDs, positive raw samples, and
-performance eligibility; the differential binds an executable full-Session test and result cases;
-and the fingerprint binds a lowercase SHA-256 identity. These anchors prevent the maturity
+runs locked compilation plus bounded `cargo fuzz run` and `cargo fuzz cmin`, exact cargo-fuzz
+version, one corpus positional argument, dictionary, seed, run count, input length, timeout, and RSS
+limits, and minimized case IDs. Holdout evidence must bind at least two case manifests plus their
+actual input and expected-service bytes, exact hashes, Native runners, and a test that compares the
+independent reference. The benchmark binds registered scenario IDs, exactly 21 positive raw
+samples, recomputed median/p95/p99, a median confidence interval, complete testing-standard host and
+build metadata, exact corpus hash, warmup/cache scope, and per-sample reference equality; it remains
+ineligible for release, external comparison, or a regression threshold on the local host. The
+differential binds an executable full-Session test and result cases. The fingerprint is the SHA-256
+of the sorted canonical content references for the reference source, case manifests, inputs,
+expected outputs, and a validated run-environment record. These anchors prevent the maturity
 artifact's own metadata from serving as its complete proof.
 
 The `m0.parser-mutation-smoke.v1` integration test binds the exact SHA-256 of
@@ -242,8 +262,8 @@ page-count helper on self-authored inputs. Its valid one-page and nested three-p
 exact and repeatable. With the nested root's positive Count changed from 3 to 4, Native returns
 `RPE-DOCUMENT-0033` while PDFium produces `page_count=4`; this is an expected strictness difference.
 That real O4 comparison is still non-gating and unregistered, does not change this Native object
-loop's older `pages_processed=1` smoke classification, leaves the page-count feature `PLANNED`, and
-does not establish M1 exit.
+loop's older `pages_processed=1` smoke classification, contributes nothing to the project-owned
+page-count maturity graph, and does not establish M1 exit.
 
 A release-mode baseline-tool follow-up uses one separate hash-fixed 128-page fixture for two
 50-sample trials. All timed and warmup Native/PDFium counts agree. It records Native full
@@ -264,6 +284,18 @@ projection with the independent case model, compares canonical JSON with the rep
 and closes to zero jobs and resident resources. No PDFium process or external baseline participates
 in this suite.
 
+The separate M1 maturity suite does not reuse those O0/O1 PDFs as holdout evidence. One independent
+holdout contains a four-leaf page tree and two-item outline and pins the exact ten-object budget
+boundary. A second sealed, disjoint holdout contains two direct page leaves and one outline item
+under an exact six-object budget. Both are content-addressed full-session oracles reviewed separately
+from the development cases and fuzz corpus. A distinct O2 adjudication PDF places integer values in
+optional reference slots and is excluded from the holdout set. On those identical adjudication bytes,
+the frozen pre-fix projection reports page count one and an empty outline, Native reports
+`RPE-DOCUMENT-0032` and `RPE-DOCUMENT-0036`, and the independent reference rejects both fields. The
+test binds all three canonical output hashes and correction commit `a5ec35b`. Its benchmark performs
+one untimed warmup and then measures exactly 21 fresh bounded Native sessions in release mode; every
+timed result must equal the independent reference before its sample is retained.
+
 # Dependencies and generated data
 
 - Rust standard library.
@@ -271,7 +303,14 @@ in this suite.
   plus test-only `pdf-rs-corpus`, `pdf-rs-benchmark`, `pdf-rs-bytes`,
   `pdf-rs-syntax`, `pdf-rs-xref`, `pdf-rs-object`, `pdf-rs-document`,
   `pdf-rs-cache`, and `pdf-rs-session` dependencies.
-- No external packages, engines, fonts, color data, or user documents.
+- The nested non-product fuzz package directly pins `libfuzzer-sys = 0.4.13`; its own Cargo.lock
+  binds the complete transitive closure. The gating toolchain pins `cargo-fuzz 0.13.2`, binds the
+  crates.io source-package hash, and provisions it with `cargo install --locked --version 0.13.2
+  cargo-fuzz`. Both have conditional non-product dependency-ledger records. The PR replay uses
+  `--sanitizer none`, a repository PDF dictionary, a bounded 64-run campaign, and real
+  coverage-corpus minimization; neither dependency enters any product closure. Crash minimization
+  is explicitly not applicable when the bounded run produces no crash.
+- No external engine, font, color data, or user document enters the maturity evidence graph.
 
 # Tests and fuzz targets
 
@@ -279,8 +318,8 @@ Tests cover required manifest groups, malformed syntax, duplicates, hash/oracle/
 budget validation, deterministic bundle addressing, source/render/contract
 binding, artifact completeness, mismatch diagnostics, idempotent writes, and
 rejection of product-to-tools or full-engine dependencies. The cross-tool
-M1 maturity tests validate the repository's four truthfully PLANNED profiles and prove that
-label-only REFERENCE and DIFFERENTIAL edits fail on their missing evidence fields. An isolated fake
+M1 maturity tests validate two REFERENCE and two DIFFERENTIAL profiles and prove that
+label-only promotions fail on missing or inconsistent evidence. An isolated fake
 repository additionally proves one complete content-addressed DIFFERENTIAL graph passes and rejects
 absolute or traversing references, missing and non-regular paths, hash drift, duplicate references,
 O4/external or ineligible/unregistered/non-gating artifacts, schema and graph drift, feature/spec
@@ -322,10 +361,17 @@ explicit Closing, and zero terminal resources. The independent direct-dictionary
 optional null, valid, and ill-typed fields separately; integer-as-reference mutations cover Catalog
 Outlines, page Parent, and outline First/Last/Prev/Next, with separate Count and target-shape checks.
 
-This is not a registered fuzz target. It has no coverage guidance, randomness,
-dictionary, corpus growth, sanitizer, watchdog, minimizer, nightly campaign, or
-release eligibility. Continuous parser fuzzing, automated failure bundles, and
-interrupted-write recovery remain planned before T1 inputs.
+`fuzz.m1documentservices` is a registered, non-product `libfuzzer-sys` target. It feeds arbitrary
+bytes into `OpenStrictBaseRevisionJob`, drives exact Range responses through
+`M1StrictDocumentSession`, and requests both Native services after Ready. The build gate runs
+`cargo check --locked --manifest-path`; the replay gate uses copies of three reviewed source seeds—a
+minimal PDF, a truncated header, and a valid nested-outline PDF—in a temporary corpus with fixed seed
+424242, exactly 64 runs, 1 MiB maximum input, one-second per-input timeout, and 512 MiB libFuzzer RSS
+limit. A separate real `cargo fuzz cmin` run retains a nonexpanding corpus of three
+coverage-selected outputs. `--sanitizer none` preserves stable-toolchain
+portability, so this is genuine libFuzzer
+coverage-guided parser fuzzing without ASan/MSan or other sanitizer evidence; it is not continuous
+duration evidence, a nightly campaign, or CANARY-scale corpus evidence.
 
 # Known deviations and unsupported cases
 
@@ -334,11 +380,12 @@ interrupted-write recovery remain planned before T1 inputs.
   review, fuzz campaign, holdout execution, benchmark samples, differential run, or reference build.
   Those substantive claims remain owned by their registered producers and domain-specific gates.
   The reader is intentionally a strict repository schema subset rather than a general TOML parser.
-- The document-service suite is project-authored Native/reference evidence and does not register or
-  promote either service by itself. Promotion still requires the complete content-addressed
-  maturity graph, runnable fuzz/minimizer registration, disjoint holdout, eligible benchmark,
-  independent review, reference fingerprint, and trace/ledger state transition. The existing O4
-  PDFium probes remain unregistered and non-gating.
+- The document-service suite does not self-promote either service. Promotion is the conjunction of
+  the complete content-addressed graph, runnable fuzz/minimizer registration, distinct holdout,
+  same-Native-scope performance-eligible raw distribution, independent review, project-reference
+  fingerprint, and trace/ledger state transition. The four-case and 64-run sizes are deliberately
+  bounded and are not described as CANARY coverage. Existing O4 PDFium probes remain unregistered,
+  non-gating, and absent from every evidence cross-reference.
 
 - The manifest parser does not claim general TOML compatibility; multiline
   arrays, dotted keys, inline tables, escapes within array elements, and comments
@@ -389,10 +436,15 @@ interrupted-write recovery remain planned before T1 inputs.
   IPC, event publication, broad lifecycle model evidence, or a registered differential. The arbiter
   API reports RangeStore backing and registration capacity separately, while the store's internal
   allocator metadata remains only indirectly bounded. The relevant features remain `PLANNED`, and
-  none of these loops establishes M1 exit.
+  none of these component loops alone establishes M1 exit; the bounded M1 gate is established only
+  by their conjunction with the registered repair and service-maturity evidence graph.
 
 # History
 
+- 2026-07-15: Promoted R0/R1 to REFERENCE and strict page-count/outline to DIFFERENTIAL with 28
+  content-addressed, ledger-bound artifacts; added a separate two-role optional-field adjudication,
+  two disjoint holdouts and full-session replay, positive same-Native-scope raw samples, project-reference
+  fingerprints, and a fixed 64-run coverage-guided fuzz replay without registering PDFium O4.
 - 2026-07-15: Added four content-addressed strict document-service cases and a budget-bound
   comparison through `M1StrictDocumentSession` against independent O0/O1 finite models, with reverse
   Range delivery, validator-owned product limits, object/depth boundary rejection, tri-state optional
@@ -401,8 +453,8 @@ interrupted-write recovery remain planned before T1 inputs.
   references, exact artifact metadata and cross-reference graphs, feature/spec registrations, and
   data-ledger hashes; added role-specific content-addressed subjects and executed-test registration
   so artifact metadata cannot self-certify promotion, with isolated promotion and rejection fixtures.
-- 2026-07-15: Added the machine-readable M1 capability-profile ledger and a PR gate that retains
-  all profiles as PLANNED while rejecting evidence-free maturity relabelling.
+- 2026-07-15: Introduced the machine-readable M1 capability-profile ledger with every profile
+  initially PLANNED and a PR gate that rejects evidence-free maturity relabelling.
 
 - 2026-07-15: Drove the generated PDF through the public strict-open coordinator, verifying exact
   five-checkpoint actor-turn coordination, opaque Ready source ownership and release evidence, and

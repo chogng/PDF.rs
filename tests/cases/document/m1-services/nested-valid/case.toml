@@ -15,7 +15,7 @@ interpretation = "Postorder page counting and preorder outline traversal indepen
 
 [provenance]
 kind = "self-authored-generated"
-source = "tools/quality/tests/m1_document_service_support/mod.rs"
+source = "tests/cases/document/m1-services/nested-valid/input.pdf"
 sha256 = "sha256:ccfb1b1deb755ace8a2b59d9e4f006d0686d89b69b0ea74b1544873b3fb9629f"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = true

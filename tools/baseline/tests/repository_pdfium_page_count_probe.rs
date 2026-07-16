@@ -6,7 +6,7 @@ use pdf_rs_digest::sha256;
 
 const REPORT_ID: &str = "pdfium-c040cf96-macos-arm64-o4-page-count-differential-probe-v1";
 const REPORT_HASH: &str = "44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878";
-const DATA_LEDGER_VERSION: &str = "0.10.0";
+const DATA_LEDGER_VERSION: &str = "0.11.0";
 const DATA_LEDGER_SOURCE_HASH: &str =
     "44012e3c647bd58091cd08ea02bf5430aaddd05c12fe2140cb43854e586ef878";
 const REPORT: &[u8] = include_bytes!(
@@ -282,14 +282,16 @@ fn page_count_evidence_is_data_bound_but_not_a_registered_baseline() {
     let feature_map = include_str!("../../../docs/traceability/feature-map.toml");
     let page_count_feature = array_record(feature_map, "feature", "core.strict-page-count");
     assert_line(page_count_feature, "profile = \"m1.strict-page-count.v1\"");
-    assert_line(page_count_feature, "state = \"PLANNED\"");
-    assert!(page_count_feature.contains("tools/baseline::pdfium_page_count_real_adapter"));
-    assert!(page_count_feature.contains("tools/baseline::repository_pdfium_page_count_probe"));
+    assert_line(page_count_feature, "state = \"DIFFERENTIAL\"");
+    assert!(!page_count_feature.contains("tools/baseline::pdfium_page_count_real_adapter"));
+    assert!(!page_count_feature.contains("tools/baseline::repository_pdfium_page_count_probe"));
+    assert!(page_count_feature.contains("tools/quality::m1_document_service_differential"));
+    assert!(page_count_feature.contains("fuzz.m1documentservices"));
 
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
     assert!(spec_map.contains("tools/baseline::pdfium_page_count_real_adapter"));
     assert!(spec_map.contains("tools/baseline::repository_pdfium_page_count_probe"));
-    assert!(spec_map.contains("PageTreeCountMismatch"));
+    assert!(spec_map.contains("RPE-DOCUMENT-0033"));
     assert!(spec_map.contains("expected strictness difference"));
     assert!(spec_map.contains("not a registered baseline"));
 

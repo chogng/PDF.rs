@@ -1,13 +1,13 @@
 schema = 1
-version = "0.62.0"
+version = "0.63.0"
 status = "active"
 
 [[feature]]
 id = "core.strict-repair-policy"
 owner = "parser-security"
-state = "PLANNED"
+state = "REFERENCE"
 profile = "m1.r0-strict.v1"
-clauses = ["RPE-ARCH-001/5.3-5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
+clauses = ["RPE-ARCH-001/5.3", "RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
 modules = ["core/xref", "core/object", "core/document"]
 tests = ["core/xref::traditional_xref", "core/object::object_behavior", "core/document::strict_base_open", "tools/quality::maturity"]
 fuzz_targets = []
@@ -17,9 +17,9 @@ introduced_in = "0.1.0"
 [[feature]]
 id = "core.local-repair"
 owner = "parser-security"
-state = "PLANNED"
+state = "REFERENCE"
 profile = "m1.r1-local-repair.v1"
-clauses = ["RPE-ARCH-001/5.4-5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
 modules = ["core/xref", "core/object", "core/document"]
 tests = ["core/xref::local_repair", "core/xref::traditional_xref", "core/object::local_repair", "core/object::object_behavior", "core/document::local_repair_geometry", "core/document::local_repair_open", "tools/quality::maturity"]
 fuzz_targets = []
@@ -293,25 +293,25 @@ introduced_in = "0.1.0"
 [[feature]]
 id = "core.strict-outline"
 owner = "parser-security"
-state = "PLANNED"
+state = "DIFFERENTIAL"
 profile = "m1.strict-outline.v1"
-clauses = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+clauses = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::local_repair_open", "core/document::acquired_services", "core/document::repository_policy", "tools/baseline::pdfium_outline_real_adapter", "tools/baseline::repository_pdfium_outline_probe"]
-fuzz_targets = []
-benchmarks = []
+tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::local_repair_open", "core/document::acquired_services", "core/document::repository_policy", "tools/quality::m1_document_service_differential", "tools/quality::m1_document_service_maturity", "tools/quality::m1_document_service_fuzz"]
+fuzz_targets = ["fuzz.m1documentservices"]
+benchmarks = ["benchmark.m1-native-document-services"]
 introduced_in = "0.1.0"
 
 [[feature]]
 id = "core.strict-page-count"
 owner = "parser-security"
-state = "PLANNED"
+state = "DIFFERENTIAL"
 profile = "m1.strict-page-count.v1"
-clauses = ["RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
 modules = ["core/document"]
-tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::local_repair_open", "core/document::acquired_services", "core/document::repository_policy", "tools/baseline::pdfium_page_count_real_adapter", "tools/baseline::pdfium_page_count_performance", "tools/baseline::repository_pdfium_page_count_probe", "tools/baseline::repository_pdfium_page_count_performance_probe", "tools/quality::native_object_loop"]
-fuzz_targets = []
-benchmarks = []
+tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::local_repair_open", "core/document::acquired_services", "core/document::repository_policy", "tools/quality::m1_document_service_differential", "tools/quality::m1_document_service_maturity", "tools/quality::m1_document_service_fuzz", "tools/quality::native_object_loop"]
+fuzz_targets = ["fuzz.m1documentservices"]
+benchmarks = ["benchmark.m1-native-document-services"]
 introduced_in = "0.1.0"
 
 [[feature]]

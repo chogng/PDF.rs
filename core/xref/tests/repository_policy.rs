@@ -209,8 +209,8 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("spec traceability map must be readable during repository tests");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.63.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.63.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -419,12 +419,14 @@ fn traceability_maps_are_versioned_together_and_register_xref() {
         )
     );
     assert!(requirement.contains("`/Prev` traversal"));
-    assert!(requirement.contains("schedules exact filtered or unfiltered object-stream payload reads"));
+    assert!(
+        requirement.contains("schedules exact filtered or unfiltered object-stream payload reads")
+    );
     assert!(requirement.contains("repair"));
-    assert!(requirement.contains("does not claim M1 exit"));
+    assert!(requirement.contains("contribute to the covered M1 byte-and-object gate"));
     assert!(requirement.contains("ISO conformance"));
-    assert!(requirement.contains("R0 conformance"));
-    assert!(requirement.contains("Native/PDFium semantic or pixel differential"));
+    assert!(requirement.contains("a release profile"));
+    assert!(requirement.contains("Native/PDFium pixel maturity"));
 
     let ready_store_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/9.1")
         .expect("the session Ready-store architecture requirement record must exist");

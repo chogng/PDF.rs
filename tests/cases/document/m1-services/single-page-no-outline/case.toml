@@ -15,7 +15,7 @@ interpretation = "A one-leaf Pages tree reports one page; an absent Catalog Outl
 
 [provenance]
 kind = "self-authored-generated"
-source = "tools/quality/tests/m1_document_service_support/mod.rs"
+source = "tests/cases/document/m1-services/single-page-no-outline/input.pdf"
 sha256 = "sha256:1d9575155aee9da157652b5388796e6819c1f55cfd83e0f3b07dd7cf78e6b446"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = true

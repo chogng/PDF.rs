@@ -1,6 +1,6 @@
 schema = 1
 id = "r0-development-plan"
-version = "0.2.0"
+version = "0.3.0"
 status = "active"
 planning_basis = "RPE-ARCH-001 v0.3, sections 2.6 and 15.3"
 last_updated = 2026-07-15
@@ -73,7 +73,7 @@ title = "Bytes and objects"
 owner_role = "parser-security"
 reviewer_roles = ["quality-corpus", "spec-conformance"]
 planned_fte = 4.0
-start_date = 2026-08-31
+start_date = 2026-07-15
 target_date = 2026-10-30
 dependencies = ["M0"]
 max_parallel_work_items = 3
@@ -83,6 +83,24 @@ deliverables = [
   "R0/R1 repair",
 ]
 exit_gate = "Out-of-order Range, cancellation, and source-change E2E pass; page-count and outline services reach DIFFERENTIAL."
+status = "complete"
+completed_at = 2026-07-15
+reviewed_by_roles = ["quality-corpus", "spec-conformance"]
+evidence = [
+  "snapshot-bound Range pause/resume, reverse delivery, cancellation, and source-change E2E: cargo test -p pdf-rs-session --test range_loopback_http --test m1_strict_document_session",
+  "bounded syntax, xref, object, strict R0, and local R1 layers: cargo test --workspace --all-targets",
+  "R0 and R1 reviewed REFERENCE profiles plus page-count and outline DIFFERENTIAL profiles: cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml",
+  "four registered service cases, two disjoint holdouts, and separate same-input O2 adjudication: cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases and cargo test -p pdf-rs-quality --test m1_document_service_maturity -- --nocapture",
+  "full-session Native/reference comparison: cargo test -p pdf-rs-quality --test m1_document_service_differential -- --nocapture",
+  "registered three-seed libFuzzer replay and real cmin: cargo test -p pdf-rs-quality --test m1_document_service_fuzz -- --nocapture",
+  "exact 21-sample locked release benchmark: cargo test --release --locked -p pdf-rs-quality --test m1_document_service_maturity native_document_service_benchmark_emits_positive_same_scope_samples -- --nocapture",
+]
+remaining_non_blocking = [
+  "generic multi-job scheduler with priority, fairness, backpressure, and a complete Session, request, Worker, and IPC registry",
+  "product Range transport and browser or desktop E2E beyond the deterministic test-only loopback host",
+  "CANARY-scale holdout, continuous fuzzing, fixed-pool performance, and later release-profile evidence",
+  "platform-enforced isolation and baseline-ledger registration before any external O4 observation may become gating",
+]
 
 [[milestone]]
 id = "M2"

@@ -17,7 +17,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         .split("[[milestone]]")
         .next()
         .expect("the plan has a top-level header");
-    assert_line(plan_header, "version = \"0.2.0\"");
+    assert_line(plan_header, "version = \"0.3.0\"");
     assert_line(plan_header, "status = \"active\"");
     assert_line(plan_header, "last_updated = 2026-07-15");
 
@@ -42,11 +42,25 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         );
     }
     let m1 = array_record(PLAN, "[[milestone]]", "M1");
-    assert!(!m1.contains("status = \"complete\""));
-    assert!(!m1.contains("completed_at ="));
+    for required in [
+        "start_date = 2026-07-15",
+        "status = \"complete\"",
+        "completed_at = 2026-07-15",
+        "reviewed_by_roles = [\"quality-corpus\", \"spec-conformance\"]",
+        "validate-m1-maturity docs/traceability/capability-profiles.toml",
+        "registered three-seed libFuzzer replay and real cmin",
+        "generic multi-job scheduler with priority, fairness, backpressure",
+        "platform-enforced isolation and baseline-ledger registration",
+    ] {
+        assert!(
+            m1.contains(required),
+            "missing M1 closure evidence: {required}"
+        );
+    }
+    assert!(date_value(m1, "start_date") <= date_value(m1, "completed_at"));
 
-    assert_line(SPEC_MAP, "version = \"0.62.0\"");
-    assert_line(FEATURE_MAP, "version = \"0.62.0\"");
+    assert_line(SPEC_MAP, "version = \"0.63.0\"");
+    assert_line(FEATURE_MAP, "version = \"0.63.0\"");
     let requirement = array_record(SPEC_MAP, "[[requirement]]", "RPE-ARCH-001/15.3/M0");
     for required in [
         "status = \"covered\"",
@@ -58,8 +72,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         "process-level black box used only with fixed, self-authored, hash-bound inputs",
         "not a registered baseline",
         "expected strictness difference",
-        "feature states remain PLANNED",
-        "M1 exit is not claimed complete",
+        "external probes remain unregistered and non-gating",
         "remain open as later maturity or release work; none is part of the accepted M0 exit gate",
     ] {
         assert!(
@@ -157,4 +170,12 @@ fn position(document: &str, needle: &str) -> usize {
     document
         .find(needle)
         .unwrap_or_else(|| panic!("missing CI step: {needle}"))
+}
+
+fn date_value<'a>(record: &'a str, key: &str) -> &'a str {
+    let prefix = format!("{key} = ");
+    record
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("missing date field: {key}"))
 }

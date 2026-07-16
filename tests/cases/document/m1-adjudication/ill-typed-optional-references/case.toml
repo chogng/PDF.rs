@@ -1,0 +1,85 @@
+schema = 1
+
+[identity]
+id = "document/m1-adjudication/ill-typed-optional-references"
+title = "Ill-typed optional Catalog and Pages references"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["7.3.9", "7.3.10", "7.7.2", "7.7.3", "12.3.3", "RPE-ARCH-001/15.3/M1"]
+interpretation = "Integer-valued optional reference fields are present but ill-typed; strict page-count and outline services reject the same input instead of collapsing the fields to absent."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/document/m1-adjudication/ill-typed-optional-references/input.pdf"
+sha256 = "sha256:d9bd0843a41f20695c1d057c597ea7cb54612f44394d6b6a9dfe458c04c1d39c"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.strict-page-count", "core.strict-outline", "runtime.m1-strict-document-session"]
+requirements = ["m1.strict-page-count.v1", "m1.strict-outline.v1", "m1.strict-document-session.v1"]
+
+[validity]
+class = "invalid"
+strict_expected = "RPE-DOCUMENT-0032,RPE-DOCUMENT-0036"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+service = "expected/service.json"
+service_sha256 = "sha256:961a8fee74720e4c04f8ac8f50587b5ad8c836801c942c31a1aa2aa46f5c32dc"
+
+[oracle]
+level = "O2"
+derivation = "Same-input Native/reference adjudication against the frozen pre-fix projection for ill-typed optional references."
+reviewers = ["service-evidence-review", "maturity-evidence-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-15"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 8
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 1
+max_group_depth = 1
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+max_pages = 8
+max_outline_items = 8
+max_range_resident_bytes = 1048576
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "document-services-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m1_document_service_maturity"]
+external_observation = []
+
+[history]
+entries = ["2026-07-15: activated solely as the same-input O2 adjudication; excluded from every independent holdout set"]

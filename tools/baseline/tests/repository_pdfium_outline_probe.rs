@@ -209,7 +209,7 @@ fn outline_differential_evidence_is_hash_bound_and_scope_limited() {
 #[test]
 fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
     let ledger = include_str!("../../../docs/traceability/data-ledger.toml");
-    assert_line(ledger, "version = \"0.10.0\"");
+    assert_line(ledger, "version = \"0.11.0\"");
     let record = array_record(
         ledger,
         "data",
@@ -263,11 +263,16 @@ fn outline_evidence_is_data_bound_but_not_a_registered_baseline() {
 
     let feature_map = include_str!("../../../docs/traceability/feature-map.toml");
     let spec_map = include_str!("../../../docs/traceability/spec-map.toml");
-    for map in [feature_map, spec_map] {
-        assert_line(map, "version = \"0.62.0\"");
-        assert!(map.contains("tools/baseline::pdfium_outline_real_adapter"));
-        assert!(map.contains("tools/baseline::repository_pdfium_outline_probe"));
-    }
+    assert_line(feature_map, "version = \"0.63.0\"");
+    assert_line(spec_map, "version = \"0.63.0\"");
+    let outline = array_record(feature_map, "feature", "core.strict-outline");
+    assert_line(outline, "state = \"DIFFERENTIAL\"");
+    assert!(!outline.contains("tools/baseline::pdfium_outline_real_adapter"));
+    assert!(!outline.contains("tools/baseline::repository_pdfium_outline_probe"));
+    assert!(outline.contains("tools/quality::m1_document_service_differential"));
+    assert!(outline.contains("fuzz.m1documentservices"));
+    assert!(spec_map.contains("tools/baseline::pdfium_outline_real_adapter"));
+    assert!(spec_map.contains("tools/baseline::repository_pdfium_outline_probe"));
     assert!(spec_map.contains("expected strictness difference"));
     assert!(spec_map.contains("not a registered baseline"));
 

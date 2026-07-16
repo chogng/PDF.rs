@@ -15,7 +15,7 @@ interpretation = "The second top-level item names the first item's child as Prev
 
 [provenance]
 kind = "self-authored-generated"
-source = "tools/quality/tests/m1_document_service_support/mod.rs"
+source = "tests/cases/document/m1-services/outline-wrong-prev/input.pdf"
 sha256 = "sha256:58eee303b4483387c057fe0ae663b213c0543db1d180317151b744d5f9d26a35"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = true

@@ -1,0 +1,12 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.page-count.independent-review"
+evidence_kind = "independent-review-report"
+feature = "core.strict-page-count"
+target = "core/document::AttestedRevisionIndex::count_pages"
+executed_tests = ["tools/quality::m1_document_service_differential", "core/document::page_tree_count"]
+fuzz_targets = []
+benchmarks = []
+reviewers = ["service-evidence-review", "maturity-evidence-review"]
+independent = true
+verdict = "pass"

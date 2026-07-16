@@ -769,8 +769,8 @@ fn generated_pdf_completes_strict_base_revision_attestation_loop() {
 
 #[test]
 fn native_object_loop_traceability_is_explicit_and_non_differential() {
-    assert_eq!(top_level_version(FEATURE_MAP), Some("0.62.0"));
-    assert_eq!(top_level_version(SPEC_MAP), Some("0.62.0"));
+    assert_eq!(top_level_version(FEATURE_MAP), Some("0.63.0"));
+    assert_eq!(top_level_version(SPEC_MAP), Some("0.63.0"));
 
     let feature = record_with_id(FEATURE_MAP, "feature", "quality.native-object-loop")
         .expect("the Native object-loop feature record must exist");
@@ -910,18 +910,30 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     let page_count_feature = record_with_id(FEATURE_MAP, "feature", "core.strict-page-count")
         .expect("the strict page-count feature record must exist");
     assert!(page_count_feature.contains("owner = \"parser-security\""));
-    assert!(page_count_feature.contains("state = \"PLANNED\""));
+    assert!(page_count_feature.contains("state = \"DIFFERENTIAL\""));
     assert!(page_count_feature.contains("profile = \"m1.strict-page-count.v1\""));
-    assert!(page_count_feature.contains("RPE-ARCH-001/5.8-5.9"));
+    for clause in [
+        "ISO-32000-1:2008/7.7.3",
+        "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/11.5-11.7",
+        "RPE-ARCH-001/15.3/M1",
+    ] {
+        assert!(page_count_feature.contains(clause));
+    }
     assert!(page_count_feature.contains("modules = [\"core/document\"]"));
     assert!(page_count_feature.contains("core/document::page_tree_count"));
     assert!(page_count_feature.contains("core/document::page_tree_limit_config"));
     assert!(page_count_feature.contains("core/document::repository_policy"));
-    assert!(page_count_feature.contains("tools/baseline::pdfium_page_count_real_adapter"));
-    assert!(page_count_feature.contains("tools/baseline::repository_pdfium_page_count_probe"));
+    assert!(page_count_feature.contains("core/document::local_repair_open"));
+    assert!(page_count_feature.contains("core/document::acquired_services"));
     assert!(page_count_feature.contains("tools/quality::native_object_loop"));
-    assert!(page_count_feature.contains("fuzz_targets = []"));
-    assert!(page_count_feature.contains("benchmarks = []"));
+    assert!(page_count_feature.contains("tools/quality::m1_document_service_differential"));
+    assert!(page_count_feature.contains("tools/quality::m1_document_service_maturity"));
+    assert!(page_count_feature.contains("tools/quality::m1_document_service_fuzz"));
+    assert!(page_count_feature.contains("fuzz_targets = [\"fuzz.m1documentservices\"]"));
+    assert!(
+        page_count_feature.contains("benchmarks = [\"benchmark.m1-native-document-services\"]")
+    );
 
     let ready_store_feature = record_with_id(FEATURE_MAP, "feature", "runtime.session-ready-store")
         .expect("the session Ready-store feature record must exist");
@@ -981,13 +993,16 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "RPE-ARCH-001/9.1",
         "RPE-ARCH-001/14.2",
         "RPE-ARCH-001/12.6",
-        "RPE-ARCH-001/15.3/M1",
     ] {
         let requirement = record_with_id(SPEC_MAP, "requirement", requirement_id)
             .unwrap_or_else(|| panic!("requirement {requirement_id} must exist"));
         assert!(requirement.contains("tools/quality::native_object_loop"));
         assert!(requirement.contains("status = \"partial\""));
     }
+    let m1_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/15.3/M1")
+        .expect("the M1 architecture requirement must exist");
+    assert!(m1_requirement.contains("tools/quality::native_object_loop"));
+    assert!(m1_requirement.contains("status = \"covered\""));
 
     let generator_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/12.6")
         .expect("the fixture-generator requirement must exist");
@@ -1012,8 +1027,11 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(m0_requirement.contains("RPE-DOCUMENT-0033"));
     assert!(m0_requirement.contains("PDFium page_count=4"));
     assert!(m0_requirement.contains("expected strictness difference"));
-    assert!(m0_requirement.contains("feature states remain PLANNED"));
-    assert!(m0_requirement.contains("M1 exit is not claimed complete"));
+    assert!(m0_requirement.contains("All external probes remain unregistered and non-gating"));
+    assert!(
+        m0_requirement
+            .contains("do not participate in the later project-owned M1 DIFFERENTIAL evidence")
+    );
     assert!(m0_requirement.contains("synchronously close the store"));
     assert!(m0_requirement.contains("zero post-close resources"));
     assert!(m0_requirement.contains("broad corpus and pixel differential evidence"));
@@ -1036,9 +1054,11 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(page_tree_requirement.contains("page_count=1"));
     assert!(page_tree_requirement.contains("pages_processed=1"));
     assert!(page_tree_requirement.contains("non-gating smoke observation"));
-    assert!(page_tree_requirement.contains("not a registered page-count differential"));
-    assert!(page_tree_requirement.contains("feature state remains PLANNED"));
-    assert!(page_tree_requirement.contains("does not claim M1 or M2 exit"));
+    assert!(page_tree_requirement.contains("rather than a registered page-count differential"));
+    assert!(page_tree_requirement.contains(
+        "Registered project-owned DIFFERENTIAL promotion is complete at bounded M1 scale"
+    ));
+    assert!(page_tree_requirement.contains("contributes to covered M1 exit but does not claim M2"));
 
     let xref_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.4")
         .expect("the xref architecture requirement must exist");
@@ -1070,8 +1090,8 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("opaque move-only handoff"));
     assert!(xref_requirement.contains("same private source owner"));
     assert!(xref_requirement.contains("generic scheduler and complete Session"));
-    assert!(xref_requirement.contains("Native/PDFium semantic or pixel differential"));
-    assert!(xref_requirement.contains("does not claim M1 exit"));
+    assert!(xref_requirement.contains("Native/PDFium pixel maturity"));
+    assert!(xref_requirement.contains("contribute to the covered M1 byte-and-object gate"));
 
     let byte_access_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.1-5.2")
         .expect("the byte-access architecture requirement must exist");
@@ -1091,7 +1111,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "same private source owner",
         "generic multi-job scheduler",
         "complete Session/request/Worker ownership",
-        "does not claim M1 exit",
+        "contributes to the covered M1 gate",
     ] {
         assert!(
             byte_access_requirement.contains(required),
@@ -1120,8 +1140,6 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         );
     }
 
-    let m1_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/15.3/M1")
-        .expect("the M1 architecture requirement must exist");
     for required in [
         "runtime.strict-base-open-coordinator",
         "runtime/session::strict_base_open_coordinator",
@@ -1140,7 +1158,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
         "consuming close returns exact owner-release evidence",
         "not a complete Session",
         "generic multi-job scheduler",
-        "does not claim M1 exit",
+        "these bounded gates cover M1",
     ] {
         assert!(
             m1_requirement.contains(required),

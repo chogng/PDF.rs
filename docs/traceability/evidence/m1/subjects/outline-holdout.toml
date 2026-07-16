@@ -1,0 +1,11 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.outline.holdout"
+evidence_kind = "holdout-manifest"
+feature = "core.strict-outline"
+target = "core/document::AttestedRevisionIndex::read_outline"
+executed_tests = ["tools/quality::m1_document_service_maturity"]
+fuzz_targets = []
+benchmarks = []
+case_ids = ["document/m1-maturity-holdout/nested-four-pages", "document/m1-maturity-holdout/flat-two-pages-single-outline"]
+verdict = "pass"

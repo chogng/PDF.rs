@@ -1,0 +1,28 @@
+[package]
+name = "pdf-rs-quality-fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+pdf-rs-bytes = { path = "../../../core/bytes" }
+pdf-rs-cache = { path = "../../../runtime/cache" }
+pdf-rs-document = { path = "../../../core/document" }
+pdf-rs-object = { path = "../../../core/object" }
+pdf-rs-session = { path = "../../../runtime/session" }
+pdf-rs-syntax = { path = "../../../core/syntax" }
+pdf-rs-xref = { path = "../../../core/xref" }
+
+[[bin]]
+name = "m1documentservices"
+path = "fuzz_targets/m1_document_services.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

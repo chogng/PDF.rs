@@ -93,21 +93,25 @@ const OPTIONAL_SECTION_FIELDS: &[(&str, &[&str])] = &[
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// A case manifest that has passed structural and value-shape validation.
 pub struct CaseManifest {
     values: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl CaseManifest {
+    /// Returns the canonical `identity.id` value.
     pub fn case_id(&self) -> &str {
         self.string("identity", "id")
             .expect("a validated manifest always contains identity.id")
     }
 
+    /// Returns the canonical source digest declared by `provenance.sha256`.
     pub fn source_sha256(&self) -> &str {
         self.string("provenance", "sha256")
             .expect("a validated manifest always contains provenance.sha256")
     }
 
+    /// Returns a field's validated canonical encoded value without decoding it.
     pub fn raw(&self, section: &str, key: &str) -> Option<&str> {
         self.values
             .get(section)
@@ -115,15 +119,18 @@ impl CaseManifest {
             .map(String::as_str)
     }
 
+    /// Returns a field decoded as a canonical quoted string.
     pub fn string(&self, section: &str, key: &str) -> Option<&str> {
         self.raw(section, key).and_then(unquote)
     }
 
+    /// Returns a field decoded as a canonical positive integer.
     pub fn positive_u64(&self, section: &str, key: &str) -> Option<u64> {
         self.raw(section, key)
             .and_then(parse_canonical_positive_integer)
     }
 
+    /// Returns a field decoded as a canonical boolean.
     pub fn boolean(&self, section: &str, key: &str) -> Option<bool> {
         match self.raw(section, key) {
             Some("true") => Some(true),
@@ -132,16 +139,22 @@ impl CaseManifest {
         }
     }
 
+    /// Returns a field decoded as a canonical array of quoted strings.
     pub fn string_array<'a>(&'a self, section: &str, key: &str) -> Option<Vec<&'a str>> {
         parse_string_array(self.raw(section, key)?)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// A stable, optionally source-located case-manifest validation failure.
 pub struct ManifestDiagnostic {
+    /// Stable `RPE-MANIFEST-*` diagnostic code.
     pub code: &'static str,
+    /// One-based input line when the failure is tied to lexical input.
     pub line: Option<usize>,
+    /// Canonical section name when the failure is tied to a section or field.
     pub section: Option<String>,
+    /// Canonical field name when the failure is tied to one field.
     pub key: Option<String>,
 }
 
@@ -190,6 +203,12 @@ impl fmt::Display for ManifestDiagnostic {
     }
 }
 
+/// Loads and validates one canonical case-manifest file.
+///
+/// # Errors
+///
+/// Returns one or more stable diagnostics when the file cannot be read or its contents fail
+/// canonical manifest validation.
 pub fn validate_manifest_file(path: &Path) -> Result<CaseManifest, Vec<ManifestDiagnostic>> {
     let input = fs::read_to_string(path).map_err(|_| {
         vec![ManifestDiagnostic {
@@ -202,6 +221,12 @@ pub fn validate_manifest_file(path: &Path) -> Result<CaseManifest, Vec<ManifestD
     validate_manifest(&input)
 }
 
+/// Validates canonical case-manifest text without performing filesystem access.
+///
+/// # Errors
+///
+/// Returns one or more stable diagnostics when parsing, required-field checks, or value-shape
+/// checks fail.
 pub fn validate_manifest(input: &str) -> Result<CaseManifest, Vec<ManifestDiagnostic>> {
     let parsed = match parse(input) {
         Ok(parsed) => parsed,

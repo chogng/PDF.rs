@@ -3,7 +3,8 @@
 These files are the machine-readable starting point for the audit chain defined by
 [`docs/standards/traceability-and-provenance.md`](../standards/traceability-and-provenance.md).
 Some ledgers now contain implementation records while approval-sensitive ledgers
-remain empty. `status = "active"` means records exist, not that their requirements
+remain empty. The dependency ledger separately records conditional non-product fuzz inputs;
+neither record enters a product closure. `status = "active"` means records exist, not that their requirements
 are covered or release-approved; `status = "initial"` means only that the ledger
 schema exists. In particular, the baseline ledger remains empty until a reviewed
 external executable and complete fingerprint are available.
@@ -29,6 +30,9 @@ changes and increment `schema` only for incompatible structural changes.
 local-repair, page-count, and outline capabilities. The PR lane validates it before product build
 proof. A profile cannot be relabelled `REFERENCE` without O0/O1 cases, a concrete
 reference/target pair, and independent review. `DIFFERENTIAL` additionally requires O2
-adjudication, registered fuzz/minimization, a fixed holdout, eligible benchmark and differential
-reports, and a complete reference or baseline fingerprint. The initial records remain `PLANNED`
-and are not M1 exit evidence.
+adjudication, registered fuzz/minimization, at least two disjoint content-addressed holdouts,
+eligible benchmark and differential reports, and a complete reference fingerprint. Strict R0 and
+bounded local R1 are registered at `REFERENCE`; strict page-count and outline are registered at
+`DIFFERENTIAL` through an atomic two-gate review with no product or CANARY exposure. The other M1
+component profiles remain `PLANNED`. PDFium observations remain outside this graph as unregistered,
+non-gating O4 probes and are not correctness or release oracles.

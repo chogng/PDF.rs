@@ -306,11 +306,11 @@ fn source_revision_chain_acquisition_stays_proof_bound_and_partial() {
     }
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
         .expect("M1 requirement record must exist");
-    assert!(milestone.contains("status = \"partial\""));
+    assert!(milestone.contains("status = \"covered\""));
     assert!(milestone.contains("indirect-Length xref streams"));
     assert!(milestone.contains("source-acquired document owner now closes"));
     assert!(milestone.contains("acquired-chain page-count/outline integration"));
-    assert!(milestone.contains("Strict page-count and outline features remain PLANNED"));
+    assert!(milestone.contains("strict page-count and outline at DIFFERENTIAL"));
 }
 
 #[test]
@@ -430,10 +430,10 @@ fn source_acquired_document_services_stay_proof_bound_and_planned() {
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M1")
         .expect("M1 requirement record must exist");
-    assert!(milestone.contains("status = \"partial\""));
+    assert!(milestone.contains("status = \"covered\""));
     assert!(milestone.contains("source-acquired document owner now closes"));
-    assert!(milestone.contains("Strict page-count and outline features remain PLANNED"));
-    assert!(milestone.contains("does not claim M1 exit"));
+    assert!(milestone.contains("strict page-count and outline at DIFFERENTIAL"));
+    assert!(milestone.contains("these bounded gates cover M1"));
 }
 
 #[test]
@@ -494,7 +494,7 @@ fn traceability_registers_strict_base_open_as_a_planned_product_composition() {
         "cancellation in both child layers",
         "Resume execution and source-failure disposition require exact arbiter",
         "generic scheduler and complete Session",
-        "does not claim M1 exit",
+        "contribute to the covered M1 byte-and-object gate",
     ] {
         assert!(
             requirement.contains(required),
@@ -554,7 +554,7 @@ fn traceability_registers_revision_resolution_without_claiming_complete_m1_suppo
         "m1.unfiltered-object-stream-resolution.v1",
         "latest effective uncompressed container",
         "schedules exact filtered or unfiltered object-stream payload reads",
-        "does not claim M1 exit",
+        "contribute to the covered M1 byte-and-object gate",
         "status = \"partial\"",
     ] {
         assert!(
@@ -613,7 +613,7 @@ fn traceability_registers_core_repaired_open_without_claiming_a_session() {
     let feature = record_with_id(&feature_map, "feature", "core.local-repair")
         .expect("local-repair feature record must exist");
     for required in [
-        "state = \"PLANNED\"",
+        "state = \"REFERENCE\"",
         "profile = \"m1.r1-local-repair.v1\"",
         "core/document::local_repair_geometry",
         "core/document::local_repair_open",
@@ -643,8 +643,8 @@ fn traceability_registers_core_repaired_open_without_claiming_a_session() {
         "first-pass aggregate",
         "repaired proof separately owns core page-count/outline jobs without losing R1 provenance",
         "source-acquired document owner now closes",
-        "does not claim M1 exit",
-        "status = \"partial\"",
+        "strict R0 and bounded local R1 at REFERENCE",
+        "status = \"covered\"",
     ] {
         assert!(
             milestone.contains(required),
@@ -665,24 +665,30 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.63.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.63.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
     for required in [
-        "state = \"PLANNED\"",
+        "state = \"DIFFERENTIAL\"",
         "profile = \"m1.strict-page-count.v1\"",
+        "ISO-32000-1:2008/7.7.3",
         "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/11.5-11.7",
+        "RPE-ARCH-001/15.3/M1",
         "modules = [\"core/document\"]",
         "core/document::page_tree_count",
         "core/document::page_tree_limit_config",
         "core/document::repository_policy",
-        "tools/baseline::pdfium_page_count_real_adapter",
-        "tools/baseline::repository_pdfium_page_count_probe",
+        "core/document::local_repair_open",
+        "core/document::acquired_services",
         "tools/quality::native_object_loop",
-        "fuzz_targets = []",
-        "benchmarks = []",
+        "tools/quality::m1_document_service_differential",
+        "tools/quality::m1_document_service_maturity",
+        "tools/quality::m1_document_service_fuzz",
+        "fuzz_targets = [\"fuzz.m1documentservices\"]",
+        "benchmarks = [\"benchmark.m1-native-document-services\"]",
     ] {
         assert!(
             feature.contains(required),
@@ -727,13 +733,13 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
         "lazy PageIndex",
         "page_count=1",
         "pages_processed=1",
-        "not a registered page-count differential",
+        "rather than a registered page-count differential",
         "not a registered baseline or correctness oracle",
-        "feature state remains PLANNED",
+        "Registered project-owned DIFFERENTIAL promotion is complete at bounded M1 scale",
         "sealed cloneable strict or locally repaired handles",
         "repaired ownership retains the complete xref/object diagnostic ledger",
         "bounded M1 Session continues to select strict base opening",
-        "does not claim M1 or M2 exit",
+        "contributes to covered M1 exit but does not claim M2",
         "status = \"partial\"",
     ] {
         assert!(
@@ -815,7 +821,7 @@ fn traceability_registers_bounded_pdf_text_strings() {
 }
 
 #[test]
-fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
+fn traceability_registers_strict_outline_as_a_bounded_differential_profile() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
         .parent()
@@ -830,7 +836,7 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
     let feature = record_with_id(&feature_map, "feature", "core.strict-outline")
         .expect("strict outline feature record must exist");
     for required in [
-        "state = \"PLANNED\"",
+        "state = \"DIFFERENTIAL\"",
         "profile = \"m1.strict-outline.v1\"",
         "ISO-32000-1:2008/7.3.9",
         "ISO-32000-1:2008/7.3.10",
@@ -839,14 +845,19 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "ISO-32000-1:2008/7.9.2.2",
         "ISO-32000-1:2008/D.3",
         "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/11.5-11.7",
+        "RPE-ARCH-001/15.3/M1",
         "modules = [\"core/document\"]",
         "core/document::outline",
         "core/document::outline_limit_config",
         "core/document::repository_policy",
-        "tools/baseline::pdfium_outline_real_adapter",
-        "tools/baseline::repository_pdfium_outline_probe",
-        "fuzz_targets = []",
-        "benchmarks = []",
+        "core/document::local_repair_open",
+        "core/document::acquired_services",
+        "tools/quality::m1_document_service_differential",
+        "tools/quality::m1_document_service_maturity",
+        "tools/quality::m1_document_service_fuzz",
+        "fuzz_targets = [\"fuzz.m1documentservices\"]",
+        "benchmarks = [\"benchmark.m1-native-document-services\"]",
     ] {
         assert!(
             feature.contains(required),
@@ -939,9 +950,9 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "non-gating O4 PDFium public-bookmark comparison matches Native exactly",
         "wrong-Prev fixture yields Native RPE-DOCUMENT-0041",
         "public API does not expose Prev",
-        "contained baseline registration",
-        "broad corpus differential evidence remain open",
-        "does not claim ISO conformance or M1 exit",
+        "baseline-ledger registration and platform-enforced isolation remain open",
+        "project-owned O0/O1/O2, disjoint holdout, fuzz/minimizer, benchmark, fingerprint, and full-session graph",
+        "contributes to bounded M1 exit without claiming ISO conformance or M2",
     ] {
         assert!(
             outline_requirement.contains(required),
@@ -963,7 +974,8 @@ fn traceability_registers_strict_outline_as_a_partial_bootstrap() {
         "pinned, non-gating O4 PDFium public-bookmark comparison matches Native exactly",
         "expected wrong-Prev strictness difference",
         "not a registered baseline or correctness oracle",
-        "does not claim M1 or M2 exit",
+        "Registered project-owned DIFFERENTIAL promotion is complete at bounded M1 scale",
+        "contributes to covered M1 exit but does not claim M2",
         "status = \"partial\"",
     ] {
         assert!(

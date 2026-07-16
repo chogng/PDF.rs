@@ -309,11 +309,12 @@ project-authored bytes.
   section 9.4 small-object/multi-level policy remain open.
 - Ready-store reports exclude source storage, stream payloads, allocator metadata, and RSS. Range
   reports include source backing capacity and actual registration-vector capacity but exclude the
-  RangeStore's internal allocator metadata and RSS. Broader registered lifecycle model tests, a
-  generic multi-job generation registry and scheduler, fuzz targets, browser/desktop E2E, and
-  registered bounded Native-reference differential evidence remain open before M1 exit, while
-  PDFium stays an unregistered, non-gating O4 observer. Broader product-Session and rendering gates
-  remain later work; they are not prerequisites for the bounded M1 byte/object actor slice itself.
+  RangeStore's internal allocator metadata and RSS. Project-owned registered Native-reference
+  evidence for the bounded page-count and outline services now closes the M1 differential gate.
+  Broader lifecycle model tests, a generic multi-job generation registry and scheduler, wider fuzz
+  campaigns, and browser/desktop E2E remain open, while PDFium stays an unregistered, non-gating O4
+  observer. Broader product-Session and rendering gates remain later work; they are not prerequisites
+  for the bounded M1 byte/object actor slice itself.
 
 # History
 

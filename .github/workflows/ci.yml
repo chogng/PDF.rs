@@ -16,5 +16,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Install locked fuzz toolchain
+        run: |
+          cargo install --locked --version 0.13.2 cargo-fuzz
+          actual="$(cargo fuzz --version)"
+          if [ "$actual" != "cargo-fuzz 0.13.2" ]; then
+            echo "expected cargo-fuzz 0.13.2, got $actual" >&2
+            exit 1
+          fi
       - name: Run repository CI
         run: ./scripts/ci.sh pr

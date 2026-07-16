@@ -1,0 +1,80 @@
+schema = 1
+
+[identity]
+id = "document/m1-repair/r1-local-repair-o1"
+title = "Bounded R1 composes whitespace, stream-length, and offset repairs"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "RPE-ARCH-001"
+version = "53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
+clauses = ["5.4", "5.5", "15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8"]
+interpretation = "R1 accepts only the explicitly bounded local whitespace, direct stream-length, and small xref-offset candidates and publishes their source-located ledger."
+
+[provenance]
+kind = "self-authored-source-case"
+source = "core/document/tests/local_repair_open.rs"
+sha256 = "sha256:7c39ec0be194abe61da79df409488d01b3bfc072c5704781cf5521f43303b0d9"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = false
+access = "repository"
+
+[features]
+ids = ["core.local-repair"]
+requirements = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8"]
+
+[validity]
+class = "real-world-tolerated"
+strict_expected = "failure"
+recovery_expected = "success-with-local-repair-ledger"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = false
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic enumeration of the three admitted local candidate classes and their exact source spans."
+reviewers = ["parser-security-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-15"
+
+[budget]
+max_input_bytes = 8192
+max_objects = 16
+max_resolve_depth = 8
+max_stream_output_bytes = 8192
+max_total_decode_bytes = 8192
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 1
+max_group_depth = 1
+operator_fuel = 8192
+decode_fuel = 8192
+watchdog_ms = 500
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "bytes-and-objects-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["core/document::local_repair_open"]
+external_observation = []
+
+[history]
+entries = ["2026-07-15: activated as the O1 bounded R1 repair-ledger case"]

@@ -323,7 +323,7 @@ fn bounded_m1_session_is_one_actor_without_a_generic_scheduler_claim() {
         "fixed two-service selection is round-robin",
         "polls at most one parser job",
         "not a generic priority scheduler",
-        "remains the M1 exit blocker at this stage",
+        "Registered page-count and outline DIFFERENTIAL evidence now closes the bounded M1 exit gate",
     ] {
         assert!(
             milestone.contains(required),
@@ -339,8 +339,8 @@ fn traceability_registers_the_owner_and_bounded_lifecycle_claim() {
         .expect("feature map must be readable");
     let spec_map = fs::read_to_string(root.join("docs/traceability/spec-map.toml"))
         .expect("spec map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.62.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.62.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.63.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.63.0"));
 
     let feature = record_with_id(&feature_map, "feature", "runtime.ready-session-owner")
         .expect("Ready-session owner feature must exist");
@@ -592,8 +592,8 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "host submission/cancellation",
         "generic multi-job scheduler with priority, fairness, backpressure, and generation registry",
         "complete Session/request/Worker ownership",
-        "all features stay PLANNED",
-        "does not claim M1 exit",
+        "These component labels remain PLANNED",
+        "contributes to the covered M1 gate",
     ] {
         assert!(
             byte_access.contains(required),
@@ -615,7 +615,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "opaque move-only handoff",
         "same private source owner",
         "generic scheduler and complete Session",
-        "does not claim M1 exit",
+        "contribute to the covered M1 byte-and-object gate",
     ] {
         assert!(
             xref.contains(required),
@@ -673,7 +673,7 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "runtime/session::repository_policy",
         "tools/quality::native_range_resume_loop",
         "tools/quality::native_strict_open_runtime_loop",
-        "status = \"partial\"",
+        "status = \"covered\"",
         "one-job strict-open coordinator",
         "Coordinator public run_one is the only parser entry",
         "host ingress only mutates Range state and may queue completion",
@@ -694,8 +694,8 @@ fn traceability_registers_range_resume_and_strict_open_execution_as_partial() {
         "The explicit object R1 sibling likewise exhausts the unchanged strict framer",
         "LocallyRepairedRevisionIndex",
         "single core repaired-open coordinator",
-        "Truthful registered page-count and outline DIFFERENTIAL evidence remains",
-        "does not claim M1 exit",
+        "Project-owned O0/O1/O2",
+        "these bounded gates cover M1",
     ] {
         assert!(
             milestone.contains(required),
@@ -746,8 +746,10 @@ fn provenance_bounds_each_runtime_owner_without_a_complete_session_claim() {
         "does not publish `SessionClosed`",
         "not allocator telemetry, process RSS",
         "No PDFium",
-        "registered bounded Native-reference differential evidence",
-        "PDFium stays an unregistered, non-gating O4 observer",
+        "Project-owned registered Native-reference",
+        "closes the M1 differential gate",
+        "PDFium stays an unregistered",
+        "non-gating O4",
     ] {
         assert!(
             provenance.contains(required),

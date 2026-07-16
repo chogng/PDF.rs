@@ -1,0 +1,85 @@
+schema = 1
+
+[identity]
+id = "document/m1-maturity-holdout/nested-four-pages"
+title = "Independent four-page and two-item M1 maturity holdout"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["7.7.2", "7.7.3", "12.3.3", "RPE-ARCH-001/15.3/M1"]
+interpretation = "An independently authored graph exercises a four-leaf page tree, a two-item outline, and the exact object-budget boundary without reusing registered O0/O1 service fixtures."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/document/m1-maturity-holdout/nested-four-pages/input.pdf"
+sha256 = "sha256:2f3f29a8ca990b9e8d2d0fe36089420a8543f638340baeee220a2ced0b6948d3"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.strict-page-count", "core.strict-outline", "runtime.m1-strict-document-session"]
+requirements = ["m1.strict-page-count.v1", "m1.strict-outline.v1", "m1.strict-document-session.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = false
+capability = false
+error = false
+service = "expected/service.json"
+service_sha256 = "sha256:6ebf157b569ac72e51a2b22bc27f7dc6b0c3cdbd9c693de2f0dbd50d4b57b976"
+
+[oracle]
+level = "O1"
+derivation = "Independent finite graph evaluation over four page leaves and two exact outline siblings."
+reviewers = ["maturity-evidence-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-15"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 10
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 1
+max_group_depth = 1
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+max_pages = 8
+max_outline_items = 8
+max_range_resident_bytes = 1048576
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "document-services-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m1_document_service_maturity"]
+external_observation = []
+
+[history]
+entries = ["2026-07-15: activated as an independent O1 M1 maturity holdout"]

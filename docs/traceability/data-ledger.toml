@@ -1,5 +1,5 @@
 schema = 1
-version = "0.10.0"
+version = "0.11.0"
 status = "active"
 
 [[data]]
@@ -138,3 +138,479 @@ validated_by = "cargo test --package pdf-rs-baseline --test repository_pdfium_pa
 owner = "baseline-release"
 update_policy = "create a new evidence id when either engine revision, platform, helper, build flags, fixture, process policy, measurement scope, warmup/sample count, or observed output changes"
 delete_policy = "retain while the PDFium O4 page-count boundary-performance probe is referenced"
+
+[[data]]
+id = "evidence.m1.outline.benchmark"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/benchmark.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:915bef88fdf01508e1e31556b2de7b9e6b405b1233f073bfe2b8378f14359b31"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.differential"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/differential.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:3f734be55a3c284fc0a7ed207b72c0f81989b11d56aa86f33564a5b2a2b2f06c"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.fuzz-minimizer"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/fuzz-minimizer.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:a4246f78a50b82eeae1f4a696c16cc6c0d103556f7271478d63e94dddb9965b4"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.holdout"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/holdout.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:ef4dabebd9b596ba31d1f64f940aec0f0f2d0cea1683fc89c20450926160eeb7"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.independent-review"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/independent-review.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:2854435724f5c51acf0b23d1a7137688403749f0c88a59b824cc2e412bce535b"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.o0"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/o0.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:ad63ae69214c01b0ddccdb351caee2f75dfadecc1cdeb6ca224045f447e26325"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.o1"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/o1.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:d997eed5add00c366d4594f00a34f23bea1500dc03438b50ef1425660b164e16"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.o2"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/o2.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:162c1dbb6ae3423ff0ffd79c4738c56de64a697ca931d99241699e444dc59e06"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.reference-fingerprint"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/reference-fingerprint.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:1a1338b22c116de9c570fb45d3a58aa0770b3797709cfab58fb70464f5276920"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.outline.reference"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/outline/reference.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:627d744357f75edaae035fd9ff9cf29c99ccf166ee9f39a6ca22df6a4c8b0f75"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.benchmark"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/benchmark.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:6ba9c9d527b106326bae832c131759e475434c7f435fdd3c21a85af9dedc246e"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.differential"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/differential.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:dd4cd8b14cc580a6a59e497a4d18f2e58cee440ec8a4b1a9b125222b7d5bc0ed"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.fuzz-minimizer"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/fuzz-minimizer.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:a9b580af36f1a92c1c8940905e59320775641ab28a1ad8f06c46a7fb56124691"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.holdout"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/holdout.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:6f79c3fa57adee803f970ebe08618564d452ff3a4b57ed52d7e97b23a2cbef78"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.independent-review"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/independent-review.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:6d53ac6c9433bbd0b6737b05ab56f347134f2aa8e6f1e7caefde0950683b3a40"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.o0"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/o0.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:5e36a7bb2f1c76c50337e17fcfbe34bd825cdac245d4071443bc24bbd34d2f5f"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.o1"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/o1.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:b6dbfd05a9ec294f9a7431466264e44f9dcaa7d50370cebccb95b5d48d7071c5"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.o2"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/o2.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:9945b9c8d23c68880063a705df14314a55bbe16c00a3ce4c423837d3f39ed6e8"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.reference-fingerprint"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/reference-fingerprint.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:cd1c6a7918b6aa6caa6405f34092500efabb28a5c8578c3b616045405d2bdd29"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.page-count.reference"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/page-count/reference.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:221de081e37e66de6b06fe8e160edf0baf187dc9050aa583b7c00fc99ce9cbb6"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r0.independent-review"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r0/independent-review.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:bf7ed9fc73e6ea8bf74cf9cdacacb3b4ab7601ebe666dd66eee10dd495256096"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r0.o0"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r0/o0.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:c804dd105ef6be7b31c72b2eaeb2f88c3aecfc84d8151bf085d1f584874c9a07"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r0.o1"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r0/o1.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:35b71d09a2271c22a9c8b161ad627fc53a94d172917cab03e2592ebfd5db56b0"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r0.reference"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r0/reference.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:61330046127cd0bde55269cf45460c51ea652ab74f57409f84a2c0dcb60e34fd"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r1.independent-review"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r1/independent-review.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:bbe1301cfe10e29059dab6a655e6dc567b3215b3504e011850cf10339508fd1c"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r1.o0"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r1/o0.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:538170d30e66e2f74dbe9cff42224102464fbd5ffb5daefd3c900eaec790660f"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r1.o1"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r1/o1.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:93a384545aceb52feb5476f66f8949cc98afecd0504e55b7306d89f80086374a"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m1.r1.reference"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m1/r1/reference.toml"
+acquired_at = 2026-07-15
+version = "m1-maturity-evidence-schema-1"
+source_hash = "sha256:1c8e4bd2cd96b006036420c77f8a33c093554e4528b0a21a88de465211c5ddeb"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the corresponding M1 capability profile is promoted"

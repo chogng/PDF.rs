@@ -1,0 +1,12 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.outline.independent-review"
+evidence_kind = "independent-review-report"
+feature = "core.strict-outline"
+target = "core/document::AttestedRevisionIndex::read_outline"
+executed_tests = ["tools/quality::m1_document_service_differential", "core/document::outline"]
+fuzz_targets = []
+benchmarks = []
+reviewers = ["service-evidence-review", "maturity-evidence-review"]
+independent = true
+verdict = "pass"

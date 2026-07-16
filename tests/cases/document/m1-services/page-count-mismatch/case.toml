@@ -15,7 +15,7 @@ interpretation = "The root declares Count 4 but its complete Kids graph contains
 
 [provenance]
 kind = "self-authored-generated"
-source = "tools/quality/tests/m1_document_service_support/mod.rs"
+source = "tests/cases/document/m1-services/page-count-mismatch/input.pdf"
 sha256 = "sha256:02a49fa31d16a840af09e6845929d7d6271e82d2b77f58b2645fb6e5fd3319be"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = true

@@ -1,0 +1,17 @@
+schema = 1
+type = "m1-run-environment"
+commit = "926472cf541ddd1b3cb2da3f989bdcec74746701"
+commit_scope = "Native implementation, unchanged independent reference, existing fixture bytes and expected outputs, and v0.62 pre-promotion trace state"
+worktree_scope = "maturity and support harnesses, four registered case provenance edits, new holdout and adjudication cases, fuzz assets, v0.63 trace maps, and evidence were uncommitted; every executable input is content-addressed"
+cargo_profile = "release"
+cargo_flags = "cargo test --release --locked -p pdf-rs-quality --test m1_document_service_maturity native_document_service_benchmark_emits_positive_same_scope_samples -- --nocapture"
+rustc = "rustc 1.93.0 (254b59607 2026-01-19); LLVM 21.1.8; aarch64-apple-darwin"
+os = "macOS 26.4.1 build 25E253; Darwin 25.4.0 arm64"
+cpu = "Apple M2 Max; 12 cores (8 performance, 4 efficiency)"
+gpu = "not-applicable: CPU-only document service"
+memory_bytes = 34359738368
+browser = "not-applicable: no browser path"
+cargo_fuzz_version = "0.13.2"
+cargo_fuzz_source_sha256 = "sha256:5acfd01930e49823e58c30dd8012d3338a620377d7c7d4cc140ca4b2169400e2"
+cargo_fuzz_install = "cargo install --locked --version 0.13.2 cargo-fuzz"
+external_observation = false

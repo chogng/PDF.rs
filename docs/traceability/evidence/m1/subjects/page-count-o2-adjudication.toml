@@ -1,0 +1,16 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m1.page-count.o2-adjudication"
+evidence_kind = "adjudication-report"
+feature = "core.strict-page-count"
+target = "core/document::AttestedRevisionIndex::count_pages"
+executed_tests = ["tools/quality::m1_document_service_maturity"]
+fuzz_targets = []
+benchmarks = []
+case_ids = ["document/m1-adjudication/ill-typed-optional-references"]
+reviewers = ["service-evidence-review", "maturity-evidence-review"]
+correction_commit = "a5ec35b"
+pre_fix_output = "sha256:a9769304a688face7c4d3256d4cdcf1770ff637cb25848619c4c03205f03aa8d"
+native_output = "sha256:961a8fee74720e4c04f8ac8f50587b5ad8c836801c942c31a1aa2aa46f5c32dc"
+reference_output = "sha256:0f7c1caf0e137625c3e104130c42e6525d602bdb2a8d63ff5c8b45420faf9837"
+verdict = "pass"
