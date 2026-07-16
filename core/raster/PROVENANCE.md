@@ -28,7 +28,7 @@ construct public Scene fixtures; they do not enter the product graph.
 - [RPE-ARCH-001, sections 6.4-6.7 and 8.1-8.3](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
   requires a project-owned deterministic Reference path consuming immutable Scene values, fixed
   output encoding, bounded checked work, and separation from platform graphics stacks.
-- [RPE-STD-001, sections 3 and 5-10](../../docs/standards/coding-standard.md) requires one-way
+- [RPE-STD-001, sections 3 and 5-11](../../docs/standards/coding-standard.md) requires one-way
   dependencies, checked arithmetic, fallible bounded allocation, deterministic output, and
   content-redacted diagnostics.
 - [RPE-STD-003, sections 8-9 and 12](../../docs/standards/testing-standard.md) requires exact
