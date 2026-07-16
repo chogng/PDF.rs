@@ -1,0 +1,63 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.reference-geometry-coverage.independent-review"
+milestone = "M3"
+work_item = "M3-05"
+profile = "m3.reference-geometry-coverage.v1"
+feature = "core.reference-geometry-coverage"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "213652f80d9d8c6749102f0aa7d6d53163e5ac3c"
+reviewed_subject_commit = "213652f80d9d8c6749102f0aa7d6d53163e5ac3c"
+reviewed_subject_tree = "de487ccfee70952024ea15b16e5c497794ec3269"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-not-working-tree"
+reviewed_subject_commit_map = [
+  "core/raster/PROVENANCE.md@213652f80d9d8c6749102f0aa7d6d53163e5ac3c",
+  "core/raster/src/reference/coverage.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c",
+  "core/raster/src/reference/geometry.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c",
+  "core/raster/tests/reference_geometry_kernel.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c",
+  "core/raster/tests/reference_geometry_kernel_support/mod.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = [
+  "Q32.32 page crop, rotation, and device mapping with checked rounding",
+  "adaptive De Casteljau cubic flattening and normalized fill-edge construction",
+  "nonzero and even-odd 8x8 scalar sample coverage with analytic small-grid expectations",
+  "logical growth, physical retained/transient bytes, fuel, cancellation, and atomic failure boundaries",
+]
+reviewed_subjects = [
+  "core/raster/PROVENANCE.md@213652f80d9d8c6749102f0aa7d6d53163e5ac3c#sha256:b7693bc88d8229fabf28f92b002112cb93656f3ef69b731ded978872d3bce926",
+  "core/raster/src/reference/coverage.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c#sha256:a43e2ad1be3d27789a17ce2ec3a7671938cd6340438c8b1525701f9968d35139",
+  "core/raster/src/reference/geometry.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c#sha256:edf9562b1965de73835283ea8eb0181515bf716484cc0fb08c07fae5755c5ad3",
+  "core/raster/tests/reference_geometry_kernel.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c#sha256:c7196c5a772d9322533a0100bb9e7c3ecc361784ea6b21091e8bd6ec6f0984f5",
+  "core/raster/tests/reference_geometry_kernel_support/mod.rs@213652f80d9d8c6749102f0aa7d6d53163e5ac3c#sha256:01687caa3b76f860f11f8e421bdd0646ca9c5eafabcbc837db94d5e8c3f245f5",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-raster --test reference_geometry_kernel",
+  "cargo test --locked --release --package pdf-rs-raster --test reference_geometry_kernel",
+  "cargo test --locked --package pdf-rs-raster --all-targets",
+  "cargo clippy --locked --package pdf-rs-raster --all-targets -- -D warnings",
+  "cargo fmt --all -- --check",
+  "git show --check 213652f",
+  "git diff-tree --check 213652f^ 213652f",
+]
+verification_summary = "The dedicated geometry kernel passed 50/50 tests in debug and release; raster all-targets, clippy, fmt, and Git whitespace checks passed."
+review_scope = "M3-05 only; includes shared coverage and geometry support needed by M3-06, but excludes color/compositing, images, glyphs, integrated ReferenceRenderJob publication, O0/O1/O3 case authority, maturity promotion, and M3 exit"
+review_rounds = [
+  "fixed-point mapping, rounding, flattening, and edge-rule review",
+  "logical versus physical capacity, transient peak, cancellation, and one-less budget review",
+  "allocator-overcapacity equivalence and debug/release determinism review",
+  "exact commit-tree subject and repository-policy review",
+]
+closed_findings = [
+  "P1 logical capacity determinism: growth scheduling is derived from logical length while allocator-reported capacity is used only for retained and transient byte ceilings.",
+  "P1 transient allocation accounting: geometry growth checks the old-plus-new allocation peak and conservatively retains the highest observed transient upper bound.",
+  "P1 singular transforms: non-invertible geometry is rejected as InvalidGeometry rather than silently producing empty coverage.",
+  "P1 deterministic boundaries: exact/one-less fuel, allocation, cancellation, analytic coverage, rotation, and allocator-overcapacity variants are pinned in debug and release.",
+]
+open_p0_p2 = 0
+verdict = "SHIP"

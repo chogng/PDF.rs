@@ -234,8 +234,8 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
     for required in [
         "pub struct MaterializedPage",
         "pub struct MaterializePageJob",
@@ -339,8 +339,8 @@ fn m2_page_property_lookup_is_no_io_bounded_and_traceable() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
     for required in [
         "pub struct PagePropertyReference",
         "pub struct PagePropertyResolver",
@@ -512,8 +512,8 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
     for required in [
         "pub struct PageContentJobContext",
         "pub enum PageContentPhase",
@@ -1266,8 +1266,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

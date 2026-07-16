@@ -37,6 +37,7 @@ cargo run --quiet --package pdf-rs-benchmark -- \
 cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases
 cargo test --locked --package pdf-rs-quality --test m3_raster_oracle_contract
 cargo test --locked --package pdf-rs-quality --test m3_content_graphics_trace
+cargo test --locked --package pdf-rs-quality --test m3_reference_geometry_trace
 
 m2_scene_gate_root="target/ci-artifacts/m2-scene-gate"
 if [[ "$m2_scene_gate_root" != "target/ci-artifacts/m2-scene-gate" ]]; then

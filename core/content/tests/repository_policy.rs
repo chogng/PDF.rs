@@ -160,8 +160,8 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan is readable");
     let ci = fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -487,7 +487,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         "current path is never part of q/Q",
         "Path segments, retained path bytes, dash entries and unique retained dash bytes",
         "failed-publication peaks",
-        "does not yet rasterize these commands",
+        "M3-05 and M3-06 add project-owned Q32.32 page mapping",
     ] {
         assert!(
             paths.contains(required),

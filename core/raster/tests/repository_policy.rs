@@ -201,8 +201,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -256,7 +256,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "core/raster::reference_foundation",
         "M3-03 adds the incompatible m3.scene-graphics-v2.v1 schema",
         "M3-04 adds the first bounded producer",
-        "Reference foundation still rejects visible Scene-v2 work",
+        "M3-05 and M3-06 add independently bounded pure raster kernels",
         "status = \"partial\"",
     ] {
         assert!(
@@ -268,11 +268,11 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let reference_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/8.1-8.3")
         .expect("Reference architecture requirement must be registered");
     for required in [
-        "features = [\"core.reference-pixel-foundation\"]",
+        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\"]",
         "implementation = [\"core/raster\"]",
         "sRGB-reference-v1",
-        "not the final reference-raster-v1",
-        "no O0/O1 oracle registration",
+        "not mounted into ReferenceRenderJob",
+        "register no O0/O1 case authority",
         "status = \"partial\"",
     ] {
         assert!(
@@ -287,12 +287,12 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "M3-01 closes the bounded value-only Reference pixel foundation",
         "M3-02 closes the independently governed pixel artifact/oracle contract",
         "M3-03 closes the graphics Scene schema and capability graph",
-        "M3-04 now closes the bounded Content graphics producer",
-        "M3-05 through M3-11 still own geometry and coverage",
+        "M3-04 closes the bounded Content graphics producer",
+        "M3-07 through M3-11 still own color/compositing",
         "tools/quality::m3_raster_oracle_contract",
         "tools/quality::m3_content_graphics_trace",
         "tools/quality::purity",
-        "does not claim visible PDF rendering",
+        "does not claim integrated visible PDF rendering",
         "status = \"partial\"",
     ] {
         assert!(
@@ -313,7 +313,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let m3_02 = record_with_id(&plan, "work_item", "M3-02").expect("M3-02 must exist");
     assert!(m3_02.contains("status = \"complete\""));
     assert!(m3_02.contains("completed_at = 2026-07-16"));
-    for index in 3..=4 {
+    for index in 3..=6 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -326,7 +326,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "{id} must retain its completion date"
         );
     }
-    for index in 5..=11 {
+    for index in 7..=11 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -382,6 +382,12 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "cargo test --locked --package pdf-rs-quality --test m3_content_graphics_trace"
         ),
         "M3-04 commit-bound evidence must have an explicit CI gate"
+    );
+    assert!(
+        ci.contains(
+            "cargo test --locked --package pdf-rs-quality --test m3_reference_geometry_trace"
+        ),
+        "M3-05/M3-06 commit-bound evidence must have an explicit CI gate"
     );
 
     for required in [

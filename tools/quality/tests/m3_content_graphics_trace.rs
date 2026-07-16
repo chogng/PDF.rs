@@ -6,7 +6,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.71.0";
+const TRACE_VERSION: &str = "0.72.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "b2a0b88ce3c0f4d186f450a793909d1f72a75230";
 const IMPLEMENTATION_TREE: &str = "b22d0ae88ced2194d884ec781b30f0c5ff367747";
@@ -483,15 +483,22 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
         RequirementExpectation {
             id: "ISO-32000-1:2008/8.4.2",
             snapshot: ISO_SNAPSHOT,
-            features: &["core.content-vm-scene-v1", "core.content-graphics-v2"],
-            implementation: &["core/content", "core/scene"],
+            features: &[
+                "core.content-vm-scene-v1",
+                "core.content-graphics-v2",
+                "core.reference-stroke-clip",
+            ],
+            implementation: &["core/content", "core/scene", "core/raster"],
             tests: &[
                 "core/content::vm",
                 "core/content::vm_graphics",
                 "core/content::repository_policy",
                 "core/scene::scene_v2",
+                "core/raster::reference_geometry_kernel",
+                "core/raster::repository_policy",
+                "tools/quality::m3_reference_geometry_trace",
             ],
-            note: "explicit M3 GraphicsV2 profile",
+            note: "M3-06 adds a staged deterministic clip stack",
         },
     );
     assert_requirement(
@@ -511,25 +518,48 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
             note: "M3-04 applies",
         },
     );
-    for id in ["ISO-32000-1:2008/8.5", "ISO-32000-1:2008/8.6"] {
-        assert_requirement(
-            &spec_text,
-            RequirementExpectation {
-                id,
-                snapshot: ISO_SNAPSHOT,
-                features: &["core.content-graphics-v2", "core.scene-graphics-v2"],
-                implementation: &["core/content", "core/scene"],
-                tests: &[
-                    "core/content::scanner",
-                    "core/content::vm_graphics",
-                    "core/content::repository_policy",
-                    "core/scene::scene_v2",
-                    "tools/quality::m3_content_graphics_trace",
-                ],
-                note: "M3 GraphicsV2 profile",
-            },
-        );
-    }
+    assert_requirement(
+        &spec_text,
+        RequirementExpectation {
+            id: "ISO-32000-1:2008/8.5",
+            snapshot: ISO_SNAPSHOT,
+            features: &[
+                "core.content-graphics-v2",
+                "core.scene-graphics-v2",
+                "core.reference-geometry-coverage",
+                "core.reference-stroke-clip",
+            ],
+            implementation: &["core/content", "core/scene", "core/raster"],
+            tests: &[
+                "core/content::scanner",
+                "core/content::vm_graphics",
+                "core/content::repository_policy",
+                "core/scene::scene_v2",
+                "core/raster::reference_geometry_kernel",
+                "core/raster::repository_policy",
+                "tools/quality::m3_content_graphics_trace",
+                "tools/quality::m3_reference_geometry_trace",
+            ],
+            note: "M3-05 and M3-06 add",
+        },
+    );
+    assert_requirement(
+        &spec_text,
+        RequirementExpectation {
+            id: "ISO-32000-1:2008/8.6",
+            snapshot: ISO_SNAPSHOT,
+            features: &["core.content-graphics-v2", "core.scene-graphics-v2"],
+            implementation: &["core/content", "core/scene"],
+            tests: &[
+                "core/content::scanner",
+                "core/content::vm_graphics",
+                "core/content::repository_policy",
+                "core/scene::scene_v2",
+                "tools/quality::m3_content_graphics_trace",
+            ],
+            note: "M3 GraphicsV2 profile",
+        },
+    );
     assert_requirement(
         &spec_text,
         RequirementExpectation {
@@ -569,6 +599,8 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core.scene-graphics-v2",
                 "quality.m2-scene-gate",
                 "core.reference-pixel-foundation",
+                "core.reference-geometry-coverage",
+                "core.reference-stroke-clip",
             ],
             implementation: &[
                 "core/content",
@@ -588,10 +620,12 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core/scene::repository_policy",
                 "core/raster::reference_foundation",
                 "core/raster::reference_scene_v2_boundary",
+                "core/raster::reference_geometry_kernel",
                 "core/raster::repository_policy",
                 "tools/quality::m2_scene_gate",
                 "tools/quality::m2_exit",
                 "tools/quality::m3_content_graphics_trace",
+                "tools/quality::m3_reference_geometry_trace",
             ],
             note: "M3-04 adds",
         },
@@ -605,6 +639,8 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core.reference-pixel-foundation",
                 "core.scene-graphics-v2",
                 "core.content-graphics-v2",
+                "core.reference-geometry-coverage",
+                "core.reference-stroke-clip",
                 "quality.m3-raster-oracle-contract",
             ],
             implementation: &[
@@ -623,14 +659,16 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core/scene::scene_diff_v2_budget",
                 "core/raster::reference_foundation",
                 "core/raster::reference_scene_v2_boundary",
+                "core/raster::reference_geometry_kernel",
                 "core/raster::repository_policy",
                 "tools/compare::pixel",
                 "tools/quality::m3_raster_oracle_contract",
                 "tools/quality::m3_content_graphics_trace",
+                "tools/quality::m3_reference_geometry_trace",
                 "tools/quality::m2_exit",
                 "tools/quality::purity",
             ],
-            note: "M3-04 now closes",
+            note: "M3-05 and M3-06 now close",
         },
     );
 }

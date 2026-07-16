@@ -1,5 +1,5 @@
 schema = 1
-version = "0.71.0"
+version = "0.72.0"
 status = "active"
 
 [[feature]]
@@ -142,6 +142,30 @@ profile = "m3.reference-pixel-foundation.v1"
 clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
 modules = ["core/raster"]
 tests = ["core/raster::reference_foundation", "core/raster::reference_scene_v2_boundary", "core/raster::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.reference-geometry-coverage"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m3.reference-geometry-coverage.v1"
+clauses = ["ISO-32000-1:2008/8.5", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
+modules = ["core/raster"]
+tests = ["core/raster::reference_geometry_kernel", "core/raster::repository_policy", "tools/quality::m3_reference_geometry_trace"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.reference-stroke-clip"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m3.reference-stroke-clip.v1"
+clauses = ["ISO-32000-1:2008/8.4.2", "ISO-32000-1:2008/8.5", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
+modules = ["core/raster"]
+tests = ["core/raster::reference_geometry_kernel", "core/raster::repository_policy", "tools/quality::m3_reference_geometry_trace"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"
