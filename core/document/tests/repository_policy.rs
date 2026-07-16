@@ -234,8 +234,8 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
     for required in [
         "pub struct MaterializedPage",
         "pub struct MaterializePageJob",
@@ -314,6 +314,221 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
     let m2_03 = record_with_id(&plan, "work_item", "M2-03").expect("M2-03 work item must exist");
     assert!(m2_03.contains("status = \"complete\""));
     assert!(m2_03.contains("completed_at = 2026-07-16"));
+}
+
+#[test]
+fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let page_content = fs::read_to_string(crate_root.join("src/page_content.rs"))
+        .expect("page-content acquisition source is readable");
+    let limits = fs::read_to_string(crate_root.join("src/page_content_limits.rs"))
+        .expect("page-content limits are readable");
+    let error =
+        fs::read_to_string(crate_root.join("src/error.rs")).expect("document errors are readable");
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("document library source is readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature map is readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map is readable");
+    let plan =
+        fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
+
+    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
+    for required in [
+        "pub struct PageContentJobContext",
+        "pub enum PageContentPhase",
+        "pub struct PageContentStats",
+        "pub struct AcquiredPageContentStream",
+        "pub enum PageContentDecode",
+        "pub struct EmptyIdentityContent",
+        "pub struct AcquiredPageContent",
+        "pub enum PageContentPoll",
+        "pub struct AcquirePageContentJob",
+        "AttestedRevisionIndexOwner<'index>",
+        "pub fn acquire_page_content(",
+        "pub fn acquire_page_content_owned(",
+        "FilterPlan::preflight_pdf_dictionary",
+        "FilterPlan::retained_heap_upper_bound",
+        "FilterPlan::from_pdf_dictionary",
+        "DecodeRequest::new",
+        "PageContentDecode::EmptyIdentity",
+        "enum ParentDecodeBudget",
+        "ObjectWorkCaps::new_with_retained_bytes",
+        "SyntaxLimitKind::RetainedBytes",
+        "fn prioritize_runtime_error(",
+        "DecodeErrorCategory::Unsupported => DocumentErrorCode::UnsupportedPageContentFilter",
+        "DecodeErrorCategory::Syntax => DocumentErrorCode::PageContentDecodeFailure",
+    ] {
+        assert!(
+            page_content.contains(required),
+            "page-content acquisition must contain {required:?}"
+        );
+    }
+    for required in [
+        "pub struct PageContentLimitConfig",
+        "pub struct PageContentLimits",
+        "max_alias_depth",
+        "max_streams",
+        "max_array_entries",
+        "max_objects",
+        "max_reference_edges",
+        "max_total_object_read_bytes",
+        "max_total_object_parse_bytes",
+        "max_total_encoded_bytes",
+        "max_total_decoded_bytes",
+        "max_total_decode_fuel",
+        "max_retained_state_bytes",
+    ] {
+        assert!(
+            limits.contains(required),
+            "page-content limits must contain {required:?}"
+        );
+    }
+    for required in [
+        "PageContentAliasDepth,",
+        "PageContentStreamInputBytes,",
+        "PageContentStreamFilters,",
+        "PageContentStreamFilterPlanBytes,",
+        "PageContentStreamLayerOutputBytes,",
+        "PageContentStreamTotalOutputBytes,",
+        "PageContentStreamFinalOutputBytes,",
+        "PageContentStreamDecodeFuel,",
+        "PageContentStreamRetainedBytes,",
+        "DocumentErrorCode::DuplicatePageContents",
+        "DocumentErrorCode::InvalidPageContents",
+        "DocumentErrorCode::UnsupportedPageContentsRepresentation",
+        "DocumentErrorCode::PageContentAliasCycle",
+        "DocumentErrorCode::PageContentDecodeFailure",
+        "DocumentErrorCode::UnsupportedPageContentFilter",
+    ] {
+        assert!(
+            error.contains(required),
+            "document error policy must contain {required:?}"
+        );
+    }
+    for required in [
+        "AcquirePageContentJob",
+        "AcquiredPageContent",
+        "AcquiredPageContentStream",
+        "EmptyIdentityContent",
+        "PageContentDecode",
+        "PageContentJobContext",
+        "PageContentPoll",
+        "PageContentLimitConfig",
+        "PageContentLimits",
+    ] {
+        assert!(
+            library.contains(required),
+            "document public boundary must export {required:?}"
+        );
+    }
+
+    let feature = record_with_id(&feature_map, "feature", "core.page-content-acquisition")
+        .expect("page-content acquisition feature is registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m2.page-content-acquisition.v1\"",
+        "ISO-32000-1:2008/7.7.3",
+        "ISO-32000-1:2008/7.8.2",
+        "RPE-ARCH-001/5.6",
+        "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/15.3/M2",
+        "modules = [\"core/document\"]",
+        "core/document::page_content",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "page-content feature must contain {required:?}"
+        );
+    }
+
+    let page_tree = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.7.3")
+        .expect("page-tree requirement exists");
+    for required in [
+        "core.page-content-acquisition",
+        "core/document::page_content",
+        "M2-05 consumes that exact materialized Page",
+        "strict attested authority",
+        "supported whole-object aliases",
+        "Locally repaired and acquired-chain page indexing/materialization/content acquisition",
+    ] {
+        assert!(
+            page_tree.contains(required),
+            "page-tree mapping must contain {required:?}"
+        );
+    }
+
+    let content_stream = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.8.2")
+        .expect("content-stream requirement exists");
+    for required in [
+        "core.page-content-acquisition",
+        "core.content-operator-scanner",
+        "core/document::page_content",
+        "execution order",
+        "sealed DecodedStream",
+        "zero-length unfiltered identity proof",
+        "strict attested proof",
+        "does not support locally repaired or acquired revision-chain authorities",
+        "M2-06 owns those VM semantics",
+    ] {
+        assert!(
+            content_stream.contains(required),
+            "content-stream mapping must contain {required:?}"
+        );
+    }
+
+    let stream_decode = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.6")
+        .expect("stream-decoding requirement exists");
+    assert!(stream_decode.contains("core.page-content-acquisition"));
+    assert!(stream_decode.contains("core/document::page_content"));
+    assert!(stream_decode.contains("m2.page-content-acquisition.v1"));
+    assert!(stream_decode.contains("explicit identity proof"));
+
+    let document_model = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.8-5.9")
+        .expect("document-model requirement exists");
+    assert!(document_model.contains("core.page-content-acquisition"));
+    assert!(document_model.contains("core/document::page_content"));
+    assert!(document_model.contains("M2 adds three separate PLANNED document profiles"));
+    assert!(
+        document_model.contains("Acquired-chain page indexing/materialization/content acquisition")
+    );
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
+        .expect("M2 requirement exists");
+    for required in [
+        "core.page-content-acquisition",
+        "core/document::page_content",
+        "M2-05 is complete as two bounded PLANNED profiles",
+        "one exact MaterializedPage",
+        "preserves exact object/dictionary/encoded spans",
+        "Acquired-chain content acquisition also remains outside this profile",
+        "M2-06 Content VM execution",
+        "M2-07 registered normative Scene exit evidence remain open",
+        "M2 exit gate is not closed",
+    ] {
+        assert!(
+            milestone.contains(required),
+            "M2 mapping must contain {required:?}"
+        );
+    }
+
+    let m2_05 = record_with_id(&plan, "work_item", "M2-05").expect("M2-05 work item exists");
+    assert!(m2_05.contains("status = \"complete\""));
+    assert!(m2_05.contains("completed_at = 2026-07-16"));
+    let m2_06 = record_with_id(&plan, "work_item", "M2-06").expect("M2-06 work item exists");
+    assert!(m2_06.contains("status = \"planned\""));
+    let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
+    assert!(m2_07.contains("status = \"planned\""));
 }
 
 #[test]
@@ -869,8 +1084,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

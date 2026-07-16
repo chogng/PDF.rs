@@ -123,7 +123,10 @@ fn direct_dictionary_canonicalization_is_filters_owned_bounded_and_cancellable()
     let provenance = fs::read_to_string(crate_root.join("PROVENANCE.md")).unwrap();
 
     for required in [
+        "pub fn preflight_pdf_dictionary<C: DecodeCancellation + ?Sized>(",
         "pub fn from_pdf_dictionary<C: DecodeCancellation + ?Sized>(",
+        "preflight_pdf_dictionary_metadata",
+        "validate_pdf_dictionary_metadata",
         "unique_metadata_value",
         "canonical_filter_shape",
         "canonical_pdf_filter",
@@ -141,6 +144,9 @@ fn direct_dictionary_canonicalization_is_filters_owned_bounded_and_cancellable()
         );
     }
     for required in [
+        "FilterPlan::preflight_pdf_dictionary",
+        "without allocating a plan",
+        "exact declared filter count",
         "filters-owned shared direct-metadata canonicalizer",
         "Metadata keys must be unique",
         "equal-length direct array",
@@ -220,8 +226,8 @@ fn traceability_registers_basic_filters_without_claiming_stream_integration() {
         fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml")).unwrap();
     let spec_map =
         fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml")).unwrap();
-    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.stream-filter-decode")
         .expect("basic stream-filter feature must exist");

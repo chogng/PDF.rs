@@ -131,8 +131,8 @@ fn m2_scene_and_semantic_diff_are_independently_traceable_without_closing_the_ga
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.66.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.66.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -201,7 +201,7 @@ fn m2_scene_and_semantic_diff_are_independently_traceable_without_closing_the_ga
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement must be registered");
     assert!(milestone.contains("M2-04 is complete as a foundation"));
-    assert!(milestone.contains("M2-05 content acquisition/operator scanning"));
+    assert!(milestone.contains("M2-05 is complete as two bounded PLANNED profiles"));
     assert!(milestone.contains("M2-07 registered normative Scene exit evidence remain open"));
     assert!(milestone.contains("M2 exit gate is not closed"));
 
