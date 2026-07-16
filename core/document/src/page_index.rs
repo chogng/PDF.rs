@@ -631,6 +631,145 @@ impl PageIndex {
         Ok(())
     }
 
+    /// Builds the exact Page-to-root inheritance chain for materialization-owned traversal.
+    pub(crate) fn inheritance_chain(
+        &self,
+        handle: PageHandle,
+        max_depth: u64,
+        max_retained_bytes: u64,
+    ) -> Result<Vec<ObjectRef>, DocumentError> {
+        self.validate_handle(handle)?;
+        if self.page(handle.index) != Some(handle.object) {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::StalePageHandle,
+                Some(handle.object),
+                None,
+            ));
+        }
+        let leaf = self.node(handle.object).ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(handle.object), None)
+        })?;
+        let required_depth = u64::from(leaf.depth());
+        if required_depth > max_depth {
+            return Err(DocumentError::page_materialization_resource(
+                DocumentLimitKind::PageMaterializationAncestors,
+                max_depth,
+                0,
+                required_depth,
+                handle.object,
+                Some(leaf.edge_offset()),
+            ));
+        }
+        let required_capacity = usize::try_from(required_depth).map_err(|_| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(handle.object),
+                Some(leaf.edge_offset()),
+            )
+        })?;
+        let required_bytes = u64::try_from(required_capacity)
+            .ok()
+            .and_then(|capacity| {
+                capacity.checked_mul(u64::try_from(mem::size_of::<ObjectRef>()).ok()?)
+            })
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(handle.object),
+                    Some(leaf.edge_offset()),
+                )
+            })?;
+        if required_bytes > max_retained_bytes {
+            return Err(DocumentError::page_materialization_resource(
+                DocumentLimitKind::PageMaterializationStateBytes,
+                max_retained_bytes,
+                0,
+                required_bytes,
+                handle.object,
+                Some(leaf.edge_offset()),
+            ));
+        }
+        let mut chain = Vec::new();
+        chain.try_reserve_exact(required_capacity).map_err(|_| {
+            DocumentError::page_materialization_resource(
+                DocumentLimitKind::PageMaterializationStateBytes,
+                max_retained_bytes,
+                0,
+                required_bytes,
+                handle.object,
+                Some(leaf.edge_offset()),
+            )
+        })?;
+        let retained_bytes = u64::try_from(chain.capacity())
+            .ok()
+            .and_then(|capacity| {
+                capacity.checked_mul(u64::try_from(mem::size_of::<ObjectRef>()).ok()?)
+            })
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(handle.object),
+                    Some(leaf.edge_offset()),
+                )
+            })?;
+        if retained_bytes > max_retained_bytes {
+            return Err(DocumentError::page_materialization_resource(
+                DocumentLimitKind::PageMaterializationStateBytes,
+                max_retained_bytes,
+                0,
+                retained_bytes,
+                handle.object,
+                Some(leaf.edge_offset()),
+            ));
+        }
+
+        let mut current = Some(handle.object);
+        let mut expected_depth = leaf.depth();
+        while let Some(reference) = current {
+            let node = self.node(reference).ok_or_else(|| {
+                DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), None)
+            })?;
+            if node.depth() != expected_depth {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(reference),
+                    Some(node.edge_offset()),
+                ));
+            }
+            chain.push(reference);
+            match node.parent() {
+                Some(parent) => {
+                    expected_depth = expected_depth.checked_sub(1).ok_or_else(|| {
+                        DocumentError::for_code(
+                            DocumentErrorCode::InternalState,
+                            Some(reference),
+                            Some(node.edge_offset()),
+                        )
+                    })?;
+                    current = Some(parent);
+                }
+                None if reference == self.catalog.pages() && expected_depth == 1 => {
+                    current = None;
+                }
+                None => {
+                    return Err(DocumentError::for_code(
+                        DocumentErrorCode::InternalState,
+                        Some(reference),
+                        Some(node.edge_offset()),
+                    ));
+                }
+            }
+        }
+        if chain.len() != required_capacity {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(handle.object),
+                Some(leaf.edge_offset()),
+            ));
+        }
+        Ok(chain)
+    }
+
     #[allow(
         dead_code,
         reason = "sealed dense-order admission remains the M2-01 compatibility boundary"

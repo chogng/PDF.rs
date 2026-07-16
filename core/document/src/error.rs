@@ -97,6 +97,18 @@ pub enum DocumentLimitKind {
     PageTreeTraversalBytes,
     /// Allocator-reported ordered page-reference capacity retained by one page index.
     PageIndexBytes,
+    /// Page or Pages dictionaries opened while resolving inherited page values.
+    PageMaterializationAncestors,
+    /// Proof-preserving object jobs started across page ancestors and value aliases.
+    PageMaterializationObjects,
+    /// Whole-object direct-reference edges followed for inherited page values.
+    PageMaterializationReferenceEdges,
+    /// Cumulative exact object-read bytes across one page materialization job.
+    PageMaterializationObjectReadBytes,
+    /// Cumulative object-parser window bytes across one page materialization job.
+    PageMaterializationObjectParseBytes,
+    /// Allocator-reported state and proof-bearing value capacity retained by materialization.
+    PageMaterializationStateBytes,
     /// Distinct outline item identities scheduled by one bounded outline job.
     OutlineItems,
     /// Greatest root-relative outline item depth accepted by one outline job.
@@ -237,8 +249,24 @@ pub enum DocumentErrorCode {
     DuplicateStructuralKey,
     /// A requested zero-based logical page index is outside the validated document range.
     PageIndexOutOfBounds,
-    /// A page handle belongs to another immutable source, revision, Catalog, or logical order.
+    /// A page handle belongs to another binding or its paired index lacks the exact Page proof.
     StalePageHandle,
+    /// Runtime identity or child checkpoints for inherited page-value materialization are invalid.
+    InvalidPageMaterializationJobContext,
+    /// MediaBox or CropBox is missing, malformed, non-finite, or not exactly representable.
+    InvalidPageBox,
+    /// Rotate is not an integer multiple of ninety degrees.
+    InvalidPageRotation,
+    /// Resources does not resolve to one direct PDF dictionary.
+    InvalidPageResources,
+    /// No inheritable MediaBox definition exists on the validated Page-to-root chain.
+    MissingPageMediaBox,
+    /// No inheritable Resources definition exists on the validated Page-to-root chain.
+    MissingPageResources,
+    /// A whole-object inherited-value alias revisited an active reference.
+    PageValueAliasCycle,
+    /// An inherited value uses a valid alias or nested representation outside this bounded profile.
+    UnsupportedPageValueRepresentation,
     /// Runtime identity or child checkpoints for outline traversal are inconsistent.
     InvalidOutlineJobContext,
     /// The Catalog outline entry or outline root dictionary has the wrong shape.
@@ -546,6 +574,46 @@ impl DocumentError {
                 DocumentRecoverability::CorrectReference,
                 "RPE-DOCUMENT-0059",
             ),
+            DocumentErrorCode::InvalidPageMaterializationJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0060",
+            ),
+            DocumentErrorCode::InvalidPageBox => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0061",
+            ),
+            DocumentErrorCode::InvalidPageRotation => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0062",
+            ),
+            DocumentErrorCode::InvalidPageResources => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0063",
+            ),
+            DocumentErrorCode::MissingPageMediaBox => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0064",
+            ),
+            DocumentErrorCode::MissingPageResources => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0065",
+            ),
+            DocumentErrorCode::PageValueAliasCycle => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0066",
+            ),
+            DocumentErrorCode::UnsupportedPageValueRepresentation => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0067",
+            ),
             DocumentErrorCode::InvalidOutlineJobContext => (
                 DocumentErrorCategory::Configuration,
                 DocumentRecoverability::CorrectConfiguration,
@@ -715,6 +783,27 @@ impl DocumentError {
     }
 
     pub(crate) const fn page_tree_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn page_materialization_resource(
         kind: DocumentLimitKind,
         limit: u64,
         consumed: u64,

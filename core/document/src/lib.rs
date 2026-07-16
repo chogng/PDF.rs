@@ -66,8 +66,12 @@ mod local_repair_open;
 mod model;
 mod outline;
 mod outline_limits;
+mod page_geometry;
 mod page_index;
 mod page_index_job;
+mod page_materialization;
+mod page_materialization_limits;
+mod page_resources;
 mod page_tree;
 mod page_tree_limits;
 mod reference_chain;
@@ -121,6 +125,9 @@ pub use outline::{
     OutlineTargetKind, ReadOutlineJob,
 };
 pub use outline_limits::{OutlineLimitConfig, OutlineLimits};
+pub use page_geometry::{
+    InheritedPageValue, PageBoxes, PageCoordinate, PageRectangle, PageRotation, PageValueProvenance,
+};
 pub use page_index::{
     PageHandle, PageIndex, PageIndexLimits, PageIndexSegmentKind, PageIndexStats,
     PageSegmentEvidence, PageSegmentSummary,
@@ -129,6 +136,12 @@ pub use page_index_job::{
     BuildPageIndexJob, LookupPageJob, PageIndexBuildPoll, PageLookup, PageLookupPhase,
     PageLookupPoll, PageLookupStats,
 };
+pub use page_materialization::{
+    MaterializePageJob, MaterializedPage, PageMaterializationJobContext, PageMaterializationPhase,
+    PageMaterializationPoll, PageMaterializationStats,
+};
+pub use page_materialization_limits::{PageMaterializationLimitConfig, PageMaterializationLimits};
+pub use page_resources::PageResourceScope;
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
 };
