@@ -7,7 +7,8 @@ use pdf_rs_syntax::{ObjectRef, PdfDictionary, SyntaxObject};
 
 use crate::{
     AttestedObject, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    PagePropertyLookupLimits, PagePropertyLookupStats, RevisionId,
+    ImageXObjectUnsupported, ImageXObjectUnsupportedKind, PagePropertyLookupLimits,
+    PagePropertyLookupStats, PageXObjectLookupLimits, PageXObjectLookupStats, RevisionId,
 };
 
 const CANCELLATION_PROBE_INTERVAL: u64 = 256;
@@ -99,6 +100,24 @@ impl PageResourceScope {
             scope: self,
             limits,
             stats: PagePropertyLookupStats {
+                lookups: 0,
+                entry_visits: 0,
+            },
+        }
+    }
+
+    /// Creates a no-I/O resolver borrowing this exact resource dictionary proof.
+    ///
+    /// The resolver returns only a fixed-size indirect-reference proof. It does not open,
+    /// decode, or retain the selected XObject payload.
+    pub const fn xobject_resolver(
+        &self,
+        limits: PageXObjectLookupLimits,
+    ) -> PageXObjectResolver<'_> {
+        PageXObjectResolver {
+            scope: self,
+            limits,
+            stats: PageXObjectLookupStats {
                 lookups: 0,
                 entry_visits: 0,
             },
@@ -306,6 +325,376 @@ impl fmt::Debug for PagePropertyReference {
             .field("property_name", &"[NOT RETAINED]")
             .field("property_key_offset", &self.property_key_offset)
             .field("property_value_offset", &self.property_value_offset)
+            .finish()
+    }
+}
+
+/// Fixed-size proof that one Page resource name selected an indirect XObject reference.
+///
+/// The requested name bytes are intentionally not retained or copied. Exact key/value offsets
+/// bind the proof to the source occurrence, while acquisition remains separately proof-bound to
+/// the retained revision authority.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PageXObjectReference {
+    target: ObjectRef,
+    snapshot: SourceSnapshot,
+    revision_id: RevisionId,
+    revision_startxref: u64,
+    scope_defining_object: ObjectRef,
+    scope_defining_value_offset: u64,
+    resource_dictionary_owner: ObjectRef,
+    xobject_key_offset: u64,
+    xobject_value_offset: u64,
+    entry_key_offset: u64,
+    entry_value_offset: u64,
+}
+
+impl PageXObjectReference {
+    /// Returns the indirect object named by the selected XObject entry.
+    pub const fn target(self) -> ObjectRef {
+        self.target
+    }
+
+    /// Returns the immutable source snapshot retained by the resource dictionary owner.
+    pub const fn snapshot(self) -> SourceSnapshot {
+        self.snapshot
+    }
+
+    /// Returns the caller-assigned revision identity of the resource dictionary owner.
+    pub const fn revision_id(self) -> RevisionId {
+        self.revision_id
+    }
+
+    /// Returns the `startxref` anchor of the resource dictionary owner's revision.
+    pub const fn revision_startxref(self) -> u64 {
+        self.revision_startxref
+    }
+
+    /// Returns the Page or Pages object whose Resources field ended inheritance lookup.
+    pub const fn scope_defining_object(self) -> ObjectRef {
+        self.scope_defining_object
+    }
+
+    /// Returns the source offset of that exact Resources field value.
+    pub const fn scope_defining_value_offset(self) -> u64 {
+        self.scope_defining_value_offset
+    }
+
+    /// Returns the indirect object physically owning the selected resource dictionary.
+    pub const fn resource_dictionary_owner(self) -> ObjectRef {
+        self.resource_dictionary_owner
+    }
+
+    /// Returns the source offset of the unique `/XObject` key.
+    pub const fn xobject_key_offset(self) -> u64 {
+        self.xobject_key_offset
+    }
+
+    /// Returns the source offset of the unique `/XObject` value.
+    pub const fn xobject_value_offset(self) -> u64 {
+        self.xobject_value_offset
+    }
+
+    /// Returns the source offset of the selected resource-name key.
+    pub const fn entry_key_offset(self) -> u64 {
+        self.entry_key_offset
+    }
+
+    /// Returns the source offset of the selected indirect-reference value.
+    pub const fn entry_value_offset(self) -> u64 {
+        self.entry_value_offset
+    }
+}
+
+impl fmt::Debug for PageXObjectReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageXObjectReference")
+            .field("target", &self.target)
+            .field("snapshot", &self.snapshot)
+            .field("revision_id", &self.revision_id)
+            .field("revision_startxref", &self.revision_startxref)
+            .field("scope_defining_object", &self.scope_defining_object)
+            .field(
+                "scope_defining_value_offset",
+                &self.scope_defining_value_offset,
+            )
+            .field("resource_dictionary_owner", &self.resource_dictionary_owner)
+            .field("xobject_key_offset", &self.xobject_key_offset)
+            .field("xobject_value_offset", &self.xobject_value_offset)
+            .field("resource_name", &"[NOT RETAINED]")
+            .field("entry_key_offset", &self.entry_key_offset)
+            .field("entry_value_offset", &self.entry_value_offset)
+            .finish()
+    }
+}
+
+/// Terminal result of one no-I/O Page XObject name lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PageXObjectLookupOutcome {
+    /// One exact indirect XObject reference was proven.
+    Ready(PageXObjectReference),
+    /// The selected resource representation is valid but outside the registered subset.
+    Unsupported(ImageXObjectUnsupported),
+}
+
+/// Borrowed no-I/O resolver for one exact inherited Page resource dictionary.
+pub struct PageXObjectResolver<'scope> {
+    scope: &'scope PageResourceScope,
+    limits: PageXObjectLookupLimits,
+    stats: PageXObjectLookupStats,
+}
+
+impl PageXObjectResolver<'_> {
+    /// Returns the validated independent lookup and entry-visit profile.
+    pub const fn limits(&self) -> PageXObjectLookupLimits {
+        self.limits
+    }
+
+    /// Returns cumulative work, including work retained after failed lookups.
+    pub const fn stats(&self) -> PageXObjectLookupStats {
+        self.stats
+    }
+
+    /// Resolves one Page XObject name without polling or opening the target object.
+    ///
+    /// This bounded profile accepts only `/XObject << /Name n 0 R >>`. An indirect
+    /// `/XObject` dictionary and a directly embedded selected XObject are reported through the
+    /// typed unsupported boundary. Malformed, missing, or duplicate structures remain document
+    /// failures.
+    pub fn lookup_image_xobject(
+        &mut self,
+        name: &[u8],
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<PageXObjectLookupOutcome, DocumentError> {
+        let scope = self.scope;
+        let limits = self.limits;
+        let stats = &mut self.stats;
+        let owner = scope.dictionary_owner();
+        let snapshot = owner.snapshot();
+        let owner_reference = owner.reference();
+        let scope_offset = scope.defining_value_offset;
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Err(fallback) = charge_xobject_lookup(stats, limits, owner_reference, scope_offset) {
+            return Err(prioritize_runtime_error(
+                snapshot,
+                source,
+                cancellation,
+                fallback,
+                owner_reference,
+                scope_offset,
+            ));
+        }
+        let dictionary = scope.dictionary().map_err(|fallback| {
+            prioritize_runtime_error(
+                snapshot,
+                source,
+                cancellation,
+                fallback,
+                owner_reference,
+                scope_offset,
+            )
+        })?;
+
+        let mut xobject_key_offset = None;
+        let mut xobject_value = None;
+        let mut duplicate_xobject_offset = None;
+        for entry in dictionary.entries() {
+            let key_offset = entry.key().span().start();
+            probe_xobject_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            if let Err(fallback) =
+                charge_xobject_entry_visit(stats, limits, owner_reference, key_offset)
+            {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                ));
+            }
+            if entry.key().value().bytes() != b"XObject" {
+                continue;
+            }
+            if xobject_value.is_some() {
+                duplicate_xobject_offset.get_or_insert(key_offset);
+            } else {
+                xobject_key_offset = Some(key_offset);
+                xobject_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Some(offset) = duplicate_xobject_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(xobject_value) = xobject_value else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageXObjectResource,
+                Some(owner_reference),
+                Some(scope_offset),
+            ));
+        };
+        let xobject_value_offset = xobject_value.span().start();
+        let Some(xobject_key_offset) = xobject_key_offset else {
+            return Err(internal_error(owner_reference, Some(xobject_value_offset)));
+        };
+        let xobjects = match xobject_value.value() {
+            SyntaxObject::Dictionary(dictionary) => dictionary,
+            SyntaxObject::Reference(reference) => {
+                return Ok(PageXObjectLookupOutcome::Unsupported(
+                    ImageXObjectUnsupported::new(
+                        ImageXObjectUnsupportedKind::IndirectXObjectDictionary,
+                        *reference,
+                        xobject_value_offset,
+                    ),
+                ));
+            }
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPageXObjectResource,
+                    Some(owner_reference),
+                    Some(xobject_value_offset),
+                ));
+            }
+        };
+
+        let mut entry_key_offset = None;
+        let mut entry_value = None;
+        let mut duplicate_entry_offset = None;
+        for entry in xobjects.entries() {
+            let key_offset = entry.key().span().start();
+            probe_xobject_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            if let Err(fallback) =
+                charge_xobject_entry_visit(stats, limits, owner_reference, key_offset)
+            {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                ));
+            }
+            if entry.key().value().bytes() != name {
+                continue;
+            }
+            if entry_value.is_some() {
+                duplicate_entry_offset.get_or_insert(key_offset);
+            } else {
+                entry_key_offset = Some(key_offset);
+                entry_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            xobject_value_offset,
+        )?;
+        if let Some(offset) = duplicate_entry_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(entry_value) = entry_value else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageXObjectResource,
+                Some(owner_reference),
+                Some(xobject_value_offset),
+            ));
+        };
+        let entry_value_offset = entry_value.span().start();
+        let Some(entry_key_offset) = entry_key_offset else {
+            return Err(internal_error(owner_reference, Some(entry_value_offset)));
+        };
+        let target = match entry_value.value() {
+            SyntaxObject::Reference(reference) => *reference,
+            SyntaxObject::Dictionary(_) => {
+                return Ok(PageXObjectLookupOutcome::Unsupported(
+                    ImageXObjectUnsupported::new(
+                        ImageXObjectUnsupportedKind::DirectXObject,
+                        owner_reference,
+                        entry_value_offset,
+                    ),
+                ));
+            }
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPageXObjectResource,
+                    Some(owner_reference),
+                    Some(entry_value_offset),
+                ));
+            }
+        };
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            entry_value_offset,
+        )?;
+        Ok(PageXObjectLookupOutcome::Ready(PageXObjectReference {
+            target,
+            snapshot,
+            revision_id: owner.revision_id(),
+            revision_startxref: owner.revision_startxref(),
+            scope_defining_object: scope.defining_object,
+            scope_defining_value_offset: scope_offset,
+            resource_dictionary_owner: owner_reference,
+            xobject_key_offset,
+            xobject_value_offset,
+            entry_key_offset,
+            entry_value_offset,
+        }))
+    }
+}
+
+impl fmt::Debug for PageXObjectResolver<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageXObjectResolver")
+            .field("scope", &self.scope)
+            .field("limits", &self.limits)
+            .field("stats", &self.stats)
+            .field("dictionary", &"[REDACTED]")
             .finish()
     }
 }
@@ -620,6 +1009,70 @@ fn charge_entry_visit(
     if stats.entry_visits >= limits.max_entry_visits() {
         return Err(DocumentError::page_property_resource(
             DocumentLimitKind::PagePropertyEntryVisits,
+            limits.max_entry_visits(),
+            stats.entry_visits,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.entry_visits = stats
+        .entry_visits
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn probe_xobject_scan(
+    stats: &PageXObjectLookupStats,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits != 0
+        && stats
+            .entry_visits
+            .is_multiple_of(CANCELLATION_PROBE_INTERVAL)
+    {
+        runtime_guard(snapshot, source, cancellation, reference, offset)?;
+    }
+    Ok(())
+}
+
+fn charge_xobject_lookup(
+    stats: &mut PageXObjectLookupStats,
+    limits: PageXObjectLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.lookups >= limits.max_lookups() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageXObjectLookups,
+            limits.max_lookups(),
+            stats.lookups,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.lookups = stats
+        .lookups
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn charge_xobject_entry_visit(
+    stats: &mut PageXObjectLookupStats,
+    limits: PageXObjectLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits >= limits.max_entry_visits() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageXObjectEntryVisits,
             limits.max_entry_visits(),
             stats.entry_visits,
             1,

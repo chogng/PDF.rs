@@ -151,6 +151,32 @@ pub enum DocumentLimitKind {
     PagePropertyLookups,
     /// Outer resource and inner property dictionary entries visited during property lookup.
     PagePropertyEntryVisits,
+    /// Page resource names resolved through one borrowed XObject resolver.
+    PageXObjectLookups,
+    /// Outer resource and inner XObject dictionary entries visited during XObject lookup.
+    PageXObjectEntryVisits,
+    /// Top-level and nested Image XObject metadata entries visited before decode.
+    ImageXObjectMetadataEntries,
+    /// Exact source bytes consumed while reopening one proof-bound Image XObject.
+    ImageXObjectObjectReadBytes,
+    /// Parser-window bytes consumed while reopening one proof-bound Image XObject.
+    ImageXObjectObjectParseBytes,
+    /// Positive pixel columns declared by one Image XObject.
+    ImageXObjectWidth,
+    /// Positive pixel rows declared by one Image XObject.
+    ImageXObjectHeight,
+    /// Checked source pixels declared by one Image XObject.
+    ImageXObjectPixels,
+    /// Tightly packed decoded bytes in one Image XObject row.
+    ImageXObjectStrideBytes,
+    /// Exact encoded stream-payload bytes for one Image XObject.
+    ImageXObjectEncodedBytes,
+    /// Exact final decoded component bytes for one Image XObject.
+    ImageXObjectDecodedBytes,
+    /// Deterministic foundational decode fuel for one Image XObject.
+    ImageXObjectDecodeFuel,
+    /// Conservatively accounted object, filter-plan, and decoded capacity.
+    ImageXObjectRetainedBytes,
     /// Distinct outline item identities scheduled by one bounded outline job.
     OutlineItems,
     /// Greatest root-relative outline item depth accepted by one outline job.
@@ -329,6 +355,14 @@ pub enum DocumentErrorCode {
     UnsupportedIndirectPageProperties,
     /// A requested marked-content property resolves to an unsupported direct dictionary.
     UnsupportedDirectPagePropertyDictionary,
+    /// `/XObject` or one requested Page XObject name has an invalid semantic shape.
+    InvalidPageXObjectResource,
+    /// Runtime identity or checkpoints for Image XObject acquisition are inconsistent.
+    InvalidImageXObjectJobContext,
+    /// An otherwise selected Image XObject has malformed required metadata or decoded geometry.
+    InvalidImageXObject,
+    /// A registered Image XObject stream failed canonical filter planning or decoding.
+    ImageXObjectDecodeFailure,
     /// Runtime identity or child checkpoints for outline traversal are inconsistent.
     InvalidOutlineJobContext,
     /// The Catalog outline entry or outline root dictionary has the wrong shape.
@@ -726,6 +760,26 @@ impl DocumentError {
                 DocumentRecoverability::UseSupportedFeature,
                 "RPE-DOCUMENT-0077",
             ),
+            DocumentErrorCode::InvalidPageXObjectResource => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0078",
+            ),
+            DocumentErrorCode::InvalidImageXObjectJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0079",
+            ),
+            DocumentErrorCode::InvalidImageXObject => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0080",
+            ),
+            DocumentErrorCode::ImageXObjectDecodeFailure => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0081",
+            ),
             DocumentErrorCode::InvalidOutlineJobContext => (
                 DocumentErrorCategory::Configuration,
                 DocumentRecoverability::CorrectConfiguration,
@@ -958,6 +1012,27 @@ impl DocumentError {
     }
 
     pub(crate) const fn page_property_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn image_xobject_resource(
         kind: DocumentLimitKind,
         limit: u64,
         consumed: u64,
