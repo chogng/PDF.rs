@@ -8,6 +8,7 @@ mod render;
 pub use error::{
     ReferenceRenderError, ReferenceRenderErrorCategory, ReferenceRenderErrorCode,
     ReferenceRenderLimit, ReferenceRenderLimitKind, ReferenceRenderRecoverability,
+    ReferenceRenderUnsupported, ReferenceRenderUnsupportedKind,
 };
 pub use limits::{ReferenceRasterLimitConfig, ReferenceRasterLimits};
 pub use model::{

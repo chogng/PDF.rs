@@ -109,6 +109,7 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
     assert!(diff.contains("pub fn validate(config: SceneDiffLimitConfig)"));
     assert!(diff.contains("SceneLimitKind::Differences"));
     assert!(diff.contains("SceneLimitKind::DiffRetainedBytes"));
+    assert!(diff.contains("SceneLimitKind::DiffCompareWork"));
     assert!(diff.contains("SceneLimitKind::DiffCanonicalBytes"));
     assert!(!diff.contains("expected_binding.source()"));
     assert!(!diff.contains("actual_binding.source()"));

@@ -184,6 +184,18 @@ impl Matrix {
             scaled_sum(&[(b1, e2), (d1, f2)], f1)?,
         ]))
     }
+
+    /// Applies this affine transform to one exact user-space point.
+    pub fn checked_transform_point(
+        self,
+        point: crate::ScenePoint,
+    ) -> Result<crate::ScenePoint, SceneError> {
+        let [a, b, c, d, e, f] = self.components.map(SceneScalar::scaled);
+        Ok(crate::ScenePoint::new(
+            scaled_sum(&[(a, point.x().scaled()), (c, point.y().scaled())], e)?,
+            scaled_sum(&[(b, point.x().scaled()), (d, point.y().scaled())], f)?,
+        ))
+    }
 }
 
 fn scaled_sum(products: &[(i64, i64)], addend: i64) -> Result<SceneScalar, SceneError> {

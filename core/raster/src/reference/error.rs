@@ -1,6 +1,56 @@
 use std::error::Error;
 use std::fmt;
 
+/// Visible Scene capability outside the current non-painting Reference profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReferenceRenderUnsupportedKind {
+    /// One declared visible graphics requirement is not implemented by this renderer.
+    VisibleGraphicsRequirement,
+    /// One visible graphics command is not implemented by this renderer.
+    VisibleGraphicsCommand,
+}
+
+/// Content-redacted structured unsupported Reference-rendering outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReferenceRenderUnsupported {
+    kind: ReferenceRenderUnsupportedKind,
+    index: u32,
+    diagnostic_id: &'static str,
+}
+
+impl ReferenceRenderUnsupported {
+    pub(crate) const fn visible_requirement(index: u32) -> Self {
+        Self {
+            kind: ReferenceRenderUnsupportedKind::VisibleGraphicsRequirement,
+            index,
+            diagnostic_id: "RPE-RASTER-0007",
+        }
+    }
+
+    pub(crate) const fn visible_command(index: u32) -> Self {
+        Self {
+            kind: ReferenceRenderUnsupportedKind::VisibleGraphicsCommand,
+            index,
+            diagnostic_id: "RPE-RASTER-0008",
+        }
+    }
+
+    /// Returns the unsupported visible Scene surface.
+    pub const fn kind(self) -> ReferenceRenderUnsupportedKind {
+        self.kind
+    }
+
+    /// Returns the zero-based requirement or command index.
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+
+    /// Returns the stable content-redacted diagnostic identifier.
+    pub const fn diagnostic_id(self) -> &'static str {
+        self.diagnostic_id
+    }
+}
+
 /// Deterministic Reference raster budget that rejected work or publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReferenceRenderLimitKind {
@@ -16,7 +66,9 @@ pub enum ReferenceRenderLimitKind {
     OutputBytes,
     /// Scene commands traversed by the Reference profile.
     Commands,
-    /// Deterministic command-plus-pixel work units.
+    /// Scene capability requirements traversed before dispatch.
+    Requirements,
+    /// Deterministic requirement-plus-command-plus-pixel work units.
     Fuel,
     /// Allocator-reported pixel-vector capacity.
     RetainedBytes,

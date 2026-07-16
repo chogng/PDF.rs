@@ -13,6 +13,8 @@ mod builder;
 mod canonical;
 mod diff;
 mod error;
+mod graphics;
+mod graphics_builder;
 mod limits;
 mod model;
 mod scalar;
@@ -25,6 +27,15 @@ pub use diff::{
 pub use error::{
     SceneError, SceneErrorCategory, SceneErrorCode, SceneLimit, SceneLimitKind, SceneRecoverability,
 };
+pub use graphics::{
+    BlendMode, CapabilityContext, CapabilityRequirement, CapabilityRequirementId, CapabilityStatus,
+    DashPattern, DeviceColor, FillRule, GlyphOutline, GlyphRun, GlyphUse, GraphicsCapability,
+    GraphicsCommand, GraphicsCommandRecord, GraphicsResource, GraphicsResourceEntry,
+    GraphicsResourceId, GraphicsResourceSource, GraphicsScene, GraphicsSceneStats, ImageColorSpace,
+    ImageResource, LineCap, LineJoin, LineStyle, Paint, PathResource, PathSegment, PositionedGlyph,
+    SceneBounds, ScenePoint, SceneUnit,
+};
+pub use graphics_builder::{GraphicsSceneBuilder, GraphicsSceneLimitConfig, GraphicsSceneLimits};
 pub use limits::{SceneLimitConfig, SceneLimits};
 pub use model::{
     CapabilityDecision, CommandSource, FeatureReport, PageGeometry, PageRotation, ResourceId,

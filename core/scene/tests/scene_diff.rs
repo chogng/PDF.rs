@@ -122,6 +122,7 @@ fn runtime_source_identity_noise_is_ignored() {
     assert!(difference.differences().is_empty());
     assert_eq!(difference.stats().differences(), 0);
     assert_eq!(difference.stats().retained_bytes(), 0);
+    assert_eq!(difference.stats().compare_work(), 9);
 }
 
 #[test]
@@ -286,6 +287,29 @@ fn one_less_than_each_diff_budget_is_a_structured_failure() {
         SceneLimitKind::DiffRetainedBytes
     );
 
+    let compare_work = complete.stats().compare_work();
+    assert!(compare_work > 1);
+    let exact = compare_scenes(
+        &expected,
+        &actual,
+        diff_limits(|value| value.max_compare_work = compare_work),
+    )
+    .unwrap();
+    assert_eq!(exact.stats().compare_work(), compare_work);
+    let error = compare_scenes(
+        &expected,
+        &actual,
+        diff_limits(|value| value.max_compare_work = compare_work - 1),
+    )
+    .unwrap_err();
+    let evidence = error.limit().unwrap();
+    assert_eq!(evidence.kind(), SceneLimitKind::DiffCompareWork);
+    assert_eq!(evidence.limit(), compare_work - 1);
+    assert_eq!(
+        evidence.consumed().checked_add(evidence.attempted()),
+        Some(compare_work)
+    );
+
     let canonical_bytes = u64::try_from(complete.canonical_json_bytes().unwrap().len()).unwrap();
     assert!(canonical_bytes > 1);
     let limited = compare_scenes(
@@ -323,6 +347,15 @@ fn diff_limits_reject_every_zero_dimension() {
 
     let config = SceneDiffLimitConfig {
         max_canonical_bytes: 0,
+        ..SceneDiffLimitConfig::default()
+    };
+    assert_eq!(
+        SceneDiffLimits::validate(config).unwrap_err().code(),
+        SceneErrorCode::InvalidLimits
+    );
+
+    let config = SceneDiffLimitConfig {
+        max_compare_work: 0,
         ..SceneDiffLimitConfig::default()
     };
     assert_eq!(

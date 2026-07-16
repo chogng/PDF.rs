@@ -132,7 +132,7 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
         "check_cancellation(cancellation, &mut cancellation_checks)?;\n    let mut rgba = Vec::new();",
         "rgba.try_reserve_exact(required_capacity)",
         "if rgba.len() != required_capacity",
-        "ReferenceRenderStats::new(commands, pixels, fuel, retained_bytes, cancellation_checks)",
+        "ReferenceRenderStats::new(\n            commands,\n            requirements,\n            pixels,\n            fuel,\n            retained_bytes,\n            cancellation_checks,",
     ] {
         assert!(
             render.contains(required),

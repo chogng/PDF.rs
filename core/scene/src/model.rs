@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pdf_rs_bytes::SourceIdentity;
 use pdf_rs_syntax::ObjectRef;
 
-use crate::{SceneError, SceneErrorCode, SceneLimits, SceneScalar};
+use crate::{GraphicsScene, SceneError, SceneErrorCode, SceneLimits, SceneScalar};
 
 /// Version of the immutable Scene schema.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -16,6 +16,8 @@ pub struct SceneVersion {
 impl SceneVersion {
     /// Initial incompatible/compatible Scene schema pair.
     pub const V1_0: Self = Self { major: 1, minor: 0 };
+    /// Graphics-capable incompatible Scene schema generation.
+    pub const V2_0: Self = Self { major: 2, minor: 0 };
 
     /// Returns the incompatible schema generation.
     pub const fn major(self) -> u16 {
@@ -402,6 +404,8 @@ pub enum SceneFeature {
 pub enum CapabilityDecision {
     /// Every semantic feature in this Scene is supported by the producing profile.
     Supported,
+    /// At least one declared Scene capability is outside the producing profile.
+    Unsupported,
 }
 
 /// Immutable deterministic feature report.
@@ -415,6 +419,13 @@ impl FeatureReport {
     pub(crate) fn supported(tags: Vec<SceneFeature>) -> Self {
         Self {
             decision: CapabilityDecision::Supported,
+            tags: Arc::new(tags),
+        }
+    }
+
+    pub(crate) fn with_decision(decision: CapabilityDecision, tags: Vec<SceneFeature>) -> Self {
+        Self {
+            decision,
             tags: Arc::new(tags),
         }
     }
@@ -505,6 +516,7 @@ pub struct Scene {
     provenance: Arc<Vec<CommandSource>>,
     limits: SceneLimits,
     stats: SceneStats,
+    graphics: Option<GraphicsScene>,
 }
 
 impl Scene {
@@ -532,6 +544,40 @@ impl Scene {
             provenance: Arc::new(provenance),
             limits,
             stats,
+            graphics: None,
+        }
+    }
+
+    pub(crate) fn new_graphics(
+        binding: SceneBinding,
+        geometry: PageGeometry,
+        graphics: GraphicsScene,
+    ) -> Self {
+        let decision = if graphics.is_supported() {
+            CapabilityDecision::Supported
+        } else {
+            CapabilityDecision::Unsupported
+        };
+        let stats = SceneStats::new(
+            u32::try_from(graphics.commands().len())
+                .expect("graphics command count is bounded by a u32 limit"),
+            u32::try_from(graphics.resources().len())
+                .expect("graphics resource count is bounded by a u32 limit"),
+            0,
+            graphics.stats().retained_bytes(),
+            graphics.stats().resource_index_work(),
+        );
+        Self {
+            version: SceneVersion::V2_0,
+            binding,
+            geometry,
+            commands: Arc::new(Vec::new()),
+            resources: Arc::new(Vec::new()),
+            features: FeatureReport::with_decision(decision, Vec::new()),
+            provenance: Arc::new(Vec::new()),
+            limits: SceneLimits::default(),
+            stats,
+            graphics: Some(graphics),
         }
     }
 
@@ -570,14 +616,24 @@ impl Scene {
         &self.provenance
     }
 
-    /// Returns the complete limit profile retained by this Scene.
+    /// Returns the legacy Scene-v1 limit profile.
+    ///
+    /// Scene v2 callers use [`GraphicsScene::limits`] through [`Scene::graphics`].
     pub const fn limits(&self) -> SceneLimits {
         self.limits
     }
 
-    /// Returns deterministic construction and retained-capacity accounting.
+    /// Returns common deterministic construction and retained-capacity accounting.
+    ///
+    /// Scene v2 reports graphics command/resource counts, retained bytes, and index work here;
+    /// graphics-specific dimensions remain available through [`GraphicsScene::stats`].
     pub const fn stats(&self) -> SceneStats {
         self.stats
+    }
+
+    /// Borrows Scene v2 graphics semantics, or returns `None` for legacy Scene v1.
+    pub const fn graphics(&self) -> Option<&GraphicsScene> {
+        self.graphics.as_ref()
     }
 }
 
@@ -593,6 +649,7 @@ impl fmt::Debug for Scene {
             .field("resource_count", &self.resources.len())
             .field("features", &self.features)
             .field("stats", &self.stats)
+            .field("has_graphics", &self.graphics.is_some())
             .field("content", &"[REDACTED]")
             .finish()
     }

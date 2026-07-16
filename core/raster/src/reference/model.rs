@@ -130,6 +130,7 @@ impl ReferenceRenderConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReferenceRenderStats {
     commands: u64,
+    requirements: u64,
     pixels: u64,
     fuel: u64,
     retained_bytes: u64,
@@ -139,6 +140,7 @@ pub struct ReferenceRenderStats {
 impl ReferenceRenderStats {
     pub(crate) const fn new(
         commands: u64,
+        requirements: u64,
         pixels: u64,
         fuel: u64,
         retained_bytes: u64,
@@ -146,6 +148,7 @@ impl ReferenceRenderStats {
     ) -> Self {
         Self {
             commands,
+            requirements,
             pixels,
             fuel,
             retained_bytes,
@@ -158,12 +161,17 @@ impl ReferenceRenderStats {
         self.commands
     }
 
+    /// Returns the traversed capability requirement count.
+    pub const fn requirements(self) -> u64 {
+        self.requirements
+    }
+
     /// Returns the complete output pixel count.
     pub const fn pixels(self) -> u64 {
         self.pixels
     }
 
-    /// Returns deterministic command-plus-pixel work units.
+    /// Returns deterministic requirement-plus-command-plus-pixel work units.
     pub const fn fuel(self) -> u64 {
         self.fuel
     }

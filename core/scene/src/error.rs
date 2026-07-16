@@ -10,6 +10,24 @@ pub enum SceneLimitKind {
     Resources,
     /// Active marked-content nesting depth.
     MarkedContentDepth,
+    /// Graphics-capable Scene v2 commands.
+    GraphicsCommands,
+    /// Graphics-capable Scene v2 resources.
+    GraphicsResources,
+    /// Graphics-capable Scene v2 capability requirements.
+    GraphicsRequirements,
+    /// Capability-graph dependency identifiers.
+    GraphicsDependencies,
+    /// Aggregate path segments retained by graphics resources.
+    PathSegments,
+    /// Aggregate decoded image bytes retained by graphics resources.
+    ImageBytes,
+    /// Aggregate positioned glyph uses.
+    Glyphs,
+    /// Saved graphics-state nesting depth.
+    GraphicsStateDepth,
+    /// Isolated transparency-group nesting depth.
+    GraphicsGroupDepth,
     /// Decoded bytes retained by one marked-content tag.
     NameBytes,
     /// Allocator-reported element and scalar-buffer capacity retained by one Scene.
@@ -22,6 +40,8 @@ pub enum SceneLimitKind {
     Differences,
     /// Fixed-size difference-record capacity retained by one Scene comparison.
     DiffRetainedBytes,
+    /// Deterministic semantic comparisons performed by one Scene diff.
+    DiffCompareWork,
     /// Bytes emitted by canonical Scene semantic-diff JSON.
     DiffCanonicalBytes,
     /// A fallible allocation failed within an already validated bound.

@@ -275,6 +275,14 @@ fn configuration_and_limit_profiles_fail_closed() {
         ReferenceRasterLimits::validate(invalid).unwrap_err().code(),
         ReferenceRenderErrorCode::InvalidLimits
     );
+    let invalid = ReferenceRasterLimitConfig {
+        max_requirements: 0,
+        ..ReferenceRasterLimitConfig::default()
+    };
+    assert_eq!(
+        ReferenceRasterLimits::validate(invalid).unwrap_err().code(),
+        ReferenceRenderErrorCode::InvalidLimits
+    );
 
     let huge = ReferenceRenderConfig::opaque_srgb(u32::MAX, u32::MAX).unwrap();
     let mut job = ReferenceRenderJob::new(empty_scene(1), huge, ReferenceRasterLimits::default());
@@ -365,6 +373,7 @@ fn exact_measured_profile_is_admitted_and_one_less_retention_is_rejected() {
         }),
     );
     assert_eq!(exact.stats().retained_bytes(), measured);
+    assert_eq!(exact.stats().requirements(), 0);
     assert_eq!(exact.stats().pixels(), 3);
     assert_eq!(exact.stats().fuel(), 3);
 
@@ -386,6 +395,7 @@ fn exact_measured_profile_is_admitted_and_one_less_retention_is_rejected() {
         }),
     );
     assert_eq!(marked_exact.stats().commands(), 2);
+    assert_eq!(marked_exact.stats().requirements(), 0);
     assert_eq!(marked_exact.stats().fuel(), 5);
 
     let mut one_less = ReferenceRenderJob::new(

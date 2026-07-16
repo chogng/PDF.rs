@@ -2,10 +2,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::canonical::CanonicalWriter;
-use crate::{Scene, SceneError, SceneErrorCode, SceneLimitKind, SceneVersion};
+use crate::{
+    CapabilityRequirement, GraphicsCommand, GraphicsResourceEntry, Scene, SceneCommand, SceneError,
+    SceneErrorCode, SceneLimitKind, SceneVersion,
+};
 
 const HARD_MAX_DIFFERENCES: u32 = 16_000_000;
 const HARD_MAX_DIFF_RETAINED_BYTES: u64 = 1024 * 1024 * 1024;
+const HARD_MAX_DIFF_COMPARE_WORK: u64 = 1_000_000_000_000;
 const HARD_MAX_DIFF_CANONICAL_BYTES: u64 = 1024 * 1024 * 1024;
 const NO_INDEX: u32 = u32::MAX;
 
@@ -16,6 +20,8 @@ pub struct SceneDiffLimitConfig {
     pub max_differences: u32,
     /// Maximum allocator-reported difference-record capacity in bytes.
     pub max_retained_bytes: u64,
+    /// Maximum deterministic semantic comparison work.
+    pub max_compare_work: u64,
     /// Maximum canonical Scene-diff JSON bytes.
     pub max_canonical_bytes: u64,
 }
@@ -25,6 +31,7 @@ impl Default for SceneDiffLimitConfig {
         Self {
             max_differences: 1_000_000,
             max_retained_bytes: 128 * 1024 * 1024,
+            max_compare_work: 4_000_000_000,
             max_canonical_bytes: 256 * 1024 * 1024,
         }
     }
@@ -35,6 +42,7 @@ impl Default for SceneDiffLimitConfig {
 pub struct SceneDiffLimits {
     max_differences: u32,
     max_retained_bytes: u64,
+    max_compare_work: u64,
     max_canonical_bytes: u64,
 }
 
@@ -45,6 +53,8 @@ impl SceneDiffLimits {
             || config.max_differences > HARD_MAX_DIFFERENCES
             || config.max_retained_bytes == 0
             || config.max_retained_bytes > HARD_MAX_DIFF_RETAINED_BYTES
+            || config.max_compare_work == 0
+            || config.max_compare_work > HARD_MAX_DIFF_COMPARE_WORK
             || config.max_canonical_bytes == 0
             || config.max_canonical_bytes > HARD_MAX_DIFF_CANONICAL_BYTES
         {
@@ -53,6 +63,7 @@ impl SceneDiffLimits {
         Ok(Self {
             max_differences: config.max_differences,
             max_retained_bytes: config.max_retained_bytes,
+            max_compare_work: config.max_compare_work,
             max_canonical_bytes: config.max_canonical_bytes,
         })
     }
@@ -65,6 +76,11 @@ impl SceneDiffLimits {
     /// Returns the maximum retained difference-record capacity.
     pub const fn max_retained_bytes(self) -> u64 {
         self.max_retained_bytes
+    }
+
+    /// Returns the maximum deterministic semantic comparison work.
+    pub const fn max_compare_work(self) -> u64 {
+        self.max_compare_work
     }
 
     /// Returns the maximum canonical Scene-diff JSON size.
@@ -98,6 +114,16 @@ pub enum SceneDiffSection {
     Commands,
     /// Command provenance paired by command index.
     CommandProvenance,
+    /// Scene-v2 semantic graphics commands.
+    GraphicsCommands,
+    /// Scene-v2 decoded command provenance.
+    GraphicsCommandProvenance,
+    /// Scene-v2 conservative command bounds.
+    GraphicsBounds,
+    /// Scene-v2 first-use graphics resources.
+    GraphicsResources,
+    /// Scene-v2 capability requirements and dependencies.
+    GraphicsCapabilities,
 }
 
 /// Stable field within a semantic Scene-diff section.
@@ -200,6 +226,7 @@ pub struct SceneDiffStats {
     removed: u32,
     changed: u32,
     retained_bytes: u64,
+    compare_work: u64,
 }
 
 impl SceneDiffStats {
@@ -209,6 +236,7 @@ impl SceneDiffStats {
         removed: u32,
         changed: u32,
         retained_bytes: u64,
+        compare_work: u64,
     ) -> Self {
         Self {
             differences,
@@ -216,6 +244,7 @@ impl SceneDiffStats {
             removed,
             changed,
             retained_bytes,
+            compare_work,
         }
     }
 
@@ -243,6 +272,11 @@ impl SceneDiffStats {
     pub const fn retained_bytes(self) -> u64 {
         self.retained_bytes
     }
+
+    /// Returns deterministic work charged before semantic value comparisons.
+    pub const fn compare_work(self) -> u64 {
+        self.compare_work
+    }
 }
 
 /// Immutable, bounded, content-redacted semantic comparison of two Scenes.
@@ -251,6 +285,7 @@ pub struct SceneDiff {
     differences: Arc<Vec<SceneDifference>>,
     limits: SceneDiffLimits,
     stats: SceneDiffStats,
+    schema_major: u16,
 }
 
 impl SceneDiff {
@@ -288,7 +323,9 @@ impl SceneDiff {
             writer.separator(index)?;
             write_difference(&mut writer, difference)?;
         }
-        writer.push(b"],\"schema\":{\"major\":1,\"minor\":0,\"name\":\"scene-semantic-diff\"}")?;
+        writer.push(b"],\"schema\":{\"major\":")?;
+        writer.push_u16(self.schema_major)?;
+        writer.push(b",\"minor\":0,\"name\":\"scene-semantic-diff\"}")?;
         writer.push(b",\"summary\":{\"added\":")?;
         writer.push_u32(self.stats.added())?;
         writer.push(b",\"changed\":")?;
@@ -324,85 +361,88 @@ pub fn compare_scenes(
     actual: &Scene,
     limits: SceneDiffLimits,
 ) -> Result<SceneDiff, SceneError> {
-    let mut counter = DifferenceCounter::new(limits);
-    visit_differences(expected, actual, |difference| counter.record(difference))?;
-
-    let minimum_retained = retained_bytes_for(counter.differences)?;
-    if minimum_retained > limits.max_retained_bytes() {
-        return Err(SceneError::resource(
-            SceneLimitKind::DiffRetainedBytes,
-            limits.max_retained_bytes(),
-            0,
-            minimum_retained,
-            None,
-        ));
-    }
-
-    let capacity = usize::try_from(counter.differences)
-        .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?;
-    let mut differences = Vec::new();
-    differences.try_reserve_exact(capacity).map_err(|_| {
-        SceneError::resource(
-            SceneLimitKind::Allocation,
-            limits.max_retained_bytes(),
-            0,
-            minimum_retained,
-            None,
-        )
-    })?;
-    let retained_bytes = retained_bytes_for(
-        u32::try_from(differences.capacity())
-            .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?,
-    )?;
-    if retained_bytes > limits.max_retained_bytes() {
-        return Err(SceneError::resource(
-            SceneLimitKind::DiffRetainedBytes,
-            limits.max_retained_bytes(),
-            0,
-            retained_bytes,
-            None,
-        ));
-    }
-
-    visit_differences(expected, actual, |difference| {
-        differences.push(difference);
-        Ok(())
-    })?;
-    if differences.len() != capacity {
-        return Err(SceneError::for_code(SceneErrorCode::InternalState, None));
-    }
-
-    let stats = SceneDiffStats::new(
-        counter.differences,
-        counter.added,
-        counter.removed,
-        counter.changed,
-        retained_bytes,
-    );
-    Ok(SceneDiff {
-        differences: Arc::new(differences),
-        limits,
-        stats,
-    })
+    let mut collector = DifferenceCollector::new(limits);
+    visit_differences(expected, actual, &mut collector)?;
+    collector.finish(
+        if expected.graphics().is_some() || actual.graphics().is_some() {
+            2
+        } else {
+            1
+        },
+    )
 }
 
-struct DifferenceCounter {
+trait DifferenceSink {
+    fn charge_compare(&mut self, attempted: u64) -> Result<(), SceneError>;
+    fn record(&mut self, difference: SceneDifference) -> Result<(), SceneError>;
+}
+
+struct DifferenceCollector {
     limits: SceneDiffLimits,
+    values: Vec<SceneDifference>,
     differences: u32,
     added: u32,
     removed: u32,
     changed: u32,
+    compare_work: u64,
 }
 
-impl DifferenceCounter {
+impl DifferenceCollector {
     const fn new(limits: SceneDiffLimits) -> Self {
         Self {
             limits,
+            values: Vec::new(),
             differences: 0,
             added: 0,
             removed: 0,
             changed: 0,
+            compare_work: 0,
         }
+    }
+
+    fn finish(self, schema_major: u16) -> Result<SceneDiff, SceneError> {
+        let retained_bytes = retained_bytes_for(
+            u32::try_from(self.values.capacity())
+                .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?,
+        )?;
+        let stats = SceneDiffStats::new(
+            self.differences,
+            self.added,
+            self.removed,
+            self.changed,
+            retained_bytes,
+            self.compare_work,
+        );
+        Ok(SceneDiff {
+            differences: Arc::new(self.values),
+            limits: self.limits,
+            stats,
+            schema_major,
+        })
+    }
+}
+
+impl DifferenceSink for DifferenceCollector {
+    fn charge_compare(&mut self, attempted: u64) -> Result<(), SceneError> {
+        let remaining = self
+            .limits
+            .max_compare_work()
+            .checked_sub(self.compare_work)
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::InternalState, None))?;
+        if attempted > remaining {
+            return Err(SceneError::resource(
+                SceneLimitKind::DiffCompareWork,
+                self.limits.max_compare_work(),
+                self.compare_work,
+                attempted,
+                None,
+            ));
+        }
+        self.compare_work = self
+            .compare_work
+            .checked_add(attempted)
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::InternalState, None))?;
+        Ok(())
     }
 
     fn record(&mut self, difference: SceneDifference) -> Result<(), SceneError> {
@@ -415,10 +455,51 @@ impl DifferenceCounter {
                 None,
             ));
         }
-        self.differences = self
+
+        let next_count = self
             .differences
             .checked_add(1)
             .ok_or_else(|| SceneError::for_code(SceneErrorCode::InternalState, None))?;
+        let minimum_retained = retained_bytes_for(next_count)?;
+        if minimum_retained > self.limits.max_retained_bytes() {
+            return Err(SceneError::resource(
+                SceneLimitKind::DiffRetainedBytes,
+                self.limits.max_retained_bytes(),
+                retained_bytes_for(self.differences)?,
+                retained_bytes_for(1)?,
+                None,
+            ));
+        }
+        if self.values.len() == self.values.capacity() {
+            let retained_before = retained_bytes_for(
+                u32::try_from(self.values.capacity())
+                    .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?,
+            )?;
+            self.values.try_reserve(1).map_err(|_| {
+                SceneError::resource(
+                    SceneLimitKind::Allocation,
+                    self.limits.max_retained_bytes(),
+                    retained_before,
+                    retained_bytes_for(1).unwrap_or(u64::MAX),
+                    None,
+                )
+            })?;
+            let retained_after = retained_bytes_for(
+                u32::try_from(self.values.capacity())
+                    .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?,
+            )?;
+            if retained_after > self.limits.max_retained_bytes() {
+                return Err(SceneError::resource(
+                    SceneLimitKind::DiffRetainedBytes,
+                    self.limits.max_retained_bytes(),
+                    retained_before,
+                    retained_after.saturating_sub(retained_before),
+                    None,
+                ));
+            }
+        }
+        self.values.push(difference);
+        self.differences = next_count;
         match difference.kind() {
             SceneDiffKind::Added => self.added = checked_increment(self.added)?,
             SceneDiffKind::Removed => self.removed = checked_increment(self.removed)?,
@@ -445,9 +526,9 @@ fn retained_bytes_for(capacity: u32) -> Result<u64, SceneError> {
 fn visit_differences(
     expected: &Scene,
     actual: &Scene,
-    mut emit: impl FnMut(SceneDifference) -> Result<(), SceneError>,
+    sink: &mut impl DifferenceSink,
 ) -> Result<(), SceneError> {
-    compare_version(expected.version(), actual.version(), &mut emit)?;
+    compare_version(expected.version(), actual.version(), sink)?;
 
     let expected_binding = expected.binding();
     let actual_binding = actual.binding();
@@ -455,19 +536,19 @@ fn visit_differences(
         expected_binding.page_index() != actual_binding.page_index(),
         SceneDiffSection::Binding,
         SceneDiffField::PageIndex,
-        &mut emit,
+        sink,
     )?;
     compare_scalar(
         expected_binding.page_object() != actual_binding.page_object(),
         SceneDiffSection::Binding,
         SceneDiffField::PageObject,
-        &mut emit,
+        sink,
     )?;
     compare_scalar(
         expected_binding.revision_startxref() != actual_binding.revision_startxref(),
         SceneDiffSection::Binding,
         SceneDiffField::RevisionStartxref,
-        &mut emit,
+        sink,
     )?;
 
     let expected_geometry = expected.geometry();
@@ -476,64 +557,140 @@ fn visit_differences(
         expected_geometry.media_box() != actual_geometry.media_box(),
         SceneDiffSection::Geometry,
         SceneDiffField::MediaBox,
-        &mut emit,
+        sink,
     )?;
     compare_scalar(
         expected_geometry.crop_box() != actual_geometry.crop_box(),
         SceneDiffSection::Geometry,
         SceneDiffField::CropBox,
-        &mut emit,
+        sink,
     )?;
     compare_scalar(
         expected_geometry.rotation() != actual_geometry.rotation(),
         SceneDiffSection::Geometry,
         SceneDiffField::Rotation,
-        &mut emit,
+        sink,
     )?;
 
     compare_scalar(
         expected.features().decision() != actual.features().decision(),
         SceneDiffSection::Features,
         SceneDiffField::Decision,
-        &mut emit,
+        sink,
     )?;
-    compare_entries(
+    compare_entries_with(
         SceneDiffSection::Features,
         expected.features().tags(),
         actual.features().tags(),
-        &mut emit,
+        sink,
+        |_, _| Ok(1),
+        |expected, actual| expected != actual,
     )?;
-    compare_entries(
+    compare_entries_with(
         SceneDiffSection::Resources,
         expected.resources(),
         actual.resources(),
-        &mut emit,
+        sink,
+        |_, _| Ok(1),
+        |expected, actual| expected != actual,
     )?;
-    compare_entries(
+    compare_entries_with(
         SceneDiffSection::Commands,
         expected.commands(),
         actual.commands(),
-        &mut emit,
+        sink,
+        scene_command_compare_work,
+        scene_commands_differ,
     )?;
-    compare_entries(
+    compare_entries_with(
         SceneDiffSection::CommandProvenance,
         expected.provenance(),
         actual.provenance(),
-        &mut emit,
+        sink,
+        |_, _| Ok(1),
+        |expected, actual| expected != actual,
+    )?;
+    compare_graphics(expected, actual, sink)
+}
+
+fn compare_graphics(
+    expected: &Scene,
+    actual: &Scene,
+    sink: &mut impl DifferenceSink,
+) -> Result<(), SceneError> {
+    let expected_commands = expected
+        .graphics()
+        .map_or(&[][..], |graphics| graphics.commands());
+    let actual_commands = actual
+        .graphics()
+        .map_or(&[][..], |graphics| graphics.commands());
+    compare_entries_with(
+        SceneDiffSection::GraphicsCommands,
+        expected_commands,
+        actual_commands,
+        sink,
+        |expected, actual| graphics_command_compare_work(expected.command(), actual.command()),
+        |expected, actual| expected.command() != actual.command(),
+    )?;
+    compare_entries_with(
+        SceneDiffSection::GraphicsCommandProvenance,
+        expected_commands,
+        actual_commands,
+        sink,
+        |_, _| Ok(1),
+        |expected, actual| expected.source() != actual.source(),
+    )?;
+    compare_entries_with(
+        SceneDiffSection::GraphicsBounds,
+        expected_commands,
+        actual_commands,
+        sink,
+        |_, _| Ok(1),
+        |expected, actual| expected.bounds() != actual.bounds(),
+    )?;
+
+    let expected_resources = expected
+        .graphics()
+        .map_or(&[][..], |graphics| graphics.resources());
+    let actual_resources = actual
+        .graphics()
+        .map_or(&[][..], |graphics| graphics.resources());
+    compare_entries_with(
+        SceneDiffSection::GraphicsResources,
+        expected_resources,
+        actual_resources,
+        sink,
+        graphics_resource_compare_work,
+        |expected, actual| expected != actual,
+    )?;
+
+    let expected_requirements = expected
+        .graphics()
+        .map_or(&[][..], |graphics| graphics.requirements());
+    let actual_requirements = actual
+        .graphics()
+        .map_or(&[][..], |graphics| graphics.requirements());
+    compare_entries_with(
+        SceneDiffSection::GraphicsCapabilities,
+        expected_requirements,
+        actual_requirements,
+        sink,
+        capability_compare_work,
+        |expected, actual| expected != actual,
     )
 }
 
 fn compare_version(
     expected: SceneVersion,
     actual: SceneVersion,
-    emit: &mut impl FnMut(SceneDifference) -> Result<(), SceneError>,
+    sink: &mut impl DifferenceSink,
 ) -> Result<(), SceneError> {
     compare_schema_components(
         expected.major(),
         expected.minor(),
         actual.major(),
         actual.minor(),
-        emit,
+        sink,
     )
 }
 
@@ -542,19 +699,19 @@ fn compare_schema_components(
     expected_minor: u16,
     actual_major: u16,
     actual_minor: u16,
-    emit: &mut impl FnMut(SceneDifference) -> Result<(), SceneError>,
+    sink: &mut impl DifferenceSink,
 ) -> Result<(), SceneError> {
     compare_scalar(
         expected_major != actual_major,
         SceneDiffSection::Schema,
         SceneDiffField::Major,
-        emit,
+        sink,
     )?;
     compare_scalar(
         expected_minor != actual_minor,
         SceneDiffSection::Schema,
         SceneDiffField::Minor,
-        emit,
+        sink,
     )
 }
 
@@ -562,10 +719,11 @@ fn compare_scalar(
     differs: bool,
     section: SceneDiffSection,
     field: SceneDiffField,
-    emit: &mut impl FnMut(SceneDifference) -> Result<(), SceneError>,
+    sink: &mut impl DifferenceSink,
 ) -> Result<(), SceneError> {
+    sink.charge_compare(1)?;
     if differs {
-        emit(SceneDifference::scalar(
+        sink.record(SceneDifference::scalar(
             section,
             field,
             SceneDiffKind::Changed,
@@ -574,16 +732,19 @@ fn compare_scalar(
     Ok(())
 }
 
-fn compare_entries<T: PartialEq>(
+fn compare_entries_with<T>(
     section: SceneDiffSection,
     expected: &[T],
     actual: &[T],
-    emit: &mut impl FnMut(SceneDifference) -> Result<(), SceneError>,
+    sink: &mut impl DifferenceSink,
+    compare_work: impl Fn(&T, &T) -> Result<u64, SceneError>,
+    differs: impl Fn(&T, &T) -> bool,
 ) -> Result<(), SceneError> {
     let shared = expected.len().min(actual.len());
     for index in 0..shared {
-        if expected[index] != actual[index] {
-            emit(SceneDifference::entry(
+        sink.charge_compare(compare_work(&expected[index], &actual[index])?)?;
+        if differs(&expected[index], &actual[index]) {
+            sink.record(SceneDifference::entry(
                 section,
                 SceneDiffKind::Changed,
                 difference_index(index)?,
@@ -591,20 +752,98 @@ fn compare_entries<T: PartialEq>(
         }
     }
     for index in shared..expected.len() {
-        emit(SceneDifference::entry(
+        sink.charge_compare(1)?;
+        sink.record(SceneDifference::entry(
             section,
             SceneDiffKind::Removed,
             difference_index(index)?,
         ))?;
     }
     for index in shared..actual.len() {
-        emit(SceneDifference::entry(
+        sink.charge_compare(1)?;
+        sink.record(SceneDifference::entry(
             section,
             SceneDiffKind::Added,
             difference_index(index)?,
         ))?;
     }
     Ok(())
+}
+
+fn scene_command_compare_work(
+    expected: &SceneCommand,
+    actual: &SceneCommand,
+) -> Result<u64, SceneError> {
+    let payload = match (expected.tag(), actual.tag()) {
+        (Some(expected), Some(actual)) => expected.bytes().len().max(actual.bytes().len()),
+        _ => 0,
+    };
+    compare_work_with_payload(payload)
+}
+
+fn scene_commands_differ(expected: &SceneCommand, actual: &SceneCommand) -> bool {
+    expected.kind() != actual.kind()
+        || expected.properties() != actual.properties()
+        || match (expected.tag(), actual.tag()) {
+            (Some(expected), Some(actual)) => expected.bytes() != actual.bytes(),
+            (None, None) => false,
+            (Some(_), None) | (None, Some(_)) => true,
+        }
+}
+
+fn graphics_command_compare_work(
+    expected: &GraphicsCommand,
+    actual: &GraphicsCommand,
+) -> Result<u64, SceneError> {
+    let payload = match (expected, actual) {
+        (
+            GraphicsCommand::Stroke {
+                style: expected, ..
+            },
+            GraphicsCommand::Stroke { style: actual, .. },
+        )
+        | (
+            GraphicsCommand::FillStroke {
+                style: expected, ..
+            },
+            GraphicsCommand::FillStroke { style: actual, .. },
+        ) => expected
+            .dash()
+            .array()
+            .len()
+            .max(actual.dash().array().len()),
+        (GraphicsCommand::DrawGlyphRun(expected), GraphicsCommand::DrawGlyphRun(actual)) => {
+            expected.glyphs().len().max(actual.glyphs().len())
+        }
+        _ => 0,
+    };
+    compare_work_with_payload(payload)
+}
+
+fn graphics_resource_compare_work(
+    expected: &GraphicsResourceEntry,
+    actual: &GraphicsResourceEntry,
+) -> Result<u64, SceneError> {
+    expected.resource().comparison_work(actual.resource())
+}
+
+fn capability_compare_work(
+    expected: &CapabilityRequirement,
+    actual: &CapabilityRequirement,
+) -> Result<u64, SceneError> {
+    compare_work_with_payload(
+        expected
+            .dependencies()
+            .len()
+            .max(actual.dependencies().len()),
+    )
+}
+
+fn compare_work_with_payload(payload: usize) -> Result<u64, SceneError> {
+    u64::try_from(payload)
+        .ok()
+        .and_then(|payload| payload.checked_add(1))
+        .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))
 }
 
 fn difference_index(index: usize) -> Result<u32, SceneError> {
@@ -649,26 +888,31 @@ fn write_difference(
         SceneDiffSection::Resources => b"\"resources\"",
         SceneDiffSection::Commands => b"\"commands\"",
         SceneDiffSection::CommandProvenance => b"\"command-provenance\"",
+        SceneDiffSection::GraphicsCommands => b"\"graphics-commands\"",
+        SceneDiffSection::GraphicsCommandProvenance => b"\"graphics-command-provenance\"",
+        SceneDiffSection::GraphicsBounds => b"\"graphics-bounds\"",
+        SceneDiffSection::GraphicsResources => b"\"graphics-resources\"",
+        SceneDiffSection::GraphicsCapabilities => b"\"graphics-capabilities\"",
     })?;
     writer.push(b"}")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SceneDiffField, SceneDiffKind, SceneDiffSection, compare_schema_components};
+    use super::{
+        DifferenceCollector, SceneDiffField, SceneDiffKind, SceneDiffLimits, SceneDiffSection,
+        compare_schema_components,
+    };
 
     #[test]
     fn schema_major_and_minor_have_stable_first_positions() {
-        let mut differences = Vec::new();
-        compare_schema_components(1, 0, 2, 3, &mut |difference| {
-            differences.push(difference);
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(differences.len(), 2);
-        assert_eq!(differences[0].section(), SceneDiffSection::Schema);
-        assert_eq!(differences[0].field(), SceneDiffField::Major);
-        assert_eq!(differences[0].kind(), SceneDiffKind::Changed);
-        assert_eq!(differences[1].field(), SceneDiffField::Minor);
+        let mut collector = DifferenceCollector::new(SceneDiffLimits::default());
+        compare_schema_components(1, 0, 2, 3, &mut collector).unwrap();
+        assert_eq!(collector.values.len(), 2);
+        assert_eq!(collector.compare_work, 2);
+        assert_eq!(collector.values[0].section(), SceneDiffSection::Schema);
+        assert_eq!(collector.values[0].field(), SceneDiffField::Major);
+        assert_eq!(collector.values[0].kind(), SceneDiffKind::Changed);
+        assert_eq!(collector.values[1].field(), SceneDiffField::Minor);
     }
 }

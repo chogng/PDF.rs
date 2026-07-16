@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use pdf_rs_scene::{Scene, SceneCommandKind};
+use pdf_rs_scene::{CapabilityStatus, Scene, SceneCommandKind};
 
 use crate::reference::{
     CanonicalPixelBuffer, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderError,
     ReferenceRenderErrorCode, ReferenceRenderLimitKind, ReferenceRenderStats,
+    ReferenceRenderUnsupported,
 };
 
 const RGBA_BYTES_PER_PIXEL: u64 = 4;
@@ -24,6 +25,8 @@ pub enum ReferenceRenderPhase {
     Pending,
     /// One complete immutable pixel buffer was published.
     Ready,
+    /// One visible Scene capability was outside the current Reference profile.
+    Unsupported,
     /// One terminal structured failure was published.
     Failed,
 }
@@ -33,6 +36,8 @@ pub enum ReferenceRenderPhase {
 pub enum ReferenceRenderPoll {
     /// One complete immutable canonical pixel buffer.
     Ready(Arc<CanonicalPixelBuffer>),
+    /// One structured unsupported visible Scene capability.
+    Unsupported(ReferenceRenderUnsupported),
     /// One structured terminal failure.
     Failed(ReferenceRenderError),
 }
@@ -40,6 +45,7 @@ pub enum ReferenceRenderPoll {
 #[derive(Clone)]
 enum RunTerminal {
     Ready(Arc<CanonicalPixelBuffer>),
+    Unsupported(ReferenceRenderUnsupported),
     Failed(ReferenceRenderError),
 }
 
@@ -91,9 +97,13 @@ impl ReferenceRenderJob {
             )),
         };
         let terminal = match result {
-            Ok(buffer) => {
+            Ok(ExecuteTerminal::Ready(buffer)) => {
                 self.phase = ReferenceRenderPhase::Ready;
                 RunTerminal::Ready(Arc::new(buffer))
+            }
+            Ok(ExecuteTerminal::Unsupported(unsupported)) => {
+                self.phase = ReferenceRenderPhase::Unsupported;
+                RunTerminal::Unsupported(unsupported)
             }
             Err(error) => {
                 self.phase = ReferenceRenderPhase::Failed;
@@ -110,9 +120,15 @@ impl RunTerminal {
     fn poll(&self) -> ReferenceRenderPoll {
         match self {
             Self::Ready(buffer) => ReferenceRenderPoll::Ready(Arc::clone(buffer)),
+            Self::Unsupported(unsupported) => ReferenceRenderPoll::Unsupported(*unsupported),
             Self::Failed(error) => ReferenceRenderPoll::Failed(*error),
         }
     }
+}
+
+enum ExecuteTerminal {
+    Ready(CanonicalPixelBuffer),
+    Unsupported(ReferenceRenderUnsupported),
 }
 
 fn execute(
@@ -120,7 +136,7 @@ fn execute(
     config: ReferenceRenderConfig,
     limits: ReferenceRasterLimits,
     cancellation: &dyn ReferenceRasterCancellation,
-) -> Result<CanonicalPixelBuffer, ReferenceRenderError> {
+) -> Result<ExecuteTerminal, ReferenceRenderError> {
     let mut cancellation_checks = 0u64;
     check_cancellation(cancellation, &mut cancellation_checks)?;
 
@@ -164,16 +180,69 @@ fn execute(
         output_bytes,
     )?;
 
-    let commands = u64::try_from(scene.commands().len()).map_err(|_| numeric_overflow())?;
+    let graphics_commands = scene
+        .graphics()
+        .map_or(0, |graphics| graphics.commands().len());
+    let commands = scene
+        .commands()
+        .len()
+        .checked_add(graphics_commands)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(numeric_overflow)?;
     ensure_limit(
         ReferenceRenderLimitKind::Commands,
         limits.max_commands(),
         commands,
     )?;
-    let fuel = commands.checked_add(pixels).ok_or_else(numeric_overflow)?;
-    ensure_limit(ReferenceRenderLimitKind::Fuel, limits.max_fuel(), fuel)?;
+    let requirements = scene
+        .graphics()
+        .map_or(0, |graphics| graphics.requirements().len());
+    let requirements = u64::try_from(requirements).map_err(|_| numeric_overflow())?;
+    ensure_limit(
+        ReferenceRenderLimitKind::Requirements,
+        limits.max_requirements(),
+        requirements,
+    )?;
+    let traversal_fuel = commands
+        .checked_add(requirements)
+        .ok_or_else(numeric_overflow)?;
+    ensure_limit(
+        ReferenceRenderLimitKind::Fuel,
+        limits.max_fuel(),
+        traversal_fuel,
+    )?;
 
     let mut work_since_cancellation = 0u64;
+    if let Some(graphics) = scene.graphics() {
+        for (index, requirement) in graphics.requirements().iter().enumerate() {
+            if requirement.status() == CapabilityStatus::Unsupported {
+                return Ok(ExecuteTerminal::Unsupported(
+                    ReferenceRenderUnsupported::visible_requirement(
+                        u32::try_from(index).map_err(|_| numeric_overflow())?,
+                    ),
+                ));
+            }
+            charge_work(
+                cancellation,
+                &mut cancellation_checks,
+                &mut work_since_cancellation,
+            )?;
+        }
+        for (index, record) in graphics.commands().iter().enumerate() {
+            if record.command().is_visible() {
+                return Ok(ExecuteTerminal::Unsupported(
+                    ReferenceRenderUnsupported::visible_command(
+                        u32::try_from(index).map_err(|_| numeric_overflow())?,
+                    ),
+                ));
+            }
+            charge_work(
+                cancellation,
+                &mut cancellation_checks,
+                &mut work_since_cancellation,
+            )?;
+        }
+    }
     for command in scene.commands() {
         match command.kind() {
             SceneCommandKind::BeginMarkedContent | SceneCommandKind::EndMarkedContent => {}
@@ -184,6 +253,11 @@ fn execute(
             &mut work_since_cancellation,
         )?;
     }
+
+    let fuel = traversal_fuel
+        .checked_add(pixels)
+        .ok_or_else(numeric_overflow)?;
+    ensure_limit(ReferenceRenderLimitKind::Fuel, limits.max_fuel(), fuel)?;
 
     let required_capacity = usize::try_from(output_bytes).map_err(|_| numeric_overflow())?;
     check_cancellation(cancellation, &mut cancellation_checks)?;
@@ -219,13 +293,20 @@ fn execute(
     }
     check_cancellation(cancellation, &mut cancellation_checks)?;
 
-    Ok(CanonicalPixelBuffer::new(
+    Ok(ExecuteTerminal::Ready(CanonicalPixelBuffer::new(
         scene.binding(),
         config,
         stride_bytes,
         rgba,
-        ReferenceRenderStats::new(commands, pixels, fuel, retained_bytes, cancellation_checks),
-    ))
+        ReferenceRenderStats::new(
+            commands,
+            requirements,
+            pixels,
+            fuel,
+            retained_bytes,
+            cancellation_checks,
+        ),
+    )))
 }
 
 fn ensure_limit(

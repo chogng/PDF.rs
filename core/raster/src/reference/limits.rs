@@ -6,6 +6,7 @@ const HARD_MAX_PIXELS: u64 = 268_435_456;
 const HARD_MAX_STRIDE_BYTES: u64 = 256 * 1024 * 1024;
 const HARD_MAX_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 const HARD_MAX_COMMANDS: u64 = 4_000_000;
+const HARD_MAX_REQUIREMENTS: u64 = 4_000_000;
 const HARD_MAX_FUEL: u64 = 1_000_000_000;
 const HARD_MAX_RETAINED_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -24,7 +25,9 @@ pub struct ReferenceRasterLimitConfig {
     pub max_output_bytes: u64,
     /// Maximum Scene commands traversed by the foundation.
     pub max_commands: u64,
-    /// Maximum deterministic command-plus-pixel work units.
+    /// Maximum Scene capability requirements traversed before dispatch.
+    pub max_requirements: u64,
+    /// Maximum deterministic requirement-plus-command-plus-pixel work units.
     pub max_fuel: u64,
     /// Maximum allocator-reported pixel-vector capacity.
     pub max_retained_bytes: u64,
@@ -39,6 +42,7 @@ impl Default for ReferenceRasterLimitConfig {
             max_stride_bytes: 64 * 1024 * 1024,
             max_output_bytes: 256 * 1024 * 1024,
             max_commands: 1_000_000,
+            max_requirements: 1_000_000,
             max_fuel: 128_000_000,
             max_retained_bytes: 256 * 1024 * 1024,
         }
@@ -54,6 +58,7 @@ pub struct ReferenceRasterLimits {
     max_stride_bytes: u64,
     max_output_bytes: u64,
     max_commands: u64,
+    max_requirements: u64,
     max_fuel: u64,
     max_retained_bytes: u64,
 }
@@ -73,6 +78,8 @@ impl ReferenceRasterLimits {
             || config.max_output_bytes > HARD_MAX_OUTPUT_BYTES
             || config.max_commands == 0
             || config.max_commands > HARD_MAX_COMMANDS
+            || config.max_requirements == 0
+            || config.max_requirements > HARD_MAX_REQUIREMENTS
             || config.max_fuel == 0
             || config.max_fuel > HARD_MAX_FUEL
             || config.max_retained_bytes == 0
@@ -89,6 +96,7 @@ impl ReferenceRasterLimits {
             max_stride_bytes: config.max_stride_bytes,
             max_output_bytes: config.max_output_bytes,
             max_commands: config.max_commands,
+            max_requirements: config.max_requirements,
             max_fuel: config.max_fuel,
             max_retained_bytes: config.max_retained_bytes,
         })
@@ -122,6 +130,11 @@ impl ReferenceRasterLimits {
     /// Returns the maximum traversed Scene command count.
     pub const fn max_commands(self) -> u64 {
         self.max_commands
+    }
+
+    /// Returns the maximum traversed capability requirement count.
+    pub const fn max_requirements(self) -> u64 {
+        self.max_requirements
     }
 
     /// Returns the maximum deterministic work units.
