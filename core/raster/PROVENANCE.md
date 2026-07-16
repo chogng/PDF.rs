@@ -4,10 +4,11 @@
 `pdf-rs-scene::Scene`, explicitly traverses the current non-painting marked-content command
 subset, and atomically publishes a value-only `CanonicalPixelBuffer`.
 
-The initial output profile is top-down, opaque `sRGB-reference-v1`, straight-alpha RGBA8. This
-label freezes only the pixel-value encoding and white empty-page behavior. It is not the final
-`reference-raster-v1` algorithm: page-to-device mapping, curve flattening, edge construction,
-coverage, clipping, antialiasing, compositing, color conversion, glyphs, and images remain open.
+The initial output profile is top-down, opaque `sRGB-reference-v1`, straight-alpha RGBA8.
+M3-05 and M3-06 additionally freeze the project-owned `reference-raster-v1` geometry kernel:
+page-to-device mapping, checked fixed-point path flattening, 8x8 scalar coverage, registered
+stroke construction, and nested clip-mask composition. Color, compositing, glyph, image, and
+full renderer integration remain later M3 work.
 
 `CanonicalPixelBuffer` is not the worker/session-owned transferable `Surface` lifecycle. It owns
 no `SurfaceId`, generation, epoch, acquire, transfer, release, timeout, shared memory, texture, or
@@ -44,8 +45,14 @@ construct public Scene fixtures; they do not enter the product graph.
 value contract, current non-painting Scene consumer, resource policy, tests, product-purity
 closure, and independent implementation review are present.
 
-It is not a `REFERENCE` maturity promotion; it is not an O0/O1 pixel authority.
-It is not the final `reference-raster-v1` algorithm or the M3 exit gate.
+`m3.reference-geometry-coverage.v1` and `m3.reference-stroke-clip.v1` remain `PLANNED`. Their
+completion means the deterministic kernels, independently derived analytic expectations,
+resource-boundary tests, and review evidence are present. The kernels are compiled through the
+dedicated `reference_geometry_kernel` integration harness until M3-10 connects them to
+`ReferenceRenderJob`.
+
+This is not a `REFERENCE` maturity promotion and not an O0/O1 pixel authority. It is not the final `reference-raster-v1` algorithm,
+integrated renderer, or the M3 exit gate.
 
 # Algorithms and derivations
 
@@ -70,6 +77,39 @@ It is not the final `reference-raster-v1` algorithm or the M3 exit gate.
   either one immutable `Arc<CanonicalPixelBuffer>` or one copyable structured failure. Later polls
   replay that terminal without consulting cancellation or repeating command traversal,
   allocation, or pixel work.
+- Geometry uses signed Q32.32 fixed point. Conversion from Scene billionths, matrix products,
+  interpolation, averages, and division use checked integer arithmetic with exact half-way cases
+  rounded away from zero. Overflow, singular transforms, and invalid geometry fail closed.
+- `PageDeviceMap` maps the Scene crop box into caller-selected top-down device dimensions for all
+  four canonical page rotations. Crop translation, rotation, scaling, and Y inversion are one
+  checked affine; later path transforms compose in a fixed order.
+- Cubics use adaptive De Casteljau subdivision with a device-space flatness test, a fixed
+  1/256-pixel tolerance, and recursion depth 16. A curve that cannot meet the tolerance within the
+  registered depth is rejected rather than silently approximated more coarsely.
+- Fill construction ignores horizontal and zero-length edges, closes each segmented subpath, and
+  uses a half-open vertex rule. Nonzero winding and even-odd parity share the same fixed edge test.
+  Each candidate pixel is sampled at the centers of an 8x8 grid, at offsets
+  `(2 * sample + 1) / 16`; its 64-bit sample mask is the canonical scalar coverage value.
+- Stroke dashes are resolved in stroke user space, including odd-pattern duplication, normalized
+  phase, zero-length entries, closed seams, and degenerate subpaths. Butt, round, and square caps;
+  miter, bevel, and round joins; miter fallback; close-path joins; and exact reversals are built
+  from checked polygons, circles, and round sectors. A zero-width hairline is exactly one device
+  pixel wide before 8x8 coverage sampling.
+- Clip state stores the same 64-bit sample masks as fill and stroke coverage. Intersections use
+  bitwise AND in save/restore order. Depth, pixels, fuel, current and saved capacities, replacement
+  allocations, transient bytes, retained bytes, and peak retained bytes are independently
+  checked; cancellation and one-byte-short failures preserve the prior clip state.
+- Geometry vectors and the clip save stack use a logical minimum-four, power-of-two capacity
+  schedule derived only from logical length. Move fuel, cancellation probes, and one-less work
+  boundaries therefore do not depend on allocator overcapacity. Physical `Vec::capacity()` is
+  consulted only for transient, retained, and peak byte admission.
+- Unknown geometry vectors grow on that logical schedule in private replacement storage.
+  Admission accounts for the old allocation and the complete new allocation while both coexist,
+  verifies allocator-reported capacity, then subtracts the replaced capacity only after the move.
+  `GeometryWork::geometry_bytes` is deliberately a conservative retained upper bound: capacities
+  from dropped temporary geometry remain charged for the rest of that render attempt. This can
+  reject early but cannot undercount live geometry; coverage and clip masks additionally maintain
+  their own exact allocator-capacity and peak-retained limits.
 
 # Tests
 
@@ -85,12 +125,25 @@ It is not the final `reference-raster-v1` algorithm or the M3 exit gate.
 - Invalid dimensions and limit profiles; exact and one-less width, height, pixels, stride, output
   bytes, commands, fuel, and retained-capacity admission.
 - Pixel-redacted buffer and error `Debug` output.
+- Exact crop and rotation mapping for all canonical rotations; affine inverse and transform-order
+  checks; repeatable adaptive flattening; recursion, segment, edge, fuel, geometry-byte, and
+  cancellation boundaries.
+- Independently enumerated 8x8 fill masks for rectangles, a half-pixel triangle, shared extrema,
+  reversed subpaths, and nonzero/even-odd divergence.
+- Analytic stroke expectations for half-pixel rows, zero-width hairlines, caps, joins, reversals,
+  dash phase, zero-length dash entries, closed paths, nonuniform transforms, and independent
+  dash/run/primitive/sample/coverage budgets.
+- Exact nested clip intersection, save, restore, application, retained-capacity accounting,
+  constant-work retained queries, cancellation, depth limits, and one-byte-short transactional
+  failures.
 
 # Known deviations and unsupported cases
 
-- No visible Scene command is supported yet. Paths, fills, strokes, clips, text, glyphs, images,
-  colors, alpha, blend modes, groups, masks, shadings, patterns, bounds indexes, and renderer
-  capability graphs remain later M3 work.
+- No visible Scene command is supported yet by `ReferenceRenderJob`. The path, fill, stroke, and
+  clip kernels are frozen and reviewed but intentionally remain outside that job until the
+  integrated M3-10 command pipeline. Text, glyphs, images, colors, alpha, blend modes, groups,
+  masks, shadings, patterns, bounds indexes, and renderer capability decisions remain later M3
+  work.
 - The fixed white output is a value contract for the current non-painting Scene subset, not proof
   that arbitrary pages render successfully.
 - The profile has no O0/O1 pixel authority, reviewed O3 golden, fuzz target, benchmark, maturity
@@ -100,6 +153,9 @@ It is not the final `reference-raster-v1` algorithm or the M3 exit gate.
 
 # History
 
+- 2026-07-16: Added the staged `reference-raster-v1` Q32.32 geometry, 8x8 fill coverage,
+  registered stroke, and nested clip-mask kernels with deterministic fuel, transient and retained
+  memory accounting, cancellation, and analytic boundary tests.
 - 2026-07-16: Added the bounded value-only Reference pixel foundation with explicit non-painting
   Scene traversal, opaque canonical RGBA output, deterministic budgets, cooperative cancellation,
   atomic publication, and terminal replay.
