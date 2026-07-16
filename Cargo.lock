@@ -109,6 +109,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-scene"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-syntax",
+]
+
+[[package]]
 name = "pdf-rs-session"
 version = "0.1.0"
 dependencies = [

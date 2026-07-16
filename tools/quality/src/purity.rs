@@ -41,6 +41,11 @@ const PRODUCT_PACKAGES: &[ProductPackage] = &[
         crate_name: "pdf_rs_object",
     },
     ProductPackage {
+        manifest: "core/scene/Cargo.toml",
+        package_name: "pdf-rs-scene",
+        crate_name: "pdf_rs_scene",
+    },
+    ProductPackage {
         manifest: "core/syntax/Cargo.toml",
         package_name: "pdf-rs-syntax",
         crate_name: "pdf_rs_syntax",
