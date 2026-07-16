@@ -231,7 +231,7 @@ pub enum DocumentErrorCode {
     DuplicatePageTreeNode,
     /// A Page or non-root Pages node does not point back to its exact parent.
     PageTreeParentMismatch,
-    /// A Pages node's declared Count differs from its validated leaf subtree.
+    /// A Pages Count differs from its validated direct partition or complete leaf subtree.
     PageTreeCountMismatch,
     /// A strict Catalog or page-tree dictionary repeats a structural key.
     DuplicateStructuralKey,

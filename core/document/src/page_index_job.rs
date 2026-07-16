@@ -5,28 +5,29 @@ use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, Source
 use pdf_rs_object::{ObjectLimitKind, ObjectStats, ObjectWorkCaps};
 use pdf_rs_syntax::{Located, ObjectRef, SyntaxObject};
 
+use crate::catalog::parse_strict_catalog;
 use crate::dictionary::{
     StructuralFields, collect_structural_fields, direct_dictionary, optional_field,
     reject_duplicate_field, required_field,
 };
 use crate::model::AttestedRevisionIndexOwner;
-use crate::page_index::PageIndexChild;
+use crate::page_index::{PageIndexChild, PageIndexNodeEvidence};
 use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
-    CountPagesJob, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    LocallyRepairedRevisionIndex, OpenAttestedObjectJob, PageCountPoll, PageHandle, PageIndex,
-    PageIndexLimits, PageIndexSegmentKind, PageSegmentEvidence, PageSegmentSummary,
-    PageTreeJobContext, PageTreeLimits, PageTreePhase, PageTreeStats, SharedAttestedRevisionIndex,
-    SharedLocallyRepairedRevisionIndex,
+    DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
+    LocallyRepairedRevisionIndex, OpenAttestedObjectJob, PageHandle, PageIndex, PageIndexLimits,
+    PageIndexSegmentKind, PageIndexStats, PageSegmentEvidence, PageSegmentSummary,
+    PageTreeJobContext, PageTreeLimits, PageTreePhase, SharedAttestedRevisionIndex,
+    SharedLocallyRepairedRevisionIndex, StrictCatalog,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
 
 /// Result of polling one page-index construction job.
 pub enum PageIndexBuildPoll {
-    /// The complete M1 page-tree proof was admitted as an immutable segmented index.
+    /// The Catalog and root Pages proof were admitted as an immutable lazy index.
     Ready(PageIndex),
-    /// The wrapped page-count child requires exact source ranges.
+    /// The active Catalog or root Pages child requires exact source ranges.
     Pending {
         /// One-shot data-arrival ticket returned by the byte source.
         ticket: DataTicket,
@@ -65,18 +66,47 @@ enum BuildState {
     Failed,
 }
 
-/// One-shot adapter from the unchanged complete M1 page-count proof to an M2 page index.
+#[derive(Clone, Copy)]
+enum BuildTarget {
+    Catalog,
+    RootPages {
+        reference: ObjectRef,
+        edge_offset: u64,
+    },
+}
+
+struct BuildChildState {
+    job: OpenAttestedObjectJob,
+    accounted_stats: ObjectStats,
+    work_caps: ObjectWorkCaps,
+    reference: ObjectRef,
+    offset: u64,
+}
+
+struct ParsedRootPages {
+    page_count: u32,
+    count_offset: u64,
+    children: Vec<PageIndexChild>,
+    nodes: Vec<PageIndexNodeEvidence>,
+    retained_bytes: u64,
+}
+
+/// One-shot cold bootstrap for an immutable lazy page index.
 ///
-/// Construction deliberately delegates all Catalog, Parent, cycle, duplicate-child, and Count
-/// validation to [`CountPagesJob`]. Only a successful scalar proof can cross the sealed
-/// [`PageIndex`] admission boundary.
+/// Construction opens only the strict Catalog and its root Pages dictionary. It validates the
+/// root shape, direct Kids identities, declared Count, immediate cycle/duplicate topology, and
+/// configured budgets, then publishes those direct edges as provisional range evidence. No
+/// descendant Page or Pages object is opened until a lookup requests its range.
 pub struct BuildPageIndexJob<'index> {
-    child: Option<CountPagesJob<'index>>,
+    authority: AttestedRevisionIndexOwner<'index>,
     snapshot: SourceSnapshot,
     context: PageTreeJobContext,
-    stats: PageTreeStats,
+    stats: PageIndexStats,
     tree_limits: PageTreeLimits,
     limits: PageIndexLimits,
+    catalog: Option<StrictCatalog>,
+    current: Option<BuildTarget>,
+    child: Option<BuildChildState>,
     root: ObjectRef,
     root_offset: Option<u64>,
     state: BuildState,
@@ -84,12 +114,12 @@ pub struct BuildPageIndexJob<'index> {
 }
 
 impl BuildPageIndexJob<'_> {
-    /// Returns the immutable source snapshot covered by the wrapped proof job.
+    /// Returns the immutable source snapshot covered by the cold bootstrap.
     pub const fn snapshot(&self) -> SourceSnapshot {
         self.snapshot
     }
 
-    /// Returns the runtime context copied to the wrapped page-tree job.
+    /// Returns the runtime context copied to each proof-preserving object child.
     pub const fn context(&self) -> PageTreeJobContext {
         self.context
     }
@@ -99,30 +129,27 @@ impl BuildPageIndexJob<'_> {
         self.limits
     }
 
-    /// Returns the complete limits enforced by the wrapped M1 page-tree proof.
+    /// Returns the structural limits enforced by construction and later refinements.
     pub const fn tree_limits(&self) -> PageTreeLimits {
         self.tree_limits
     }
 
-    /// Returns deterministic M1 traversal accounting through the latest poll.
-    pub const fn stats(&self) -> PageTreeStats {
+    /// Returns deterministic cold-construction accounting through the latest poll.
+    pub const fn stats(&self) -> PageIndexStats {
         self.stats
     }
 
-    /// Returns the wrapped page-tree phase, or its stable terminal projection.
-    pub fn phase(&self) -> PageTreePhase {
+    /// Returns the public page-tree phase projection.
+    pub const fn phase(&self) -> PageTreePhase {
         match self.state {
             BuildState::Ready => PageTreePhase::Ready,
             BuildState::Failed => PageTreePhase::Failed,
-            BuildState::Active => self
-                .child
-                .as_ref()
-                .map(CountPagesJob::phase)
-                .unwrap_or(PageTreePhase::Failed),
+            BuildState::Active if self.catalog.is_some() => PageTreePhase::Traversing,
+            BuildState::Active => PageTreePhase::Catalog,
         }
     }
 
-    /// Advances the wrapped proof job and admits its successful result into a page index.
+    /// Advances cold Catalog/root bootstrap without opening descendant page-tree nodes.
     pub fn poll(
         &mut self,
         source: &(dyn ByteSource + '_),
@@ -131,50 +158,681 @@ impl BuildPageIndexJob<'_> {
         if !matches!(self.state, BuildState::Active) {
             return PageIndexBuildPoll::Failed(self.terminal_error);
         }
-        let outcome = {
-            let Some(child) = self.child.as_mut() else {
+
+        loop {
+            if source.snapshot() != self.snapshot {
+                return self.fail(DocumentError::for_code(
+                    DocumentErrorCode::SourceSnapshotMismatch,
+                    self.current_reference(),
+                    self.current_offset(),
+                ));
+            }
+            if cancellation.is_cancelled() {
+                return self.fail(DocumentError::for_code(
+                    DocumentErrorCode::Cancelled,
+                    self.current_reference(),
+                    self.current_offset(),
+                ));
+            }
+
+            if self.child.is_none() {
+                if self.current.is_none() {
+                    if self.catalog.is_none() {
+                        self.current = Some(BuildTarget::Catalog);
+                    } else {
+                        return self.fail(DocumentError::for_code(
+                            DocumentErrorCode::InternalState,
+                            Some(self.root),
+                            self.root_offset,
+                        ));
+                    }
+                }
+                if let Err(error) = self.start_child() {
+                    return self.fail(error);
+                }
+            }
+
+            let Some(mut child) = self.child.take() else {
                 return self.fail(DocumentError::for_code(
                     DocumentErrorCode::InternalState,
-                    Some(self.root),
-                    self.root_offset,
+                    self.current_reference(),
+                    self.current_offset(),
                 ));
             };
-            let outcome = child.poll(source, cancellation);
-            self.stats = child.stats();
-            outcome
-        };
-        match outcome {
-            PageCountPoll::Pending {
-                ticket,
-                missing,
-                checkpoint,
-            } => PageIndexBuildPoll::Pending {
-                ticket,
-                missing,
-                checkpoint,
-            },
-            PageCountPoll::Failed(error) => self.fail(error),
-            PageCountPoll::Ready(count) => match PageIndex::from_page_count(count, self.limits) {
-                Ok(index) => {
-                    self.child = None;
-                    self.state = BuildState::Ready;
-                    self.terminal_error = DocumentError::for_code(
-                        DocumentErrorCode::JobAlreadyComplete,
-                        Some(self.root),
-                        self.root_offset,
-                    );
-                    PageIndexBuildPoll::Ready(index)
+            let outcome = child.job.poll(source, cancellation);
+            if let Err(error) = self.account_child_stats(&mut child) {
+                return self.fail(error);
+            }
+            match outcome {
+                AttestedObjectPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => {
+                    self.child = Some(child);
+                    return PageIndexBuildPoll::Pending {
+                        ticket,
+                        missing,
+                        checkpoint,
+                    };
                 }
-                Err(error) => self.fail(error),
-            },
+                AttestedObjectPoll::Failed(error) => {
+                    let mapped = self.map_child_error(error, &child);
+                    return self.fail(mapped);
+                }
+                AttestedObjectPoll::Ready(object) => {
+                    if source.snapshot() != self.snapshot {
+                        return self.fail(DocumentError::for_code(
+                            DocumentErrorCode::SourceSnapshotMismatch,
+                            Some(child.reference),
+                            Some(child.offset),
+                        ));
+                    }
+                    if cancellation.is_cancelled() {
+                        return self.fail(DocumentError::for_code(
+                            DocumentErrorCode::Cancelled,
+                            Some(child.reference),
+                            Some(child.offset),
+                        ));
+                    }
+                    let Some(target) = self.current.take() else {
+                        return self.fail(DocumentError::for_code(
+                            DocumentErrorCode::InternalState,
+                            Some(child.reference),
+                            Some(child.offset),
+                        ));
+                    };
+                    match target {
+                        BuildTarget::Catalog => {
+                            if let Err(error) = self.accept_catalog(object, cancellation) {
+                                return self.fail(error);
+                            }
+                        }
+                        BuildTarget::RootPages {
+                            reference,
+                            edge_offset,
+                        } => match self.accept_root_pages(
+                            reference,
+                            edge_offset,
+                            object,
+                            cancellation,
+                        ) {
+                            Ok(index) => return self.finish_ready(index),
+                            Err(error) => return self.fail(error),
+                        },
+                    }
+                }
+            }
         }
+    }
+
+    fn start_child(&mut self) -> Result<(), DocumentError> {
+        let target = self.current.ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                self.current_reference(),
+                self.current_offset(),
+            )
+        })?;
+        let (reference, node_depth) = match target {
+            BuildTarget::Catalog => (self.root, None),
+            BuildTarget::RootPages { reference, .. } => (reference, Some(1_u64)),
+        };
+        let attested = self.authority.as_attested();
+        let attestation = attested.attestation(reference)?;
+        let offset = attestation.xref_offset();
+        if let Some(depth) = node_depth {
+            if self.stats.nodes_started >= self.tree_limits.max_nodes() {
+                return Err(DocumentError::page_tree_resource(
+                    DocumentLimitKind::PageTreeNodes,
+                    self.tree_limits.max_nodes(),
+                    self.stats.nodes_started,
+                    1,
+                    reference,
+                    Some(offset),
+                ));
+            }
+            if depth > self.tree_limits.max_depth() {
+                return Err(DocumentError::page_tree_resource(
+                    DocumentLimitKind::PageTreeDepth,
+                    self.tree_limits.max_depth(),
+                    depth.saturating_sub(1),
+                    1,
+                    reference,
+                    Some(offset),
+                ));
+            }
+        }
+        let read_remaining = self
+            .tree_limits
+            .max_total_object_read_bytes()
+            .checked_sub(self.stats.object_read_bytes)
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(reference),
+                    Some(offset),
+                )
+            })?;
+        if read_remaining == 0 {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeObjectReadBytes,
+                self.tree_limits.max_total_object_read_bytes(),
+                self.stats.object_read_bytes,
+                1,
+                reference,
+                Some(offset),
+            ));
+        }
+        let parse_remaining = self
+            .tree_limits
+            .max_total_object_parse_bytes()
+            .checked_sub(self.stats.object_parse_bytes)
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(reference),
+                    Some(offset),
+                )
+            })?;
+        if parse_remaining == 0 {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeObjectParseBytes,
+                self.tree_limits.max_total_object_parse_bytes(),
+                self.stats.object_parse_bytes,
+                1,
+                reference,
+                Some(offset),
+            ));
+        }
+        let work_caps = ObjectWorkCaps::new(
+            read_remaining.min(attested.object_limits().max_total_read_bytes()),
+            parse_remaining.min(attested.object_limits().max_total_parse_bytes()),
+        )
+        .map_err(|error| DocumentError::from_object_access_constructor(error, reference, offset))?;
+        let context = AttestedObjectJobContext::new(
+            self.context.job(),
+            self.context.object_envelope_checkpoint(),
+            self.context.object_boundary_checkpoint(),
+            self.context.priority(),
+        );
+        let job = attested.open_object(reference, context, work_caps)?;
+        self.stats.objects_started =
+            self.stats.objects_started.checked_add(1).ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(reference),
+                    Some(offset),
+                )
+            })?;
+        if let Some(depth) = node_depth {
+            self.stats.nodes_started =
+                self.stats.nodes_started.checked_add(1).ok_or_else(|| {
+                    DocumentError::for_code(
+                        DocumentErrorCode::InternalState,
+                        Some(reference),
+                        Some(offset),
+                    )
+                })?;
+            self.stats.max_depth = self.stats.max_depth.max(depth);
+        }
+        self.child = Some(BuildChildState {
+            job,
+            accounted_stats: ObjectStats::default(),
+            work_caps,
+            reference,
+            offset,
+        });
+        Ok(())
+    }
+
+    fn account_child_stats(&mut self, child: &mut BuildChildState) -> Result<(), DocumentError> {
+        let current = child.job.stats();
+        let read_delta = current
+            .read_bytes()
+            .checked_sub(child.accounted_stats.read_bytes())
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(child.reference),
+                    Some(child.offset),
+                )
+            })?;
+        let parse_delta = current
+            .parse_bytes()
+            .checked_sub(child.accounted_stats.parse_bytes())
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(child.reference),
+                    Some(child.offset),
+                )
+            })?;
+        self.stats.object_read_bytes = self
+            .stats
+            .object_read_bytes
+            .checked_add(read_delta)
+            .filter(|value| *value <= self.tree_limits.max_total_object_read_bytes())
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(child.reference),
+                    Some(child.offset),
+                )
+            })?;
+        self.stats.object_parse_bytes = self
+            .stats
+            .object_parse_bytes
+            .checked_add(parse_delta)
+            .filter(|value| *value <= self.tree_limits.max_total_object_parse_bytes())
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(child.reference),
+                    Some(child.offset),
+                )
+            })?;
+        child.accounted_stats = current;
+        Ok(())
+    }
+
+    fn map_child_error(&self, error: DocumentError, child: &BuildChildState) -> DocumentError {
+        if error.code() == DocumentErrorCode::ResourceLimit
+            && let Some(lower) = error.object_error()
+            && let Some(limit) = lower.limit()
+        {
+            match limit.kind() {
+                ObjectLimitKind::TotalReadBytes
+                    if child.work_caps.max_read_bytes()
+                        < self
+                            .authority
+                            .as_attested()
+                            .object_limits()
+                            .max_total_read_bytes() =>
+                {
+                    return DocumentError::aggregate_object_resource(
+                        DocumentLimitKind::PageTreeObjectReadBytes,
+                        self.tree_limits.max_total_object_read_bytes(),
+                        self.stats.object_read_bytes,
+                        limit.attempted(),
+                        lower,
+                        child.reference,
+                        child.offset,
+                    );
+                }
+                ObjectLimitKind::TotalParseBytes
+                    if child.work_caps.max_parse_bytes()
+                        < self
+                            .authority
+                            .as_attested()
+                            .object_limits()
+                            .max_total_parse_bytes() =>
+                {
+                    return DocumentError::aggregate_object_resource(
+                        DocumentLimitKind::PageTreeObjectParseBytes,
+                        self.tree_limits.max_total_object_parse_bytes(),
+                        self.stats.object_parse_bytes,
+                        limit.attempted(),
+                        lower,
+                        child.reference,
+                        child.offset,
+                    );
+                }
+                ObjectLimitKind::SourceBytes
+                | ObjectLimitKind::EnvelopeBytes
+                | ObjectLimitKind::BoundaryBytes
+                | ObjectLimitKind::StreamBytes
+                | ObjectLimitKind::TotalReadBytes
+                | ObjectLimitKind::TotalParseBytes
+                | ObjectLimitKind::RepairScanBytes
+                | ObjectLimitKind::RepairHeaderCandidates
+                | ObjectLimitKind::RepairBoundaryCandidates => {}
+            }
+        }
+        error
+    }
+
+    fn accept_catalog(
+        &mut self,
+        object: AttestedObject,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<(), DocumentError> {
+        let parsed = parse_strict_catalog(self.authority.as_attested(), &object, cancellation)?;
+        let catalog = parsed.summary();
+        let pages = parsed.pages_entry();
+        self.catalog = Some(catalog);
+        self.current = Some(BuildTarget::RootPages {
+            reference: pages.reference(),
+            edge_offset: pages.value_offset(),
+        });
+        Ok(())
+    }
+
+    fn accept_root_pages(
+        &mut self,
+        reference: ObjectRef,
+        edge_offset: u64,
+        object: AttestedObject,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<PageIndex, DocumentError> {
+        if object.reference() != reference {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(object.reference()),
+                Some(object.attestation().xref_offset()),
+            ));
+        }
+        let catalog = self.catalog.ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                Some(edge_offset),
+            )
+        })?;
+        let offset = object.attestation().xref_offset();
+        let dictionary = direct_dictionary(
+            &object,
+            self.snapshot,
+            DocumentErrorCode::InvalidPageTreeNode,
+        )?;
+        let fields = collect_structural_fields(
+            dictionary,
+            [
+                b"Type".as_slice(),
+                b"Parent".as_slice(),
+                b"Kids".as_slice(),
+                b"Count".as_slice(),
+            ],
+            reference,
+            cancellation,
+        )?;
+        reject_duplicate_field(&fields, 0, reference)?;
+        let type_value = required_field(
+            &fields,
+            0,
+            reference,
+            offset,
+            DocumentErrorCode::InvalidPageTreeNode,
+        )?;
+        if !matches!(
+            type_value.value(),
+            SyntaxObject::Name(name) if name.bytes() == b"Pages"
+        ) {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageTreeNode,
+                Some(reference),
+                Some(type_value.span().start()),
+            ));
+        }
+        reject_duplicate_field(&fields, 1, reference)?;
+        validate_parent(reference, None, optional_field(&fields, 1), offset)?;
+        reject_duplicate_field(&fields, 2, reference)?;
+        reject_duplicate_field(&fields, 3, reference)?;
+        let parsed =
+            self.parse_root_pages_fields(reference, edge_offset, offset, &fields, cancellation)?;
+        self.stats.max_kids_per_node = self
+            .stats
+            .max_kids_per_node
+            .max(u64::try_from(parsed.children.len()).unwrap_or(u64::MAX));
+        self.stats.peak_retained_traversal_bytes = self
+            .stats
+            .peak_retained_traversal_bytes
+            .max(parsed.retained_bytes);
+        self.stats.complete_tree_proof = false;
+        PageIndex::from_lazy_root(
+            catalog,
+            parsed.page_count,
+            parsed.count_offset,
+            parsed.children,
+            parsed.nodes,
+            self.stats,
+            self.tree_limits,
+            self.limits,
+            Some(edge_offset),
+        )
+    }
+
+    fn parse_root_pages_fields(
+        &self,
+        reference: ObjectRef,
+        edge_offset: u64,
+        object_offset: u64,
+        fields: &StructuralFields<'_, 4>,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<ParsedRootPages, DocumentError> {
+        let kids_value = required_field(
+            fields,
+            2,
+            reference,
+            object_offset,
+            DocumentErrorCode::InvalidPageTreeNode,
+        )?;
+        let SyntaxObject::Array(kids) = kids_value.value() else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageTreeNode,
+                Some(reference),
+                Some(kids_value.span().start()),
+            ));
+        };
+        let count_value = required_field(
+            fields,
+            3,
+            reference,
+            object_offset,
+            DocumentErrorCode::InvalidPageTreeNode,
+        )?;
+        let Some(page_count) = count_value
+            .value()
+            .as_integer()
+            .and_then(|value| u32::try_from(value).ok())
+        else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageTreeNode,
+                Some(reference),
+                Some(count_value.span().start()),
+            ));
+        };
+        let page_count_u64 = u64::from(page_count);
+        let max_pages = self.tree_limits.max_pages().min(self.limits.max_pages());
+        if page_count_u64 > max_pages {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreePages,
+                max_pages,
+                0,
+                page_count_u64,
+                reference,
+                Some(count_value.span().start()),
+            ));
+        }
+        let child_count = kids.values().len();
+        let child_count_u64 = u64::try_from(child_count).map_err(|_| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                Some(kids_value.span().start()),
+            )
+        })?;
+        if child_count_u64 > self.tree_limits.max_kids_per_node() {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeKids,
+                self.tree_limits.max_kids_per_node(),
+                0,
+                child_count_u64,
+                reference,
+                Some(kids_value.span().start()),
+            ));
+        }
+        let discovered = child_count_u64.checked_add(1).ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                Some(kids_value.span().start()),
+            )
+        })?;
+        if discovered > self.tree_limits.max_nodes() {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeNodes,
+                self.tree_limits.max_nodes(),
+                1,
+                child_count_u64,
+                reference,
+                Some(kids_value.span().start()),
+            ));
+        }
+        if child_count > 0 && self.tree_limits.max_depth() < 2 {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeDepth,
+                self.tree_limits.max_depth(),
+                1,
+                1,
+                reference,
+                Some(kids_value.span().start()),
+            ));
+        }
+        let retained_bytes = root_bootstrap_bytes(child_count, child_count.saturating_add(1))
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(reference),
+                    Some(kids_value.span().start()),
+                )
+            })?;
+        if retained_bytes > self.tree_limits.max_retained_traversal_bytes() {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeTraversalBytes,
+                self.tree_limits.max_retained_traversal_bytes(),
+                0,
+                retained_bytes,
+                reference,
+                Some(kids_value.span().start()),
+            ));
+        }
+        let mut children = Vec::new();
+        children.try_reserve_exact(child_count).map_err(|_| {
+            DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeTraversalBytes,
+                self.tree_limits.max_retained_traversal_bytes(),
+                0,
+                retained_bytes,
+                reference,
+                Some(kids_value.span().start()),
+            )
+        })?;
+        for (index, child) in kids.values().iter().enumerate() {
+            if index % CANCELLATION_PROBE_INTERVAL == 0 && cancellation.is_cancelled() {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::Cancelled,
+                    Some(reference),
+                    Some(child.span().start()),
+                ));
+            }
+            let Some(child_reference) = child.value().as_reference() else {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPageTreeNode,
+                    Some(reference),
+                    Some(child.span().start()),
+                ));
+            };
+            children.push(PageIndexChild::new(child_reference, child.span().start()));
+        }
+        for child in &children {
+            if child.reference() == reference {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::PageTreeCycle,
+                    Some(reference),
+                    Some(child.edge_offset()),
+                ));
+            }
+        }
+        let mut duplicate_probe = children.clone();
+        duplicate_probe.sort_unstable_by_key(|child| child.reference());
+        if let Some(duplicate) = duplicate_probe
+            .windows(2)
+            .find(|pair| pair[0].reference() == pair[1].reference())
+            .map(|pair| pair[0].reference())
+        {
+            let duplicate_offset = children
+                .iter()
+                .filter(|child| child.reference() == duplicate)
+                .nth(1)
+                .map(PageIndexChild::edge_offset);
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicatePageTreeNode,
+                Some(duplicate),
+                duplicate_offset,
+            ));
+        }
+        for child in &children {
+            self.authority
+                .as_attested()
+                .attestation(child.reference())?;
+        }
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(child_count.saturating_add(1))
+            .map_err(|_| {
+                DocumentError::page_tree_resource(
+                    DocumentLimitKind::PageTreeTraversalBytes,
+                    self.tree_limits.max_retained_traversal_bytes(),
+                    0,
+                    retained_bytes,
+                    reference,
+                    Some(kids_value.span().start()),
+                )
+            })?;
+        nodes.push(PageIndexNodeEvidence::new(reference, None, edge_offset, 1));
+        for child in &children {
+            nodes.push(PageIndexNodeEvidence::new(
+                child.reference(),
+                Some(reference),
+                child.edge_offset(),
+                2,
+            ));
+        }
+        Ok(ParsedRootPages {
+            page_count,
+            count_offset: count_value.span().start(),
+            children,
+            nodes,
+            retained_bytes,
+        })
+    }
+
+    fn finish_ready(&mut self, index: PageIndex) -> PageIndexBuildPoll {
+        self.child = None;
+        self.current = None;
+        self.state = BuildState::Ready;
+        self.terminal_error = DocumentError::for_code(
+            DocumentErrorCode::JobAlreadyComplete,
+            Some(self.root),
+            self.root_offset,
+        );
+        PageIndexBuildPoll::Ready(index)
     }
 
     fn fail(&mut self, error: DocumentError) -> PageIndexBuildPoll {
         self.child = None;
+        self.current = None;
+        self.catalog = None;
         self.state = BuildState::Failed;
         self.terminal_error = error;
         PageIndexBuildPoll::Failed(error)
+    }
+
+    fn current_reference(&self) -> Option<ObjectRef> {
+        match self.current {
+            Some(BuildTarget::Catalog) => Some(self.root),
+            Some(BuildTarget::RootPages { reference, .. }) => Some(reference),
+            None => self.catalog.map(StrictCatalog::pages).or(Some(self.root)),
+        }
+    }
+
+    fn current_offset(&self) -> Option<u64> {
+        match self.current {
+            Some(BuildTarget::Catalog) => self.root_offset,
+            Some(BuildTarget::RootPages { edge_offset, .. }) => Some(edge_offset),
+            None => self.root_offset,
+        }
     }
 }
 
@@ -185,6 +843,7 @@ impl fmt::Debug for BuildPageIndexJob<'_> {
             .field("tree_limits", &self.tree_limits)
             .field("index_limits", &self.limits)
             .field("phase", &self.phase())
+            .field("current", &"[REDACTED]")
             .field("child", &"[REDACTED]")
             .finish()
     }
@@ -285,6 +944,10 @@ impl PageLookup {
 }
 
 /// Result of polling one exact page lookup and refinement job.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the ready value keeps the immutable proof-bound page index inline without an untracked allocation"
+)]
 pub enum PageLookupPoll {
     /// The requested Page and reusable refined immutable index are ready.
     Ready(PageLookup),
@@ -357,6 +1020,7 @@ struct FrontierState {
     next_child: usize,
     next_index: u32,
     replacements: Vec<PageSegmentSummary>,
+    pending_nodes: Vec<PageIndexNodeEvidence>,
     retained_bytes: u64,
 }
 
@@ -618,6 +1282,7 @@ impl LookupPageJob<'_> {
             next_child: 0,
             next_index: segment.start_index(),
             replacements: Vec::new(),
+            pending_nodes: Vec::new(),
             retained_bytes: 0,
         };
         if let Some(children) = segment.children() {
@@ -725,6 +1390,25 @@ impl LookupPageJob<'_> {
                 Some(edge.edge_offset()),
             )
         })?;
+        let page_index = self.page_index.as_ref().ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(edge.reference()),
+                Some(edge.edge_offset()),
+            )
+        })?;
+        if !page_index.node_matches(
+            edge.reference(),
+            Some(frontier.segment.object()),
+            edge.edge_offset(),
+            depth,
+        ) {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::AttestedObjectEvidenceMismatch,
+                Some(edge.reference()),
+                Some(edge.edge_offset()),
+            ));
+        }
         self.current = Some(CurrentTarget::Child {
             edge,
             depth,
@@ -1006,6 +1690,14 @@ impl LookupPageJob<'_> {
             reference,
             Some(count_offset),
         )?;
+        self.discover_children(reference, depth, &children, cancellation)?;
+        let Some(frontier) = self.frontier.as_mut() else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                Some(count_offset),
+            ));
+        };
         frontier.children = children;
         frontier.count_offset = Some(count_offset);
         frontier.children_ready = true;
@@ -1051,6 +1743,13 @@ impl LookupPageJob<'_> {
                 )
             })?;
         let parsed = self.parse_page_tree_node(object, Some(parent), depth, false, cancellation)?;
+        if let ParsedPageTreeNode::Pages { children, .. } = &parsed {
+            self.discover_children(edge.reference(), depth, children, cancellation)?;
+        }
+        let complete_tree_proof = self
+            .page_index
+            .as_ref()
+            .is_some_and(|page_index| page_index.stats().has_complete_tree_proof());
         let (summary, contribution, nested_child_bytes, count_offset) = match parsed {
             ParsedPageTreeNode::Page => (
                 Some(PageSegmentSummary::page(
@@ -1073,25 +1772,25 @@ impl LookupPageJob<'_> {
                     .stats
                     .max_kids_per_node
                     .max(u64::try_from(children.len()).unwrap_or(u64::MAX));
-                if page_count == 0 {
-                    (None, 0, 0, Some(count_offset))
-                } else {
-                    (
-                        Some(PageSegmentSummary::pages(
-                            start_index,
-                            page_count,
-                            edge.reference(),
-                            Some(parent),
-                            depth,
-                            PageSegmentEvidence::CompleteSubtree,
-                            Some(count_offset),
-                            Some(children),
-                        )),
+                (
+                    Some(PageSegmentSummary::pages(
+                        start_index,
                         page_count,
-                        retained_child_bytes,
+                        edge.reference(),
+                        Some(parent),
+                        depth,
+                        if complete_tree_proof {
+                            PageSegmentEvidence::CompleteSubtree
+                        } else {
+                            PageSegmentEvidence::DeclaredCount
+                        },
                         Some(count_offset),
-                    )
-                }
+                        Some(children),
+                    )),
+                    page_count,
+                    retained_child_bytes,
+                    Some(count_offset),
+                )
             }
         };
         let Some(frontier) = self.frontier.as_mut() else {
@@ -1165,6 +1864,126 @@ impl LookupPageJob<'_> {
             .stats
             .peak_retained_traversal_bytes
             .max(frontier.retained_bytes);
+        Ok(())
+    }
+
+    fn discover_children(
+        &mut self,
+        parent: ObjectRef,
+        parent_depth: u32,
+        children: &[PageIndexChild],
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<(), DocumentError> {
+        if children.is_empty() {
+            return Ok(());
+        }
+        let child_depth = parent_depth.checked_add(1).ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+        })?;
+        {
+            let Some(frontier) = self.frontier.as_mut() else {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(parent),
+                    None,
+                ));
+            };
+            let before =
+                retained_node_bytes(frontier.pending_nodes.capacity()).ok_or_else(|| {
+                    DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+                })?;
+            frontier
+                .pending_nodes
+                .try_reserve_exact(children.len())
+                .map_err(|_| {
+                    DocumentError::page_tree_resource(
+                        DocumentLimitKind::PageTreeTraversalBytes,
+                        self.limits.max_retained_traversal_bytes(),
+                        frontier.retained_bytes,
+                        u64::MAX,
+                        parent,
+                        children.first().map(|child| child.edge_offset()),
+                    )
+                })?;
+            let after =
+                retained_node_bytes(frontier.pending_nodes.capacity()).ok_or_else(|| {
+                    DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+                })?;
+            let added = after.checked_sub(before).ok_or_else(|| {
+                DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+            })?;
+            frontier.retained_bytes =
+                frontier.retained_bytes.checked_add(added).ok_or_else(|| {
+                    DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+                })?;
+            if frontier.retained_bytes > self.limits.max_retained_traversal_bytes() {
+                return Err(DocumentError::page_tree_resource(
+                    DocumentLimitKind::PageTreeTraversalBytes,
+                    self.limits.max_retained_traversal_bytes(),
+                    frontier.retained_bytes.saturating_sub(added),
+                    added,
+                    parent,
+                    children.first().map(|child| child.edge_offset()),
+                ));
+            }
+        }
+
+        for (index, child) in children.iter().enumerate() {
+            if index % CANCELLATION_PROBE_INTERVAL == 0 && cancellation.is_cancelled() {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::Cancelled,
+                    Some(parent),
+                    Some(child.edge_offset()),
+                ));
+            }
+            let node = {
+                let page_index = self.page_index.as_ref().ok_or_else(|| {
+                    DocumentError::for_code(
+                        DocumentErrorCode::InternalState,
+                        Some(parent),
+                        Some(child.edge_offset()),
+                    )
+                })?;
+                let pending = self
+                    .frontier
+                    .as_ref()
+                    .map(|frontier| frontier.pending_nodes.as_slice())
+                    .ok_or_else(|| {
+                        DocumentError::for_code(
+                            DocumentErrorCode::InternalState,
+                            Some(parent),
+                            Some(child.edge_offset()),
+                        )
+                    })?;
+                page_index.validate_new_node(
+                    parent,
+                    child.reference(),
+                    child.edge_offset(),
+                    child_depth,
+                    pending,
+                )?
+            };
+            let Some(frontier) = self.frontier.as_mut() else {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(parent),
+                    Some(child.edge_offset()),
+                ));
+            };
+            frontier.pending_nodes.push(node);
+        }
+        for child in children {
+            self.authority.attestation(child.reference())?;
+        }
+        let retained = self
+            .frontier
+            .as_ref()
+            .map(|frontier| frontier.retained_bytes)
+            .ok_or_else(|| {
+                DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+            })?;
+        self.stats.peak_retained_traversal_bytes =
+            self.stats.peak_retained_traversal_bytes.max(retained);
         Ok(())
     }
 
@@ -1392,7 +2211,6 @@ impl LookupPageJob<'_> {
                     Some(child.span().start()),
                 ));
             };
-            self.authority.attestation(child_reference)?;
             children.push(PageIndexChild::new(child_reference, child.span().start()));
         }
         let retained_child_bytes =
@@ -1442,11 +2260,20 @@ impl LookupPageJob<'_> {
             frontier.segment.object(),
             frontier.segment.parent(),
             frontier.segment.depth(),
-            PageSegmentEvidence::CompleteSubtree,
+            if frontier.segment.evidence() == PageSegmentEvidence::CompleteSubtree {
+                PageSegmentEvidence::CompleteSubtree
+            } else {
+                PageSegmentEvidence::ValidatedPartition
+            },
             frontier.count_offset,
             Some(frontier.children),
         );
-        let refined = page_index.refine(frontier.segment_index, expanded, frontier.replacements)?;
+        let refined = page_index.refine(
+            frontier.segment_index,
+            expanded,
+            frontier.replacements,
+            frontier.pending_nodes,
+        )?;
         self.page_index = Some(refined);
         self.stats.segments_refined =
             self.stats.segments_refined.checked_add(1).ok_or_else(|| {
@@ -1542,22 +2369,19 @@ impl fmt::Debug for LookupPageJob<'_> {
 }
 
 impl AttestedRevisionIndex {
-    /// Builds an immutable segmented page index from a complete borrowed M1 page-tree proof.
+    /// Cold-builds an immutable segmented page index while borrowing this strict proof.
     pub fn build_page_index(
         &self,
         context: PageTreeJobContext,
         tree_limits: PageTreeLimits,
         index_limits: PageIndexLimits,
     ) -> Result<BuildPageIndexJob<'_>, DocumentError> {
-        let root = self.root();
-        let root_offset = self.attestation(root)?.xref_offset();
-        let child = self.count_pages(context, tree_limits)?;
-        Ok(build_page_index_job(
-            child,
+        build_page_index_with_owner(
+            AttestedRevisionIndexOwner::Borrowed(self),
+            context,
+            tree_limits,
             index_limits,
-            root,
-            Some(root_offset),
-        ))
+        )
     }
 
     /// Creates a borrowed exact-page lookup that owns an immutable index clone.
@@ -1579,22 +2403,19 @@ impl AttestedRevisionIndex {
 }
 
 impl SharedAttestedRevisionIndex {
-    /// Builds an index in a job that owns a clone of this strict proof handle.
+    /// Cold-builds an index in a job that owns a clone of this strict proof handle.
     pub fn build_page_index_owned(
         &self,
         context: PageTreeJobContext,
         tree_limits: PageTreeLimits,
         index_limits: PageIndexLimits,
     ) -> Result<BuildPageIndexJob<'static>, DocumentError> {
-        let root = self.as_attested().root();
-        let root_offset = self.as_attested().attestation(root)?.xref_offset();
-        let child = self.count_pages_owned(context, tree_limits)?;
-        Ok(build_page_index_job(
-            child,
+        build_page_index_with_owner(
+            AttestedRevisionIndexOwner::Shared(self.clone()),
+            context,
+            tree_limits,
             index_limits,
-            root,
-            Some(root_offset),
-        ))
+        )
     }
 
     /// Creates an exact-page lookup that owns clones of the proof handle and immutable index.
@@ -1616,22 +2437,19 @@ impl SharedAttestedRevisionIndex {
 }
 
 impl LocallyRepairedRevisionIndex {
-    /// Builds an immutable segmented page index while borrowing this complete repaired proof.
+    /// Cold-builds an immutable segmented page index while borrowing this repaired proof.
     pub fn build_page_index(
         &self,
         context: PageTreeJobContext,
         tree_limits: PageTreeLimits,
         index_limits: PageIndexLimits,
     ) -> Result<BuildPageIndexJob<'_>, DocumentError> {
-        let root = self.root();
-        let root_offset = self.attestation(root)?.xref_offset();
-        let child = self.count_pages(context, tree_limits)?;
-        Ok(build_page_index_job(
-            child,
+        build_page_index_with_owner(
+            AttestedRevisionIndexOwner::RepairedBorrowed(self),
+            context,
+            tree_limits,
             index_limits,
-            root,
-            Some(root_offset),
-        ))
+        )
     }
 
     /// Creates a borrowed exact-page lookup that retains the repaired proof typestate.
@@ -1653,23 +2471,19 @@ impl LocallyRepairedRevisionIndex {
 }
 
 impl SharedLocallyRepairedRevisionIndex {
-    /// Builds an index in a job that owns a clone of this repaired proof handle.
+    /// Cold-builds an index in a job that owns a clone of this repaired proof handle.
     pub fn build_page_index_owned(
         &self,
         context: PageTreeJobContext,
         tree_limits: PageTreeLimits,
         index_limits: PageIndexLimits,
     ) -> Result<BuildPageIndexJob<'static>, DocumentError> {
-        let repaired = self.as_repaired();
-        let root = repaired.root();
-        let root_offset = repaired.attestation(root)?.xref_offset();
-        let child = self.count_pages_owned(context, tree_limits)?;
-        Ok(build_page_index_job(
-            child,
+        build_page_index_with_owner(
+            AttestedRevisionIndexOwner::RepairedShared(self.clone()),
+            context,
+            tree_limits,
             index_limits,
-            root,
-            Some(root_offset),
-        ))
+        )
     }
 
     /// Creates an exact-page lookup that owns clones of the repaired proof and immutable index.
@@ -1690,32 +2504,42 @@ impl SharedLocallyRepairedRevisionIndex {
     }
 }
 
-fn build_page_index_job<'index>(
-    child: CountPagesJob<'index>,
+fn build_page_index_with_owner<'index>(
+    authority: AttestedRevisionIndexOwner<'index>,
+    context: PageTreeJobContext,
+    tree_limits: PageTreeLimits,
     limits: PageIndexLimits,
-    root: ObjectRef,
-    root_offset: Option<u64>,
-) -> BuildPageIndexJob<'index> {
-    let snapshot = child.snapshot();
-    let context = child.context();
-    let stats = child.stats();
-    let tree_limits = child.limits();
-    BuildPageIndexJob {
-        child: Some(child),
+) -> Result<BuildPageIndexJob<'index>, DocumentError> {
+    let attested = authority.as_attested();
+    let snapshot = attested.snapshot();
+    let root = attested.root();
+    let root_offset = attested.attestation(root)?.xref_offset();
+    if context.object_envelope_checkpoint() == context.object_boundary_checkpoint() {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InvalidPageTreeJobContext,
+            Some(root),
+            Some(root_offset),
+        ));
+    }
+    Ok(BuildPageIndexJob {
+        authority,
         snapshot,
         context,
-        stats,
+        stats: PageIndexStats::default(),
         tree_limits,
         limits,
+        catalog: None,
+        current: None,
+        child: None,
         root,
-        root_offset,
+        root_offset: Some(root_offset),
         state: BuildState::Active,
         terminal_error: DocumentError::for_code(
             DocumentErrorCode::InternalState,
             Some(root),
-            root_offset,
+            Some(root_offset),
         ),
-    }
+    })
 }
 
 fn lookup_page_with_owner<'index>(
@@ -1740,6 +2564,13 @@ fn lookup_page_with_owner<'index>(
             DocumentErrorCode::AttestedObjectEvidenceMismatch,
             Some(root),
             Some(root_offset),
+        ));
+    }
+    if limits != page_index.tree_limits() {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InvalidLimits,
+            Some(page_index.catalog().pages()),
+            None,
         ));
     }
     if target_index >= page_index.len() {
@@ -1845,10 +2676,25 @@ fn retained_children_bytes(children: usize) -> Option<u64> {
         .checked_mul(u64::try_from(mem::size_of::<PageIndexChild>()).ok()?)
 }
 
+fn retained_node_bytes(nodes: usize) -> Option<u64> {
+    u64::try_from(nodes)
+        .ok()?
+        .checked_mul(u64::try_from(mem::size_of::<PageIndexNodeEvidence>()).ok()?)
+}
+
 fn retained_frontier_bytes(children: usize, replacements: usize) -> Option<u64> {
     let children = retained_children_bytes(children)?;
     let replacements = u64::try_from(replacements)
         .ok()?
         .checked_mul(u64::try_from(mem::size_of::<PageSegmentSummary>()).ok()?)?;
     children.checked_add(replacements)
+}
+
+fn root_bootstrap_bytes(children: usize, nodes: usize) -> Option<u64> {
+    let retained_children = retained_children_bytes(children)?;
+    let duplicate_probe = retained_children_bytes(children)?;
+    let retained_nodes = retained_node_bytes(nodes)?;
+    retained_children
+        .checked_add(duplicate_probe)?
+        .checked_add(retained_nodes)
 }

@@ -139,6 +139,10 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
         "pub struct PageHandle",
         "pub struct PageSegmentSummary",
         "pub enum PageIndexSegmentKind",
+        "pub enum PageSegmentEvidence",
+        "pub(crate) struct PageIndexNodeEvidence",
+        "pub(crate) fn from_lazy_root(",
+        "pub(crate) fn validate_new_node(",
         "pub(crate) struct ValidatedPageOrder",
         "pub(crate) fn admit(",
         "DocumentLimitKind::PageIndexBytes",
@@ -165,10 +169,10 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
             "page-index integration must contain {required:?}"
         );
     }
-    assert!(provenance.contains("unchanged M1 page-tree"));
-    assert!(provenance.contains("refines only unresolved frontier segments"));
-    assert!(provenance.contains("cold construction is"));
-    assert!(provenance.contains("therefore not yet requested-range-only"));
+    assert!(provenance.contains("opens only the strict"));
+    assert!(provenance.contains("Catalog and root Pages dictionary"));
+    assert!(provenance.contains("Unopened subtree Counts remain"));
+    assert!(provenance.contains("unchanged M1 service"));
 
     let feature = record_with_id(&feature_map, "feature", "core.ordered-page-index")
         .expect("ordered page-index feature must be registered");
@@ -179,8 +183,10 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement must be registered");
     assert!(milestone.contains("status = \"partial\""));
-    assert!(milestone.contains("M2-02 is in progress"));
-    assert!(milestone.contains("requested-range-only initial proof"));
+    assert!(milestone.contains("M2-02 is complete"));
+    assert!(milestone.contains("DeclaredCount"));
+    assert!(milestone.contains("ValidatedPartition"));
+    assert!(milestone.contains("CompleteSubtree"));
 
     let m2_01 =
         record_with_id(&plan, "work_item", "M2-01").expect("M2-01 work item must be planned");
@@ -188,7 +194,8 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
     assert!(m2_01.contains("completed_at = 2026-07-16"));
     let m2_02 =
         record_with_id(&plan, "work_item", "M2-02").expect("M2-02 work item must be planned");
-    assert!(m2_02.contains("status = \"in_progress\""));
+    assert!(m2_02.contains("status = \"complete\""));
+    assert!(m2_02.contains("completed_at = 2026-07-16"));
     let m2_03 =
         record_with_id(&plan, "work_item", "M2-03").expect("M2-03 work item must be planned");
     assert!(m2_03.contains("status = \"planned\""));
@@ -747,8 +754,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.64.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.64.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.65.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.65.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");

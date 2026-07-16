@@ -46,20 +46,25 @@ would recursively require another object-stream acquisition inside the container
 The acquired page-count slice interprets only Catalog and Page/Pages structural fields, while the
 acquired outline slice interprets only the optional Catalog `Outlines` reference and strict linked
 outline dictionaries reachable from it. M2 adds immutable proof-bound `PageIndex` storage with an
-allocator-reported segment budget. `BuildPageIndexJob` first consumes the unchanged M1 page-tree
-validator and admits one root frontier covering its recomputed page count. `LookupPageJob` then
-reopens and refines only unresolved frontier segments on the requested path, retaining direct Kids,
-exact Parent links, subtree ranges, and Count values already covered by that complete proof. Each
-successful lookup returns a refined immutable index plus a `PageHandle` carrying its zero-based
-logical index, exact Page object, source snapshot, Catalog, and revision binding. A handle can be
-validated across sibling refinements of the same immutable index binding and is rejected as stale
-for another source, revision, Catalog, or logical order. This slice does not yet materialize
-inherited page values or resources, index acquired revision chains, coalesce concurrent lookup
-work, or install the index in a reusable Session cache. All source access is synchronous polling
-through an injected `ByteSource`; all long-running CPU work uses an injected cooperative
-cancellation probe. A separate pure document-semantic helper decodes already lexical PDF strings
-under the bounded ISO 32000-1 text-string rules used by the outline slice and available to future
-metadata services.
+allocator-reported segment and discovered-node budget. `BuildPageIndexJob` opens only the strict
+Catalog and root Pages dictionary, retaining its direct Kids and nonnegative Count as explicit
+`DeclaredCount` range evidence without opening descendants. `LookupPageJob` classifies every direct
+child of only the unresolved segments covering the requested index. A locally exact contribution
+partition upgrades its parent to `ValidatedPartition`; only complete descendant validation upgrades
+it to `CompleteSubtree`. Published and transaction-local node evidence preserves exact Parent
+edges, detects active-ancestor cycles before duplicate reachability, and is committed atomically
+with each immutable refinement. Each successful lookup returns the refined index plus a
+`PageHandle` carrying its zero-based logical index, exact Page object, source snapshot, Catalog,
+revision binding, and current root-Count evidence. A handle can be validated across sibling
+refinements of the same immutable index binding and is rejected as stale for another source,
+revision, Catalog, or logical order. The separate M1 page-count service continues to provide the
+complete-tree recomputation profile and its content-addressed implementation remains unchanged.
+This slice does not yet materialize inherited page values or resources, index acquired revision
+chains, coalesce concurrent lookup work, or install the index in a reusable Session cache. All
+source access is synchronous polling through an injected `ByteSource`; all long-running CPU work
+uses an injected cooperative cancellation probe. A separate pure document-semantic helper decodes
+already lexical PDF strings under the bounded ISO 32000-1 text-string rules used by the outline
+slice and available to future metadata services.
 
 # Semantic owner
 
@@ -855,11 +860,12 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   core service integration alone does not establish M1 exit.
 - Attestation eagerly frames every in-use object. The access job can reparse one proven value, the
   chain job can follow top-level whole-object aliases, and the count/index jobs can validate and
-  refine strict Page/Pages dictionaries. The current segmented index performs one complete,
-  unchanged M1 topology-and-Count proof before lazy frontier refinement; cold construction is
-  therefore not yet requested-range-only. Persistent dependency states, concurrent lookup
-  coalescing, negative caching, eviction, and cross-job/session resident ownership remain
-  unsupported. Successful footprints are measurement evidence only.
+  refine strict Page/Pages dictionaries. The segmented index now cold-opens only Catalog/root
+  structure and validates requested range partitions lazily. Unopened subtree Counts remain
+  explicitly provisional rather than being described as complete leaf proofs; callers needing
+  whole-tree Count recomputation use the unchanged M1 service. Persistent dependency states,
+  concurrent lookup coalescing, negative caching, eviction, and cross-job/session resident
+  ownership remain unsupported. Successful footprints are measurement evidence only.
 - Indirect stream `/Length` is supported only when the effective dependency is an uncompressed
   direct nonnegative integer in the separate revision-aware job. Compressed or aliased Length,
   repair, encrypted object interpretation, filters, decoded stream payloads, acquired-chain page
@@ -895,6 +901,10 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   build job, adding immutable lazy frontier refinement, retained subtree range/Count/Kids
   summaries, source- and revision-bound PageHandles, cached random access, and stable
   out-of-range/stale-handle outcomes while preserving the accepted M1 file hashes.
+- 2026-07-16: Completed M2-02 by replacing the full-tree index prepass with a two-object
+  Catalog/root bootstrap, explicit declared/partitioned/complete Count evidence, cumulative
+  discovered-node topology, requested-range-only descendant opening, atomic immutable refinement,
+  and delayed stable failures for malformed unrequested ranges.
 - 2026-07-13: Added candidate-only single-revision physical indexing, bounded cancellable sort,
   exact lookup errors, and crate-private five-field object-target construction.
 - 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,

@@ -5,7 +5,7 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_document::{
     AttestRevisionJob, AttestedRevisionIndex, BuildPageIndexJob, CandidateRevisionIndex,
-    DocumentError, DocumentErrorCode, DocumentLimits, LookupPageJob,
+    DocumentError, DocumentErrorCode, DocumentLimitKind, DocumentLimits, LookupPageJob,
     NeverCancelled as DocumentNeverCancelled, PageHandle, PageIndex, PageIndexBuildPoll,
     PageIndexLimits, PageIndexSegmentKind, PageLookup, PageLookupPhase, PageLookupPoll,
     PageLookupStats, PageSegmentEvidence, PageSegmentSummary, PageTreeJobContext,
@@ -97,17 +97,17 @@ fn two_subtree_fixture(salt: u8) -> Fixture {
     )
 }
 
-fn cycle_fixture() -> Fixture {
+fn ancestor_cycle_fixture() -> Fixture {
     fixture(
         &[
             (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
             (
                 2,
-                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 0 >>\nendobj\n",
+                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
             ),
             (
                 3,
-                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [2 0 R] /Count 0 >>\nendobj\n",
+                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [2 0 R] /Count 1 >>\nendobj\n",
             ),
         ],
         4,
@@ -130,18 +130,112 @@ fn duplicate_fixture() -> Fixture {
     )
 }
 
-fn count_mismatch_fixture() -> Fixture {
+fn unrelated_deep_count_mismatch_fixture() -> Fixture {
     fixture(
         &[
             (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
             (
                 2,
-                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 2 >>\nendobj\n",
+                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 4 >>\nendobj\n",
             ),
-            (3, b"3 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n"),
+            (
+                3,
+                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (4, b"4 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+            (5, b"5 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+            (
+                6,
+                b"6 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [7 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (
+                7,
+                b"7 0 obj\n<< /Type /Pages /Parent 6 0 R /Kids [8 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (8, b"8 0 obj\n<< /Type /Page /Parent 7 0 R >>\nendobj\n"),
         ],
-        4,
+        9,
         0xc3,
+    )
+}
+
+fn unrelated_deep_cycle_fixture() -> Fixture {
+    fixture(
+        &[
+            (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+            (
+                2,
+                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 4 >>\nendobj\n",
+            ),
+            (
+                3,
+                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (4, b"4 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+            (5, b"5 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+            (
+                6,
+                b"6 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [7 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (
+                7,
+                b"7 0 obj\n<< /Type /Pages /Parent 6 0 R /Kids [6 0 R] /Count 2 >>\nendobj\n",
+            ),
+        ],
+        8,
+        0xc4,
+    )
+}
+
+fn seven_node_incremental_fixture(salt: u8) -> Fixture {
+    fixture(
+        &[
+            (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+            (
+                2,
+                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 >>\nendobj\n",
+            ),
+            (
+                3,
+                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (4, b"4 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+            (5, b"5 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+            (
+                6,
+                b"6 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [7 0 R] /Count 1 >>\nendobj\n",
+            ),
+            (
+                7,
+                b"7 0 obj\n<< /Type /Pages /Parent 6 0 R /Kids [8 0 R] /Count 1 >>\nendobj\n",
+            ),
+            (8, b"8 0 obj\n<< /Type /Page /Parent 7 0 R >>\nendobj\n"),
+        ],
+        9,
+        salt,
+    )
+}
+
+fn cross_sibling_duplicate_fixture() -> Fixture {
+    fixture(
+        &[
+            (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+            (
+                2,
+                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n",
+            ),
+            (
+                3,
+                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 >>\nendobj\n",
+            ),
+            (
+                4,
+                b"4 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 >>\nendobj\n",
+            ),
+            (5, b"5 0 obj\n<< /Type /Page /Parent 3 0 R >>\nendobj\n"),
+        ],
+        6,
+        0xc5,
     )
 }
 
@@ -225,9 +319,9 @@ fn context(seed: u64) -> PageTreeJobContext {
     )
 }
 
-fn tree_limits() -> PageTreeLimits {
+fn tree_limits_with_nodes(max_nodes: u64) -> PageTreeLimits {
     PageTreeLimits::validate(PageTreeLimitConfig {
-        max_nodes: 8,
+        max_nodes,
         max_depth: 4,
         max_pages: 4,
         max_kids_per_node: 4,
@@ -238,13 +332,26 @@ fn tree_limits() -> PageTreeLimits {
     .expect("test page-tree limits validate")
 }
 
+fn tree_limits() -> PageTreeLimits {
+    tree_limits_with_nodes(8)
+}
+
 fn index_limits() -> PageIndexLimits {
     PageIndexLimits::new(4, 16 << 10).expect("test page-index limits validate")
 }
 
 fn build_ready(authority: &AttestedRevisionIndex, source: &dyn ByteSource, seed: u64) -> PageIndex {
+    build_ready_with_limits(authority, source, seed, tree_limits())
+}
+
+fn build_ready_with_limits(
+    authority: &AttestedRevisionIndex,
+    source: &dyn ByteSource,
+    seed: u64,
+    limits: PageTreeLimits,
+) -> PageIndex {
     let mut job = authority
-        .build_page_index(context(seed), tree_limits(), index_limits())
+        .build_page_index(context(seed), limits, index_limits())
         .expect("valid page-index build job");
     match job.poll(source, &DocumentNeverCancelled) {
         PageIndexBuildPoll::Ready(index) => index,
@@ -260,8 +367,19 @@ fn lookup_ready(
     source: &dyn ByteSource,
     seed: u64,
 ) -> (PageLookup, PageLookupStats) {
+    lookup_ready_with_limits(authority, index, target, source, seed, tree_limits())
+}
+
+fn lookup_ready_with_limits(
+    authority: &AttestedRevisionIndex,
+    index: &PageIndex,
+    target: u32,
+    source: &dyn ByteSource,
+    seed: u64,
+    limits: PageTreeLimits,
+) -> (PageLookup, PageLookupStats) {
     let mut job = authority
-        .lookup_page(index, target, context(seed), tree_limits())
+        .lookup_page(index, target, context(seed), limits)
         .expect("valid page lookup job");
     let result = match job.poll(source, &DocumentNeverCancelled) {
         PageLookupPoll::Ready(result) => result,
@@ -319,7 +437,7 @@ fn assert_zero_lookup_work(stats: PageLookupStats) {
 }
 
 #[test]
-fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
+fn cold_build_retains_only_root_evidence_then_lookups_upgrade_requested_subtrees() {
     let fixture = two_subtree_fixture(0xa1);
     let authority = ready_index(&fixture);
     let store = supplied_store(&fixture);
@@ -329,18 +447,30 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(initial.len(), 4);
     assert!(!initial.is_complete());
     assert_eq!(initial.segments().len(), 1);
+    let build_stats = initial.stats();
+    assert_eq!(build_stats.objects_started(), 2);
+    assert_eq!(build_stats.nodes_started(), 1);
+    assert_eq!(build_stats.exact_pages(), 0);
+    assert_eq!(build_stats.max_depth(), 1);
+    assert_eq!(build_stats.max_kids_per_node(), 2);
+    assert!(build_stats.object_read_bytes() > 0);
+    assert!(build_stats.object_parse_bytes() > 0);
+    assert!(build_stats.peak_retained_traversal_bytes() > 0);
+    assert!(!build_stats.has_complete_tree_proof());
+
     let root = assert_segment(&initial, object_ref(2), 0, 4, PageIndexSegmentKind::Pages);
     assert_eq!(root.parent(), None);
     assert_eq!(root.depth(), 1);
     assert_eq!(root.declared_count(), 4);
-    assert_eq!(root.evidence(), PageSegmentEvidence::CompleteSubtree);
-    assert_eq!(root.validated_count(), Some(4));
-    assert_eq!(root.partitioned_count(), Some(4));
-    assert_eq!(root.retained_kid_count(), None);
+    assert_eq!(root.evidence(), PageSegmentEvidence::DeclaredCount);
+    assert_eq!(root.validated_count(), None);
+    assert_eq!(root.partitioned_count(), None);
+    assert!(root.count_offset().is_some());
+    assert_eq!(root.retained_kid_count(), Some(2));
 
     let (page_one, first_stats) = lookup_ready(&authority, &initial, 1, &store, 6_401);
-    assert_eq!(first_stats.objects_started(), 5);
-    assert_eq!(first_stats.nodes_classified(), 5);
+    assert_eq!(first_stats.objects_started(), 4);
+    assert_eq!(first_stats.nodes_classified(), 4);
     assert_eq!(first_stats.segments_refined(), 2);
     let page_one_handle: PageHandle = page_one.handle();
     assert_eq!(page_one_handle.index(), 1);
@@ -352,13 +482,20 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(page_one_handle.document_page_count(), 4);
     assert_eq!(
         page_one_handle.document_page_count_evidence(),
-        PageSegmentEvidence::CompleteSubtree
+        PageSegmentEvidence::ValidatedPartition
     );
     assert_eq!(page_one.page_index().page(1), Some(object_ref(5)));
     let (refined, returned_handle) = page_one.into_parts();
     assert_eq!(returned_handle, page_one_handle);
     refined.validate_handle(returned_handle).unwrap();
-    assert_segment(&refined, object_ref(2), 0, 4, PageIndexSegmentKind::Pages);
+    let refined_root = assert_segment(&refined, object_ref(2), 0, 4, PageIndexSegmentKind::Pages);
+    assert_eq!(
+        refined_root.evidence(),
+        PageSegmentEvidence::ValidatedPartition
+    );
+    assert_eq!(refined_root.validated_count(), None);
+    assert_eq!(refined_root.partitioned_count(), Some(4));
+    assert_eq!(refined_root.retained_kid_count(), Some(2));
     let selected_parent =
         assert_segment(&refined, object_ref(3), 0, 2, PageIndexSegmentKind::Pages);
     assert_eq!(selected_parent.declared_count(), 2);
@@ -374,8 +511,9 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(deferred.parent(), Some(object_ref(2)));
     assert_eq!(deferred.depth(), 2);
     assert_eq!(deferred.declared_count(), 2);
-    assert_eq!(deferred.evidence(), PageSegmentEvidence::CompleteSubtree);
-    assert_eq!(deferred.validated_count(), Some(2));
+    assert_eq!(deferred.evidence(), PageSegmentEvidence::DeclaredCount);
+    assert_eq!(deferred.validated_count(), None);
+    assert_eq!(deferred.partitioned_count(), None);
     assert_eq!(deferred.retained_kid_count(), Some(2));
 
     let panic_source = PanicSource(fixture.snapshot);
@@ -393,14 +531,27 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(last_stats.objects_started(), 2);
     assert_eq!(last_stats.nodes_classified(), 2);
     assert_eq!(last_stats.segments_refined(), 1);
-    assert!(last_stats.objects_started() < initial.stats().objects_started());
     assert_eq!(page_three.handle().index(), 3);
     assert_eq!(page_three.handle().object(), object_ref(8));
+    assert_eq!(
+        page_three.handle().document_page_count_evidence(),
+        PageSegmentEvidence::CompleteSubtree
+    );
     let (complete, page_three_handle) = page_three.into_parts();
     assert!(complete.is_complete());
-    assert_segment(&complete, object_ref(2), 0, 4, PageIndexSegmentKind::Pages);
-    assert_segment(&complete, object_ref(3), 0, 2, PageIndexSegmentKind::Pages);
-    assert_segment(&complete, object_ref(6), 2, 2, PageIndexSegmentKind::Pages);
+    for (reference, start) in [(object_ref(2), 0), (object_ref(3), 0), (object_ref(6), 2)] {
+        let page_count = if reference == object_ref(2) { 4 } else { 2 };
+        let segment = assert_segment(
+            &complete,
+            reference,
+            start,
+            page_count,
+            PageIndexSegmentKind::Pages,
+        );
+        assert_eq!(segment.evidence(), PageSegmentEvidence::CompleteSubtree);
+        assert_eq!(segment.validated_count(), Some(page_count));
+        assert_eq!(segment.partitioned_count(), Some(page_count));
+    }
     assert_segment(&complete, object_ref(4), 0, 1, PageIndexSegmentKind::Page);
     assert_segment(&complete, object_ref(5), 1, 1, PageIndexSegmentKind::Page);
     assert_segment(&complete, object_ref(7), 2, 1, PageIndexSegmentKind::Page);
@@ -493,43 +644,306 @@ fn lookup_rejects_out_of_bounds_indices_and_handles_from_another_binding() {
 }
 
 #[test]
-fn build_preserves_exact_m1_cycle_duplicate_and_count_failures_with_terminal_replay() {
+fn cold_build_rejects_a_direct_duplicate_kid_with_stable_terminal_replay() {
+    let fixture = duplicate_fixture();
+    let authority = ready_index(&fixture);
+    let store = supplied_store(&fixture);
+    let mut job = authority
+        .build_page_index(context(7_101), tree_limits(), index_limits())
+        .expect("cold build validates the Catalog and root Pages dictionary");
+    let failure = match job.poll(&store, &DocumentNeverCancelled) {
+        PageIndexBuildPoll::Failed(error) => error,
+        PageIndexBuildPoll::Ready(_) => {
+            panic!("a duplicate direct root Kid must not enter the lazy index")
+        }
+        PageIndexBuildPoll::Pending { .. } => panic!("complete failing source must not pend"),
+    };
+    assert_eq!(failure.code(), DocumentErrorCode::DuplicatePageTreeNode);
+    assert_eq!(failure.reference(), Some(object_ref(3)));
+    match job.poll(&store, &DocumentNeverCancelled) {
+        PageIndexBuildPoll::Failed(repeated) => assert_eq!(repeated, failure),
+        _ => panic!("terminal cold-build failure must replay exactly"),
+    }
+}
+
+#[test]
+fn cross_sibling_descendant_duplicate_fails_during_root_refinement_and_replays() {
+    let fixture = cross_sibling_duplicate_fixture();
+    let authority = ready_index(&fixture);
+    let store = supplied_store(&fixture);
+    let index = build_ready(&authority, &store, 7_111);
+    let root = assert_segment(&index, object_ref(2), 0, 2, PageIndexSegmentKind::Pages);
+    assert_eq!(root.evidence(), PageSegmentEvidence::DeclaredCount);
+
+    let mut lookup = authority
+        .lookup_page(&index, 0, context(7_112), tree_limits())
+        .unwrap();
+    let failure = match lookup.poll(&store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(error) => error,
+        PageLookupPoll::Ready(_) => {
+            panic!("a descendant shared across sibling subtrees must not publish a Page")
+        }
+        PageLookupPoll::Pending { .. } => panic!("complete failing source must not pend"),
+    };
+    assert_eq!(failure.code(), DocumentErrorCode::DuplicatePageTreeNode);
+    assert_eq!(failure.reference(), Some(object_ref(5)));
+    assert_eq!(lookup.stats().segments_refined(), 0);
+    assert_eq!(lookup.phase(), PageLookupPhase::Failed);
+    match lookup.poll(&store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(repeated) => assert_eq!(repeated, failure),
+        _ => panic!("terminal cross-sibling duplicate failure must replay exactly"),
+    }
+}
+
+#[test]
+fn discovered_node_limit_is_global_across_incremental_refinements() {
+    let exact_fixture = seven_node_incremental_fixture(0xc6);
+    let exact_authority = ready_index(&exact_fixture);
+    let exact_store = supplied_store(&exact_fixture);
+    let exact_limits = tree_limits_with_nodes(7);
+    let exact_initial =
+        build_ready_with_limits(&exact_authority, &exact_store, 7_113, exact_limits);
+    let (first, _) = lookup_ready_with_limits(
+        &exact_authority,
+        &exact_initial,
+        0,
+        &exact_store,
+        7_114,
+        exact_limits,
+    );
+    assert_eq!(first.handle().object(), object_ref(4));
+    let (six_discovered, first_handle) = first.into_parts();
+    six_discovered.validate_handle(first_handle).unwrap();
+    let deferred = assert_segment(
+        &six_discovered,
+        object_ref(6),
+        2,
+        1,
+        PageIndexSegmentKind::Pages,
+    );
+    assert_eq!(deferred.evidence(), PageSegmentEvidence::DeclaredCount);
+
+    let (last, _) = lookup_ready_with_limits(
+        &exact_authority,
+        &six_discovered,
+        2,
+        &exact_store,
+        7_115,
+        exact_limits,
+    );
+    assert_eq!(last.handle().object(), object_ref(8));
+    let exact_complete = last.page_index();
+    assert!(exact_complete.is_complete());
+    assert_eq!(
+        assert_segment(
+            exact_complete,
+            object_ref(2),
+            0,
+            3,
+            PageIndexSegmentKind::Pages,
+        )
+        .evidence(),
+        PageSegmentEvidence::CompleteSubtree
+    );
+
+    let limited_fixture = seven_node_incremental_fixture(0xc7);
+    let limited_authority = ready_index(&limited_fixture);
+    let limited_store = supplied_store(&limited_fixture);
+    let limited_limits = tree_limits_with_nodes(6);
+    let limited_initial =
+        build_ready_with_limits(&limited_authority, &limited_store, 7_116, limited_limits);
+    let (first, _) = lookup_ready_with_limits(
+        &limited_authority,
+        &limited_initial,
+        0,
+        &limited_store,
+        7_117,
+        limited_limits,
+    );
+    let (six_discovered, _) = first.into_parts();
+
+    let mut failing = limited_authority
+        .lookup_page(&six_discovered, 2, context(7_118), limited_limits)
+        .unwrap();
+    let failure = match failing.poll(&limited_store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(error) => error,
+        PageLookupPoll::Ready(_) => {
+            panic!("discovering a seventh Page-tree node must exceed a six-node global limit")
+        }
+        PageLookupPoll::Pending { .. } => panic!("complete failing source must not pend"),
+    };
+    assert_eq!(failure.code(), DocumentErrorCode::ResourceLimit);
+    let detail = failure
+        .limit()
+        .expect("global node exhaustion retains structured limit detail");
+    assert_eq!(detail.kind(), DocumentLimitKind::PageTreeNodes);
+    assert_eq!(detail.limit(), 6);
+    assert_eq!(detail.consumed(), 6);
+    assert_eq!(detail.attempted(), 1);
+    match failing.poll(&limited_store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(repeated) => assert_eq!(repeated, failure),
+        _ => panic!("terminal global-node-limit failure must replay exactly"),
+    }
+
+    let mut retried = limited_authority
+        .lookup_page(&six_discovered, 2, context(7_119), limited_limits)
+        .unwrap();
+    match retried.poll(&limited_store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(repeated) => assert_eq!(repeated, failure),
+        PageLookupPoll::Ready(_) => {
+            panic!("a new lookup job must not reset the retained discovered-node budget")
+        }
+        PageLookupPoll::Pending { .. } => panic!("complete failing source must not pend"),
+    }
+}
+
+#[test]
+fn lookup_rejects_tree_limits_different_from_the_index_before_work() {
+    let fixture = seven_node_incremental_fixture(0xc8);
+    let authority = ready_index(&fixture);
+    let store = supplied_store(&fixture);
+    let index_limits = tree_limits_with_nodes(7);
+    let index = build_ready_with_limits(&authority, &store, 7_120, index_limits);
+
+    let error = match authority.lookup_page(&index, 0, context(7_121), tree_limits_with_nodes(8)) {
+        Err(error) => error,
+        Ok(_) => panic!("lookup limits must match the immutable index before a job is created"),
+    };
+    assert_eq!(error.code(), DocumentErrorCode::InvalidLimits);
+    assert_eq!(error.reference(), Some(object_ref(2)));
+}
+
+#[test]
+fn ancestor_cycle_is_delayed_to_lookup_and_replays_the_stable_page_tree_error() {
+    let fixture = ancestor_cycle_fixture();
+    let authority = ready_index(&fixture);
+    let store = supplied_store(&fixture);
+    let index = build_ready(&authority, &store, 7_121);
+    let root = assert_segment(&index, object_ref(2), 0, 1, PageIndexSegmentKind::Pages);
+    assert_eq!(root.evidence(), PageSegmentEvidence::DeclaredCount);
+    assert_eq!(root.retained_kid_count(), Some(1));
+
+    let mut lookup = authority
+        .lookup_page(&index, 0, context(7_131), tree_limits())
+        .unwrap();
+    let failure = match lookup.poll(&store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(error) => error,
+        PageLookupPoll::Ready(_) => panic!("an ancestor cycle must not publish a Page"),
+        PageLookupPoll::Pending { .. } => panic!("complete failing source must not pend"),
+    };
+    assert_eq!(failure.code(), DocumentErrorCode::PageTreeCycle);
+    assert_eq!(failure.reference(), Some(object_ref(2)));
+    assert_eq!(lookup.phase(), PageLookupPhase::Failed);
+    match lookup.poll(&store, &DocumentNeverCancelled) {
+        PageLookupPoll::Failed(repeated) => assert_eq!(repeated, failure),
+        _ => panic!("terminal ancestor-cycle failure must replay exactly"),
+    }
+}
+
+#[test]
+fn unrelated_deep_count_and_cycle_errors_wait_until_their_declared_range_is_requested() {
     let cases = [
         (
-            cycle_fixture(),
-            DocumentErrorCode::PageTreeCycle,
-            object_ref(2),
-        ),
-        (
-            duplicate_fixture(),
-            DocumentErrorCode::DuplicatePageTreeNode,
-            object_ref(3),
-        ),
-        (
-            count_mismatch_fixture(),
+            unrelated_deep_count_mismatch_fixture(),
             DocumentErrorCode::PageTreeCountMismatch,
-            object_ref(2),
+            object_ref(7),
+        ),
+        (
+            unrelated_deep_cycle_fixture(),
+            DocumentErrorCode::PageTreeCycle,
+            object_ref(6),
         ),
     ];
 
-    for (offset, (fixture, expected_code, expected_reference)) in cases.into_iter().enumerate() {
+    for (case_index, (fixture, expected_code, expected_reference)) in cases.into_iter().enumerate()
+    {
         let authority = ready_index(&fixture);
         let store = supplied_store(&fixture);
-        let seed = 7_101 + u64::try_from(offset).unwrap() * 10;
-        let mut job = authority
-            .build_page_index(context(seed), tree_limits(), index_limits())
-            .expect("invalid topology is rejected by the polled M1 proof");
-        let failure = match job.poll(&store, &DocumentNeverCancelled) {
-            PageIndexBuildPoll::Failed(error) => error,
-            PageIndexBuildPoll::Ready(_) => panic!("invalid page tree must not build an index"),
-            PageIndexBuildPoll::Pending { .. } => panic!("complete failing source must not pend"),
+        let seed = 7_151 + u64::try_from(case_index).unwrap() * 20;
+        let initial = build_ready(&authority, &store, seed);
+        assert_eq!(initial.stats().objects_started(), 2);
+        assert!(!initial.stats().has_complete_tree_proof());
+
+        let (safe_lookup, safe_stats) = lookup_ready(&authority, &initial, 0, &store, seed + 3);
+        assert_eq!(safe_lookup.handle().object(), object_ref(4));
+        assert_eq!(safe_stats.objects_started(), 4);
+        let (safe_index, safe_handle) = safe_lookup.into_parts();
+        safe_index.validate_handle(safe_handle).unwrap();
+        let deferred = assert_segment(
+            &safe_index,
+            object_ref(6),
+            2,
+            2,
+            PageIndexSegmentKind::Pages,
+        );
+        assert_eq!(deferred.evidence(), PageSegmentEvidence::DeclaredCount);
+        assert_eq!(deferred.validated_count(), None);
+
+        let mut failing = authority
+            .lookup_page(&safe_index, 3, context(seed + 6), tree_limits())
+            .unwrap();
+        let failure = match failing.poll(&store, &DocumentNeverCancelled) {
+            PageLookupPoll::Failed(error) => error,
+            PageLookupPoll::Ready(_) => {
+                panic!("requesting the malformed deferred range must not publish a Page")
+            }
+            PageLookupPoll::Pending { .. } => panic!("complete failing source must not pend"),
         };
         assert_eq!(failure.code(), expected_code);
         assert_eq!(failure.reference(), Some(expected_reference));
-        match job.poll(&store, &DocumentNeverCancelled) {
-            PageIndexBuildPoll::Failed(repeated) => assert_eq!(repeated, failure),
-            _ => panic!("terminal build failure must replay exactly"),
+        match failing.poll(&store, &DocumentNeverCancelled) {
+            PageLookupPoll::Failed(repeated) => assert_eq!(repeated, failure),
+            _ => panic!("terminal deferred-range failure must replay exactly"),
         }
+    }
+}
+
+#[test]
+fn cold_build_prioritizes_source_change_over_cancellation_and_replays_without_work() {
+    let fixture = two_subtree_fixture(0xa6);
+    let authority = ready_index(&fixture);
+    let store = supplied_store(&fixture);
+
+    let mut changed = authority
+        .build_page_index(context(7_191), tree_limits(), index_limits())
+        .unwrap();
+    let wrong_snapshot = snapshot(
+        u64::try_from(fixture.bytes.len()).expect("fixture length fits u64"),
+        0xf2,
+    );
+    let mismatch = match changed.poll(&PanicSource(wrong_snapshot), &Cancelled) {
+        PageIndexBuildPoll::Failed(error) => error,
+        PageIndexBuildPoll::Ready(_) => panic!("changed source must not publish an index"),
+        PageIndexBuildPoll::Pending { .. } => {
+            panic!("changed source must fail before byte acquisition")
+        }
+    };
+    assert_eq!(mismatch.code(), DocumentErrorCode::SourceSnapshotMismatch);
+    assert_eq!(changed.stats().objects_started(), 0);
+    assert_eq!(changed.stats().object_read_bytes(), 0);
+    assert_eq!(changed.stats().object_parse_bytes(), 0);
+    match changed.poll(&store, &DocumentNeverCancelled) {
+        PageIndexBuildPoll::Failed(repeated) => assert_eq!(repeated, mismatch),
+        _ => panic!("terminal cold-build source failure must replay exactly"),
+    }
+
+    let mut cancelled = authority
+        .build_page_index(context(7_201), tree_limits(), index_limits())
+        .unwrap();
+    let cancellation = match cancelled.poll(&PanicSource(fixture.snapshot), &Cancelled) {
+        PageIndexBuildPoll::Failed(error) => error,
+        PageIndexBuildPoll::Ready(_) => panic!("cancelled build must not publish an index"),
+        PageIndexBuildPoll::Pending { .. } => {
+            panic!("pre-work cancellation must fail before byte acquisition")
+        }
+    };
+    assert_eq!(cancellation.code(), DocumentErrorCode::Cancelled);
+    assert_eq!(cancelled.stats().objects_started(), 0);
+    assert_eq!(cancelled.stats().object_read_bytes(), 0);
+    assert_eq!(cancelled.stats().object_parse_bytes(), 0);
+    match cancelled.poll(&store, &DocumentNeverCancelled) {
+        PageIndexBuildPoll::Failed(repeated) => assert_eq!(repeated, cancellation),
+        _ => panic!("terminal cold-build cancellation must replay exactly"),
     }
 }
 

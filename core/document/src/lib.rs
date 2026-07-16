@@ -11,11 +11,12 @@
 //! Page/Pages tree. The outline job checks linked-list topology, signed
 //! visible-item counts, decoded titles, and direct target shape; the page job
 //! publishes a scalar page count with exact Parent, Count, cycle, and
-//! duplicate-child checks. M2 wraps that unchanged proof in a bounded page-index
-//! build job, then refines immutable subtree segments only along requested lookup
-//! paths and publishes source- and revision-bound Page handles. The cold build
-//! still performs the complete M1 proof before lookup refinement. The crate also
-//! owns bounded ISO 32000-1 text-string
+//! duplicate-child checks. M2 separately cold-builds a page index from only the
+//! Catalog and root Pages dictionary, retains unopened Counts as explicit
+//! declared-range evidence, then validates direct partitions and descendant
+//! topology only along requested lookup ranges. Successful lookups publish
+//! source- and revision-bound Page handles without changing the accepted M1
+//! scalar proof. The crate also owns bounded ISO 32000-1 text-string
 //! decoding from lexical PDF strings into UTF-8 without exposing source content
 //! in diagnostics. Other dictionary, array, stream, and nested-reference
 //! semantics remain outside a complete object-graph resolver.
