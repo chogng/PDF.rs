@@ -11,6 +11,7 @@
 #![deny(missing_docs)]
 
 mod error;
+mod graphics_limits;
 mod limits;
 mod model;
 mod number;
@@ -24,6 +25,7 @@ pub use error::{
     ContentError, ContentErrorCategory, ContentErrorCode, ContentLimit, ContentLimitKind,
     ContentRecoverability,
 };
+pub use graphics_limits::{ContentGraphicsLimitConfig, ContentGraphicsLimits};
 pub use limits::{ContentLimitConfig, ContentLimits};
 pub use model::{
     ContentDictionaryEntry, ContentExtent, ContentName, ContentOperand, ContentOperator,
@@ -39,9 +41,9 @@ pub use scanner::{
 };
 pub use vm::{ContentVmPoll, InterpretPageJob};
 pub use vm_error::{
-    ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCategory,
-    ContentVmErrorCode, ContentVmFailure, ContentVmLimit, ContentVmLimitKind,
-    ContentVmRecoverability,
+    ContentGraphicsLimit, ContentGraphicsLimitKind, ContentUnsupported, ContentUnsupportedKind,
+    ContentVmError, ContentVmErrorCategory, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
+    ContentVmLimitKind, ContentVmRecoverability,
 };
 pub use vm_limits::{ContentVmLimitConfig, ContentVmLimits};
 pub use vm_model::{ContentVmPhase, ContentVmStats, InterpretedPage, ResolvedPropertyUse};

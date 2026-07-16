@@ -407,6 +407,16 @@ pub enum OperatorContext {
     CompatibilityBoundary,
     /// Operates on the marked-content stack or emits a marked-content point.
     MarkedContent,
+    /// Constructs or closes the current path outside a text object.
+    PathConstruction,
+    /// Paints or discards the current path outside a text object.
+    PathPainting,
+    /// Selects a pending clipping rule for the current path outside a text object.
+    ClippingPath,
+    /// Changes one registered line parameter in the current graphics state.
+    LineState,
+    /// Changes a registered device-color value in the current graphics state.
+    DeviceColor,
 }
 
 /// Exact top-level operand shape required before an initial known operator can execute.
@@ -414,8 +424,20 @@ pub enum OperatorContext {
 pub enum OperatorOperandShape {
     /// No operands.
     None,
+    /// One PDF number.
+    OneNumber,
+    /// Two PDF numbers in source order.
+    TwoNumbers,
+    /// Three PDF numbers in source order.
+    ThreeNumbers,
+    /// Four PDF numbers in source order.
+    FourNumbers,
     /// Six PDF numbers in source order.
     SixNumbers,
+    /// One PDF integer.
+    OneInteger,
+    /// One array of PDF numbers followed by one PDF number.
+    NumberArrayAndNumber,
     /// One PDF name.
     Name,
     /// One PDF name followed by either a name or a direct dictionary.
@@ -426,6 +448,10 @@ impl OperatorOperandShape {
     const fn operand_count(self) -> u8 {
         match self {
             Self::None => 0,
+            Self::OneNumber | Self::OneInteger => 1,
+            Self::TwoNumbers | Self::NumberArrayAndNumber => 2,
+            Self::ThreeNumbers => 3,
+            Self::FourNumbers => 4,
             Self::SixNumbers => 6,
             Self::Name => 1,
             Self::NameAndNameOrDictionary => 2,
@@ -469,6 +495,66 @@ pub enum OperatorKind {
     BeginMarkedContentProperties,
     /// End marked-content sequence (`EMC`).
     EndMarkedContent,
+    /// Begin a new subpath (`m`).
+    MoveTo,
+    /// Append a straight-line segment (`l`).
+    LineTo,
+    /// Append a cubic Bézier segment (`c`).
+    CubicCurveTo,
+    /// Append a cubic Bézier segment replicating the initial control point (`v`).
+    CubicCurveToReplicateInitial,
+    /// Append a cubic Bézier segment replicating the final control point (`y`).
+    CubicCurveToReplicateFinal,
+    /// Close the current subpath (`h`).
+    ClosePath,
+    /// Append a closed rectangular subpath (`re`).
+    Rectangle,
+    /// Stroke the current path (`S`).
+    StrokePath,
+    /// Close and stroke the current path (`s`).
+    CloseAndStrokePath,
+    /// Fill the current path using the nonzero winding rule (`f`).
+    FillNonzero,
+    /// Fill using the legacy nonzero winding alias (`F`).
+    FillNonzeroLegacy,
+    /// Fill the current path using the even-odd rule (`f*`).
+    FillEvenOdd,
+    /// Fill nonzero and then stroke the current path (`B`).
+    FillStrokeNonzero,
+    /// Fill even-odd and then stroke the current path (`B*`).
+    FillStrokeEvenOdd,
+    /// Close, fill nonzero, and stroke the current path (`b`).
+    CloseFillStrokeNonzero,
+    /// Close, fill even-odd, and stroke the current path (`b*`).
+    CloseFillStrokeEvenOdd,
+    /// End the current path without painting (`n`).
+    EndPath,
+    /// Select nonzero clipping for the current path (`W`).
+    ClipNonzero,
+    /// Select even-odd clipping for the current path (`W*`).
+    ClipEvenOdd,
+    /// Set line width (`w`).
+    SetLineWidth,
+    /// Set line-cap style (`J`).
+    SetLineCap,
+    /// Set line-join style (`j`).
+    SetLineJoin,
+    /// Set miter limit (`M`).
+    SetMiterLimit,
+    /// Set line-dash pattern and phase (`d`).
+    SetLineDash,
+    /// Set stroking DeviceGray (`G`).
+    SetStrokingGray,
+    /// Set nonstroking DeviceGray (`g`).
+    SetNonstrokingGray,
+    /// Set stroking DeviceRGB (`RG`).
+    SetStrokingRgb,
+    /// Set nonstroking DeviceRGB (`rg`).
+    SetNonstrokingRgb,
+    /// Set stroking DeviceCMYK (`K`).
+    SetStrokingCmyk,
+    /// Set nonstroking DeviceCMYK (`k`).
+    SetNonstrokingCmyk,
 }
 
 /// Declarative scanner/VM metadata for one known operator.
@@ -535,6 +621,36 @@ impl OperatorKind {
             b"BMC" => Some(Self::BeginMarkedContent),
             b"BDC" => Some(Self::BeginMarkedContentProperties),
             b"EMC" => Some(Self::EndMarkedContent),
+            b"m" => Some(Self::MoveTo),
+            b"l" => Some(Self::LineTo),
+            b"c" => Some(Self::CubicCurveTo),
+            b"v" => Some(Self::CubicCurveToReplicateInitial),
+            b"y" => Some(Self::CubicCurveToReplicateFinal),
+            b"h" => Some(Self::ClosePath),
+            b"re" => Some(Self::Rectangle),
+            b"S" => Some(Self::StrokePath),
+            b"s" => Some(Self::CloseAndStrokePath),
+            b"f" => Some(Self::FillNonzero),
+            b"F" => Some(Self::FillNonzeroLegacy),
+            b"f*" => Some(Self::FillEvenOdd),
+            b"B" => Some(Self::FillStrokeNonzero),
+            b"B*" => Some(Self::FillStrokeEvenOdd),
+            b"b" => Some(Self::CloseFillStrokeNonzero),
+            b"b*" => Some(Self::CloseFillStrokeEvenOdd),
+            b"n" => Some(Self::EndPath),
+            b"W" => Some(Self::ClipNonzero),
+            b"W*" => Some(Self::ClipEvenOdd),
+            b"w" => Some(Self::SetLineWidth),
+            b"J" => Some(Self::SetLineCap),
+            b"j" => Some(Self::SetLineJoin),
+            b"M" => Some(Self::SetMiterLimit),
+            b"d" => Some(Self::SetLineDash),
+            b"G" => Some(Self::SetStrokingGray),
+            b"g" => Some(Self::SetNonstrokingGray),
+            b"RG" => Some(Self::SetStrokingRgb),
+            b"rg" => Some(Self::SetNonstrokingRgb),
+            b"K" => Some(Self::SetStrokingCmyk),
+            b"k" => Some(Self::SetNonstrokingCmyk),
             _ => None,
         }
     }
@@ -625,6 +741,216 @@ impl OperatorKind {
                 OperatorContext::MarkedContent,
                 OperatorFailurePolicy::Execute,
                 1,
+            ),
+            Self::MoveTo => spec(
+                b"m",
+                OperatorOperandShape::TwoNumbers,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                3,
+            ),
+            Self::LineTo => spec(
+                b"l",
+                OperatorOperandShape::TwoNumbers,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                3,
+            ),
+            Self::CubicCurveTo => spec(
+                b"c",
+                OperatorOperandShape::SixNumbers,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                7,
+            ),
+            Self::CubicCurveToReplicateInitial => spec(
+                b"v",
+                OperatorOperandShape::FourNumbers,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                5,
+            ),
+            Self::CubicCurveToReplicateFinal => spec(
+                b"y",
+                OperatorOperandShape::FourNumbers,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                5,
+            ),
+            Self::ClosePath => spec(
+                b"h",
+                OperatorOperandShape::None,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::Rectangle => spec(
+                b"re",
+                OperatorOperandShape::FourNumbers,
+                OperatorContext::PathConstruction,
+                OperatorFailurePolicy::Execute,
+                5,
+            ),
+            Self::StrokePath => spec(
+                b"S",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::CloseAndStrokePath => spec(
+                b"s",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::FillNonzero => spec(
+                b"f",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::FillNonzeroLegacy => spec(
+                b"F",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::FillEvenOdd => spec(
+                b"f*",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::FillStrokeNonzero => spec(
+                b"B",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::FillStrokeEvenOdd => spec(
+                b"B*",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::CloseFillStrokeNonzero => spec(
+                b"b",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::CloseFillStrokeEvenOdd => spec(
+                b"b*",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::EndPath => spec(
+                b"n",
+                OperatorOperandShape::None,
+                OperatorContext::PathPainting,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::ClipNonzero => spec(
+                b"W",
+                OperatorOperandShape::None,
+                OperatorContext::ClippingPath,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::ClipEvenOdd => spec(
+                b"W*",
+                OperatorOperandShape::None,
+                OperatorContext::ClippingPath,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::SetLineWidth => spec(
+                b"w",
+                OperatorOperandShape::OneNumber,
+                OperatorContext::LineState,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetLineCap => spec(
+                b"J",
+                OperatorOperandShape::OneInteger,
+                OperatorContext::LineState,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetLineJoin => spec(
+                b"j",
+                OperatorOperandShape::OneInteger,
+                OperatorContext::LineState,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetMiterLimit => spec(
+                b"M",
+                OperatorOperandShape::OneNumber,
+                OperatorContext::LineState,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetLineDash => spec(
+                b"d",
+                OperatorOperandShape::NumberArrayAndNumber,
+                OperatorContext::LineState,
+                OperatorFailurePolicy::Execute,
+                3,
+            ),
+            Self::SetStrokingGray => spec(
+                b"G",
+                OperatorOperandShape::OneNumber,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetNonstrokingGray => spec(
+                b"g",
+                OperatorOperandShape::OneNumber,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetStrokingRgb => spec(
+                b"RG",
+                OperatorOperandShape::ThreeNumbers,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                4,
+            ),
+            Self::SetNonstrokingRgb => spec(
+                b"rg",
+                OperatorOperandShape::ThreeNumbers,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                4,
+            ),
+            Self::SetStrokingCmyk => spec(
+                b"K",
+                OperatorOperandShape::FourNumbers,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                5,
+            ),
+            Self::SetNonstrokingCmyk => spec(
+                b"k",
+                OperatorOperandShape::FourNumbers,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                5,
             ),
         }
     }

@@ -330,6 +330,283 @@ fn known_operator_table_declares_token_arity_context_and_cost() {
     }
 }
 
+#[test]
+fn m3_graphics_operator_table_is_exact_and_scanner_classifies_every_token() {
+    let expected = [
+        (
+            OperatorKind::MoveTo,
+            b"m".as_slice(),
+            2,
+            OperatorOperandShape::TwoNumbers,
+            OperatorContext::PathConstruction,
+            3,
+        ),
+        (
+            OperatorKind::LineTo,
+            b"l".as_slice(),
+            2,
+            OperatorOperandShape::TwoNumbers,
+            OperatorContext::PathConstruction,
+            3,
+        ),
+        (
+            OperatorKind::CubicCurveTo,
+            b"c".as_slice(),
+            6,
+            OperatorOperandShape::SixNumbers,
+            OperatorContext::PathConstruction,
+            7,
+        ),
+        (
+            OperatorKind::CubicCurveToReplicateInitial,
+            b"v".as_slice(),
+            4,
+            OperatorOperandShape::FourNumbers,
+            OperatorContext::PathConstruction,
+            5,
+        ),
+        (
+            OperatorKind::CubicCurveToReplicateFinal,
+            b"y".as_slice(),
+            4,
+            OperatorOperandShape::FourNumbers,
+            OperatorContext::PathConstruction,
+            5,
+        ),
+        (
+            OperatorKind::ClosePath,
+            b"h".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathConstruction,
+            1,
+        ),
+        (
+            OperatorKind::Rectangle,
+            b"re".as_slice(),
+            4,
+            OperatorOperandShape::FourNumbers,
+            OperatorContext::PathConstruction,
+            5,
+        ),
+        (
+            OperatorKind::StrokePath,
+            b"S".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::CloseAndStrokePath,
+            b"s".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::FillNonzero,
+            b"f".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::FillNonzeroLegacy,
+            b"F".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::FillEvenOdd,
+            b"f*".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::FillStrokeNonzero,
+            b"B".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::FillStrokeEvenOdd,
+            b"B*".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::CloseFillStrokeNonzero,
+            b"b".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::CloseFillStrokeEvenOdd,
+            b"b*".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::EndPath,
+            b"n".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::PathPainting,
+            1,
+        ),
+        (
+            OperatorKind::ClipNonzero,
+            b"W".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::ClippingPath,
+            1,
+        ),
+        (
+            OperatorKind::ClipEvenOdd,
+            b"W*".as_slice(),
+            0,
+            OperatorOperandShape::None,
+            OperatorContext::ClippingPath,
+            1,
+        ),
+        (
+            OperatorKind::SetLineWidth,
+            b"w".as_slice(),
+            1,
+            OperatorOperandShape::OneNumber,
+            OperatorContext::LineState,
+            2,
+        ),
+        (
+            OperatorKind::SetLineCap,
+            b"J".as_slice(),
+            1,
+            OperatorOperandShape::OneInteger,
+            OperatorContext::LineState,
+            2,
+        ),
+        (
+            OperatorKind::SetLineJoin,
+            b"j".as_slice(),
+            1,
+            OperatorOperandShape::OneInteger,
+            OperatorContext::LineState,
+            2,
+        ),
+        (
+            OperatorKind::SetMiterLimit,
+            b"M".as_slice(),
+            1,
+            OperatorOperandShape::OneNumber,
+            OperatorContext::LineState,
+            2,
+        ),
+        (
+            OperatorKind::SetLineDash,
+            b"d".as_slice(),
+            2,
+            OperatorOperandShape::NumberArrayAndNumber,
+            OperatorContext::LineState,
+            3,
+        ),
+        (
+            OperatorKind::SetStrokingGray,
+            b"G".as_slice(),
+            1,
+            OperatorOperandShape::OneNumber,
+            OperatorContext::DeviceColor,
+            2,
+        ),
+        (
+            OperatorKind::SetNonstrokingGray,
+            b"g".as_slice(),
+            1,
+            OperatorOperandShape::OneNumber,
+            OperatorContext::DeviceColor,
+            2,
+        ),
+        (
+            OperatorKind::SetStrokingRgb,
+            b"RG".as_slice(),
+            3,
+            OperatorOperandShape::ThreeNumbers,
+            OperatorContext::DeviceColor,
+            4,
+        ),
+        (
+            OperatorKind::SetNonstrokingRgb,
+            b"rg".as_slice(),
+            3,
+            OperatorOperandShape::ThreeNumbers,
+            OperatorContext::DeviceColor,
+            4,
+        ),
+        (
+            OperatorKind::SetStrokingCmyk,
+            b"K".as_slice(),
+            4,
+            OperatorOperandShape::FourNumbers,
+            OperatorContext::DeviceColor,
+            5,
+        ),
+        (
+            OperatorKind::SetNonstrokingCmyk,
+            b"k".as_slice(),
+            4,
+            OperatorOperandShape::FourNumbers,
+            OperatorContext::DeviceColor,
+            5,
+        ),
+    ];
+
+    let program = scan(&[b"1 2 m 3 4 l 1 2 3 4 5 6 c 1 2 3 4 v 1 2 3 4 y h \
+          1 2 3 4 re S s f F f* B B* b b* n W W* \
+          2 w 1 J 2 j 10 M [3 4] 1 d \
+          .5 G .25 g 1 0 .5 RG 0 1 .5 rg 0 1 .5 .25 K 1 0 .5 .25 k"])
+    .expect("registered M3 graphics operators scan");
+    assert_eq!(program.operators().len(), expected.len());
+
+    for (operator, (kind, token, operands, operand_shape, context, fuel)) in
+        program.operators().iter().zip(expected)
+    {
+        assert_eq!(operator.operator().known(), Some(kind));
+        assert_eq!(operator.operator().token(), token);
+        assert_eq!(operator.operands().len(), operands);
+
+        let spec = kind.spec();
+        assert_eq!(spec.token(), token);
+        assert_eq!(
+            spec.min_operands(),
+            u8::try_from(operands).expect("test arity fits")
+        );
+        assert_eq!(
+            spec.max_operands(),
+            u8::try_from(operands).expect("test arity fits")
+        );
+        assert_eq!(spec.operand_shape(), operand_shape);
+        assert_eq!(spec.context(), context);
+        assert_eq!(spec.failure_policy(), OperatorFailurePolicy::Execute);
+        assert_eq!(spec.base_fuel(), fuel);
+    }
+    assert_eq!(program.stats().unknown_operators(), 0);
+}
+
 fn budget_fixture() -> Vec<DecodedContentStream<'static>> {
     streams(&[b"[[1] 2] 3 VeryLongUnknown", b"4 5 6 q"])
 }

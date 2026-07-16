@@ -123,9 +123,10 @@ impl ContentVmStats {
 
     /// Returns peak VM-owned transient and final capacity.
     ///
-    /// This includes decoded stream descriptors, the transient scanned program, graphics-state
-    /// stack capacity, and retained property proofs. Acquired Page content and Scene storage remain
-    /// under their independent sealed budgets and are not included.
+    /// This includes decoded stream descriptors, the transient scanned program, current-path
+    /// capacity, unique active dash-array capacity, graphics-state stack capacity, and retained
+    /// property proofs. Acquired Page content and Scene storage remain under their independent
+    /// sealed budgets and are not included.
     pub const fn peak_retained_bytes(self) -> u64 {
         self.peak_retained_bytes
     }

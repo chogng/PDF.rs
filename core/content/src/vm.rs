@@ -7,18 +7,26 @@ use pdf_rs_document::{
     AcquiredPageContent, DocumentCancellation, PagePropertyLookupLimits, PagePropertyLookupStats,
 };
 use pdf_rs_scene::{
-    CommandSource, Matrix, PageGeometry, PageRotation as ScenePageRotation, Scene, SceneBinding,
-    SceneBuilder, SceneError, SceneLimits, SceneRect, SceneScalar,
+    CommandSource, DashPattern, DashPatternBuilder, GraphicsSceneBuilder, GraphicsSceneLimits,
+    Matrix, PageGeometry, PageRotation as ScenePageRotation, Scene, SceneBinding, SceneBuilder,
+    SceneError, SceneLimits, SceneRect, SceneScalar,
 };
 
 use crate::scanner::{ScanTerminal, run_scan};
 use crate::{
-    ContentCancellation, ContentLimits, ContentName, ContentNumber, ContentOperand,
-    ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
+    ContentCancellation, ContentGraphicsLimits, ContentLimits, ContentName, ContentNumber,
+    ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
     ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
     ContentVmLimitKind, ContentVmLimits, ContentVmPhase, ContentVmStats, DecodedContentStream,
-    InterpretedPage, LocatedOperand, OperatorKind, ResolvedPropertyUse,
+    InterpretedPage, LocatedOperand, OperatorContext, OperatorKind, OperatorOperandShape,
+    ResolvedPropertyUse,
 };
+
+mod graphics;
+
+use graphics::{DashRetentionAdmission, GraphicsExecutionError, GraphicsVm, VmRetention};
+
+const DASH_CANCELLATION_INTERVAL: usize = 256;
 
 /// One replayable sealed Page-interpretation outcome.
 #[derive(Clone)]
@@ -51,13 +59,24 @@ enum JobState {
     Failed(ContentVmFailure),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContentVmProfile {
+    SceneV1 {
+        scene_limits: SceneLimits,
+    },
+    GraphicsV2 {
+        graphics_limits: ContentGraphicsLimits,
+        scene_limits: GraphicsSceneLimits,
+    },
+}
+
 /// Single-owner sealed interpreter for one exact proof-bearing acquired Page.
 pub struct InterpretPageJob {
     acquired: Option<AcquiredPageContent>,
     scan_limits: ContentLimits,
     vm_limits: ContentVmLimits,
     property_limits: PagePropertyLookupLimits,
-    scene_limits: SceneLimits,
+    profile: ContentVmProfile,
     state: JobState,
     scan_stats: ContentScanStats,
     vm_stats: ContentVmStats,
@@ -78,7 +97,32 @@ impl InterpretPageJob {
             scan_limits,
             vm_limits,
             property_limits,
-            scene_limits,
+            profile: ContentVmProfile::SceneV1 { scene_limits },
+            state: JobState::Pending,
+            scan_stats: ContentScanStats::default(),
+            vm_stats: ContentVmStats::default(),
+            property_stats: PagePropertyLookupStats::default(),
+        }
+    }
+
+    /// Creates a pending interpreter for the explicit graphics-capable Scene-v2 profile.
+    pub fn new_graphics_v2(
+        acquired: AcquiredPageContent,
+        scan_limits: ContentLimits,
+        vm_limits: ContentVmLimits,
+        graphics_limits: ContentGraphicsLimits,
+        property_limits: PagePropertyLookupLimits,
+        scene_limits: GraphicsSceneLimits,
+    ) -> Self {
+        Self {
+            acquired: Some(acquired),
+            scan_limits,
+            vm_limits,
+            property_limits,
+            profile: ContentVmProfile::GraphicsV2 {
+                graphics_limits,
+                scene_limits,
+            },
             state: JobState::Pending,
             scan_stats: ContentScanStats::default(),
             vm_stats: ContentVmStats::default(),
@@ -134,7 +178,7 @@ impl InterpretPageJob {
                 self.scan_limits,
                 self.vm_limits,
                 self.property_limits,
-                self.scene_limits,
+                self.profile,
                 source,
                 cancellation,
             )
@@ -187,7 +231,7 @@ impl fmt::Debug for InterpretPageJob {
             .field("scan_limits", &self.scan_limits)
             .field("vm_limits", &self.vm_limits)
             .field("property_limits", &self.property_limits)
-            .field("scene_limits", &self.scene_limits)
+            .field("profile", &self.profile)
             .field("scan_stats", &self.scan_stats)
             .field("vm_stats", &self.vm_stats)
             .field("property_stats", &self.property_stats)
@@ -201,6 +245,46 @@ struct Execution {
     property_uses: Vec<ResolvedPropertyUse>,
     property_capacity_bytes: u64,
     final_ctm: Matrix,
+}
+
+enum SceneSink {
+    V1(SceneBuilder),
+    V2(GraphicsSceneBuilder),
+}
+
+impl SceneSink {
+    fn begin_marked_content(
+        &mut self,
+        tag: &[u8],
+        properties: Option<pdf_rs_syntax::ObjectRef>,
+        source: CommandSource,
+    ) -> Result<(), SceneError> {
+        match self {
+            Self::V1(builder) => builder.begin_marked_content(tag, properties, source),
+            Self::V2(_) => Ok(()),
+        }
+    }
+
+    fn end_marked_content(&mut self, source: CommandSource) -> Result<(), SceneError> {
+        match self {
+            Self::V1(builder) => builder.end_marked_content(source),
+            Self::V2(_) => Ok(()),
+        }
+    }
+
+    fn finish(self) -> Result<Scene, SceneError> {
+        match self {
+            Self::V1(builder) => builder.finish(),
+            Self::V2(builder) => builder.finish(),
+        }
+    }
+
+    fn graphics_mut(&mut self) -> Option<&mut GraphicsSceneBuilder> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(builder) => Some(builder),
+        }
+    }
 }
 
 enum RunTerminal {
@@ -232,6 +316,20 @@ impl Accounting {
         self.peak_retained = self.peak_retained.max(retained);
     }
 
+    fn charge_fuel(
+        &mut self,
+        limits: ContentVmLimits,
+        amount: u64,
+        source: ContentOperatorSource,
+    ) -> Result<(), ContentVmError> {
+        limits.preflight(ContentVmLimitKind::Fuel, self.fuel, amount, Some(source))?;
+        self.fuel = self
+            .fuel
+            .checked_add(amount)
+            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+        Ok(())
+    }
+
     fn snapshot(&self, retained: u64) -> ContentVmStats {
         ContentVmStats::new(
             self.operators,
@@ -255,7 +353,7 @@ fn run_interpretation(
     scan_limits: ContentLimits,
     vm_limits: ContentVmLimits,
     property_limits: PagePropertyLookupLimits,
-    scene_limits: SceneLimits,
+    profile: ContentVmProfile,
     source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
 ) -> RunReport {
@@ -356,7 +454,7 @@ fn run_interpretation(
         program_bytes,
         vm_limits,
         property_limits,
-        scene_limits,
+        profile,
         source,
         cancellation,
         &mut accounting,
@@ -405,7 +503,7 @@ fn execute_program(
     program_bytes: u64,
     vm_limits: ContentVmLimits,
     property_limits: PagePropertyLookupLimits,
-    scene_limits: SceneLimits,
+    profile: ContentVmProfile,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
     accounting: &mut Accounting,
@@ -429,8 +527,19 @@ fn execute_program(
                 );
             }
         };
-        let mut scene = SceneBuilder::new(binding, geometry, scene_limits);
+        let mut scene = match profile {
+            ContentVmProfile::SceneV1 { scene_limits } => {
+                SceneSink::V1(SceneBuilder::new(binding, geometry, scene_limits))
+            }
+            ContentVmProfile::GraphicsV2 { scene_limits, .. } => SceneSink::V2(
+                GraphicsSceneBuilder::new_v2(binding, geometry, scene_limits),
+            ),
+        };
         let mut graphics = Vec::new();
+        let mut graphics_v2 = match profile {
+            ContentVmProfile::SceneV1 { .. } => None,
+            ContentVmProfile::GraphicsV2 { .. } => Some(GraphicsVm::new()),
+        };
         let mut current_ctm = Matrix::IDENTITY;
         let mut text_active = false;
         let mut compatibility_depth = 0_u32;
@@ -469,9 +578,43 @@ fn execute_program(
                 );
             };
 
-            let validated = match validate_operands(kind, operator.operands(), operator_source) {
-                Ok(value) => value,
-                Err(error) => {
+            if let Err(error) =
+                validate_operand_structure(kind, operator.operands(), operator_source)
+            {
+                return prioritize_vm(snapshot, byte_source, cancellation, operator_source, error);
+            }
+            if matches!(profile, ContentVmProfile::GraphicsV2 { .. })
+                && let Err(error) = validate_operator_context(kind, text_active, operator_source)
+            {
+                return prioritize_vm(snapshot, byte_source, cancellation, operator_source, error);
+            }
+            let validated = if kind == OperatorKind::SetLineDash {
+                let (dash_values, dash_phase) = dash_operands(operator.operands());
+                let dash_entries = match u64::try_from(dash_values.len()) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            vm_error(ContentVmErrorCode::InternalState, operator_source),
+                        );
+                    }
+                };
+                let fuel = match u64::from(kind.spec().base_fuel()).checked_add(dash_entries) {
+                    Some(value) => value,
+                    None => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            vm_error(ContentVmErrorCode::InternalState, operator_source),
+                        );
+                    }
+                };
+                if let Err(error) = admit_operator(accounting, vm_limits, fuel, operator_source) {
                     return prioritize_vm(
                         snapshot,
                         byte_source,
@@ -480,19 +623,141 @@ fn execute_program(
                         error,
                     );
                 }
+
+                let ContentVmProfile::GraphicsV2 {
+                    graphics_limits, ..
+                } = profile
+                else {
+                    if let Err(error) = validate_legacy_dash_operands(
+                        dash_values,
+                        dash_phase,
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        operator_source,
+                    ) {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error,
+                        );
+                    }
+                    return prioritize(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        Some(operator_source),
+                        RunTerminal::Unsupported(ContentUnsupported::new(
+                            ContentUnsupportedKind::GraphicsV2Operator,
+                            operator_source,
+                        )),
+                    );
+                };
+                let property_bytes = capacity_bytes(&property_uses).unwrap_or(u64::MAX);
+                let retention = VmRetention::new(program_bytes, property_bytes, vm_limits);
+                let expected_bytes = match byte_width::<SceneScalar>(dash_values.len()) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error.with_source(operator_source),
+                        );
+                    }
+                };
+                let admission = match graphics_v2
+                    .as_ref()
+                    .expect("graphics-v2 profile owns graphics VM state")
+                    .preflight_dash_candidate(
+                        dash_entries,
+                        expected_bytes,
+                        graphics_limits,
+                        retention,
+                        operator_source,
+                    ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error,
+                        );
+                    }
+                };
+                let pattern = match convert_dash_operands(
+                    dash_values,
+                    dash_phase,
+                    admission,
+                    expected_bytes,
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    operator_source,
+                    accounting,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error,
+                        );
+                    }
+                };
+                ValidatedOperands::Dash { pattern }
+            } else {
+                let validated = match convert_operands(kind, operator.operands(), operator_source) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error,
+                        );
+                    }
+                };
+                let fuel = match u64::from(kind.spec().base_fuel())
+                    .checked_add(validated.dynamic_fuel(kind))
+                {
+                    Some(value) => value,
+                    None => {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            vm_error(ContentVmErrorCode::InternalState, operator_source),
+                        );
+                    }
+                };
+                if let Err(error) = admit_operator(accounting, vm_limits, fuel, operator_source) {
+                    return prioritize_vm(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        operator_source,
+                        error,
+                    );
+                }
+                validated
             };
-            if let Err(error) = admit_operator(
-                accounting,
-                vm_limits,
-                u64::from(kind.spec().base_fuel()),
-                operator_source,
-            ) {
-                return prioritize_vm(snapshot, byte_source, cancellation, operator_source, error);
-            }
 
             match kind {
                 OperatorKind::SaveGraphicsState => {
-                    let graphics_depth = match u64::try_from(graphics.len()) {
+                    let saved_len = graphics_v2
+                        .as_ref()
+                        .map_or(graphics.len(), |machine| machine.saved().len());
+                    let graphics_depth = match u64::try_from(saved_len) {
                         Ok(value) => value,
                         Err(_) => {
                             return prioritize_vm(
@@ -518,13 +783,23 @@ fn execute_program(
                             error,
                         );
                     }
-                    let retained = match reserve_vm_slot(
-                        &mut graphics,
-                        program_bytes,
-                        capacity_bytes(&property_uses).unwrap_or(u64::MAX),
-                        vm_limits,
-                        operator_source,
-                    ) {
+                    let property_bytes = capacity_bytes(&property_uses).unwrap_or(u64::MAX);
+                    let retained_result = match graphics_v2.as_mut() {
+                        Some(machine) => machine.reserve_saved_slot(
+                            VmRetention::new(program_bytes, property_bytes, vm_limits),
+                            operator_source,
+                            accounting,
+                        ),
+                        None => reserve_vm_slot(
+                            &mut graphics,
+                            program_bytes,
+                            property_bytes,
+                            vm_limits,
+                            operator_source,
+                            accounting,
+                        ),
+                    };
+                    let retained = match retained_result {
                         Ok(value) => value,
                         Err(error) => {
                             return prioritize_vm(
@@ -537,8 +812,40 @@ fn execute_program(
                         }
                     };
                     accounting.observe_retained(retained);
-                    graphics.push(current_ctm);
-                    let graphics_depth = match u32::try_from(graphics.len()) {
+                    if let Some(machine) = graphics_v2.as_mut() {
+                        let command_source = match command_source(operator_source) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                return prioritize_scene(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    error,
+                                );
+                            }
+                        };
+                        if let Err(error) = scene
+                            .graphics_mut()
+                            .expect("graphics-v2 profile owns graphics builder")
+                            .append_save(pdf_rs_scene::SceneBounds::Empty, command_source)
+                        {
+                            return prioritize_scene(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                operator_source,
+                                error,
+                            );
+                        }
+                        machine.push_current();
+                    } else {
+                        graphics.push(current_ctm);
+                    }
+                    let saved_len = graphics_v2
+                        .as_ref()
+                        .map_or(graphics.len(), |machine| machine.saved().len());
+                    let graphics_depth = match u32::try_from(saved_len) {
                         Ok(value) => value,
                         Err(_) => {
                             return prioritize_vm(
@@ -554,19 +861,71 @@ fn execute_program(
                         accounting.max_graphics_depth.max(graphics_depth);
                 }
                 OperatorKind::RestoreGraphicsState => {
-                    let Some(restored) = graphics.pop() else {
-                        return prioritize_vm(
-                            snapshot,
-                            byte_source,
-                            cancellation,
-                            operator_source,
-                            vm_error(ContentVmErrorCode::InvalidGraphicsState, operator_source),
-                        );
-                    };
-                    current_ctm = restored;
+                    if let Some(machine) = graphics_v2.as_mut() {
+                        if machine.saved().is_empty() {
+                            return prioritize_vm(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                operator_source,
+                                vm_error(ContentVmErrorCode::InvalidGraphicsState, operator_source),
+                            );
+                        }
+                        let command_source = match command_source(operator_source) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                return prioritize_scene(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    error,
+                                );
+                            }
+                        };
+                        if let Err(error) = scene
+                            .graphics_mut()
+                            .expect("graphics-v2 profile owns graphics builder")
+                            .append_restore(pdf_rs_scene::SceneBounds::Empty, command_source)
+                        {
+                            return prioritize_scene(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                operator_source,
+                                error,
+                            );
+                        }
+                        current_ctm = match machine.restore(operator_source) {
+                            Ok(Some(value)) => value,
+                            Ok(None) => {
+                                unreachable!("validated graphics-v2 restore has saved state");
+                            }
+                            Err(error) => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    error,
+                                );
+                            }
+                        };
+                    } else {
+                        let Some(restored) = graphics.pop() else {
+                            return prioritize_vm(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                operator_source,
+                                vm_error(ContentVmErrorCode::InvalidGraphicsState, operator_source),
+                            );
+                        };
+                        current_ctm = restored;
+                    }
                 }
                 OperatorKind::ConcatMatrix => {
-                    let ValidatedOperands::Matrix(numbers) = validated else {
+                    let ValidatedOperands::SixNumbers(numbers) = validated else {
                         unreachable!("validated cm operands have matrix shape");
                     };
                     let operand = Matrix::new(
@@ -584,6 +943,9 @@ fn execute_program(
                             );
                         }
                     };
+                    if let Some(machine) = graphics_v2.as_mut() {
+                        machine.set_ctm(current_ctm);
+                    }
                 }
                 OperatorKind::BeginText => {
                     if text_active {
@@ -771,12 +1133,20 @@ fn execute_program(
                             error,
                         );
                     }
+                    let graphics_capacity = graphics_v2
+                        .as_ref()
+                        .map_or_else(
+                            || capacity_bytes(&graphics),
+                            |machine| machine.retained_capacity_bytes(operator_source),
+                        )
+                        .unwrap_or(u64::MAX);
                     let retained = match reserve_vm_slot(
                         &mut property_uses,
                         program_bytes,
-                        capacity_bytes(&graphics).unwrap_or(u64::MAX),
+                        graphics_capacity,
                         vm_limits,
                         operator_source,
+                        accounting,
                     ) {
                         Ok(value) => value,
                         Err(error) => {
@@ -909,12 +1279,100 @@ fn execute_program(
                     }
                     marked_depth -= 1;
                 }
+                OperatorKind::MoveTo
+                | OperatorKind::LineTo
+                | OperatorKind::CubicCurveTo
+                | OperatorKind::CubicCurveToReplicateInitial
+                | OperatorKind::CubicCurveToReplicateFinal
+                | OperatorKind::ClosePath
+                | OperatorKind::Rectangle
+                | OperatorKind::StrokePath
+                | OperatorKind::CloseAndStrokePath
+                | OperatorKind::FillNonzero
+                | OperatorKind::FillNonzeroLegacy
+                | OperatorKind::FillEvenOdd
+                | OperatorKind::FillStrokeNonzero
+                | OperatorKind::FillStrokeEvenOdd
+                | OperatorKind::CloseFillStrokeNonzero
+                | OperatorKind::CloseFillStrokeEvenOdd
+                | OperatorKind::EndPath
+                | OperatorKind::ClipNonzero
+                | OperatorKind::ClipEvenOdd
+                | OperatorKind::SetLineWidth
+                | OperatorKind::SetLineCap
+                | OperatorKind::SetLineJoin
+                | OperatorKind::SetMiterLimit
+                | OperatorKind::SetLineDash
+                | OperatorKind::SetStrokingGray
+                | OperatorKind::SetNonstrokingGray
+                | OperatorKind::SetStrokingRgb
+                | OperatorKind::SetNonstrokingRgb
+                | OperatorKind::SetStrokingCmyk
+                | OperatorKind::SetNonstrokingCmyk => {
+                    let graphics_limits = match profile {
+                        ContentVmProfile::SceneV1 { .. } => {
+                            return prioritize(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                Some(operator_source),
+                                RunTerminal::Unsupported(ContentUnsupported::new(
+                                    ContentUnsupportedKind::GraphicsV2Operator,
+                                    operator_source,
+                                )),
+                            );
+                        }
+                        ContentVmProfile::GraphicsV2 {
+                            graphics_limits, ..
+                        } => graphics_limits,
+                    };
+                    let machine = graphics_v2
+                        .as_mut()
+                        .expect("graphics-v2 profile owns graphics VM state");
+                    let builder = scene
+                        .graphics_mut()
+                        .expect("graphics-v2 profile owns graphics Scene builder");
+                    let property_bytes = capacity_bytes(&property_uses).unwrap_or(u64::MAX);
+                    let retention = VmRetention::new(program_bytes, property_bytes, vm_limits);
+                    match machine.execute(
+                        kind,
+                        &validated,
+                        graphics_limits,
+                        retention,
+                        builder,
+                        operator_source,
+                        accounting,
+                    ) {
+                        Ok(retained) => accounting.observe_retained(retained),
+                        Err(error) => {
+                            return match error {
+                                GraphicsExecutionError::Vm(error) => prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    error,
+                                ),
+                                GraphicsExecutionError::Scene(error) => prioritize_scene(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    error,
+                                ),
+                            };
+                        }
+                    }
+                }
             }
         }
 
+        let graphics_unbalanced = graphics_v2
+            .as_ref()
+            .map_or(!graphics.is_empty(), |machine| !machine.saved().is_empty());
         for (unbalanced, code) in [
             (
-                !graphics.is_empty(),
+                graphics_unbalanced,
                 ContentVmErrorCode::InvalidGraphicsState,
             ),
             (text_active, ContentVmErrorCode::InvalidTextObject),
@@ -953,12 +1411,15 @@ fn execute_program(
         if let Err(failure) = runtime_guard(snapshot, byte_source, cancellation, None) {
             return RunTerminal::Failed(failure);
         }
+        let final_ctm = graphics_v2
+            .as_ref()
+            .map_or(current_ctm, GraphicsVm::current_ctm);
         let property_capacity_bytes = capacity_bytes(&property_uses).unwrap_or(u64::MAX);
         RunTerminal::Ready(Execution {
             scene,
             property_uses,
             property_capacity_bytes,
-            final_ctm: current_ctm,
+            final_ctm,
         })
     })();
 
@@ -975,7 +1436,15 @@ enum PropertyOperand<'a> {
 
 enum ValidatedOperands<'a> {
     None,
-    Matrix([ContentNumber; 6]),
+    OneNumber(ContentNumber),
+    TwoNumbers([ContentNumber; 2]),
+    ThreeNumbers([ContentNumber; 3]),
+    FourNumbers([ContentNumber; 4]),
+    SixNumbers([ContentNumber; 6]),
+    OneInteger(i64),
+    Dash {
+        pattern: DashPattern,
+    },
     Name(&'a ContentName),
     NameAndProperty {
         tag: &'a ContentName,
@@ -983,35 +1452,254 @@ enum ValidatedOperands<'a> {
     },
 }
 
-fn validate_operands<'a>(
+impl ValidatedOperands<'_> {
+    fn dynamic_fuel(&self, kind: OperatorKind) -> u64 {
+        match self {
+            _ if matches!(
+                kind,
+                OperatorKind::LineTo
+                    | OperatorKind::CubicCurveTo
+                    | OperatorKind::CubicCurveToReplicateInitial
+                    | OperatorKind::CubicCurveToReplicateFinal
+            ) =>
+            {
+                2
+            }
+            _ if matches!(kind, OperatorKind::MoveTo | OperatorKind::ClosePath) => 1,
+            _ if kind == OperatorKind::Rectangle => 5,
+            Self::None
+            | Self::OneNumber(_)
+            | Self::TwoNumbers(_)
+            | Self::ThreeNumbers(_)
+            | Self::FourNumbers(_)
+            | Self::SixNumbers(_)
+            | Self::OneInteger(_)
+            | Self::Dash { .. }
+            | Self::Name(_)
+            | Self::NameAndProperty { .. } => 0,
+        }
+    }
+}
+
+fn validate_operand_structure(
+    kind: OperatorKind,
+    operands: &[LocatedOperand],
+    source: ContentOperatorSource,
+) -> Result<(), ContentVmError> {
+    let spec = kind.spec();
+    if operands.len() != usize::from(spec.min_operands()) {
+        return Err(vm_error(ContentVmErrorCode::InvalidOperandCount, source));
+    }
+    let valid = match spec.operand_shape() {
+        OperatorOperandShape::None => true,
+        OperatorOperandShape::OneNumber
+        | OperatorOperandShape::TwoNumbers
+        | OperatorOperandShape::ThreeNumbers
+        | OperatorOperandShape::FourNumbers
+        | OperatorOperandShape::SixNumbers => operands.iter().all(is_number),
+        OperatorOperandShape::OneInteger => {
+            matches!(operands[0].value(), ContentOperand::Integer(_))
+        }
+        OperatorOperandShape::NumberArrayAndNumber => {
+            matches!(operands[0].value(), ContentOperand::Array(_)) && is_number(&operands[1])
+        }
+        OperatorOperandShape::Name => {
+            matches!(operands[0].value(), ContentOperand::Name(_))
+        }
+        OperatorOperandShape::NameAndNameOrDictionary => {
+            matches!(operands[0].value(), ContentOperand::Name(_))
+                && matches!(
+                    operands[1].value(),
+                    ContentOperand::Name(_) | ContentOperand::Dictionary(_)
+                )
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(vm_error(ContentVmErrorCode::InvalidOperandType, source))
+    }
+}
+
+fn validate_operator_context(
+    kind: OperatorKind,
+    text_active: bool,
+    source: ContentOperatorSource,
+) -> Result<(), ContentVmError> {
+    if text_active
+        && matches!(
+            kind.spec().context(),
+            OperatorContext::PathConstruction
+                | OperatorContext::PathPainting
+                | OperatorContext::ClippingPath
+        )
+    {
+        return Err(vm_error(ContentVmErrorCode::InvalidOperatorContext, source));
+    }
+    Ok(())
+}
+
+fn is_number(operand: &LocatedOperand) -> bool {
+    matches!(
+        operand.value(),
+        ContentOperand::Integer(_) | ContentOperand::Real(_)
+    )
+}
+
+fn dash_operands(operands: &[LocatedOperand]) -> (&[LocatedOperand], &LocatedOperand) {
+    let ContentOperand::Array(values) = operands[0].value() else {
+        unreachable!("validated line-dash operands start with an array");
+    };
+    (values, &operands[1])
+}
+
+fn validate_legacy_dash_operands(
+    values: &[LocatedOperand],
+    phase: &LocatedOperand,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    operator_source: ContentOperatorSource,
+) -> Result<(), ContentVmError> {
+    parse_number(phase, operator_source)?;
+    guarded_dash_probe(snapshot, source, cancellation, operator_source)?;
+    for (index, value) in values.iter().enumerate() {
+        parse_number(value, operator_source)?;
+        if (index + 1) % DASH_CANCELLATION_INTERVAL == 0 {
+            guarded_dash_probe(snapshot, source, cancellation, operator_source)?;
+        }
+    }
+    if !values.len().is_multiple_of(DASH_CANCELLATION_INTERVAL) {
+        guarded_dash_probe(snapshot, source, cancellation, operator_source)?;
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "dash conversion keeps admission, source binding, cancellation, and provenance explicit"
+)]
+fn convert_dash_operands(
+    values: &[LocatedOperand],
+    phase: &LocatedOperand,
+    admission: DashRetentionAdmission,
+    expected_bytes: u64,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    operator_source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<DashPattern, ContentVmError> {
+    let phase = parse_number(phase, operator_source)?;
+    if phase < ContentNumber::ZERO {
+        return Err(vm_error(
+            ContentVmErrorCode::InvalidGraphicsParameter,
+            operator_source,
+        ));
+    }
+    guarded_dash_probe(snapshot, source, cancellation, operator_source)?;
+
+    let mut builder = DashPatternBuilder::new();
+    builder
+        .try_reserve_exact(values.len())
+        .map_err(|_| admission.allocation_error(expected_bytes))?;
+    let actual = builder
+        .retained_bytes()
+        .map_err(|_| vm_error(ContentVmErrorCode::InternalState, operator_source))?;
+    admission.preflight_actual(actual)?;
+    accounting.observe_retained(admission.retained_with_candidate(actual));
+
+    for (index, value) in values.iter().enumerate() {
+        let value = parse_number(value, operator_source)?;
+        if value < ContentNumber::ZERO {
+            return Err(vm_error(
+                ContentVmErrorCode::InvalidGraphicsParameter,
+                operator_source,
+            ));
+        }
+        builder
+            .try_push(SceneScalar::from_scaled(value.scaled()))
+            .map_err(|_| {
+                vm_error(
+                    ContentVmErrorCode::InvalidGraphicsParameter,
+                    operator_source,
+                )
+            })?;
+        if (index + 1) % DASH_CANCELLATION_INTERVAL == 0 {
+            guarded_dash_probe(snapshot, source, cancellation, operator_source)?;
+        }
+    }
+    if !values.len().is_multiple_of(DASH_CANCELLATION_INTERVAL) {
+        guarded_dash_probe(snapshot, source, cancellation, operator_source)?;
+    }
+    let pattern = builder
+        .finish(SceneScalar::from_scaled(phase.scaled()))
+        .map_err(|_| {
+            vm_error(
+                ContentVmErrorCode::InvalidGraphicsParameter,
+                operator_source,
+            )
+        })?;
+    Ok(pattern)
+}
+
+fn guarded_dash_probe(
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    operator_source: ContentOperatorSource,
+) -> Result<(), ContentVmError> {
+    match runtime_guard(snapshot, source, cancellation, Some(operator_source)) {
+        Ok(()) => Ok(()),
+        Err(ContentVmFailure::Vm(error)) => Err(error),
+        Err(
+            ContentVmFailure::Content(_)
+            | ContentVmFailure::Document(_)
+            | ContentVmFailure::Scene(_),
+        ) => unreachable!("runtime guards only produce VM source or cancellation failures"),
+    }
+}
+
+fn convert_operands<'a>(
     kind: OperatorKind,
     operands: &'a [LocatedOperand],
     source: ContentOperatorSource,
 ) -> Result<ValidatedOperands<'a>, ContentVmError> {
     let spec = kind.spec();
-    if operands.len() != usize::from(spec.min_operands()) {
-        return Err(vm_error(ContentVmErrorCode::InvalidOperandCount, source));
-    }
-    match kind {
-        OperatorKind::ConcatMatrix => {
-            let mut numbers = [ContentNumber::ZERO; 6];
-            for (output, operand) in numbers.iter_mut().zip(operands) {
-                *output = match operand.value() {
-                    ContentOperand::Integer(value) => ContentNumber::from_integer(*value),
-                    ContentOperand::Real(value) => ContentNumber::parse(value.raw()),
-                    _ => Err(vm_error(ContentVmErrorCode::InvalidOperandType, source)),
-                }
-                .map_err(|error| error.with_source(source))?;
-            }
-            Ok(ValidatedOperands::Matrix(numbers))
+    match spec.operand_shape() {
+        OperatorOperandShape::None => Ok(ValidatedOperands::None),
+        OperatorOperandShape::OneNumber => Ok(ValidatedOperands::OneNumber(parse_number(
+            &operands[0],
+            source,
+        )?)),
+        OperatorOperandShape::TwoNumbers => Ok(ValidatedOperands::TwoNumbers(parse_numbers(
+            operands, source,
+        )?)),
+        OperatorOperandShape::ThreeNumbers => Ok(ValidatedOperands::ThreeNumbers(parse_numbers(
+            operands, source,
+        )?)),
+        OperatorOperandShape::FourNumbers => Ok(ValidatedOperands::FourNumbers(parse_numbers(
+            operands, source,
+        )?)),
+        OperatorOperandShape::SixNumbers => Ok(ValidatedOperands::SixNumbers(parse_numbers(
+            operands, source,
+        )?)),
+        OperatorOperandShape::OneInteger => {
+            let ContentOperand::Integer(value) = operands[0].value() else {
+                return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
+            };
+            Ok(ValidatedOperands::OneInteger(*value))
         }
-        OperatorKind::MarkedContentPoint | OperatorKind::BeginMarkedContent => {
+        OperatorOperandShape::NumberArrayAndNumber => {
+            unreachable!("line-dash operands are admitted and converted by the bounded dash path")
+        }
+        OperatorOperandShape::Name => {
             let ContentOperand::Name(name) = operands[0].value() else {
                 return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
             };
             Ok(ValidatedOperands::Name(name))
         }
-        OperatorKind::MarkedContentPointProperties | OperatorKind::BeginMarkedContentProperties => {
+        OperatorOperandShape::NameAndNameOrDictionary => {
             let ContentOperand::Name(tag) = operands[0].value() else {
                 return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
             };
@@ -1022,8 +1710,30 @@ fn validate_operands<'a>(
             };
             Ok(ValidatedOperands::NameAndProperty { tag, property })
         }
-        _ => Ok(ValidatedOperands::None),
     }
+}
+
+fn parse_numbers<const N: usize>(
+    operands: &[LocatedOperand],
+    source: ContentOperatorSource,
+) -> Result<[ContentNumber; N], ContentVmError> {
+    let mut numbers = [ContentNumber::ZERO; N];
+    for (output, operand) in numbers.iter_mut().zip(operands) {
+        *output = parse_number(operand, source)?;
+    }
+    Ok(numbers)
+}
+
+fn parse_number(
+    operand: &LocatedOperand,
+    source: ContentOperatorSource,
+) -> Result<ContentNumber, ContentVmError> {
+    match operand.value() {
+        ContentOperand::Integer(value) => ContentNumber::from_integer(*value),
+        ContentOperand::Real(value) => ContentNumber::parse(value.raw()),
+        _ => Err(vm_error(ContentVmErrorCode::InvalidOperandType, source)),
+    }
+    .map_err(|error| error.with_source(source))
 }
 
 fn admit_operator(
@@ -1224,20 +1934,37 @@ fn reserve_vm_slot<T>(
     other_capacity_bytes: u64,
     limits: ContentVmLimits,
     source: ContentOperatorSource,
+    accounting: &mut Accounting,
 ) -> Result<u64, ContentVmError> {
     if values.len() == values.capacity() {
+        let required_capacity = values
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+        let target_capacity = geometric_capacity(values.capacity(), required_capacity);
+        let current_bytes = capacity_bytes(values)?;
+        let target_bytes = byte_width::<T>(target_capacity)?;
         let consumed = program_bytes
             .checked_add(other_capacity_bytes)
-            .and_then(|value| value.checked_add(capacity_bytes(values).ok()?))
+            .and_then(|value| value.checked_add(current_bytes))
             .unwrap_or(u64::MAX);
-        let attempted = byte_width::<T>(1)?;
+        let attempted = target_bytes.saturating_sub(current_bytes);
         limits.preflight(
             ContentVmLimitKind::RetainedBytes,
             consumed,
             attempted,
             Some(source),
         )?;
-        values.try_reserve_exact(1).map_err(|_| {
+        accounting.charge_fuel(
+            limits,
+            u64::try_from(values.len())
+                .map_err(|_| vm_error(ContentVmErrorCode::InternalState, source))?,
+            source,
+        )?;
+        let additional = target_capacity
+            .checked_sub(values.len())
+            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+        values.try_reserve_exact(additional).map_err(|_| {
             ContentVmError::resource(
                 ContentVmLimit::new(
                     ContentVmLimitKind::Allocation,
@@ -1255,6 +1982,18 @@ fn reserve_vm_slot<T>(
         .unwrap_or(u64::MAX);
     limits.preflight(ContentVmLimitKind::RetainedBytes, 0, total, Some(source))?;
     Ok(total)
+}
+
+fn geometric_capacity(current_capacity: usize, required_capacity: usize) -> usize {
+    if required_capacity <= current_capacity {
+        return current_capacity;
+    }
+    let grown = if current_capacity == 0 {
+        4
+    } else {
+        current_capacity.checked_mul(2).unwrap_or(required_capacity)
+    };
+    grown.max(required_capacity)
 }
 
 fn capacity_bytes<T>(values: &Vec<T>) -> Result<u64, ContentVmError> {
@@ -1276,5 +2015,33 @@ struct DocumentCancellationAdapter<'a>(&'a dyn DocumentCancellation);
 impl ContentCancellation for DocumentCancellationAdapter<'_> {
     fn is_cancelled(&self) -> bool {
         self.0.is_cancelled()
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use pdf_rs_syntax::ObjectRef;
+
+    use super::*;
+    use crate::DecodedSpan;
+
+    #[test]
+    fn generic_vm_vector_growth_is_geometric_and_charges_live_move_work() {
+        let source =
+            ContentOperatorSource::new(DecodedSpan::new(ObjectRef::new(4, 0).unwrap(), 0, 0, 1), 0);
+        let limits = ContentVmLimits::default();
+        let mut accounting = Accounting::default();
+        let mut values = Vec::<u8>::new();
+
+        reserve_vm_slot(&mut values, 0, 0, limits, source, &mut accounting)
+            .expect("initial reserve");
+        let initial_capacity = values.capacity();
+        assert!(initial_capacity >= 4);
+        assert_eq!(accounting.fuel, 0);
+        values.resize(initial_capacity, 0);
+
+        reserve_vm_slot(&mut values, 0, 0, limits, source, &mut accounting).expect("grown reserve");
+        assert!(values.capacity() >= initial_capacity * 2);
+        assert_eq!(accounting.fuel, u64::try_from(initial_capacity).unwrap());
     }
 }

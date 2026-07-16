@@ -86,29 +86,12 @@ impl PathResource {
     ///
     /// Producers must make PDF's implicit post-close subpath restart explicit with `MoveTo`.
     pub fn new(segments: Vec<PathSegment>) -> Result<Self, SceneError> {
-        let mut active_subpath = false;
-        for segment in &segments {
-            match segment {
-                PathSegment::MoveTo(_) => active_subpath = true,
-                PathSegment::LineTo(_) | PathSegment::CubicTo { .. } if !active_subpath => {
-                    return Err(SceneError::for_code(
-                        SceneErrorCode::InvalidCommandSequence,
-                        None,
-                    ));
-                }
-                PathSegment::ClosePath if !active_subpath => {
-                    return Err(SceneError::for_code(
-                        SceneErrorCode::InvalidCommandSequence,
-                        None,
-                    ));
-                }
-                PathSegment::ClosePath => active_subpath = false,
-                PathSegment::LineTo(_) | PathSegment::CubicTo { .. } => {}
-            }
+        let mut builder = PathResourceBuilder::new();
+        builder.try_reserve_exact(segments.len())?;
+        for segment in segments {
+            builder.try_push(segment)?;
         }
-        Ok(Self {
-            segments: Arc::new(exact_vec(segments)?),
-        })
+        Ok(builder.finish())
     }
 
     /// Borrows exact path segments.
@@ -118,6 +101,85 @@ impl PathResource {
 
     pub(crate) fn retained_bytes(&self) -> Result<u64, SceneError> {
         vec_capacity_bytes(&self.segments)
+    }
+}
+
+/// Incrementally validated path construction with an O(1), element-buffer-copy-free handoff.
+///
+/// Producers that already charge and validate each appended segment can use this builder to avoid
+/// rescanning or copying a potentially long path when it becomes an immutable resource.
+#[derive(Debug, Default)]
+pub struct PathResourceBuilder {
+    segments: Vec<PathSegment>,
+    active_subpath: bool,
+}
+
+impl PathResourceBuilder {
+    /// Creates an empty path construction.
+    pub const fn new() -> Self {
+        Self {
+            segments: Vec::new(),
+            active_subpath: false,
+        }
+    }
+
+    /// Returns the validated segment count.
+    pub const fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Returns allocator-reported segment capacity.
+    pub const fn capacity(&self) -> usize {
+        self.segments.capacity()
+    }
+
+    /// Returns whether no segments have been appended.
+    pub const fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Returns allocator-reported retained segment capacity.
+    pub fn retained_bytes(&self) -> Result<u64, SceneError> {
+        vec_capacity_bytes(&self.segments)
+    }
+
+    /// Fallibly reserves capacity for exactly the requested additional segment count.
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), SceneError> {
+        reserve_exact(&mut self.segments, additional)
+    }
+
+    /// Validates and appends one normalized construction segment.
+    pub fn try_push(&mut self, segment: PathSegment) -> Result<(), SceneError> {
+        let next_active = match segment {
+            PathSegment::MoveTo(_) => true,
+            PathSegment::LineTo(_) | PathSegment::CubicTo { .. } if !self.active_subpath => {
+                return Err(SceneError::for_code(
+                    SceneErrorCode::InvalidCommandSequence,
+                    None,
+                ));
+            }
+            PathSegment::ClosePath if !self.active_subpath => {
+                return Err(SceneError::for_code(
+                    SceneErrorCode::InvalidCommandSequence,
+                    None,
+                ));
+            }
+            PathSegment::ClosePath => false,
+            PathSegment::LineTo(_) | PathSegment::CubicTo { .. } => true,
+        };
+        if self.segments.len() == self.segments.capacity() {
+            self.try_reserve_exact(1)?;
+        }
+        self.segments.push(segment);
+        self.active_subpath = next_active;
+        Ok(())
+    }
+
+    /// Seals the already validated segments in O(1) without rescanning or copying their buffer.
+    pub fn finish(self) -> PathResource {
+        PathResource {
+            segments: Arc::new(self.segments),
+        }
     }
 }
 
@@ -162,19 +224,12 @@ pub struct DashPattern {
 impl DashPattern {
     /// Creates a nonnegative dash pattern; a nonempty all-zero array is rejected.
     pub fn new(array: Vec<SceneScalar>, phase: SceneScalar) -> Result<Self, SceneError> {
-        if phase < SceneScalar::ZERO
-            || array.iter().any(|value| *value < SceneScalar::ZERO)
-            || (!array.is_empty() && array.iter().all(|value| *value == SceneScalar::ZERO))
-        {
-            return Err(SceneError::for_code(
-                SceneErrorCode::InvalidCommandSequence,
-                None,
-            ));
+        let mut builder = DashPatternBuilder::new();
+        builder.try_reserve_exact(array.len())?;
+        for value in array {
+            builder.try_push(value)?;
         }
-        Ok(Self {
-            array: Arc::new(exact_vec(array)?),
-            phase,
-        })
+        builder.finish(phase)
     }
 
     /// Borrows dash lengths in user-space units.
@@ -187,8 +242,76 @@ impl DashPattern {
         self.phase
     }
 
-    pub(crate) fn retained_bytes(&self) -> Result<u64, SceneError> {
+    /// Returns allocator-reported retained dash-array capacity.
+    pub fn retained_bytes(&self) -> Result<u64, SceneError> {
         vec_capacity_bytes(&self.array)
+    }
+}
+
+/// Incrementally validated dash-array construction with an O(1), element-buffer-copy-free handoff.
+#[derive(Debug, Default)]
+pub struct DashPatternBuilder {
+    array: Vec<SceneScalar>,
+    any_nonzero: bool,
+}
+
+impl DashPatternBuilder {
+    /// Creates an empty dash-array construction.
+    pub const fn new() -> Self {
+        Self {
+            array: Vec::new(),
+            any_nonzero: false,
+        }
+    }
+
+    /// Returns the appended dash-entry count.
+    pub const fn len(&self) -> usize {
+        self.array.len()
+    }
+
+    /// Returns whether no dash entries have been appended.
+    pub const fn is_empty(&self) -> bool {
+        self.array.is_empty()
+    }
+
+    /// Returns allocator-reported retained dash-array capacity.
+    pub fn retained_bytes(&self) -> Result<u64, SceneError> {
+        vec_capacity_bytes(&self.array)
+    }
+
+    /// Fallibly reserves capacity for exactly the requested additional entry count.
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), SceneError> {
+        reserve_exact(&mut self.array, additional)
+    }
+
+    /// Validates and appends one nonnegative dash length.
+    pub fn try_push(&mut self, value: SceneScalar) -> Result<(), SceneError> {
+        if value < SceneScalar::ZERO {
+            return Err(SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                None,
+            ));
+        }
+        if self.array.len() == self.array.capacity() {
+            self.try_reserve_exact(1)?;
+        }
+        self.array.push(value);
+        self.any_nonzero |= value != SceneScalar::ZERO;
+        Ok(())
+    }
+
+    /// Seals a valid pattern in O(1) without rescanning or copying its array buffer.
+    pub fn finish(self, phase: SceneScalar) -> Result<DashPattern, SceneError> {
+        if phase < SceneScalar::ZERO || (!self.array.is_empty() && !self.any_nonzero) {
+            return Err(SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                None,
+            ));
+        }
+        Ok(DashPattern {
+            array: Arc::new(self.array),
+            phase,
+        })
     }
 }
 
@@ -1114,17 +1237,30 @@ impl GraphicsScene {
 
 fn exact_vec<T>(values: Vec<T>) -> Result<Vec<T>, SceneError> {
     let mut exact = Vec::new();
-    exact.try_reserve_exact(values.len()).map_err(|_| {
+    reserve_exact(&mut exact, values.len())?;
+    exact.extend(values);
+    Ok(exact)
+}
+
+fn reserve_exact<T>(values: &mut Vec<T>, additional: usize) -> Result<(), SceneError> {
+    let current = vec_capacity_bytes(values)?;
+    let attempted = u64::try_from(additional)
+        .ok()
+        .and_then(|count| {
+            u64::try_from(size_of::<T>())
+                .ok()
+                .and_then(|width| count.checked_mul(width))
+        })
+        .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?;
+    values.try_reserve_exact(additional).map_err(|_| {
         SceneError::resource(
             crate::SceneLimitKind::Allocation,
             u64::MAX,
-            0,
-            u64::try_from(values.len()).unwrap_or(u64::MAX),
+            current,
+            attempted,
             None,
         )
-    })?;
-    exact.extend(values);
-    Ok(exact)
+    })
 }
 
 fn vec_capacity_bytes<T>(values: &Vec<T>) -> Result<u64, SceneError> {
@@ -1140,7 +1276,10 @@ fn vec_capacity_bytes<T>(values: &Vec<T>) -> Result<u64, SceneError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DashPattern, PathResource, PathSegment, SceneBounds, ScenePoint};
+    use super::{
+        DashPattern, DashPatternBuilder, PathResource, PathResourceBuilder, PathSegment,
+        SceneBounds, ScenePoint,
+    };
     use crate::{SceneErrorCode, SceneScalar};
 
     #[test]
@@ -1162,6 +1301,57 @@ mod tests {
             DashPattern::new(vec![SceneScalar::ZERO], SceneScalar::ZERO)
                 .unwrap_err()
                 .code(),
+            SceneErrorCode::InvalidCommandSequence
+        );
+    }
+
+    #[test]
+    fn incremental_path_and_dash_builders_validate_before_o1_handoff() {
+        let point = ScenePoint::new(SceneScalar::ZERO, SceneScalar::ZERO);
+        let mut invalid_path = PathResourceBuilder::new();
+        assert_eq!(
+            invalid_path
+                .try_push(PathSegment::LineTo(point))
+                .unwrap_err()
+                .code(),
+            SceneErrorCode::InvalidCommandSequence
+        );
+
+        let mut path = PathResourceBuilder::new();
+        path.try_reserve_exact(2).unwrap();
+        path.try_push(PathSegment::MoveTo(point)).unwrap();
+        path.try_push(PathSegment::LineTo(point)).unwrap();
+        let path_bytes = path.retained_bytes().unwrap();
+        let path_buffer = path.segments.as_ptr();
+        let path = path.finish();
+        assert_eq!(path.segments().len(), 2);
+        assert_eq!(path.retained_bytes().unwrap(), path_bytes);
+        assert_eq!(path.segments.as_ptr(), path_buffer);
+
+        let mut dash = DashPatternBuilder::new();
+        dash.try_reserve_exact(2).unwrap();
+        dash.try_push(SceneScalar::ONE).unwrap();
+        dash.try_push(SceneScalar::from_scaled(2_000_000_000))
+            .unwrap();
+        let dash_bytes = dash.retained_bytes().unwrap();
+        let dash_buffer = dash.array.as_ptr();
+        let dash = dash.finish(SceneScalar::ZERO).unwrap();
+        assert_eq!(dash.array().len(), 2);
+        assert_eq!(dash.retained_bytes().unwrap(), dash_bytes);
+        assert_eq!(dash.array.as_ptr(), dash_buffer);
+
+        let mut negative_dash = DashPatternBuilder::new();
+        assert_eq!(
+            negative_dash
+                .try_push(SceneScalar::from_scaled(-1))
+                .unwrap_err()
+                .code(),
+            SceneErrorCode::InvalidCommandSequence
+        );
+        let mut all_zero_dash = DashPatternBuilder::new();
+        all_zero_dash.try_push(SceneScalar::ZERO).unwrap();
+        assert_eq!(
+            all_zero_dash.finish(SceneScalar::ZERO).unwrap_err().code(),
             SceneErrorCode::InvalidCommandSequence
         );
     }

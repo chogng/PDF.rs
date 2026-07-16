@@ -26,6 +26,19 @@ pub enum ContentVmLimitKind {
     Allocation,
 }
 
+/// Deterministic graphics-profile budget that rejected path or dash state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContentGraphicsLimitKind {
+    /// Current-path construction segments.
+    PathSegments,
+    /// Allocator-reported current-path retained capacity.
+    PathRetainedBytes,
+    /// Entries in one line-dash array.
+    DashEntries,
+    /// Aggregate unique dash-array capacity retained by active graphics states.
+    DashRetainedBytes,
+}
+
 /// Structured Content VM resource-limit context without content bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContentVmLimit {
@@ -71,6 +84,57 @@ impl ContentVmLimit {
     }
 }
 
+/// Structured graphics-profile resource context without content bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContentGraphicsLimit {
+    kind: ContentGraphicsLimitKind,
+    limit: u64,
+    consumed: u64,
+    attempted: u64,
+}
+
+impl ContentGraphicsLimit {
+    pub(crate) const fn new(
+        kind: ContentGraphicsLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+    ) -> Self {
+        Self {
+            kind,
+            limit,
+            consumed,
+            attempted,
+        }
+    }
+
+    /// Returns the rejected graphics budget dimension.
+    pub const fn kind(self) -> ContentGraphicsLimitKind {
+        self.kind
+    }
+
+    /// Returns the configured ceiling.
+    pub const fn limit(self) -> u64 {
+        self.limit
+    }
+
+    /// Returns the amount charged before the rejected work.
+    pub const fn consumed(self) -> u64 {
+        self.consumed
+    }
+
+    /// Returns the additional amount or complete amount that was rejected.
+    pub const fn attempted(self) -> u64 {
+        self.attempted
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContentResourceLimit {
+    Vm(ContentVmLimit),
+    Graphics(ContentGraphicsLimit),
+}
+
 /// Stable machine-readable Content VM failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContentVmErrorCode {
@@ -94,6 +158,12 @@ pub enum ContentVmErrorCode {
     InvalidCompatibilityState,
     /// Marked-content begin/end structure is invalid or unbalanced.
     InvalidMarkedContentState,
+    /// A registered graphics parameter is outside its admitted value domain.
+    InvalidGraphicsParameter,
+    /// Current-path construction or clipping sequencing is invalid.
+    InvalidPathState,
+    /// An operator is not admitted in the current structural context.
+    InvalidOperatorContext,
     /// The supplied byte source no longer matches the acquired Page snapshot.
     SourceSnapshotMismatch,
     /// Cooperative cancellation was observed before atomic publication.
@@ -150,7 +220,7 @@ pub struct ContentVmError {
     recoverability: ContentVmRecoverability,
     diagnostic_id: &'static str,
     source: Option<ContentOperatorSource>,
-    limit: Option<ContentVmLimit>,
+    resource_limit: Option<ContentResourceLimit>,
 }
 
 impl ContentVmError {
@@ -165,7 +235,7 @@ impl ContentVmError {
             recoverability,
             diagnostic_id,
             source,
-            limit: None,
+            resource_limit: None,
         }
     }
 
@@ -179,7 +249,21 @@ impl ContentVmError {
             recoverability: ContentVmRecoverability::ReduceWorkload,
             diagnostic_id: "RPE-CONTENT-VM-0012",
             source,
-            limit: Some(limit),
+            resource_limit: Some(ContentResourceLimit::Vm(limit)),
+        }
+    }
+
+    pub(crate) const fn graphics_resource(
+        limit: ContentGraphicsLimit,
+        source: Option<ContentOperatorSource>,
+    ) -> Self {
+        Self {
+            code: ContentVmErrorCode::ResourceLimit,
+            category: ContentVmErrorCategory::Resource,
+            recoverability: ContentVmRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-CONTENT-VM-0012",
+            source,
+            resource_limit: Some(ContentResourceLimit::Graphics(limit)),
         }
     }
 
@@ -215,7 +299,18 @@ impl ContentVmError {
 
     /// Returns structured resource context for a budget failure.
     pub const fn limit(self) -> Option<ContentVmLimit> {
-        self.limit
+        match self.resource_limit {
+            Some(ContentResourceLimit::Vm(limit)) => Some(limit),
+            Some(ContentResourceLimit::Graphics(_)) | None => None,
+        }
+    }
+
+    /// Returns structured graphics-profile resource context for a budget failure.
+    pub const fn graphics_limit(self) -> Option<ContentGraphicsLimit> {
+        match self.resource_limit {
+            Some(ContentResourceLimit::Graphics(limit)) => Some(limit),
+            Some(ContentResourceLimit::Vm(_)) | None => None,
+        }
     }
 }
 
@@ -277,6 +372,21 @@ const fn error_policy(
             ContentVmRecoverability::CorrectInput,
             "RPE-CONTENT-VM-0010",
         ),
+        ContentVmErrorCode::InvalidGraphicsParameter => (
+            ContentVmErrorCategory::Malformed,
+            ContentVmRecoverability::CorrectInput,
+            "RPE-CONTENT-VM-0015",
+        ),
+        ContentVmErrorCode::InvalidPathState => (
+            ContentVmErrorCategory::State,
+            ContentVmRecoverability::CorrectInput,
+            "RPE-CONTENT-VM-0016",
+        ),
+        ContentVmErrorCode::InvalidOperatorContext => (
+            ContentVmErrorCategory::State,
+            ContentVmRecoverability::CorrectInput,
+            "RPE-CONTENT-VM-0017",
+        ),
         ContentVmErrorCode::SourceSnapshotMismatch => (
             ContentVmErrorCategory::Source,
             ContentVmRecoverability::ReopenSource,
@@ -323,6 +433,8 @@ pub enum ContentUnsupportedKind {
     IndirectPageProperties,
     /// The selected Page property value is a direct dictionary.
     DirectPagePropertyDictionary,
+    /// A registered graphics operator requires the explicit graphics-v2 profile.
+    GraphicsV2Operator,
 }
 
 /// Content-redacted structured unsupported outcome.
@@ -388,6 +500,7 @@ impl ContentUnsupported {
             }
             ContentUnsupportedKind::IndirectPageProperties => "RPE-CONTENT-UNSUPPORTED-0005",
             ContentUnsupportedKind::DirectPagePropertyDictionary => "RPE-CONTENT-UNSUPPORTED-0006",
+            ContentUnsupportedKind::GraphicsV2Operator => "RPE-CONTENT-UNSUPPORTED-0007",
         }
     }
 }
