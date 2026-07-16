@@ -87,6 +87,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-font"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-generate"
 version = "0.1.0"
 dependencies = [

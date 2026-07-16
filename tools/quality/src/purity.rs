@@ -19,7 +19,7 @@ struct ProductPackage {
     crate_name: &'static str,
 }
 
-const PRODUCT_PACKAGE_COUNT: usize = 11;
+const PRODUCT_PACKAGE_COUNT: usize = 12;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -40,6 +40,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "core/filters/Cargo.toml",
         package_name: "pdf-rs-filters",
         crate_name: "pdf_rs_filters",
+    },
+    ProductPackage {
+        manifest: "core/font/Cargo.toml",
+        package_name: "pdf-rs-font",
+        crate_name: "pdf_rs_font",
     },
     ProductPackage {
         manifest: "core/object/Cargo.toml",
@@ -1069,6 +1074,11 @@ mod tests {
             manifest: "core/raster/Cargo.toml",
             package_name: "pdf-rs-raster",
             crate_name: "pdf_rs_raster",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "core/font/Cargo.toml",
+            package_name: "pdf-rs-font",
+            crate_name: "pdf_rs_font",
         }));
         let root = temp_dir("isolated");
         write_product_manifests(&root);
