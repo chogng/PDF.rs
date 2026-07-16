@@ -1,5 +1,5 @@
 schema = 1
-version = "0.70.0"
+version = "0.71.0"
 status = "active"
 
 [[feature]]
@@ -118,6 +118,18 @@ profile = "m3.reference-pixel-foundation.v1"
 clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
 modules = ["core/raster"]
 tests = ["core/raster::reference_foundation", "core/raster::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.m3-raster-oracle-contract"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m3.raster-oracle-contract.v1"
+clauses = ["RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-003/9", "RPE-STD-004/5-6"]
+modules = ["tools/compare", "tools/quality", "docs/traceability"]
+tests = ["tools/compare::pixel", "tools/quality::m3_raster_oracle_contract", "tools/quality::m2_exit"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

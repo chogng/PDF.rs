@@ -1,5 +1,5 @@
 schema = 1
-version = "0.70.0"
+version = "0.71.0"
 status = "active"
 
 [[requirement]]
@@ -288,11 +288,11 @@ component_notes = "The bounded M1 actor now realizes the required Created/Openin
 id = "RPE-STD-003/9"
 snapshot_hash = "sha256:8006ec108b84b89771f7e03d304a880755c9efd6d34f13aba2e4a14ad51c44a8"
 summary = "Valid, invalid, unsupported, and recovery cases are distinct test classes and recovery expectations must name the selected policy."
-features = ["core.strict-repair-policy", "core.local-repair"]
+features = ["core.strict-repair-policy", "core.local-repair", "quality.m3-raster-oracle-contract"]
 implementation = ["core/xref", "core/object", "core/document", "tools/quality"]
-tests = ["core/xref::traditional_xref", "core/xref::local_repair", "core/object::object_behavior", "core/object::local_repair", "core/document::strict_base_open", "core/document::local_repair_open", "tools/quality::maturity"]
+tests = ["core/xref::traditional_xref", "core/xref::local_repair", "core/object::object_behavior", "core/object::local_repair", "core/document::strict_base_open", "core/document::local_repair_open", "tools/quality::maturity", "tools/quality::m3_raster_oracle_contract"]
 status = "partial"
-notes = "The R0/R1 case manifests and executable evidence keep strict failure, allowlisted local recovery, Unsupported, resource, cancellation, and source-integrity outcomes distinct. O0/O1 records prohibit reference-generated expectations and bind reviewed Native runners. Broader R2/R3 and cross-feature recovery matrices remain open."
+notes = "The R0/R1 case manifests and executable evidence keep strict failure, allowlisted local recovery, Unsupported, resource, cancellation, and source-integrity outcomes distinct. O0/O1 records prohibit reference-generated expectations and bind reviewed Native runners. M3-02 adds an artifact-specific pixel oracle extension: committed pixel bytes and hashes are paired, O0/O1 prohibit Reference generation, and O3 requires a content-addressed canonical Reference identity, two independent non-placeholder roles, and hash-bound review evidence. Broader R2/R3 and cross-feature recovery matrices remain open."
 
 [[requirement]]
 id = "RPE-STD-005/8"
@@ -453,11 +453,11 @@ notes = "M2 execution is defined in plan/m2.toml and the bounded milestone compl
 id = "RPE-ARCH-001/15.3/M3"
 snapshot_hash = "sha256:53d46023770b4558705cc00f779fb3031245d473378d82869875283913157541"
 summary = "M3 develops the project-owned bounded Reference renderer, its independently authorized pixel cases, and the registered reference-raster profile."
-features = ["core.reference-pixel-foundation"]
-implementation = ["core/raster", "tools/quality", "docs/traceability"]
-tests = ["core/raster::reference_foundation", "core/raster::repository_policy", "tools/quality::purity"]
+features = ["core.reference-pixel-foundation", "quality.m3-raster-oracle-contract"]
+implementation = ["core/raster", "tools/compare", "tools/quality", "docs/traceability"]
+tests = ["core/raster::reference_foundation", "core/raster::repository_policy", "tools/compare::pixel", "tools/quality::m3_raster_oracle_contract", "tools/quality::m2_exit", "tools/quality::purity"]
 status = "partial"
-notes = "M3 execution is defined in plan/m3.toml and the milestone is in progress. M3-01 is complete as a bounded PLANNED foundation: the new pure product raster crate consumes the current non-painting immutable Scene subset, fixes one value-only canonical pixel encoding, enforces checked independent dimensions, byte geometry, work, retention, allocation, and cancellation policy, drops the input Scene before retaining a terminal, publishes no partial pixels, and participates in product-purity and fresh release-build closure. Hash-bound independent spec-conformance and parser-security reviews in docs/traceability/evidence/m3/reference-pixel-foundation/independent-review.toml returned SHIP with no open P0-P2 findings after the input Scene lifetime and pre-allocation cancellation probes were made explicit; repository policy locks the one-way Scene dependency and exclusion of platform or external engines. M3-02 through M3-11 remain planned and still own oracle/golden policy, graphics Scene schema, Content VM path and painting semantics, fixed-point geometry and coverage, strokes and clips, color and compositing, images, glyphs, integrated reference-raster-v1, and the normative M3 exit gate. Therefore this record does not claim visible PDF rendering, O0/O1 authority, reviewed O3 goldens, REFERENCE maturity, complete R0 graphics, product Surface/runtime integration, or M3 completion."
+notes = "M3 execution is defined in plan/m3.toml and the milestone is in progress. M3-01 is complete as a bounded PLANNED foundation: the new pure product raster crate consumes the current non-painting immutable Scene subset, fixes one value-only canonical pixel encoding, enforces checked independent dimensions, byte geometry, work, retention, allocation, and cancellation policy, drops the input Scene before retaining a terminal, publishes no partial pixels, and participates in product-purity and fresh release-build closure. Hash-bound independent spec-conformance and parser-security reviews in docs/traceability/evidence/m3/reference-pixel-foundation/independent-review.toml returned SHIP with no open P0-P2 findings after the input Scene lifetime and pre-allocation cancellation probes were made explicit; repository policy locks the one-way Scene dependency and exclusion of platform or external engines. M3-02 is also complete: tools/compare strictly decodes the one canonical schema-1 pixel encoding, while tools/quality adds a backward-compatible artifact-specific pixel oracle table, exact artifact/hash coupling, content-addressed derivation and Reference identity files, O0/O1 generation prohibition, O3 two-role review binding, bounded read-only linked-file validation, full symlink rejection, and an explicit no-overwrite CI contract. Independent review in docs/traceability/evidence/m3/raster-oracle-contract/independent-review.toml returned SHIP with no open P0-P2 findings after closing global pair coupling, identity self-assertion, placeholder-role, and case-tree symlink gaps. M3-03 through M3-11 remain planned and still own graphics Scene schema, Content VM path and painting semantics, fixed-point geometry and coverage, strokes and clips, color and compositing, images, glyphs, integrated reference-raster-v1, real registered O0/O1/O3 pixel cases, and the normative M3 exit gate. Therefore this record does not claim visible PDF rendering, accepted final pixel authority, reviewed final renderer O3 goldens, REFERENCE maturity, complete R0 graphics, product Surface/runtime integration, or M3 completion."
 
 [[requirement]]
 id = "RPE-ARCH-001/12.6"

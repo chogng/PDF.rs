@@ -189,13 +189,18 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "docs/traceability/evidence/m3/reference-pixel-foundation/independent-review.toml",
         ))
         .expect("M3-01 review evidence must be readable");
+    let oracle_review = fs::read_to_string(
+        repository_root
+            .join("docs/traceability/evidence/m3/raster-oracle-contract/independent-review.toml"),
+    )
+    .expect("M3-02 review evidence must be readable");
     let plan =
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan must be readable");
     let provenance =
         fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.70.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.70.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.71.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.71.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -219,6 +224,23 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         assert!(
             feature.contains(required),
             "Reference pixel feature must contain {required:?}"
+        );
+    }
+
+    let oracle_feature =
+        record_with_id(&feature_map, "feature", "quality.m3-raster-oracle-contract")
+            .expect("M3 raster oracle feature must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m3.raster-oracle-contract.v1\"",
+        "modules = [\"tools/compare\", \"tools/quality\", \"docs/traceability\"]",
+        "tools/quality::m3_raster_oracle_contract",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            oracle_feature.contains(required),
+            "M3 raster oracle feature must contain {required:?}"
         );
     }
 
@@ -258,7 +280,9 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         .expect("M3 milestone requirement must be registered");
     for required in [
         "M3-01 is complete",
-        "M3-02 through M3-11 remain planned",
+        "M3-02 is also complete",
+        "M3-03 through M3-11 remain planned",
+        "tools/quality::m3_raster_oracle_contract",
         "tools/quality::purity",
         "does not claim visible PDF rendering",
         "status = \"partial\"",
@@ -278,7 +302,10 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let m3_01 = record_with_id(&plan, "work_item", "M3-01").expect("M3-01 must exist");
     assert!(m3_01.contains("status = \"complete\""));
     assert!(m3_01.contains("completed_at = 2026-07-16"));
-    for index in 2..=11 {
+    let m3_02 = record_with_id(&plan, "work_item", "M3-02").expect("M3-02 must exist");
+    assert!(m3_02.contains("status = \"complete\""));
+    assert!(m3_02.contains("completed_at = 2026-07-16"));
+    for index in 3..=11 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -290,6 +317,10 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     assert!(
         !capability_profiles.contains("m3.reference-pixel-foundation.v1"),
         "M3-01 must not create a maturity profile"
+    );
+    assert!(
+        !capability_profiles.contains("m3.raster-oracle-contract.v1"),
+        "M3-02 must not create a maturity profile"
     );
 
     for required in [
@@ -304,6 +335,20 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         assert!(
             review.contains(required),
             "review evidence must contain {required:?}"
+        );
+    }
+
+    for required in [
+        "work_item = \"M3-02\"",
+        "profile = \"m3.raster-oracle-contract.v1\"",
+        "reviewer_roles = [\"spec-conformance\", \"parser-security\"]",
+        "maturity_promotion = false",
+        "open_p0_p2 = 0",
+        "verdict = \"SHIP\"",
+    ] {
+        assert!(
+            oracle_review.contains(required),
+            "M3-02 review evidence must contain {required:?}"
         );
     }
 

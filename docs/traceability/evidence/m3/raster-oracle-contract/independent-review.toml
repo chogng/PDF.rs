@@ -1,0 +1,61 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.raster-oracle-contract.independent-review"
+milestone = "M3"
+work_item = "M3-02"
+profile = "m3.raster-oracle-contract.v1"
+feature = "quality.m3-raster-oracle-contract"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commits = ["53d8bdd3f539b230ca464479b7d2ed86e123e096", "850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8"]
+reviewed_subject_resolution = "explicit-git-tree-map-not-working-tree"
+reviewed_subject_commit_map = [
+  "tools/compare/src/pixel.rs@53d8bdd3f539b230ca464479b7d2ed86e123e096",
+  "tools/compare/src/lib.rs@53d8bdd3f539b230ca464479b7d2ed86e123e096",
+  "tools/compare/PROVENANCE.md@53d8bdd3f539b230ca464479b7d2ed86e123e096",
+  "tools/quality/src/manifest.rs@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "tools/quality/src/case_contract.rs@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "tools/quality/src/lib.rs@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "tools/quality/src/main.rs@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "tools/quality/tests/m3_raster_oracle_contract.rs@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "tools/quality/tests/m2_exit.rs@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "scripts/ci.sh@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+  "tools/quality/PROVENANCE.md@850718ae23515d2aabdf83f4ec1bac3f2ddd5bc8",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = ["canonical pixel artifact decoding", "artifact-specific pixel oracle policy", "linked-file containment and budgets", "read-only CI and M0-M2 compatibility"]
+reviewed_subjects = [
+  "tools/compare/src/pixel.rs#sha256:45e9386356904f6b4d0387d0f5f62c35602dde542c1712e9f01caee2631487d4",
+  "tools/compare/src/lib.rs#sha256:aaf118caeec332cfc3b3fb73e91d4fb1bc2eeba76b6eaf406f7d4c2ab829e5bf",
+  "tools/compare/PROVENANCE.md#sha256:7bdb3977e376c4a6066fdb7237fccd104fb87829fd4c49b0a9e1cf17937dca53",
+  "tools/quality/src/manifest.rs#sha256:80e5f3e616d9147d060143b0507152eb110950e1f91b17b23269a20b3a7e36db",
+  "tools/quality/src/case_contract.rs#sha256:e5f60a5ccf15dd58e1c200cf85800352a468dce44ac85383e70990414af92d15",
+  "tools/quality/src/lib.rs#sha256:88771f797cbca75b0c2777ddd15b10ec91e76e09e23b650658790ab05090f2e6",
+  "tools/quality/src/main.rs#sha256:59a8875d5e237265f85ca5e0d2d77b6d16c7c22764c6a4b9b1daaff863a8485d",
+  "tools/quality/tests/m3_raster_oracle_contract.rs#sha256:7fab492c9b758b6c1c2b0fa6a4b65677bf1a1b3317e4c596009f6499814dc9d7",
+  "tools/quality/tests/m2_exit.rs#sha256:5084db04d368968d741145b817c87fef0799ab1570b14bea52cb122defc444bc",
+  "scripts/ci.sh#sha256:ca52f902fe96694175cdfc81f1894e4aa0bb65f95cfabf7f825fe22e7e9857e6",
+  "tools/quality/PROVENANCE.md#sha256:aabe1fdead4702e4da928330dadff1135e1e1d22aec4f15d5e4658536695759a",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-compare",
+  "cargo clippy --locked --package pdf-rs-compare --all-targets -- -D warnings",
+  "cargo test --locked --package pdf-rs-quality --test m3_raster_oracle_contract",
+  "cargo test --locked --package pdf-rs-quality --lib",
+  "cargo clippy --locked --package pdf-rs-quality --all-targets -- -D warnings",
+  "cargo run --quiet --locked --package pdf-rs-quality -- validate-cases tests/cases",
+  "cargo test --locked --package pdf-rs-quality --test m2_exit",
+  "cargo fmt --all --check",
+]
+review_scope = "M3-02 artifact and oracle contract only; no final renderer identity approval, registered M3 pixel case verdict, O3 renderer golden approval, REFERENCE promotion, or M3 exit"
+closed_findings = [
+  "P1 artifact authority coupling: presence of either committed pixel artifact or pixel_oracle now requires the complete extension globally while legacy absence of both remains valid.",
+  "P1 Reference identity self-assertion: O3 now resolves and hash-verifies a strict canonical reference-raster-v1 identity artifact rather than accepting an arbitrary identity-shaped string.",
+  "P1/P2 reviewer and containment gaps: placeholder roles are rejected, every manifest and linked path component is checked for symlinks, and case-tree discovery fails instead of silently skipping symlink entries.",
+]
+open_p0_p2 = 0
+verdict = "SHIP"
