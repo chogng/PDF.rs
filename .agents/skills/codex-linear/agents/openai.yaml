@@ -1,4 +1,0 @@
-interface:
-  display_name: "Codex Linear"
-  short_description: "Coordinate Linear issues, worktrees, and PRs"
-  default_prompt: "Use $codex-linear to claim a CHO issue in an isolated worktree and synchronize its branch, pull request, and Linear state."
