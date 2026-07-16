@@ -1,0 +1,81 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.reference-color-compositing.independent-review"
+milestone = "M3"
+work_item = "M3-07"
+profile = "m3.reference-color-compositing.v1"
+feature = "core.reference-color-compositing"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "127ee3cac4ab5595abbecd6438e6e309a58b23cb"
+reviewed_subject_commit = "127ee3cac4ab5595abbecd6438e6e309a58b23cb"
+reviewed_subject_tree = "c5e3ba0d5cd5e5de7b30845bb177e196ec8655b7"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-not-working-tree"
+reviewed_subject_commit_map = [
+  "core/raster/PROVENANCE.md@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/raster/src/reference/color.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/raster/src/reference/error.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/raster/src/reference/mod.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/raster/src/reference/render.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/raster/tests/reference_color.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/raster/tests/reference_scene_v2_boundary.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/scene/src/canonical.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/scene/src/graphics.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+  "core/scene/tests/scene_v2.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = [
+  "endpoint-inclusive Q16 DeviceGray, DeviceRGB, and saturated DeviceCMYK conversion",
+  "premultiplied constant alpha, Normal, Multiply, and Screen source-over, and straight RGBA8 publication",
+  "independent boundary grids, literal channel stacks, layered-shape pixels, metamorphics, and debug/release determinism",
+  "structured pre-publication rejection of unsupported device-color, alpha, blend, soft-mask, and group requirements",
+]
+reviewed_subjects = [
+  "core/raster/PROVENANCE.md@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:1d0697c25e05f360d94cf41247b7cb82e41200bb5b2a18514873ef41bfe01475",
+  "core/raster/src/reference/color.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:66c13e663d41e3b12dfa81f7e5d57feb383da17ec12a804a0961578edf1e10b8",
+  "core/raster/src/reference/error.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:790c88e9e44473d5fae003e7abf249cd84efda1b113fa09d26cd5cbfc0daa6cc",
+  "core/raster/src/reference/mod.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:1a2e44993f84d9cd4c795c76b5cda543217ac1b7efdc6a69112b753fbe4326d4",
+  "core/raster/src/reference/render.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:ee6a03c1b84d057d30f4a1d3e4170a11fe8fff050c64d93b6d0b48c3886ad3b3",
+  "core/raster/tests/reference_color.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:55923ce8b597113aa7392b6535764bdef2179c73a18db55aed6492ae9df8073d",
+  "core/raster/tests/reference_scene_v2_boundary.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:7c54a456bf8d9ec5cce7c7cfee97a491bbd029ac1eec849c3853bca4478dd24b",
+  "core/scene/src/canonical.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:6afc284c454f99ebec04f69b32e05e463d1103fd682d99f78605a4bf5eb52179",
+  "core/scene/src/graphics.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:75355cc04e50ec9547cc834c80d2137dcc4de1e3b01ca5562db65888ada6602c",
+  "core/scene/tests/scene_v2.rs@127ee3cac4ab5595abbecd6438e6e309a58b23cb#sha256:a65ae893520b047cc89b578c3ea2f9c7fd848022680da13b22386ce2433650da",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-raster --test reference_color",
+  "cargo test --locked --release --package pdf-rs-raster --test reference_color",
+  "cargo test --locked --package pdf-rs-raster --test reference_scene_v2_boundary",
+  "cargo test --locked --release --package pdf-rs-raster --test reference_scene_v2_boundary",
+  "cargo test --locked --package pdf-rs-scene --all-targets",
+  "cargo test --locked --release --package pdf-rs-scene --all-targets",
+  "cargo test --locked --package pdf-rs-raster --all-targets",
+  "cargo test --locked --release --package pdf-rs-raster --all-targets",
+  "cargo clippy --locked --package pdf-rs-raster --package pdf-rs-scene --all-targets -- -D warnings",
+  "cargo fmt --all -- --check",
+  "git show --check 127ee3c",
+  "git diff-tree --check 127ee3c^ 127ee3c",
+]
+verification_summary = "The color kernel passed 10/10 tests in debug and release; structured capability boundaries, Scene-v2 soft-mask canonicalization, raster all-targets, clippy, fmt, and Git whitespace checks passed."
+review_scope = "M3-07 only; includes the Scene soft-mask capability token needed for structured rejection, but excludes geometry/stroke/clip re-review, images, glyphs, integrated ReferenceRenderJob visible-command rendering, O0/O1/O3 case authority, maturity promotion, and M3 exit"
+review_rounds = [
+  "device-color conversion, Q16 rounding, premultiplication, and publication review",
+  "Normal, Multiply, Screen, independent boundary-grid, and layered-shape review",
+  "unsupported color, alpha, blend, soft-mask, and group capability review",
+  "exact commit-tree subject and repository-policy review",
+]
+closed_findings = [
+  "P1 independent visual expectation: a literal 3x3 layered-shape fixture now exercises overlapping Normal, Multiply, and Screen operations instead of relying only on channel-stack vectors.",
+  "P1 structured unsupported masks: soft masks now have a named canonical Scene capability and terminate before visible-command dispatch or pixel publication.",
+  "P1 conversion boundaries: a non-endpoint saturated CMYK vector and exact straight-RGBA8 half-up publication boundary are pinned.",
+  "P1 bounded execution: conversion, premultiplication, blending, and publication are allocation-free fixed-work kernels with no platform color-management dependency.",
+]
+open_p0 = 0
+open_p1 = 0
+open_p2 = 0
+open_p0_p2 = 0
+verdict = "SHIP"

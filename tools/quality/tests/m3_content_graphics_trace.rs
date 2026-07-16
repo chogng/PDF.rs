@@ -6,7 +6,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.72.0";
+const TRACE_VERSION: &str = "0.73.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "b2a0b88ce3c0f4d186f450a793909d1f72a75230";
 const IMPLEMENTATION_TREE: &str = "b22d0ae88ced2194d884ec781b30f0c5ff367747";
@@ -548,16 +548,40 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
         RequirementExpectation {
             id: "ISO-32000-1:2008/8.6",
             snapshot: ISO_SNAPSHOT,
-            features: &["core.content-graphics-v2", "core.scene-graphics-v2"],
-            implementation: &["core/content", "core/scene"],
+            features: &[
+                "core.content-graphics-v2",
+                "core.scene-graphics-v2",
+                "core.reference-color-compositing",
+            ],
+            implementation: &["core/content", "core/scene", "core/raster"],
             tests: &[
                 "core/content::scanner",
                 "core/content::vm_graphics",
                 "core/content::repository_policy",
                 "core/scene::scene_v2",
+                "core/raster::reference_color",
+                "core/raster::reference_scene_v2_boundary",
+                "core/raster::repository_policy",
                 "tools/quality::m3_content_graphics_trace",
+                "tools/quality::m3_reference_color_trace",
             ],
-            note: "M3 GraphicsV2 profile",
+            note: "M3-07 freezes project-owned",
+        },
+    );
+    assert_requirement(
+        &spec_text,
+        RequirementExpectation {
+            id: "ISO-32000-1:2008/11.3.2-11.3.4",
+            snapshot: ISO_SNAPSHOT,
+            features: &["core.reference-color-compositing"],
+            implementation: &["core/raster"],
+            tests: &[
+                "core/raster::reference_color",
+                "core/raster::reference_scene_v2_boundary",
+                "core/raster::repository_policy",
+                "tools/quality::m3_reference_color_trace",
+            ],
+            note: "M3-07 implements",
         },
     );
     assert_requirement(
@@ -601,6 +625,7 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core.reference-pixel-foundation",
                 "core.reference-geometry-coverage",
                 "core.reference-stroke-clip",
+                "core.reference-color-compositing",
             ],
             implementation: &[
                 "core/content",
@@ -621,13 +646,15 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core/raster::reference_foundation",
                 "core/raster::reference_scene_v2_boundary",
                 "core/raster::reference_geometry_kernel",
+                "core/raster::reference_color",
                 "core/raster::repository_policy",
                 "tools/quality::m2_scene_gate",
                 "tools/quality::m2_exit",
                 "tools/quality::m3_content_graphics_trace",
                 "tools/quality::m3_reference_geometry_trace",
+                "tools/quality::m3_reference_color_trace",
             ],
-            note: "M3-04 adds",
+            note: "M3-07 adds",
         },
     );
     assert_requirement(
@@ -641,6 +668,7 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core.content-graphics-v2",
                 "core.reference-geometry-coverage",
                 "core.reference-stroke-clip",
+                "core.reference-color-compositing",
                 "quality.m3-raster-oracle-contract",
             ],
             implementation: &[
@@ -660,15 +688,17 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
                 "core/raster::reference_foundation",
                 "core/raster::reference_scene_v2_boundary",
                 "core/raster::reference_geometry_kernel",
+                "core/raster::reference_color",
                 "core/raster::repository_policy",
                 "tools/compare::pixel",
                 "tools/quality::m3_raster_oracle_contract",
                 "tools/quality::m3_content_graphics_trace",
                 "tools/quality::m3_reference_geometry_trace",
+                "tools/quality::m3_reference_color_trace",
                 "tools/quality::m2_exit",
                 "tools/quality::purity",
             ],
-            note: "M3-05 and M3-06 now close",
+            note: "M3-07 now closes",
         },
     );
 }

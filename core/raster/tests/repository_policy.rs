@@ -201,8 +201,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.73.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.73.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -246,17 +246,46 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         );
     }
 
+    let color_feature = record_with_id(&feature_map, "feature", "core.reference-color-compositing")
+        .expect("Reference color-compositing feature must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m3.reference-color-compositing.v1\"",
+        "ISO-32000-1:2008/8.6",
+        "ISO-32000-1:2008/11.3.2-11.3.4",
+        "RPE-ARCH-001/6.4-6.7",
+        "RPE-ARCH-001/8.1-8.3",
+        "RPE-ARCH-001/15.3/M3",
+        "modules = [\"core/raster\"]",
+        "core/raster::reference_color",
+        "core/raster::reference_scene_v2_boundary",
+        "core/raster::repository_policy",
+        "tools/quality::m3_reference_color_trace",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            color_feature.contains(required),
+            "Reference color feature must contain {required:?}"
+        );
+    }
+
     let scene_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/6.4-6.7")
         .expect("Scene architecture requirement must be registered");
     for required in [
         "core.reference-pixel-foundation",
         "core.content-graphics-v2",
         "core.scene-graphics-v2",
+        "core.reference-color-compositing",
         "\"core/raster\"",
         "core/raster::reference_foundation",
+        "core/raster::reference_color",
+        "tools/quality::m3_reference_color_trace",
         "M3-03 adds the incompatible m3.scene-graphics-v2.v1 schema",
         "M3-04 adds the first bounded producer",
         "M3-05 and M3-06 add independently bounded pure raster kernels",
+        "M3-07 adds the allocation-free `reference-color-v1`",
+        "named `soft-mask` capability",
         "status = \"partial\"",
     ] {
         assert!(
@@ -268,11 +297,14 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let reference_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/8.1-8.3")
         .expect("Reference architecture requirement must be registered");
     for required in [
-        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\"]",
+        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\"]",
         "implementation = [\"core/raster\"]",
         "sRGB-reference-v1",
+        "reference-color-v1",
+        "structured unsupported color, blend, soft-mask, and group requirements",
         "not mounted into ReferenceRenderJob",
         "register no O0/O1 case authority",
+        "All four features remain PLANNED",
         "status = \"partial\"",
     ] {
         assert!(
@@ -284,13 +316,14 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M3")
         .expect("M3 milestone requirement must be registered");
     for required in [
-        "M3-01 closes the bounded value-only Reference pixel foundation",
-        "M3-02 closes the independently governed pixel artifact/oracle contract",
-        "M3-03 closes the graphics Scene schema and capability graph",
-        "M3-04 closes the bounded Content graphics producer",
-        "M3-07 through M3-11 still own color/compositing",
+        "core.reference-color-compositing",
+        "M3-01 through M3-04 close the bounded pixel foundation",
+        "M3-05 and M3-06 close the commit-pinned geometry/coverage and stroke/clip stages",
+        "M3-07 now closes the commit-pinned color/compositing stage",
+        "M3-08 through M3-11 still own images, glyphs",
         "tools/quality::m3_raster_oracle_contract",
         "tools/quality::m3_content_graphics_trace",
+        "tools/quality::m3_reference_color_trace",
         "tools/quality::purity",
         "does not claim integrated visible PDF rendering",
         "status = \"partial\"",
@@ -298,6 +331,44 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         assert!(
             milestone.contains(required),
             "M3 requirement must contain {required:?}"
+        );
+    }
+
+    let color_requirement = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/8.6")
+        .expect("Device-color requirement must be registered");
+    for required in [
+        "core.reference-color-compositing",
+        "implementation = [\"core/content\", \"core/scene\", \"core/raster\"]",
+        "core/raster::reference_color",
+        "core/raster::reference_scene_v2_boundary",
+        "tools/quality::m3_reference_color_trace",
+        "reference-color-v1",
+        "RGB = 1 - min(1, CMY + K)",
+        "unsupported color requirements fail structurally",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            color_requirement.contains(required),
+            "Device-color requirement must contain {required:?}"
+        );
+    }
+
+    let transparency_requirement =
+        record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/11.3.2-11.3.4")
+            .expect("Transparency requirement must be registered");
+    for required in [
+        "features = [\"core.reference-color-compositing\"]",
+        "implementation = [\"core/raster\"]",
+        "core/raster::reference_color",
+        "tools/quality::m3_reference_color_trace",
+        "Normal, Multiply, and Screen source-over",
+        "canonicalizes alpha zero to transparent black",
+        "Soft masks and groups have named structured capability requirements",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            transparency_requirement.contains(required),
+            "Transparency requirement must contain {required:?}"
         );
     }
 
@@ -313,7 +384,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let m3_02 = record_with_id(&plan, "work_item", "M3-02").expect("M3-02 must exist");
     assert!(m3_02.contains("status = \"complete\""));
     assert!(m3_02.contains("completed_at = 2026-07-16"));
-    for index in 3..=6 {
+    for index in 3..=7 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -326,7 +397,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "{id} must retain its completion date"
         );
     }
-    for index in 7..=11 {
+    for index in 8..=11 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -346,6 +417,10 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     assert!(
         !capability_profiles.contains("m3.raster-oracle-contract.v1"),
         "M3-02 must not create a maturity profile"
+    );
+    assert!(
+        !capability_profiles.contains("m3.reference-color-compositing.v1"),
+        "M3-07 must not create a maturity profile"
     );
 
     for required in [
@@ -389,10 +464,15 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         ),
         "M3-05/M3-06 commit-bound evidence must have an explicit CI gate"
     );
+    assert!(
+        ci.contains("cargo test --locked --package pdf-rs-quality --test m3_reference_color_trace"),
+        "M3-07 commit-bound evidence must have an explicit CI gate"
+    );
 
     for required in [
         "# Traceability profile boundaries",
         "`m3.reference-pixel-foundation.v1`",
+        "`m3.reference-color-compositing.v1`",
         "registered as `PLANNED`",
         "not a `REFERENCE` maturity promotion",
         "not an O0/O1 pixel authority",

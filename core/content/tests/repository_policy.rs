@@ -160,8 +160,8 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan is readable");
     let ci = fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.72.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.72.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.73.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.73.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -388,6 +388,23 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
             "Content graphics-v2 feature must contain {required:?}"
         );
     }
+    let color_feature = record_with_id(&feature_map, "feature", "core.reference-color-compositing")
+        .expect("Reference color-compositing feature is registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m3.reference-color-compositing.v1\"",
+        "ISO-32000-1:2008/8.6",
+        "ISO-32000-1:2008/11.3.2-11.3.4",
+        "modules = [\"core/raster\"]",
+        "core/raster::reference_color",
+        "core/raster::reference_scene_v2_boundary",
+        "tools/quality::m3_reference_color_trace",
+    ] {
+        assert!(
+            color_feature.contains(required),
+            "Reference color feature must contain {required:?}"
+        );
+    }
     for required in [
         "max_path_segments",
         "max_path_retained_bytes",
@@ -500,16 +517,39 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     for required in [
         "core.content-graphics-v2",
         "core.scene-graphics-v2",
+        "core.reference-color-compositing",
+        "implementation = [\"core/content\", \"core/scene\", \"core/raster\"]",
         "G, g, RG, rg, K, and k",
         "stroking and nonstroking channels remain distinct",
         "q/Q restores both channels",
         "DeviceGray, DeviceRGB, or DeviceCMYK",
-        "out-of-range clamping",
-        "deterministic conversion to Reference pixels is owned by M3-07",
+        "core/raster::reference_color",
+        "tools/quality::m3_reference_color_trace",
+        "M3-07 freezes project-owned `reference-color-v1`",
+        "unsupported color requirements fail structurally",
     ] {
         assert!(
             colors.contains(required),
             "device-color mapping must contain {required:?}"
+        );
+    }
+
+    let transparency = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/11.3.2-11.3.4")
+        .expect("transparency requirement is registered");
+    for required in [
+        "features = [\"core.reference-color-compositing\"]",
+        "implementation = [\"core/raster\"]",
+        "core/raster::reference_color",
+        "core/raster::reference_scene_v2_boundary",
+        "tools/quality::m3_reference_color_trace",
+        "premultiplied project-sRGB Q16",
+        "Normal, Multiply, and Screen source-over",
+        "Soft masks and groups have named structured capability requirements",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            transparency.contains(required),
+            "transparency mapping must contain {required:?}"
         );
     }
 
@@ -545,6 +585,9 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     assert!(scene_requirement.contains("M2-07 now closes the bounded M2 exit gate"));
     assert!(scene_requirement.contains("All component and quality feature records remain PLANNED"));
     assert!(scene_requirement.contains("M3-04 adds the first bounded producer"));
+    assert!(scene_requirement.contains("core.reference-color-compositing"));
+    assert!(scene_requirement.contains("M3-07 adds the allocation-free `reference-color-v1`"));
+    assert!(scene_requirement.contains("tools/quality::m3_reference_color_trace"));
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement is registered");
@@ -590,10 +633,26 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     let m3_04 = record_with_id(&m3_plan, "work_item", "M3-04").expect("M3-04 work item exists");
     assert!(m3_04.contains("status = \"complete\""));
     assert!(m3_04.contains("completed_at = 2026-07-16"));
+    let m3_07 = record_with_id(&m3_plan, "work_item", "M3-07").expect("M3-07 work item exists");
+    assert!(m3_07.contains("status = \"complete\""));
+    assert!(m3_07.contains("completed_at = 2026-07-16"));
+    for index in 8..=11 {
+        let id = format!("M3-{index:02}");
+        let item = record_with_id(&m3_plan, "work_item", &id)
+            .unwrap_or_else(|| panic!("{id} work item exists"));
+        assert!(
+            item.contains("status = \"planned\""),
+            "{id} must remain planned after M3-07"
+        );
+    }
     assert!(
         ci.contains(
             "cargo test --locked --package pdf-rs-quality --test m3_content_graphics_trace"
         ),
         "M3-04 commit-bound evidence must have an explicit CI gate"
+    );
+    assert!(
+        ci.contains("cargo test --locked --package pdf-rs-quality --test m3_reference_color_trace"),
+        "M3-07 commit-bound evidence must have an explicit CI gate"
     );
 }

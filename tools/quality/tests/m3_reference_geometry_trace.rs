@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.72.0";
+const TRACE_VERSION: &str = "0.73.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "213652f80d9d8c6749102f0aa7d6d53163e5ac3c";
 const IMPLEMENTATION_TREE: &str = "de487ccfee70952024ea15b16e5c497794ec3269";
@@ -113,7 +113,14 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
         item.expect_array("depends_on", dependency)
             .unwrap_or_else(|error| panic!("{id} dependency: {error}"));
     }
-    for index in 7..=11 {
+    let color = table_record(&plan_text, "work_item", "M3-07");
+    color
+        .expect_string("status", "complete")
+        .expect("M3-07 status is exact");
+    color
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-07 completion is exact");
+    for index in 8..=11 {
         let id = format!("M3-{index:02}");
         table_record(&plan_text, "work_item", &id)
             .expect_string("status", "planned")
@@ -283,16 +290,26 @@ fn m3_geometry_gate_is_selected_before_m2_replay_and_preserves_m1() {
         &ci,
         "cargo test --locked --package pdf-rs-quality --test m3_reference_geometry_trace",
     );
+    let color = position(
+        &ci,
+        "cargo test --locked --package pdf-rs-quality --test m3_reference_color_trace",
+    );
     let m2_replay = position(
         &ci,
         "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
     );
     assert!(content < geometry);
-    assert!(geometry < m2_replay);
+    assert!(geometry < color);
+    assert!(color < m2_replay);
     assert_eq!(
         quality_main.matches("m3-reference-geometry-trace").count(),
         2,
         "local and PR selections must both name the geometry trace"
+    );
+    assert_eq!(
+        quality_main.matches("m3-reference-color-trace").count(),
+        2,
+        "local and PR selections must both name the color trace"
     );
 
     assert_eq!(
