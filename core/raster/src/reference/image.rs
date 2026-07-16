@@ -29,7 +29,6 @@ pub(crate) enum ImageLimitKind {
 pub(crate) enum ImageFailure {
     NumericOverflow,
     InvalidImage,
-    SingularTransform,
     UnsupportedInterpolation,
     Cancelled,
     Allocation {
@@ -57,13 +56,29 @@ impl From<GeometryFailure> for ImageFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ImageLimits {
+    /// Maximum decoded source pixels admitted for one image command.
     pub(crate) max_source_pixels: u64,
+    /// Maximum decoded row stride admitted for one image command.
     pub(crate) max_stride_bytes: u64,
+    /// Maximum decoded source bytes admitted for one image command.
     pub(crate) max_decoded_bytes: u64,
+    /// Maximum output pixels copied into the private result.
     pub(crate) max_output_pixels: u64,
+    /// Conservative full-output sample admission cap for a non-singular command.
+    ///
+    /// Admission intentionally does not depend on clip coverage or whether the transformed image
+    /// intersects the page. Published statistics retain the exact work actually performed.
     pub(crate) max_samples: u64,
+    /// Conservative full-output color-conversion admission cap for a non-singular command.
+    ///
+    /// This is checked before allocation even when the command is fully clipped or off-page.
     pub(crate) max_conversions: u64,
+    /// Maximum allocator-reported bytes retained by the private output.
     pub(crate) max_retained_bytes: u64,
+    /// Conservative full-output fuel admission cap for a non-singular command.
+    ///
+    /// The admitted amount includes output copying, all samples and conversions, and final pixel
+    /// averaging. Exact statistics can be lower for clipped or off-page commands.
     pub(crate) max_fuel: u64,
 }
 
@@ -346,23 +361,39 @@ pub(crate) fn rasterize_image(
         return Err(ImageFailure::InvalidImage);
     }
 
-    let samples = output_pixels
-        .checked_mul(u64::from(SAMPLES_PER_PIXEL))
-        .ok_or(ImageFailure::NumericOverflow)?;
-    work.ensure(ImageLimitKind::Samples, limits.max_samples, 0, samples)?;
+    let device_to_image = PageDeviceMap::new(geometry, output_width, output_height)?
+        .combined(transform)?
+        .inverse()?;
+    let admitted_samples = if device_to_image.is_some() {
+        output_pixels
+            .checked_mul(u64::from(SAMPLES_PER_PIXEL))
+            .ok_or(ImageFailure::NumericOverflow)?
+    } else {
+        0
+    };
+    work.ensure(
+        ImageLimitKind::Samples,
+        limits.max_samples,
+        0,
+        admitted_samples,
+    )?;
     work.ensure(
         ImageLimitKind::Conversions,
         limits.max_conversions,
         0,
-        samples,
+        admitted_samples,
     )?;
-    let worst_case_fuel = output_pixels
+    let admitted_sample_fuel = admitted_samples
         .checked_mul(2)
-        .and_then(|pixels| {
-            samples
-                .checked_mul(2)
-                .and_then(|sample| pixels.checked_add(sample))
-        })
+        .ok_or(ImageFailure::NumericOverflow)?;
+    let admitted_pixel_fuel = if device_to_image.is_some() {
+        output_pixels
+    } else {
+        0
+    };
+    let worst_case_fuel = output_pixels
+        .checked_add(admitted_pixel_fuel)
+        .and_then(|value| value.checked_add(admitted_sample_fuel))
         .ok_or(ImageFailure::NumericOverflow)?;
     work.ensure(ImageLimitKind::Fuel, limits.max_fuel, 0, worst_case_fuel)?;
 
@@ -398,10 +429,17 @@ pub(crate) fn rasterize_image(
         work.charge_fuel(1)?;
     }
 
-    let device_to_image = PageDeviceMap::new(geometry, output_width, output_height)?
-        .combined(transform)?
-        .inverse()?
-        .ok_or(ImageFailure::SingularTransform)?;
+    let Some(device_to_image) = device_to_image else {
+        // A rank-zero or rank-one image transform paints no area. It is a valid no-op, not a
+        // page-level failure, and still publishes a private copy of the exact backdrop.
+        work.check_cancellation()?;
+        return Ok(ImageRaster {
+            width: output_width,
+            height: output_height,
+            pixels,
+            stats: work.stats,
+        });
+    };
     let alpha = NormalizedQ16::from(alpha);
     let blend_mode = ReferenceBlendMode::from(blend_mode);
     for y in 0..output_height {
@@ -491,7 +529,7 @@ fn image_sample_index(
         .map_err(|_| ImageFailure::NumericOverflow)
 }
 
-fn unit_index(value: Fixed, extent: u32) -> Result<Option<u32>, ImageFailure> {
+pub(crate) fn unit_index(value: Fixed, extent: u32) -> Result<Option<u32>, ImageFailure> {
     if value < Fixed::ZERO || value >= Fixed::ONE {
         return Ok(None);
     }

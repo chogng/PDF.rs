@@ -19,6 +19,7 @@ use reference::coverage::CoverageMask;
 use reference::geometry::{GeometryCancellation, GeometryLimits, GeometryWork};
 use reference::image::{
     ImageCancellation, ImageFailure, ImageLimitKind, ImageLimits, ImageRaster, rasterize_image,
+    unit_index,
 };
 
 struct NeverCancel;
@@ -164,7 +165,7 @@ fn one_pixel_gray_and_cmyk_conversion_are_literal() {
 }
 
 #[test]
-fn two_by_two_top_row_orientation_and_horizontal_flip_are_exact() {
+fn two_by_two_top_row_orientation_flip_and_page_rotations_are_exact() {
     let image = image(
         2,
         2,
@@ -218,6 +219,41 @@ fn two_by_two_top_row_orientation_and_horizontal_flip_are_exact() {
             [255, 0, 0, 255],
             [255, 255, 255, 255],
             [0, 255, 0, 255],
+        ]
+    );
+
+    let rotated = |rotation| {
+        rasterize_image(
+            &image,
+            rotated_geometry(rotation),
+            Matrix::IDENTITY,
+            2,
+            2,
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            &background,
+            None,
+            ImageLimits::default(),
+            &NeverCancel,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        rgba(&rotated(PageRotation::Degrees180)),
+        vec![
+            [255, 255, 255, 255],
+            [0, 0, 255, 255],
+            [0, 255, 0, 255],
+            [255, 0, 0, 255],
+        ]
+    );
+    assert_eq!(
+        rgba(&rotated(PageRotation::Degrees270)),
+        vec![
+            [0, 255, 0, 255],
+            [255, 255, 255, 255],
+            [255, 0, 0, 255],
+            [0, 0, 255, 255],
         ]
     );
 }
@@ -294,18 +330,24 @@ fn alpha_and_multiply_are_applied_before_sample_averaging() {
 }
 
 #[test]
-fn singular_interpolated_and_mismatched_inputs_fail_structurally() {
+fn singular_point_and_line_collapses_are_valid_no_ops() {
     let normal = image(1, 1, ImageColorSpace::DeviceGray, false, vec![0]);
-    assert_eq!(
-        raster(
-            &normal,
-            matrix(["0", "0", "0", "1", "0", "0"]),
-            1,
-            1,
-            &[white()]
-        ),
-        Err(ImageFailure::SingularTransform)
-    );
+    for transform in [
+        matrix(["0", "0", "0", "0", "0", "0"]),
+        matrix(["0", "0", "0", "1", "0", "0"]),
+        matrix(["1", "1", "1", "1", "0", "0"]),
+    ] {
+        let result = raster(&normal, transform, 1, 1, &[white()]).unwrap();
+        assert_eq!(rgba(&result), vec![[255, 255, 255, 255]]);
+        assert_eq!(result.stats().samples(), 0);
+        assert_eq!(result.stats().conversions(), 0);
+        assert_eq!(result.stats().fuel(), 1);
+    }
+}
+
+#[test]
+fn interpolated_and_mismatched_inputs_fail_structurally() {
+    let normal = image(1, 1, ImageColorSpace::DeviceGray, false, vec![0]);
     let interpolated = image(1, 1, ImageColorSpace::DeviceGray, true, vec![0]);
     assert_eq!(
         raster(&interpolated, Matrix::IDENTITY, 1, 1, &[white()]),
@@ -315,6 +357,94 @@ fn singular_interpolated_and_mismatched_inputs_fail_structurally() {
         raster(&normal, Matrix::IDENTITY, 2, 1, &[white()]),
         Err(ImageFailure::InvalidImage)
     );
+}
+
+#[test]
+fn unit_and_texel_boundaries_are_lower_inclusive_and_upper_exclusive() {
+    use reference::geometry::Fixed;
+
+    assert_eq!(unit_index(Fixed::ZERO, 2).unwrap(), Some(0));
+    assert_eq!(
+        unit_index(Fixed::from_scene(scalar("0.5")).unwrap(), 2).unwrap(),
+        Some(1)
+    );
+    assert_eq!(unit_index(Fixed::ONE, 2).unwrap(), None);
+    assert_eq!(
+        unit_index(Fixed::from_scene(scalar("-0.0001")).unwrap(), 2).unwrap(),
+        None
+    );
+
+    let image = image(
+        2,
+        1,
+        ImageColorSpace::DeviceRgb,
+        false,
+        vec![255, 0, 0, 0, 0, 255],
+    );
+    // Under this flip, the leftmost 8x8 sample lies exactly on u=1 and is excluded. Four
+    // columns, including the exact u=0.5 boundary, belong to the right (blue) texel; the
+    // remaining three belong to the left (red) texel.
+    let flipped_outer_boundary = matrix(["-1", "0", "0", "1", "1.0625", "0"]);
+    assert_eq!(
+        rgba(&raster(&image, flipped_outer_boundary, 1, 1, &[white()]).unwrap()),
+        vec![[128, 32, 159, 255]]
+    );
+}
+
+#[test]
+fn clipped_and_off_page_commands_use_conservative_admission_and_exact_stats() {
+    let image = image(1, 1, ImageColorSpace::DeviceGray, false, vec![0]);
+    let mut work = GeometryWork::new(GeometryLimits::default(), &NeverCancel).unwrap();
+    let clip = CoverageMask::empty(1, 1, &mut work).unwrap();
+    let baseline = rasterize_image(
+        &image,
+        geometry(),
+        Matrix::IDENTITY,
+        1,
+        1,
+        SceneUnit::ONE,
+        BlendMode::Normal,
+        &[white()],
+        Some(&clip),
+        ImageLimits::default(),
+        &NeverCancel,
+    )
+    .unwrap();
+    assert_eq!(rgba(&baseline), vec![[255, 255, 255, 255]]);
+    assert_eq!(baseline.stats().samples(), 64);
+    assert_eq!(baseline.stats().conversions(), 0);
+
+    let conservative = ImageLimits {
+        max_conversions: 63,
+        ..ImageLimits::default()
+    };
+    assert!(matches!(
+        rasterize_image(
+            &image,
+            geometry(),
+            Matrix::IDENTITY,
+            1,
+            1,
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            &[white()],
+            Some(&clip),
+            conservative,
+            &NeverCancel,
+        ),
+        Err(ImageFailure::Limit {
+            kind: ImageLimitKind::Conversions,
+            limit: 63,
+            consumed: 0,
+            attempted: 64,
+        })
+    ));
+
+    let off_page = matrix(["1", "0", "0", "1", "2", "0"]);
+    let off_page = raster(&image, off_page, 1, 1, &[white()]).unwrap();
+    assert_eq!(rgba(&off_page), vec![[255, 255, 255, 255]]);
+    assert_eq!(off_page.stats().samples(), 64);
+    assert_eq!(off_page.stats().conversions(), 0);
 }
 
 #[test]
