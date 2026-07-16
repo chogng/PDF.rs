@@ -409,6 +409,39 @@ pub enum OperatorContext {
     MarkedContent,
 }
 
+/// Exact top-level operand shape required before an initial known operator can execute.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperatorOperandShape {
+    /// No operands.
+    None,
+    /// Six PDF numbers in source order.
+    SixNumbers,
+    /// One PDF name.
+    Name,
+    /// One PDF name followed by either a name or a direct dictionary.
+    NameAndNameOrDictionary,
+}
+
+impl OperatorOperandShape {
+    const fn operand_count(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::SixNumbers => 6,
+            Self::Name => 1,
+            Self::NameAndNameOrDictionary => 2,
+        }
+    }
+}
+
+/// Declarative initial VM outcome after an operator's operand shape has been validated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperatorFailurePolicy {
+    /// Execute the operator under its structural and resource rules.
+    Execute,
+    /// Publish a structured unsupported outcome only after operand validation succeeds.
+    ValidateThenUnsupported,
+}
+
 /// Stable known operator identity used by the initial Content VM.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum OperatorKind {
@@ -444,7 +477,9 @@ pub struct OperatorSpec {
     token: &'static [u8],
     min_operands: u8,
     max_operands: u8,
+    operand_shape: OperatorOperandShape,
     context: OperatorContext,
+    failure_policy: OperatorFailurePolicy,
     base_fuel: u16,
 }
 
@@ -464,9 +499,19 @@ impl OperatorSpec {
         self.max_operands
     }
 
+    /// Returns the exact operand type shape validated by the VM.
+    pub const fn operand_shape(self) -> OperatorOperandShape {
+        self.operand_shape
+    }
+
     /// Returns the structural context class.
     pub const fn context(self) -> OperatorContext {
         self.context
+    }
+
+    /// Returns the declared outcome after successful operand validation.
+    pub const fn failure_policy(self) -> OperatorFailurePolicy {
+        self.failure_policy
     }
 
     /// Returns the declared base VM fuel cost.
@@ -497,35 +542,109 @@ impl OperatorKind {
     /// Returns the declarative specification for this known operator.
     pub const fn spec(self) -> OperatorSpec {
         match self {
-            Self::SaveGraphicsState => spec(b"q", 0, OperatorContext::Any, 1),
-            Self::RestoreGraphicsState => spec(b"Q", 0, OperatorContext::Any, 1),
-            Self::ConcatMatrix => spec(b"cm", 6, OperatorContext::Any, 4),
-            Self::BeginText => spec(b"BT", 0, OperatorContext::TextObjectBoundary, 1),
-            Self::EndText => spec(b"ET", 0, OperatorContext::TextObjectBoundary, 1),
-            Self::BeginCompatibility => spec(b"BX", 0, OperatorContext::CompatibilityBoundary, 1),
-            Self::EndCompatibility => spec(b"EX", 0, OperatorContext::CompatibilityBoundary, 1),
-            Self::MarkedContentPoint => spec(b"MP", 1, OperatorContext::MarkedContent, 2),
-            Self::MarkedContentPointProperties => spec(b"DP", 2, OperatorContext::MarkedContent, 3),
-            Self::BeginMarkedContent => spec(b"BMC", 1, OperatorContext::MarkedContent, 2),
-            Self::BeginMarkedContentProperties => {
-                spec(b"BDC", 2, OperatorContext::MarkedContent, 3)
-            }
-            Self::EndMarkedContent => spec(b"EMC", 0, OperatorContext::MarkedContent, 1),
+            Self::SaveGraphicsState => spec(
+                b"q",
+                OperatorOperandShape::None,
+                OperatorContext::Any,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::RestoreGraphicsState => spec(
+                b"Q",
+                OperatorOperandShape::None,
+                OperatorContext::Any,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::ConcatMatrix => spec(
+                b"cm",
+                OperatorOperandShape::SixNumbers,
+                OperatorContext::Any,
+                OperatorFailurePolicy::Execute,
+                4,
+            ),
+            Self::BeginText => spec(
+                b"BT",
+                OperatorOperandShape::None,
+                OperatorContext::TextObjectBoundary,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::EndText => spec(
+                b"ET",
+                OperatorOperandShape::None,
+                OperatorContext::TextObjectBoundary,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::BeginCompatibility => spec(
+                b"BX",
+                OperatorOperandShape::None,
+                OperatorContext::CompatibilityBoundary,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::EndCompatibility => spec(
+                b"EX",
+                OperatorOperandShape::None,
+                OperatorContext::CompatibilityBoundary,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
+            Self::MarkedContentPoint => spec(
+                b"MP",
+                OperatorOperandShape::Name,
+                OperatorContext::MarkedContent,
+                OperatorFailurePolicy::ValidateThenUnsupported,
+                2,
+            ),
+            Self::MarkedContentPointProperties => spec(
+                b"DP",
+                OperatorOperandShape::NameAndNameOrDictionary,
+                OperatorContext::MarkedContent,
+                OperatorFailurePolicy::ValidateThenUnsupported,
+                3,
+            ),
+            Self::BeginMarkedContent => spec(
+                b"BMC",
+                OperatorOperandShape::Name,
+                OperatorContext::MarkedContent,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::BeginMarkedContentProperties => spec(
+                b"BDC",
+                OperatorOperandShape::NameAndNameOrDictionary,
+                OperatorContext::MarkedContent,
+                OperatorFailurePolicy::Execute,
+                3,
+            ),
+            Self::EndMarkedContent => spec(
+                b"EMC",
+                OperatorOperandShape::None,
+                OperatorContext::MarkedContent,
+                OperatorFailurePolicy::Execute,
+                1,
+            ),
         }
     }
 }
 
 const fn spec(
     token: &'static [u8],
-    operands: u8,
+    operand_shape: OperatorOperandShape,
     context: OperatorContext,
+    failure_policy: OperatorFailurePolicy,
     base_fuel: u16,
 ) -> OperatorSpec {
+    let operands = operand_shape.operand_count();
     OperatorSpec {
         token,
         min_operands: operands,
         max_operands: operands,
+        operand_shape,
         context,
+        failure_policy,
         base_fuel,
     }
 }

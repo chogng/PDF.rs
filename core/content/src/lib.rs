@@ -10,7 +10,11 @@
 mod error;
 mod limits;
 mod model;
+mod number;
 mod scanner;
+mod vm_error;
+mod vm_limits;
+mod vm_model;
 
 pub use error::{
     ContentError, ContentErrorCategory, ContentErrorCode, ContentLimit, ContentLimitKind,
@@ -21,9 +25,17 @@ pub use model::{
     ContentDictionaryEntry, ContentExtent, ContentName, ContentOperand, ContentOperator,
     ContentOperatorSource, ContentPosition, ContentProgram, ContentReal, ContentScanStats,
     ContentString, ContentStringKind, DecodedContentStream, DecodedSpan, LocatedOperand,
-    OperatorContext, OperatorKind, OperatorSpec, ScannedOperator,
+    OperatorContext, OperatorFailurePolicy, OperatorKind, OperatorOperandShape, OperatorSpec,
+    ScannedOperator,
 };
+pub use number::ContentNumber;
 pub use scanner::{
     ContentCancellation, ContentScanJob, ContentScanPhase, ContentScanPoll, NeverCancelled,
     scan_content_streams,
 };
+pub use vm_error::{
+    ContentVmError, ContentVmErrorCategory, ContentVmErrorCode, ContentVmLimit, ContentVmLimitKind,
+    ContentVmRecoverability,
+};
+pub use vm_limits::{ContentVmLimitConfig, ContentVmLimits};
+pub use vm_model::ContentVmStats;

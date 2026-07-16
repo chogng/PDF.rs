@@ -5,7 +5,7 @@ use pdf_rs_content::{
     ContentCancellation, ContentError, ContentErrorCode, ContentLimitConfig, ContentLimitKind,
     ContentLimits, ContentOperand, ContentOperator, ContentScanJob, ContentScanPhase,
     ContentScanPoll, ContentStringKind, DecodedContentStream, NeverCancelled, OperatorContext,
-    OperatorKind, scan_content_streams,
+    OperatorFailurePolicy, OperatorKind, OperatorOperandShape, scan_content_streams,
 };
 use pdf_rs_syntax::ObjectRef;
 
@@ -225,81 +225,107 @@ fn known_operator_table_declares_token_arity_context_and_cost() {
             OperatorKind::SaveGraphicsState,
             b"q".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::Any,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::RestoreGraphicsState,
             b"Q".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::Any,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::ConcatMatrix,
             b"cm".as_slice(),
             6,
+            OperatorOperandShape::SixNumbers,
             OperatorContext::Any,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::BeginText,
             b"BT".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::TextObjectBoundary,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::EndText,
             b"ET".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::TextObjectBoundary,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::BeginCompatibility,
             b"BX".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::CompatibilityBoundary,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::EndCompatibility,
             b"EX".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::CompatibilityBoundary,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::MarkedContentPoint,
             b"MP".as_slice(),
             1,
+            OperatorOperandShape::Name,
             OperatorContext::MarkedContent,
+            OperatorFailurePolicy::ValidateThenUnsupported,
         ),
         (
             OperatorKind::MarkedContentPointProperties,
             b"DP".as_slice(),
             2,
+            OperatorOperandShape::NameAndNameOrDictionary,
             OperatorContext::MarkedContent,
+            OperatorFailurePolicy::ValidateThenUnsupported,
         ),
         (
             OperatorKind::BeginMarkedContent,
             b"BMC".as_slice(),
             1,
+            OperatorOperandShape::Name,
             OperatorContext::MarkedContent,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::BeginMarkedContentProperties,
             b"BDC".as_slice(),
             2,
+            OperatorOperandShape::NameAndNameOrDictionary,
             OperatorContext::MarkedContent,
+            OperatorFailurePolicy::Execute,
         ),
         (
             OperatorKind::EndMarkedContent,
             b"EMC".as_slice(),
             0,
+            OperatorOperandShape::None,
             OperatorContext::MarkedContent,
+            OperatorFailurePolicy::Execute,
         ),
     ];
-    for (kind, token, operands, context) in expected {
+    for (kind, token, operands, operand_shape, context, failure_policy) in expected {
         let spec = kind.spec();
         assert_eq!(spec.token(), token);
         assert_eq!(spec.min_operands(), operands);
         assert_eq!(spec.max_operands(), operands);
+        assert_eq!(spec.operand_shape(), operand_shape);
         assert_eq!(spec.context(), context);
+        assert_eq!(spec.failure_policy(), failure_policy);
         assert!(spec.base_fuel() > 0);
     }
 }
