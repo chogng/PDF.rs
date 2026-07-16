@@ -38,6 +38,15 @@ construct public Scene fixtures; they do not enter the product graph.
   independent dimension, pixel, work, retained-memory, and cancellation limits with no partial
   surface publication.
 
+# Traceability profile boundaries
+
+`m3.reference-pixel-foundation.v1` is registered as `PLANNED`. M3-01 completion means the bounded
+value contract, current non-painting Scene consumer, resource policy, tests, product-purity
+closure, and independent implementation review are present.
+
+It is not a `REFERENCE` maturity promotion; it is not an O0/O1 pixel authority.
+It is not the final `reference-raster-v1` algorithm or the M3 exit gate.
+
 # Algorithms and derivations
 
 - `ReferenceRenderConfig::opaque_srgb` accepts positive caller-selected pixel dimensions. M3-01

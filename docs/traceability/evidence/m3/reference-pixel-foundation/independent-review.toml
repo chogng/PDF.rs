@@ -1,0 +1,46 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.reference-pixel-foundation.independent-review"
+milestone = "M3"
+work_item = "M3-01"
+profile = "m3.reference-pixel-foundation.v1"
+feature = "core.reference-pixel-foundation"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "3faef55df731fda03090238d1d83acc4bbfa675d"
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = ["core/raster public pixel contract", "Reference render ownership and resource policy", "product purity and fresh release closure", "scripts/ci.sh"]
+reviewed_subjects = [
+  "Cargo.lock#sha256:ebcf13f0e76eb5f89905a292dd1ae5de067d70e83d449d490c4c932401fe98e5",
+  "core/raster/Cargo.toml#sha256:19f3a511a44a44c9595012ec8ab79a536b1a3af547fc5ee930a668a9d5d417fb",
+  "core/raster/src/lib.rs#sha256:d0bd1b3ceb42c5d372de81304c836b11f28e915ad76a6517adf197779d20a3bb",
+  "core/raster/src/reference/error.rs#sha256:b43fd5eeeaada893553f55ebdaf175965c3543ccf004379eb2e3aadfeba61b9d",
+  "core/raster/src/reference/limits.rs#sha256:9e0aa9e1174e08417c95756738264e1b46b15cf8b2422d0561f18088e8983429",
+  "core/raster/src/reference/mod.rs#sha256:c4eee809e93c932f2641e699f398b0e69f7e1285cbb2653fcdb88439e9655d33",
+  "core/raster/src/reference/model.rs#sha256:88d71e6be6971244451c62743043678e185d2aa58c79918064435f220cc948f8",
+  "core/raster/src/reference/render.rs#sha256:d3d65f3087c3e43fb2c9640a9ef37335e8d53d9d8801ee2846eed7444156f640",
+  "core/raster/tests/reference_foundation.rs#sha256:a0a4f02318b7d304f7e5d3af8483ee9d9c73917cc57e83f4ddaf7572d4e6730f",
+  "scripts/ci.sh#sha256:243b3436351471bfaed9d7dffdfac347b5b763806719dcc81a0ed6fb5250b24b",
+  "tools/quality/src/purity.rs#sha256:ce6c8329325efcca89c0a6ddaeae756695850ec74bd22b73dcfcaceeee0ca587",
+]
+commands = [
+  "cargo test --locked --package pdf-rs-raster --all-targets",
+  "cargo test --locked --release --package pdf-rs-raster --all-targets",
+  "cargo clippy --locked --package pdf-rs-raster --all-targets -- -D warnings",
+  "cargo test --locked --package pdf-rs-quality purity",
+  "cargo run --quiet --locked --package pdf-rs-quality -- check-product-purity .",
+  "cargo test --locked --package pdf-rs-quality --test m2_exit",
+  "cargo fmt --all --check",
+]
+review_scope = "M3-01 bounded work-item completion only; no O0/O1 authority, O3 golden approval, REFERENCE promotion, final reference-raster-v1 claim, or M3 exit"
+review_rounds = ["public contract and bounded-scope review", "adversarial ownership, allocation, cancellation, and purity review", "post-fix security re-review"]
+closed_findings = [
+  "P1 terminal input ownership: ReferenceRenderJob now takes and releases its Arc<Scene> during the first poll before retaining success or failure, with strong-count regressions for success, failure, and replay.",
+  "P2 pre-allocation cancellation: a cooperative cancellation probe now runs immediately before potentially large pixel reservation, with a 256 MiB-class configuration regression cancelling at the second probe.",
+]
+open_p0_p2 = 0
+verdict = "SHIP"

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use pdf_rs_digest::{hex_digest, sha256};
 
-const TRACE_VERSION: &str = "0.70.0";
+const TRACE_VERSION: &str = "0.69.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const M1_PAGE_TREE_SHA256: &str =
     "e680abd131a3a4da61262eb152820c3e4f6252c6396a15447039713da3a0f5e1";

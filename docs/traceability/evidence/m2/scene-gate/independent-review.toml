@@ -16,7 +16,7 @@ reviewed_surfaces = ["core/content::vm", "tools/quality::m2_scene_gate", "tools/
 reviewed_subjects = [
   "core/content/src/vm.rs#sha256:2b866dca0b778c579a23db58f16b627fb338dcf83c4a34880c063c04c43c9eef",
   "tools/quality/tests/m2_scene_gate_support/mod.rs#sha256:af3807fbbc93fa09ca135ca27e4eeafafaaefb595e8e0bef75cde600ffb5caec",
-  "tools/quality/tests/m2_exit.rs#sha256:2cdcb920fe52065d2f385f2b734ff874e91d1c1dff3eff8586b73a8d2960c4da",
+  "docs/traceability/evidence/m2/scene-gate/subjects/tools-quality-m2-exit.rs#sha256:2cdcb920fe52065d2f385f2b734ff874e91d1c1dff3eff8586b73a8d2960c4da",
   "docs/traceability/evidence/m2/scene-gate/subjects/scripts-ci-m2.sh#sha256:7dc3aecf35f0dd0800a3ee053e92f3601cd5a45fe7c53ff317133d81806e10d2",
   "plan/m2.toml#sha256:b0378ae2c3388626871863462362649ee291ee11142bee7686ec909f4cced55a",
   "docs/traceability/evidence/m2/scene-gate/subjects/feature-map-0.69.0.toml#sha256:5fab896e6efc372fef9910a831fe32f455b7c61539f249530821080dc0cd9168",
