@@ -35,6 +35,43 @@ cargo run --quiet --package pdf-rs-benchmark -- \
     validate tests/performance/m0-synthetic-benchmark-replay-v1.toml \
     tests/corpus/manifests/t0-bootstrap-v1.toml
 cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases
+
+m2_scene_gate_root="target/ci-artifacts/m2-scene-gate"
+if [[ "$m2_scene_gate_root" != "target/ci-artifacts/m2-scene-gate" ]]; then
+    echo "refusing to clean unexpected M2 Scene gate root: $m2_scene_gate_root" >&2
+    exit 1
+fi
+if [[ -L "target" || -L "target/ci-artifacts" || -L "$m2_scene_gate_root" ]]; then
+    echo "refusing to clean M2 Scene gate root through a symbolic link" >&2
+    exit 1
+fi
+rm -rf -- "$m2_scene_gate_root"
+mkdir -p -- \
+    "$m2_scene_gate_root/debug-1" \
+    "$m2_scene_gate_root/debug-2" \
+    "$m2_scene_gate_root/release-1" \
+    "$m2_scene_gate_root/release-2"
+
+PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/debug-1" \
+    cargo test --locked --package pdf-rs-quality --test m2_scene_gate
+PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/debug-2" \
+    cargo test --locked --package pdf-rs-quality --test m2_scene_gate
+PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/release-1" \
+    cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate
+PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/release-2" \
+    cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate
+
+diff --recursive --brief \
+    "$m2_scene_gate_root/debug-1" \
+    "$m2_scene_gate_root/debug-2"
+diff --recursive --brief \
+    "$m2_scene_gate_root/release-1" \
+    "$m2_scene_gate_root/release-2"
+diff --recursive --brief \
+    "$m2_scene_gate_root/debug-1" \
+    "$m2_scene_gate_root/release-1"
+
+cargo test --locked -p pdf-rs-quality --test m2_exit
 cargo run --quiet --package pdf-rs-quality -- \
     validate-m1-maturity docs/traceability/capability-profiles.toml
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .
