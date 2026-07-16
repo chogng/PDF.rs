@@ -11,12 +11,17 @@
 
 mod builder;
 mod canonical;
+mod diff;
 mod error;
 mod limits;
 mod model;
 mod scalar;
 
 pub use builder::SceneBuilder;
+pub use diff::{
+    SceneDiff, SceneDiffField, SceneDiffKind, SceneDiffLimitConfig, SceneDiffLimits,
+    SceneDiffSection, SceneDiffStats, SceneDifference, compare_scenes,
+};
 pub use error::{
     SceneError, SceneErrorCategory, SceneErrorCode, SceneLimit, SceneLimitKind, SceneRecoverability,
 };

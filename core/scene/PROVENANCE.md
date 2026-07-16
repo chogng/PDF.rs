@@ -3,8 +3,9 @@
 `core/scene` is the first immutable Native Scene v1 product foundation. It retains bounded page
 geometry, ordered semantic marked-content commands, stable marked-content property resources,
 one-to-one decoded-coordinate command provenance, a deterministic feature report, the complete
-validated limit profile, and allocator-reported retained-capacity accounting. A bounded
-`SceneBuilder` is the only public construction path.
+validated limit profile, allocator-reported retained-capacity accounting, and a bounded
+content-redacted semantic diff. A bounded `SceneBuilder` is the only public Scene construction
+path.
 
 The crate performs no PDF byte acquisition, object resolution, content scanning, operator
 interpretation, resource inheritance, rendering, cache insertion, file or network access, async
@@ -14,6 +15,8 @@ scheduling, or external-engine fallback.
 
 Graphics/Color owns Scene schema, numeric normalization, immutable command/resource ownership,
 stable identifiers, feature reporting, canonical semantic bytes, and Scene-specific budgets.
+It also owns positional semantic diff ordering, fixed-size redacted difference records, and
+canonical diff bytes.
 `core/bytes` owns runtime source identity. `core/syntax` owns `ObjectRef`. Document and content
 layers will later validate PDF semantics and supply commands; renderers will only consume the
 published immutable Scene.
@@ -74,6 +77,19 @@ This Stage A slice does not claim an ISO 32000 conformance profile or the M2 Sce
   The writer grows in bounded geometric steps and reserves an entire hexadecimal name encoding
   before writing it, avoiding fragment-by-fragment or byte-by-byte reallocation. Canonical
   serialization never mutates the Scene.
+- `compare_scenes` ignores only runtime `SourceIdentity`; it compares schema major/minor, page
+  index, exact Page object, revision anchor, geometry, feature decision and ordered tags, stable
+  resources, semantic commands, and their paired provenance. Scalar fields are visited in fixed
+  schema order. Ordered sections compare shared positions as changed and represent only trailing
+  length imbalance as ascending added or removed records.
+- Every `SceneDifference` is a fixed eight-byte enum/index record with no names, object values,
+  source digest, or document bytes. Comparison first counts the complete result under
+  `max_differences`, then admits and fallibly reserves the complete fixed-size record capacity
+  under `max_retained_bytes`, and only then publishes the immutable diff. Exceeding either limit
+  is a structured `ResourceLimit`; differences are never silently truncated.
+- Canonical Scene-diff JSON emits only field, index, relationship, section, schema, and aggregate
+  counts in fixed order. It has an independent `max_canonical_bytes` ceiling and uses the same
+  checked writer policy as canonical Scene JSON.
 
 # Tests
 
@@ -91,6 +107,11 @@ This Stage A slice does not claim an ISO 32000 conformance profile or the M2 Sce
   limits, command/provenance pairing, and content-redacted Debug output.
 - Repository policy checks for dependency direction, product I/O exclusion, no external engines,
   and canonical-source identity omission.
+- Source-identity-noise equality, schema/binding/geometry/feature/resource/command/provenance
+  section coverage, stable changed/added/removed order, exact canonical diff golden bytes, every
+  zero limit, one-less difference/retention/canonical budgets, fixed record size, redacted Debug,
+  and repeat-build determinism. The exact golden is profile-independent and is exercised by each
+  supported debug or release test invocation.
 
 # Known deviations and unsupported cases
 
@@ -106,11 +127,14 @@ This Stage A slice does not claim an ISO 32000 conformance profile or the M2 Sce
 - Source identity remains runtime metadata on `SceneBinding` but is not serialized. A future cache
   key must combine runtime binding with a hash of canonical semantic bytes; canonical bytes alone
   are not a cross-document authorization token.
-- Canonical JSON is write-only in this slice. Schema parsing, minor-version skipping, IPC framing,
-  and `tools/compare` integration remain later M2 work.
+- Canonical Scene and Scene-diff JSON are write-only in this slice. Schema parsing, minor-version
+  skipping, IPC framing, and `tools/compare` integration remain later M2 work.
 
 # History
 
 - 2026-07-16: Added immutable bounded Scene v1 Stage A with fixed-point geometry, semantic
   marked-content commands, first-use resource IDs, paired provenance, feature reporting, and
   deterministic source-identity-free canonical JSON.
+- 2026-07-16: Added bounded Scene v1 Stage B semantic comparison with fixed-size redacted records,
+  stable section order, structured difference/retention/output limits, and exact canonical diff
+  JSON.

@@ -72,6 +72,8 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
         fs::read_to_string(crate_root.join("src/scalar.rs")).expect("scalar source is readable");
     let provenance =
         fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance is readable");
+    let diff = fs::read_to_string(crate_root.join("src/diff.rs"))
+        .expect("semantic Scene diff source is readable");
 
     assert!(!canonical.contains("binding().source()"));
     assert!(!canonical.contains("stable_id"));
@@ -89,6 +91,12 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
     assert!(provenance.contains("runtime `SourceIdentity` is"));
     assert!(provenance.contains("deliberately omitted"));
     assert!(provenance.contains("nine-decimal fixed-point"));
+    assert!(diff.contains("pub fn validate(config: SceneDiffLimitConfig)"));
+    assert!(diff.contains("SceneLimitKind::Differences"));
+    assert!(diff.contains("SceneLimitKind::DiffRetainedBytes"));
+    assert!(diff.contains("SceneLimitKind::DiffCanonicalBytes"));
+    assert!(!diff.contains("expected_binding.source()"));
+    assert!(!diff.contains("actual_binding.source()"));
 }
 
 fn collect_rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {

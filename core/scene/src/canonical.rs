@@ -19,7 +19,10 @@ impl Scene {
                 None,
             ));
         }
-        let mut writer = CanonicalWriter::new(self.limits().max_canonical_bytes());
+        let mut writer = CanonicalWriter::new(
+            self.limits().max_canonical_bytes(),
+            SceneLimitKind::CanonicalBytes,
+        );
         writer.push(b"{\"binding\":{\"page_index\":")?;
         writer.push_u32(self.binding().page_index())?;
         writer.push(b",\"page_object\":")?;
@@ -139,20 +142,22 @@ fn write_object_ref(writer: &mut CanonicalWriter, reference: ObjectRef) -> Resul
     writer.push(b"}")
 }
 
-struct CanonicalWriter {
+pub(crate) struct CanonicalWriter {
     bytes: Vec<u8>,
     limit: u64,
+    limit_kind: SceneLimitKind,
 }
 
 impl CanonicalWriter {
-    const fn new(limit: u64) -> Self {
+    pub(crate) const fn new(limit: u64, limit_kind: SceneLimitKind) -> Self {
         Self {
             bytes: Vec::new(),
             limit,
+            limit_kind,
         }
     }
 
-    fn push(&mut self, bytes: &[u8]) -> Result<(), SceneError> {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<(), SceneError> {
         self.reserve_output(bytes.len())?;
         self.bytes.extend_from_slice(bytes);
         Ok(())
@@ -163,17 +168,11 @@ impl CanonicalWriter {
             .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?;
         let attempted = u64::try_from(additional).unwrap_or(u64::MAX);
         let next = consumed.checked_add(attempted).ok_or_else(|| {
-            SceneError::resource(
-                SceneLimitKind::CanonicalBytes,
-                self.limit,
-                consumed,
-                attempted,
-                None,
-            )
+            SceneError::resource(self.limit_kind, self.limit, consumed, attempted, None)
         })?;
         if next > self.limit {
             return Err(SceneError::resource(
-                SceneLimitKind::CanonicalBytes,
+                self.limit_kind,
                 self.limit,
                 consumed,
                 attempted,
@@ -211,18 +210,18 @@ impl CanonicalWriter {
         Ok(())
     }
 
-    fn separator(&mut self, index: usize) -> Result<(), SceneError> {
+    pub(crate) fn separator(&mut self, index: usize) -> Result<(), SceneError> {
         if index != 0 {
             self.push(b",")?;
         }
         Ok(())
     }
 
-    fn push_u16(&mut self, value: u16) -> Result<(), SceneError> {
+    pub(crate) fn push_u16(&mut self, value: u16) -> Result<(), SceneError> {
         self.push_u64(u64::from(value))
     }
 
-    fn push_u32(&mut self, value: u32) -> Result<(), SceneError> {
+    pub(crate) fn push_u32(&mut self, value: u32) -> Result<(), SceneError> {
         self.push_u64(u64::from(value))
     }
 
@@ -252,7 +251,7 @@ impl CanonicalWriter {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let encoded_len = bytes.len().checked_mul(2).ok_or_else(|| {
             SceneError::resource(
-                SceneLimitKind::CanonicalBytes,
+                self.limit_kind,
                 self.limit,
                 u64::try_from(self.bytes.len()).unwrap_or(u64::MAX),
                 u64::MAX,
@@ -267,7 +266,7 @@ impl CanonicalWriter {
         Ok(())
     }
 
-    fn finish(self) -> Vec<u8> {
+    pub(crate) fn finish(self) -> Vec<u8> {
         self.bytes
     }
 }

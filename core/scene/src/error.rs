@@ -16,6 +16,12 @@ pub enum SceneLimitKind {
     RetainedBytes,
     /// Bytes emitted by canonical Scene JSON.
     CanonicalBytes,
+    /// Semantic difference records retained by one Scene comparison.
+    Differences,
+    /// Fixed-size difference-record capacity retained by one Scene comparison.
+    DiffRetainedBytes,
+    /// Bytes emitted by canonical Scene semantic-diff JSON.
+    DiffCanonicalBytes,
     /// A fallible allocation failed within an already validated bound.
     Allocation,
 }
