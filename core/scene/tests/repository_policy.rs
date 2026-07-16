@@ -115,7 +115,7 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
 }
 
 #[test]
-fn m2_scene_and_semantic_diff_are_independently_traceable_without_closing_the_gate() {
+fn m2_scene_profiles_have_a_completed_vm_producer_but_the_normative_gate_stays_open() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
         .parent()
@@ -131,8 +131,8 @@ fn m2_scene_and_semantic_diff_are_independently_traceable_without_closing_the_ga
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -190,24 +190,66 @@ fn m2_scene_and_semantic_diff_are_independently_traceable_without_closing_the_ga
         );
     }
 
+    let producer = record_with_id(&feature_map, "feature", "core.content-vm-scene-v1")
+        .expect("Content VM Scene producer must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m2.content-vm-scene-v1\"",
+        "ISO-32000-1:2008/14.6",
+        "ISO-32000-1:2008/14.6.1",
+        "ISO-32000-1:2008/14.6.2",
+        "RPE-ARCH-001/6.1-6.2",
+        "RPE-ARCH-001/6.4-6.7",
+        "RPE-ARCH-001/15.3/M2",
+        "modules = [\"core/content\"]",
+        "core/content::vm",
+        "core/content::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            producer.contains(required),
+            "Content VM producer feature must contain {required:?}"
+        );
+    }
+
     let scene_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/6.4-6.7")
         .expect("Scene architecture requirement must be registered");
+    assert!(scene_requirement.contains("core.content-vm-scene-v1"));
     assert!(scene_requirement.contains("core.scene-v1"));
     assert!(scene_requirement.contains("core.scene-semantic-diff"));
     assert!(scene_requirement.contains("fixed-size content-redacted"));
-    assert!(scene_requirement.contains("Content VM production"));
-    assert!(scene_requirement.contains("M2 normative Scene gate remain open"));
+    assert!(scene_requirement.contains("M2-06 now supplies one bounded producer"));
+    assert!(scene_requirement.contains("strict-attested acquired Page content"));
+    assert!(
+        scene_requirement
+            .contains("Unsupported and failed interpretations never own a partial Scene")
+    );
+    assert!(scene_requirement.contains("required by M2-07 also remain open"));
+    assert!(scene_requirement.contains("do not yet close the M2 exit gate"));
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement must be registered");
     assert!(milestone.contains("M2-04 is complete as a foundation"));
     assert!(milestone.contains("M2-05 is complete as two bounded PLANNED profiles"));
-    assert!(milestone.contains("M2-07 registered normative Scene exit evidence remain open"));
+    assert!(milestone.contains("M2-06 is complete as two additional bounded PLANNED profiles"));
+    assert!(milestone.contains("core.content-vm-scene-v1"));
+    assert!(milestone.contains("M2-07 registered normative Scene cases"));
     assert!(milestone.contains("M2 exit gate is not closed"));
 
     let m2_04 = record_with_id(&plan, "work_item", "M2-04").expect("M2-04 work item must exist");
     assert!(m2_04.contains("status = \"complete\""));
     assert!(m2_04.contains("completed_at = 2026-07-16"));
+    let m2_06 = record_with_id(&plan, "work_item", "M2-06").expect("M2-06 work item must exist");
+    assert!(m2_06.contains("status = \"complete\""));
+    assert!(m2_06.contains("completed_at = 2026-07-16"));
+    let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item must exist");
+    assert!(m2_07.contains("status = \"planned\""));
+    let milestone_header = plan
+        .split("[[work_item]]")
+        .next()
+        .expect("M2 plan has a top-level milestone header");
+    assert!(milestone_header.contains("status = \"in_progress\""));
 }
 
 fn collect_rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {

@@ -234,8 +234,8 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
     for required in [
         "pub struct MaterializedPage",
         "pub struct MaterializePageJob",
@@ -317,6 +317,177 @@ fn m2_inherited_page_values_are_traceable_as_one_bounded_profile() {
 }
 
 #[test]
+fn m2_page_property_lookup_is_no_io_bounded_and_traceable() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("core/document has a repository root two levels above it");
+    let resources = fs::read_to_string(crate_root.join("src/page_resources.rs"))
+        .expect("page resource source is readable");
+    let limits = fs::read_to_string(crate_root.join("src/page_property_lookup_limits.rs"))
+        .expect("page-property limits are readable");
+    let error =
+        fs::read_to_string(crate_root.join("src/error.rs")).expect("document errors are readable");
+    let library = fs::read_to_string(crate_root.join("src/lib.rs"))
+        .expect("document library source is readable");
+    let feature_map =
+        fs::read_to_string(repository_root.join("docs/traceability/feature-map.toml"))
+            .expect("feature map is readable");
+    let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
+        .expect("spec map is readable");
+    let plan =
+        fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
+
+    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
+    for required in [
+        "pub struct PagePropertyReference",
+        "pub struct PagePropertyResolver",
+        "pub const fn property_resolver(",
+        "pub fn lookup_marked_content_property(",
+        "Borrowed no-I/O resolver",
+        "without polling or opening the target object",
+        "DocumentErrorCode::DuplicateStructuralKey",
+        "DocumentErrorCode::InvalidPagePropertyResource",
+        "DocumentErrorCode::UnsupportedIndirectPageProperties",
+        "DocumentErrorCode::UnsupportedDirectPagePropertyDictionary",
+        "property_name",
+        "\"[NOT RETAINED]\"",
+    ] {
+        assert!(
+            resources.contains(required),
+            "page-property lookup must contain {required:?}"
+        );
+    }
+    for required in [
+        "pub struct PagePropertyLookupLimitConfig",
+        "pub struct PagePropertyLookupLimits",
+        "pub struct PagePropertyLookupStats",
+        "max_lookups",
+        "max_entry_visits",
+        "HARD_MAX_LOOKUPS",
+        "HARD_MAX_ENTRY_VISITS",
+    ] {
+        assert!(
+            limits.contains(required),
+            "page-property limits must contain {required:?}"
+        );
+    }
+    for required in [
+        "PagePropertyLookups,",
+        "PagePropertyEntryVisits,",
+        "InvalidPagePropertyResource,",
+        "UnsupportedIndirectPageProperties,",
+        "UnsupportedDirectPagePropertyDictionary,",
+    ] {
+        assert!(
+            error.contains(required),
+            "document error policy must contain {required:?}"
+        );
+    }
+    for required in [
+        "PagePropertyLookupLimitConfig",
+        "PagePropertyLookupLimits",
+        "PagePropertyLookupStats",
+        "PagePropertyReference",
+        "PagePropertyResolver",
+    ] {
+        assert!(
+            library.contains(required),
+            "document public boundary must export {required:?}"
+        );
+    }
+
+    let feature = record_with_id(&feature_map, "feature", "core.page-property-lookup")
+        .expect("page-property lookup feature is registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m2.page-property-lookup.v1\"",
+        "ISO-32000-1:2008/7.8.3",
+        "ISO-32000-1:2008/14.6.2",
+        "RPE-ARCH-001/5.8-5.9",
+        "RPE-ARCH-001/6.1-6.2",
+        "RPE-ARCH-001/15.3/M2",
+        "modules = [\"core/document\"]",
+        "core/document::page_properties",
+        "core/document::repository_policy",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            feature.contains(required),
+            "page-property feature must contain {required:?}"
+        );
+    }
+
+    let page_resources = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/7.8.3")
+        .expect("page-resource requirement is registered");
+    for required in [
+        "core.page-property-lookup",
+        "core.content-vm-scene-v1",
+        "core/document::page_properties",
+        "no-I/O",
+        "without polling for bytes",
+        "fixed-size PagePropertyReference evidence",
+        "never opens or attests the selected target object",
+        "retain the original lower DocumentError",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            page_resources.contains(required),
+            "page-resource mapping must contain {required:?}"
+        );
+    }
+
+    let marked_properties = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/14.6.2")
+        .expect("marked-content property requirement is registered");
+    for required in [
+        "core.page-property-lookup",
+        "core.content-vm-scene-v1",
+        "direct /Properties dictionary",
+        "uniquely named indirect-reference entry",
+        "performs no source read",
+        "independent lookup and entry-visit budgets",
+        "preserves ordinary lower document and Scene errors without remapping",
+        "status = \"partial\"",
+    ] {
+        assert!(
+            marked_properties.contains(required),
+            "marked-property mapping must contain {required:?}"
+        );
+    }
+
+    let document_model = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/5.8-5.9")
+        .expect("document-model requirement is registered");
+    assert!(document_model.contains("core.page-property-lookup"));
+    assert!(document_model.contains("core/document::page_properties"));
+    assert!(document_model.contains("M2 adds four separate PLANNED document profiles"));
+    assert!(document_model.contains("m2.page-property-lookup.v1"));
+    assert!(document_model.contains("without polling for bytes"));
+
+    let interpreter = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/6.1-6.2")
+        .expect("content-interpreter requirement is registered");
+    assert!(interpreter.contains("core.page-property-lookup"));
+    assert!(interpreter.contains("original lower DocumentError"));
+    assert!(interpreter.contains("M2-06 is complete"));
+
+    let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
+        .expect("M2 requirement is registered");
+    assert!(milestone.contains("core.page-property-lookup"));
+    assert!(milestone.contains("core/document::page_properties"));
+    assert!(milestone.contains("M2-06 is complete as two additional bounded PLANNED profiles"));
+    assert!(milestone.contains("M2-07 registered normative Scene cases"));
+    assert!(milestone.contains("M2 exit gate is not closed"));
+
+    let m2_06 = record_with_id(&plan, "work_item", "M2-06").expect("M2-06 work item exists");
+    assert!(m2_06.contains("status = \"complete\""));
+    assert!(m2_06.contains("completed_at = 2026-07-16"));
+    let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
+    assert!(m2_07.contains("status = \"planned\""));
+}
+
+#[test]
 fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root
@@ -339,8 +510,8 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
     for required in [
         "pub struct PageContentJobContext",
         "pub enum PageContentPhase",
@@ -473,13 +644,17 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     for required in [
         "core.page-content-acquisition",
         "core.content-operator-scanner",
+        "core.content-vm-scene-v1",
         "core/document::page_content",
+        "core/content::vm",
         "execution order",
         "sealed DecodedStream",
         "zero-length unfiltered identity proof",
         "strict attested proof",
-        "does not support locally repaired or acquired revision-chain authorities",
-        "M2-06 owns those VM semantics",
+        "proof-bearing AcquiredPageContent",
+        "validates known operand shapes before state or unsupported policy",
+        "scanner, document, and Scene failures retain their original structured diagnostic types",
+        "Inline images, Forms, paths, painting, text showing",
     ] {
         assert!(
             content_stream.contains(required),
@@ -498,7 +673,8 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
         .expect("document-model requirement exists");
     assert!(document_model.contains("core.page-content-acquisition"));
     assert!(document_model.contains("core/document::page_content"));
-    assert!(document_model.contains("M2 adds three separate PLANNED document profiles"));
+    assert!(document_model.contains("M2 adds four separate PLANNED document profiles"));
+    assert!(document_model.contains("m2.page-property-lookup.v1"));
     assert!(
         document_model.contains("Acquired-chain page indexing/materialization/content acquisition")
     );
@@ -509,11 +685,12 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
         "core.page-content-acquisition",
         "core/document::page_content",
         "M2-05 is complete as two bounded PLANNED profiles",
-        "one exact MaterializedPage",
-        "preserves exact object/dictionary/encoded spans",
-        "Acquired-chain content acquisition also remains outside this profile",
-        "M2-06 Content VM execution",
-        "M2-07 registered normative Scene exit evidence remain open",
+        "strict-attested Page content acquisition",
+        "ordered exact physical, filter, and decoded proof",
+        "Acquired-chain page indexing/materialization/content acquisition",
+        "M2-06 is complete as two additional bounded PLANNED profiles",
+        "sealed Content VM consumes only strict-attested AcquiredPageContent",
+        "M2-07 registered normative Scene cases",
         "M2 exit gate is not closed",
     ] {
         assert!(
@@ -526,7 +703,8 @@ fn m2_page_content_acquisition_is_proof_bound_and_traceable() {
     assert!(m2_05.contains("status = \"complete\""));
     assert!(m2_05.contains("completed_at = 2026-07-16"));
     let m2_06 = record_with_id(&plan, "work_item", "M2-06").expect("M2-06 work item exists");
-    assert!(m2_06.contains("status = \"planned\""));
+    assert!(m2_06.contains("status = \"complete\""));
+    assert!(m2_06.contains("completed_at = 2026-07-16"));
     let m2_07 = record_with_id(&plan, "work_item", "M2-07").expect("M2-07 work item exists");
     assert!(m2_07.contains("status = \"planned\""));
 }
@@ -1084,8 +1262,8 @@ fn traceability_registers_strict_page_count_without_claiming_a_page_index() {
             .expect("feature traceability map must be readable");
     let spec_map = fs::read_to_string(repository_root.join("docs/traceability/spec-map.toml"))
         .expect("specification traceability map must be readable");
-    assert_eq!(top_level_version(&feature_map), Some("0.67.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.67.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.68.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.68.0"));
 
     let feature = record_with_id(&feature_map, "feature", "core.strict-page-count")
         .expect("strict page-count feature record must exist");
