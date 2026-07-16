@@ -44,6 +44,13 @@ name = "pdf-rs-compare"
 version = "0.1.0"
 
 [[package]]
+name = "pdf-rs-content"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-syntax",
+]
+
+[[package]]
 name = "pdf-rs-corpus"
 version = "0.1.0"
 dependencies = [

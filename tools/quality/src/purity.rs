@@ -26,6 +26,11 @@ const PRODUCT_PACKAGES: &[ProductPackage] = &[
         crate_name: "pdf_rs_bytes",
     },
     ProductPackage {
+        manifest: "core/content/Cargo.toml",
+        package_name: "pdf-rs-content",
+        crate_name: "pdf_rs_content",
+    },
+    ProductPackage {
         manifest: "core/document/Cargo.toml",
         package_name: "pdf-rs-document",
         crate_name: "pdf_rs_document",
@@ -1048,6 +1053,12 @@ mod tests {
 
     #[test]
     fn ignores_tool_only_baseline_and_accepts_native_product_manifests() {
+        assert_eq!(PRODUCT_PACKAGES.len(), 10);
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "core/content/Cargo.toml",
+            package_name: "pdf-rs-content",
+            crate_name: "pdf_rs_content",
+        }));
         let root = temp_dir("isolated");
         write_product_manifests(&root);
         write_manifest(

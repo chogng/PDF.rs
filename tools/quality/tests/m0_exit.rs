@@ -128,6 +128,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         "--release",
         "--lib",
         "--package pdf-rs-bytes",
+        "--package pdf-rs-content",
         "--package pdf-rs-session",
         "target/ci-artifacts/m0-failure-bundles",
     ] {
