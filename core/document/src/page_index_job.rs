@@ -15,8 +15,9 @@ use crate::{
     AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, AttestedRevisionIndex,
     CountPagesJob, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
     LocallyRepairedRevisionIndex, OpenAttestedObjectJob, PageCountPoll, PageHandle, PageIndex,
-    PageIndexLimits, PageIndexSegmentKind, PageSegmentSummary, PageTreeJobContext, PageTreeLimits,
-    PageTreePhase, PageTreeStats, SharedAttestedRevisionIndex, SharedLocallyRepairedRevisionIndex,
+    PageIndexLimits, PageIndexSegmentKind, PageSegmentEvidence, PageSegmentSummary,
+    PageTreeJobContext, PageTreeLimits, PageTreePhase, PageTreeStats, SharedAttestedRevisionIndex,
+    SharedLocallyRepairedRevisionIndex,
 };
 
 const CANCELLATION_PROBE_INTERVAL: usize = 256;
@@ -1082,6 +1083,7 @@ impl LookupPageJob<'_> {
                             edge.reference(),
                             Some(parent),
                             depth,
+                            PageSegmentEvidence::CompleteSubtree,
                             Some(count_offset),
                             Some(children),
                         )),
@@ -1440,6 +1442,7 @@ impl LookupPageJob<'_> {
             frontier.segment.object(),
             frontier.segment.parent(),
             frontier.segment.depth(),
+            PageSegmentEvidence::CompleteSubtree,
             frontier.count_offset,
             Some(frontier.children),
         );

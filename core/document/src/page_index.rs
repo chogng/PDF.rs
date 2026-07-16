@@ -66,8 +66,23 @@ pub enum PageIndexSegmentKind {
     Pages,
 }
 
-/// One retained direct child edge of a validated Pages dictionary.
+/// Strength of the retained proof for one page-index segment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PageSegmentEvidence {
+    /// One exact Page dictionary identity has been validated.
+    ExactPage,
+    /// A Pages dictionary and its nonnegative Count were validated, but its child partition has
+    /// not yet been classified.
+    DeclaredCount,
+    /// Every direct child was classified and its Page-or-Count contribution exactly partitioned
+    /// the parent range.
+    ValidatedPartition,
+    /// Every descendant leaf in this subtree was validated and recomputed against Count.
+    CompleteSubtree,
+}
+
+/// One retained direct child edge of a validated Pages dictionary.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct PageIndexChild {
     reference: ObjectRef,
     edge_offset: u64,
@@ -99,6 +114,7 @@ pub struct PageSegmentSummary {
     parent: Option<ObjectRef>,
     depth: u32,
     kind: PageIndexSegmentKind,
+    evidence: PageSegmentEvidence,
     declared_count: u32,
     count_offset: Option<u64>,
     children: Option<Arc<Vec<PageIndexChild>>>,
@@ -140,16 +156,36 @@ impl PageSegmentSummary {
         self.kind
     }
 
-    /// Returns the dictionary Count value covered by the completed M1 page-tree proof.
+    /// Returns the retained proof strength for this exact segment.
+    pub const fn evidence(&self) -> PageSegmentEvidence {
+        self.evidence
+    }
+
+    /// Returns the dictionary Count value retained for this segment.
     ///
     /// Leaf Page segments use the implicit value one.
     pub const fn declared_count(&self) -> u32 {
         self.declared_count
     }
 
-    /// Returns the recomputed validated leaf count for this segment.
-    pub const fn validated_count(&self) -> u32 {
-        self.page_count
+    /// Returns the recomputed leaf count only when the complete subtree was validated.
+    pub const fn validated_count(&self) -> Option<u32> {
+        match self.evidence {
+            PageSegmentEvidence::ExactPage | PageSegmentEvidence::CompleteSubtree => {
+                Some(self.page_count)
+            }
+            PageSegmentEvidence::DeclaredCount | PageSegmentEvidence::ValidatedPartition => None,
+        }
+    }
+
+    /// Returns the locally checked direct-child contribution when available.
+    pub const fn partitioned_count(&self) -> Option<u32> {
+        match self.evidence {
+            PageSegmentEvidence::ExactPage
+            | PageSegmentEvidence::ValidatedPartition
+            | PageSegmentEvidence::CompleteSubtree => Some(self.page_count),
+            PageSegmentEvidence::DeclaredCount => None,
+        }
     }
 
     /// Returns the source offset of the Pages Count value when the refining lookup reopened it.
@@ -175,18 +211,24 @@ impl PageSegmentSummary {
             parent: Some(parent),
             depth,
             kind: PageIndexSegmentKind::Page,
+            evidence: PageSegmentEvidence::ExactPage,
             declared_count: 1,
             count_offset: None,
             children: None,
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the sealed segment constructor keeps every proof-bound range field explicit"
+    )]
     pub(crate) fn pages(
         start_index: u32,
         page_count: u32,
         object: ObjectRef,
         parent: Option<ObjectRef>,
         depth: u32,
+        evidence: PageSegmentEvidence,
         count_offset: Option<u64>,
         children: Option<Vec<PageIndexChild>>,
     ) -> Self {
@@ -197,6 +239,7 @@ impl PageSegmentSummary {
             parent,
             depth,
             kind: PageIndexSegmentKind::Pages,
+            evidence,
             declared_count: page_count,
             count_offset,
             children: children.map(Arc::new),
@@ -208,11 +251,87 @@ impl PageSegmentSummary {
     }
 }
 
+/// Deterministic work retained from construction of one immutable page index.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PageIndexStats {
+    pub(crate) objects_started: u64,
+    pub(crate) nodes_started: u64,
+    pub(crate) exact_pages: u64,
+    pub(crate) max_depth: u64,
+    pub(crate) max_kids_per_node: u64,
+    pub(crate) object_read_bytes: u64,
+    pub(crate) object_parse_bytes: u64,
+    pub(crate) peak_retained_traversal_bytes: u64,
+    pub(crate) complete_tree_proof: bool,
+}
+
+impl PageIndexStats {
+    /// Returns proof-preserving object jobs started while constructing the index.
+    pub const fn objects_started(self) -> u64 {
+        self.objects_started
+    }
+
+    /// Returns Page or Pages dictionaries started while constructing the index.
+    pub const fn nodes_started(self) -> u64 {
+        self.nodes_started
+    }
+
+    /// Returns exact Page leaves validated during index construction.
+    pub const fn exact_pages(self) -> u64 {
+        self.exact_pages
+    }
+
+    /// Returns the greatest root-relative Page/Pages depth started during construction.
+    pub const fn max_depth(self) -> u64 {
+        self.max_depth
+    }
+
+    /// Returns the greatest direct Kids count observed during construction.
+    pub const fn max_kids_per_node(self) -> u64 {
+        self.max_kids_per_node
+    }
+
+    /// Returns cumulative exact-read bytes charged during construction.
+    pub const fn object_read_bytes(self) -> u64 {
+        self.object_read_bytes
+    }
+
+    /// Returns cumulative parser-window bytes charged during construction.
+    pub const fn object_parse_bytes(self) -> u64 {
+        self.object_parse_bytes
+    }
+
+    /// Returns peak allocator-reported traversal capacity during construction.
+    pub const fn peak_retained_traversal_bytes(self) -> u64 {
+        self.peak_retained_traversal_bytes
+    }
+
+    /// Reports whether construction included a complete descendant-and-Count proof.
+    pub const fn has_complete_tree_proof(self) -> bool {
+        self.complete_tree_proof
+    }
+
+    pub(crate) const fn from_complete_tree(stats: PageTreeStats) -> Self {
+        Self {
+            objects_started: stats.objects_started(),
+            nodes_started: stats.nodes_started(),
+            exact_pages: stats.pages(),
+            max_depth: stats.max_depth(),
+            max_kids_per_node: stats.max_kids_per_node(),
+            object_read_bytes: stats.object_read_bytes(),
+            object_parse_bytes: stats.object_parse_bytes(),
+            peak_retained_traversal_bytes: stats.reserved_traversal_bytes(),
+            complete_tree_proof: true,
+        }
+    }
+}
+
 /// Source- and revision-bound identity of one validated logical Page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PageHandle {
     catalog: StrictCatalog,
     page_count: u32,
+    page_count_evidence: PageSegmentEvidence,
     index: u32,
     object: ObjectRef,
 }
@@ -253,9 +372,14 @@ impl PageHandle {
         self.catalog.pages()
     }
 
-    /// Returns the complete validated page count shared by sibling handles.
+    /// Returns the root Pages Count retained by the index that minted this handle.
     pub const fn document_page_count(self) -> u32 {
         self.page_count
+    }
+
+    /// Returns the proof strength retained for the root Pages Count when this handle was minted.
+    pub const fn document_page_count_evidence(self) -> PageSegmentEvidence {
+        self.page_count_evidence
     }
 }
 
@@ -270,7 +394,7 @@ pub struct PageIndex {
     page_count: u32,
     segments: Arc<Vec<PageSegmentSummary>>,
     retained_index_bytes: u64,
-    stats: PageTreeStats,
+    stats: PageIndexStats,
     limits: PageIndexLimits,
 }
 
@@ -321,8 +445,8 @@ impl PageIndex {
         self.retained_index_bytes
     }
 
-    /// Returns the complete M1 traversal statistics that admitted this index.
-    pub const fn stats(&self) -> PageTreeStats {
+    /// Returns deterministic work retained from construction of this index.
+    pub const fn stats(&self) -> PageIndexStats {
         self.stats
     }
 
@@ -428,7 +552,7 @@ impl PageIndex {
             catalog,
             page_count,
             segments,
-            order.stats,
+            PageIndexStats::from_complete_tree(order.stats),
             limits,
             root,
             Some(root_offset),
@@ -472,6 +596,7 @@ impl PageIndex {
                 catalog.pages(),
                 None,
                 1,
+                PageSegmentEvidence::CompleteSubtree,
                 None,
                 None,
             ));
@@ -480,7 +605,7 @@ impl PageIndex {
             catalog,
             page_count,
             segments,
-            count.stats(),
+            PageIndexStats::from_complete_tree(count.stats()),
             limits,
             catalog.pages(),
             None,
@@ -595,10 +720,23 @@ impl PageIndex {
         )
     }
 
-    pub(crate) const fn mint_handle(&self, index: u32, object: ObjectRef) -> PageHandle {
+    pub(crate) fn mint_handle(&self, index: u32, object: ObjectRef) -> PageHandle {
+        let page_count_evidence = self
+            .segments
+            .iter()
+            .find(|segment| {
+                segment.object() == self.catalog.pages()
+                    && segment.parent().is_none()
+                    && segment.kind() == PageIndexSegmentKind::Pages
+            })
+            .map_or(
+                PageSegmentEvidence::CompleteSubtree,
+                PageSegmentSummary::evidence,
+            );
         PageHandle {
             catalog: self.catalog,
             page_count: self.page_count,
+            page_count_evidence,
             index,
             object,
         }
@@ -608,7 +746,7 @@ impl PageIndex {
         catalog: StrictCatalog,
         page_count: u32,
         segments: Vec<PageSegmentSummary>,
-        stats: PageTreeStats,
+        stats: PageIndexStats,
         limits: PageIndexLimits,
         reference: ObjectRef,
         offset: Option<u64>,
@@ -900,7 +1038,10 @@ mod tests {
         assert_eq!(handle.object(), object_ref(5));
         assert_eq!(handle.snapshot(), fixture.snapshot);
         index.validate_handle(handle).unwrap();
-        assert_eq!(index.stats(), count.stats());
+        assert_eq!(
+            index.stats(),
+            PageIndexStats::from_complete_tree(count.stats())
+        );
         assert!(index.retained_index_bytes() > 0);
         assert_eq!(index.clone(), index);
     }
@@ -924,7 +1065,8 @@ mod tests {
         assert_eq!(root.start_index(), 0);
         assert_eq!(root.end_index(), 3);
         assert_eq!(root.declared_count(), 3);
-        assert_eq!(root.validated_count(), 3);
+        assert_eq!(root.evidence(), PageSegmentEvidence::CompleteSubtree);
+        assert_eq!(root.validated_count(), Some(3));
         assert_eq!(root.retained_kid_count(), None);
     }
 

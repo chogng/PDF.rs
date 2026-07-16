@@ -121,7 +121,8 @@ pub use outline::{
 };
 pub use outline_limits::{OutlineLimitConfig, OutlineLimits};
 pub use page_index::{
-    PageHandle, PageIndex, PageIndexLimits, PageIndexSegmentKind, PageSegmentSummary,
+    PageHandle, PageIndex, PageIndexLimits, PageIndexSegmentKind, PageIndexStats,
+    PageSegmentEvidence, PageSegmentSummary,
 };
 pub use page_index_job::{
     BuildPageIndexJob, LookupPageJob, PageIndexBuildPoll, PageLookup, PageLookupPhase,

@@ -8,8 +8,9 @@ use pdf_rs_document::{
     DocumentError, DocumentErrorCode, DocumentLimits, LookupPageJob,
     NeverCancelled as DocumentNeverCancelled, PageHandle, PageIndex, PageIndexBuildPoll,
     PageIndexLimits, PageIndexSegmentKind, PageLookup, PageLookupPhase, PageLookupPoll,
-    PageLookupStats, PageSegmentSummary, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
-    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    PageLookupStats, PageSegmentEvidence, PageSegmentSummary, PageTreeJobContext,
+    PageTreeLimitConfig, PageTreeLimits, RevisionAttestationJobContext, RevisionAttestationLimits,
+    RevisionAttestationPoll, RevisionId,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
@@ -332,7 +333,9 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(root.parent(), None);
     assert_eq!(root.depth(), 1);
     assert_eq!(root.declared_count(), 4);
-    assert_eq!(root.validated_count(), 4);
+    assert_eq!(root.evidence(), PageSegmentEvidence::CompleteSubtree);
+    assert_eq!(root.validated_count(), Some(4));
+    assert_eq!(root.partitioned_count(), Some(4));
     assert_eq!(root.retained_kid_count(), None);
 
     let (page_one, first_stats) = lookup_ready(&authority, &initial, 1, &store, 6_401);
@@ -347,6 +350,10 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(page_one_handle.catalog_root(), object_ref(1));
     assert_eq!(page_one_handle.page_tree_root(), object_ref(2));
     assert_eq!(page_one_handle.document_page_count(), 4);
+    assert_eq!(
+        page_one_handle.document_page_count_evidence(),
+        PageSegmentEvidence::CompleteSubtree
+    );
     assert_eq!(page_one.page_index().page(1), Some(object_ref(5)));
     let (refined, returned_handle) = page_one.into_parts();
     assert_eq!(returned_handle, page_one_handle);
@@ -355,7 +362,11 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     let selected_parent =
         assert_segment(&refined, object_ref(3), 0, 2, PageIndexSegmentKind::Pages);
     assert_eq!(selected_parent.declared_count(), 2);
-    assert_eq!(selected_parent.validated_count(), 2);
+    assert_eq!(
+        selected_parent.evidence(),
+        PageSegmentEvidence::CompleteSubtree
+    );
+    assert_eq!(selected_parent.validated_count(), Some(2));
     assert_eq!(selected_parent.retained_kid_count(), Some(2));
     assert_segment(&refined, object_ref(4), 0, 1, PageIndexSegmentKind::Page);
     assert_segment(&refined, object_ref(5), 1, 1, PageIndexSegmentKind::Page);
@@ -363,7 +374,8 @@ fn build_retains_one_root_segment_and_lookups_refine_only_requested_paths() {
     assert_eq!(deferred.parent(), Some(object_ref(2)));
     assert_eq!(deferred.depth(), 2);
     assert_eq!(deferred.declared_count(), 2);
-    assert_eq!(deferred.validated_count(), 2);
+    assert_eq!(deferred.evidence(), PageSegmentEvidence::CompleteSubtree);
+    assert_eq!(deferred.validated_count(), Some(2));
     assert_eq!(deferred.retained_kid_count(), Some(2));
 
     let panic_source = PanicSource(fixture.snapshot);
