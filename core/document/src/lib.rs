@@ -20,6 +20,11 @@
 //! decoding from lexical PDF strings into UTF-8 without exposing source content
 //! in diagnostics. Other dictionary, array, stream, and nested-reference
 //! semantics remain outside a complete object-graph resolver.
+//! Materialized page resource scopes can mint a separately bounded, no-I/O
+//! resolver for the direct `/Properties` dictionary used by marked-content
+//! operators. That resolver returns only a fixed-size indirect-reference proof
+//! with exact source offsets; it neither exposes raw dictionaries nor opens the
+//! referenced property object.
 //! A strict base-open composition job connects traditional xref parsing,
 //! candidate indexing, and top-level attestation without exposing an
 //! unauthenticated intermediate typestate.
@@ -73,6 +78,7 @@ mod page_index;
 mod page_index_job;
 mod page_materialization;
 mod page_materialization_limits;
+mod page_property_lookup_limits;
 mod page_resources;
 mod page_tree;
 mod page_tree_limits;
@@ -148,7 +154,10 @@ pub use page_materialization::{
     PageMaterializationPoll, PageMaterializationStats,
 };
 pub use page_materialization_limits::{PageMaterializationLimitConfig, PageMaterializationLimits};
-pub use page_resources::PageResourceScope;
+pub use page_property_lookup_limits::{
+    PagePropertyLookupLimitConfig, PagePropertyLookupLimits, PagePropertyLookupStats,
+};
+pub use page_resources::{PagePropertyReference, PagePropertyResolver, PageResourceScope};
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
 };

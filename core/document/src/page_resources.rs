@@ -1,10 +1,16 @@
 use std::fmt;
 use std::mem;
 
+use pdf_rs_bytes::{ByteSource, SourceSnapshot};
 use pdf_rs_object::IndirectObjectValue;
-use pdf_rs_syntax::{ObjectRef, PdfDictionary};
+use pdf_rs_syntax::{ObjectRef, PdfDictionary, SyntaxObject};
 
-use crate::{AttestedObject, DocumentError, DocumentErrorCode};
+use crate::{
+    AttestedObject, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
+    PagePropertyLookupLimits, PagePropertyLookupStats, RevisionId,
+};
+
+const CANCELLATION_PROBE_INTERVAL: u64 = 256;
 
 enum PageResourceOwner {
     Direct {
@@ -81,6 +87,24 @@ impl PageResourceScope {
         ancestor.checked_add(alias)
     }
 
+    /// Creates a no-I/O resolver borrowing this exact resource dictionary proof.
+    ///
+    /// The resolver retains cumulative lookup and entry-visit accounting. It does not expose the
+    /// underlying dictionary, open referenced objects, or allocate a copy of the requested name.
+    pub const fn property_resolver(
+        &self,
+        limits: PagePropertyLookupLimits,
+    ) -> PagePropertyResolver<'_> {
+        PagePropertyResolver {
+            scope: self,
+            limits,
+            stats: PagePropertyLookupStats {
+                lookups: 0,
+                entry_visits: 0,
+            },
+        }
+    }
+
     pub(crate) fn checked_retained_state_bytes(&self) -> Result<u64, DocumentError> {
         let chain_bytes = self.retained_lookup_chain_bytes().ok_or_else(|| {
             internal_error(self.defining_object, Some(self.defining_value_offset))
@@ -144,10 +168,6 @@ impl PageResourceScope {
         })
     }
 
-    #[allow(
-        dead_code,
-        reason = "M2-05 content-stream resource lookup consumes this proof-preserving bridge"
-    )]
     pub(crate) fn dictionary(&self) -> Result<&PdfDictionary, DocumentError> {
         match &self.owner {
             PageResourceOwner::Direct { object } => {
@@ -165,6 +185,15 @@ impl PageResourceScope {
             }),
         }
     }
+
+    fn dictionary_owner(&self) -> &AttestedObject {
+        match &self.owner {
+            PageResourceOwner::Direct { object } => object,
+            PageResourceOwner::Indirect {
+                terminal_object, ..
+            } => terminal_object,
+        }
+    }
 }
 
 impl fmt::Debug for PageResourceScope {
@@ -178,6 +207,478 @@ impl fmt::Debug for PageResourceScope {
             .field("terminal_resource_object", &self.terminal_resource_object())
             .field("owner", &"[REDACTED]")
             .finish()
+    }
+}
+
+/// Fixed-size proof that one marked-content property name selected an indirect object reference.
+///
+/// The requested name bytes are intentionally not retained or copied. Exact key/value offsets
+/// bind this proof to the source occurrence, while callers that need the spelling continue to own
+/// their already-bounded operator operand.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PagePropertyReference {
+    target: ObjectRef,
+    snapshot: SourceSnapshot,
+    revision_id: RevisionId,
+    revision_startxref: u64,
+    scope_defining_object: ObjectRef,
+    scope_defining_value_offset: u64,
+    resource_dictionary_owner: ObjectRef,
+    properties_key_offset: u64,
+    properties_value_offset: u64,
+    property_key_offset: u64,
+    property_value_offset: u64,
+}
+
+impl PagePropertyReference {
+    /// Returns the indirect object named by the selected property entry.
+    pub const fn target(self) -> ObjectRef {
+        self.target
+    }
+
+    /// Returns the immutable source snapshot retained by the resource dictionary owner.
+    pub const fn snapshot(self) -> SourceSnapshot {
+        self.snapshot
+    }
+
+    /// Returns the caller-assigned revision identity of the resource dictionary owner.
+    pub const fn revision_id(self) -> RevisionId {
+        self.revision_id
+    }
+
+    /// Returns the `startxref` anchor of the resource dictionary owner's revision.
+    pub const fn revision_startxref(self) -> u64 {
+        self.revision_startxref
+    }
+
+    /// Returns the Page or Pages object whose Resources field ended inheritance lookup.
+    pub const fn scope_defining_object(self) -> ObjectRef {
+        self.scope_defining_object
+    }
+
+    /// Returns the source offset of that exact Resources field value.
+    pub const fn scope_defining_value_offset(self) -> u64 {
+        self.scope_defining_value_offset
+    }
+
+    /// Returns the indirect object physically owning the selected resource dictionary.
+    pub const fn resource_dictionary_owner(self) -> ObjectRef {
+        self.resource_dictionary_owner
+    }
+
+    /// Returns the source offset of the unique `/Properties` key.
+    pub const fn properties_key_offset(self) -> u64 {
+        self.properties_key_offset
+    }
+
+    /// Returns the source offset of the unique `/Properties` value.
+    pub const fn properties_value_offset(self) -> u64 {
+        self.properties_value_offset
+    }
+
+    /// Returns the source offset of the selected property-name key.
+    pub const fn property_key_offset(self) -> u64 {
+        self.property_key_offset
+    }
+
+    /// Returns the source offset of the selected indirect-reference value.
+    pub const fn property_value_offset(self) -> u64 {
+        self.property_value_offset
+    }
+}
+
+impl fmt::Debug for PagePropertyReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PagePropertyReference")
+            .field("target", &self.target)
+            .field("snapshot", &self.snapshot)
+            .field("revision_id", &self.revision_id)
+            .field("revision_startxref", &self.revision_startxref)
+            .field("scope_defining_object", &self.scope_defining_object)
+            .field(
+                "scope_defining_value_offset",
+                &self.scope_defining_value_offset,
+            )
+            .field("resource_dictionary_owner", &self.resource_dictionary_owner)
+            .field("properties_key_offset", &self.properties_key_offset)
+            .field("properties_value_offset", &self.properties_value_offset)
+            .field("property_name", &"[NOT RETAINED]")
+            .field("property_key_offset", &self.property_key_offset)
+            .field("property_value_offset", &self.property_value_offset)
+            .finish()
+    }
+}
+
+/// Borrowed no-I/O resolver for one exact inherited page resource dictionary.
+pub struct PagePropertyResolver<'scope> {
+    scope: &'scope PageResourceScope,
+    limits: PagePropertyLookupLimits,
+    stats: PagePropertyLookupStats,
+}
+
+impl PagePropertyResolver<'_> {
+    /// Returns the validated independent lookup and entry-visit profile.
+    pub const fn limits(&self) -> PagePropertyLookupLimits {
+        self.limits
+    }
+
+    /// Returns cumulative work, including work retained after failed lookups.
+    pub const fn stats(&self) -> PagePropertyLookupStats {
+        self.stats
+    }
+
+    /// Resolves one marked-content property name without polling or opening the target object.
+    ///
+    /// This bounded profile accepts only `/Properties << /Name n 0 R >>`. An indirect
+    /// `/Properties` dictionary and a direct property dictionary are reported as distinct
+    /// structured unsupported features. The fixed-size result proves only the exact indirect
+    /// reference syntax and its resource-dictionary provenance; it deliberately does not attest
+    /// or open the referenced target.
+    pub fn lookup_marked_content_property(
+        &mut self,
+        name: &[u8],
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<PagePropertyReference, DocumentError> {
+        let scope = self.scope;
+        let limits = self.limits;
+        let stats = &mut self.stats;
+        let owner = scope.dictionary_owner();
+        let snapshot = owner.snapshot();
+        let owner_reference = owner.reference();
+        let scope_offset = scope.defining_value_offset;
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Err(fallback) = charge_lookup(stats, limits, owner_reference, scope_offset) {
+            return Err(prioritize_runtime_error(
+                snapshot,
+                source,
+                cancellation,
+                fallback,
+                owner_reference,
+                scope_offset,
+            ));
+        }
+        let dictionary = match scope.dictionary() {
+            Ok(dictionary) => dictionary,
+            Err(fallback) => {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    scope_offset,
+                ));
+            }
+        };
+
+        let mut properties_key_offset = None;
+        let mut properties_value = None;
+        let mut duplicate_properties_offset = None;
+        for entry in dictionary.entries() {
+            let key_offset = entry.key().span().start();
+            probe_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            if let Err(fallback) = charge_entry_visit(stats, limits, owner_reference, key_offset) {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                ));
+            }
+            if entry.key().value().bytes() != b"Properties" {
+                continue;
+            }
+            if properties_value.is_some() {
+                duplicate_properties_offset.get_or_insert(key_offset);
+            } else {
+                properties_key_offset = Some(key_offset);
+                properties_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Some(offset) = duplicate_properties_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(properties_value) = properties_value else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPagePropertyResource,
+                Some(owner_reference),
+                Some(scope_offset),
+            ));
+        };
+        let properties_value_offset = properties_value.span().start();
+        let Some(properties_key_offset) = properties_key_offset else {
+            return Err(internal_error(
+                owner_reference,
+                Some(properties_value_offset),
+            ));
+        };
+        let properties = match properties_value.value() {
+            SyntaxObject::Dictionary(dictionary) => dictionary,
+            SyntaxObject::Reference(reference) => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::UnsupportedIndirectPageProperties,
+                    Some(*reference),
+                    Some(properties_value_offset),
+                ));
+            }
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPagePropertyResource,
+                    Some(owner_reference),
+                    Some(properties_value_offset),
+                ));
+            }
+        };
+
+        let mut property_key_offset = None;
+        let mut property_value = None;
+        let mut duplicate_property_offset = None;
+        for entry in properties.entries() {
+            let key_offset = entry.key().span().start();
+            probe_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            if let Err(fallback) = charge_entry_visit(stats, limits, owner_reference, key_offset) {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                ));
+            }
+            if entry.key().value().bytes() != name {
+                continue;
+            }
+            if property_value.is_some() {
+                duplicate_property_offset.get_or_insert(key_offset);
+            } else {
+                property_key_offset = Some(key_offset);
+                property_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            properties_value_offset,
+        )?;
+        if let Some(offset) = duplicate_property_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(property_value) = property_value else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPagePropertyResource,
+                Some(owner_reference),
+                Some(properties_value_offset),
+            ));
+        };
+        let property_value_offset = property_value.span().start();
+        let Some(property_key_offset) = property_key_offset else {
+            return Err(internal_error(owner_reference, Some(property_value_offset)));
+        };
+        let target = match property_value.value() {
+            SyntaxObject::Reference(reference) => *reference,
+            SyntaxObject::Dictionary(_) => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::UnsupportedDirectPagePropertyDictionary,
+                    Some(owner_reference),
+                    Some(property_value_offset),
+                ));
+            }
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPagePropertyResource,
+                    Some(owner_reference),
+                    Some(property_value_offset),
+                ));
+            }
+        };
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            property_value_offset,
+        )?;
+        Ok(PagePropertyReference {
+            target,
+            snapshot,
+            revision_id: owner.revision_id(),
+            revision_startxref: owner.revision_startxref(),
+            scope_defining_object: scope.defining_object,
+            scope_defining_value_offset: scope_offset,
+            resource_dictionary_owner: owner_reference,
+            properties_key_offset,
+            properties_value_offset,
+            property_key_offset,
+            property_value_offset,
+        })
+    }
+}
+
+impl fmt::Debug for PagePropertyResolver<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PagePropertyResolver")
+            .field("scope", &self.scope)
+            .field("limits", &self.limits)
+            .field("stats", &self.stats)
+            .field("dictionary", &"[REDACTED]")
+            .finish()
+    }
+}
+
+fn probe_scan(
+    stats: &PagePropertyLookupStats,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits != 0
+        && stats
+            .entry_visits
+            .is_multiple_of(CANCELLATION_PROBE_INTERVAL)
+    {
+        runtime_guard(snapshot, source, cancellation, reference, offset)?;
+    }
+    Ok(())
+}
+
+fn charge_lookup(
+    stats: &mut PagePropertyLookupStats,
+    limits: PagePropertyLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.lookups >= limits.max_lookups() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PagePropertyLookups,
+            limits.max_lookups(),
+            stats.lookups,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.lookups = stats
+        .lookups
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn charge_entry_visit(
+    stats: &mut PagePropertyLookupStats,
+    limits: PagePropertyLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits >= limits.max_entry_visits() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PagePropertyEntryVisits,
+            limits.max_entry_visits(),
+            stats.entry_visits,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.entry_visits = stats
+        .entry_visits
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn runtime_guard(
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if source.snapshot() != snapshot {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::SourceSnapshotMismatch,
+            Some(reference),
+            Some(offset),
+        ));
+    }
+    let cancelled = cancellation.is_cancelled();
+    if source.snapshot() != snapshot {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::SourceSnapshotMismatch,
+            Some(reference),
+            Some(offset),
+        ));
+    }
+    if cancelled {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::Cancelled,
+            Some(reference),
+            Some(offset),
+        ));
+    }
+    Ok(())
+}
+
+fn prioritize_runtime_error(
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    fallback: DocumentError,
+    default_reference: ObjectRef,
+    default_offset: u64,
+) -> DocumentError {
+    let reference = fallback.reference().unwrap_or(default_reference);
+    let offset = fallback.offset().unwrap_or(default_offset);
+    match runtime_guard(snapshot, source, cancellation, reference, offset) {
+        Ok(()) => fallback,
+        Err(runtime) => runtime,
     }
 }
 

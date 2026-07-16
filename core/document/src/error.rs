@@ -147,6 +147,10 @@ pub enum DocumentLimitKind {
     PageContentStreamDecodeFuel,
     /// Decoder-owned retained capacity admitted by one stream's intrinsic profile.
     PageContentStreamRetainedBytes,
+    /// Marked-content property names resolved through one borrowed page-resource resolver.
+    PagePropertyLookups,
+    /// Outer resource and inner property dictionary entries visited during property lookup.
+    PagePropertyEntryVisits,
     /// Distinct outline item identities scheduled by one bounded outline job.
     OutlineItems,
     /// Greatest root-relative outline item depth accepted by one outline job.
@@ -319,6 +323,12 @@ pub enum DocumentErrorCode {
     PageContentDecodeFailure,
     /// A content stream names a filter outside the bounded foundational decoder profile.
     UnsupportedPageContentFilter,
+    /// `/Properties` or one requested marked-content property has an invalid semantic shape.
+    InvalidPagePropertyResource,
+    /// The page resource dictionary stores `/Properties` through an unsupported indirect object.
+    UnsupportedIndirectPageProperties,
+    /// A requested marked-content property resolves to an unsupported direct dictionary.
+    UnsupportedDirectPagePropertyDictionary,
     /// Runtime identity or child checkpoints for outline traversal are inconsistent.
     InvalidOutlineJobContext,
     /// The Catalog outline entry or outline root dictionary has the wrong shape.
@@ -701,6 +711,21 @@ impl DocumentError {
                 DocumentRecoverability::UseSupportedFeature,
                 "RPE-DOCUMENT-0074",
             ),
+            DocumentErrorCode::InvalidPagePropertyResource => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0075",
+            ),
+            DocumentErrorCode::UnsupportedIndirectPageProperties => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0076",
+            ),
+            DocumentErrorCode::UnsupportedDirectPagePropertyDictionary => (
+                DocumentErrorCategory::Unsupported,
+                DocumentRecoverability::UseSupportedFeature,
+                "RPE-DOCUMENT-0077",
+            ),
             DocumentErrorCode::InvalidOutlineJobContext => (
                 DocumentErrorCategory::Configuration,
                 DocumentRecoverability::CorrectConfiguration,
@@ -912,6 +937,27 @@ impl DocumentError {
     }
 
     pub(crate) const fn page_content_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn page_property_resource(
         kind: DocumentLimitKind,
         limit: u64,
         consumed: u64,

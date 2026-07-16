@@ -66,6 +66,23 @@ whole-value alias chains, and the terminal proof-bearing resource dictionary. Cr
 MediaBox, Rotate defaults to zero, and the nearest Resources dictionary becomes one scope without
 ancestor merging. Independent ancestor, object, reference-edge, object-read, object-parse, and
 retained-state limits bound the resumable job before immutable `MaterializedPage` publication.
+`PageResourceScope::property_resolver` is the narrow no-I/O bridge from that retained resource
+dictionary to M2 marked-content interpretation. One borrowed resolver owns independent nonzero
+lookup and cumulative dictionary-entry-visit limits and keeps all committed work visible after a
+failed call. Each lookup scans the complete outer resource dictionary to prove that `/Properties`
+is unique, then scans the complete direct property dictionary to prove that the requested decoded
+name is unique. Unrelated duplicate keys do not affect that structural policy. The bounded profile
+accepts only `/Properties << /Name n 0 R >>`: missing or wrong-shaped structures are invalid,
+indirect `/Properties` and a requested direct property dictionary are distinct structured
+unsupported cases, and the selected target reference is never opened.
+The returned fixed-size `PagePropertyReference` retains the target, source snapshot, revision
+identity and `startxref`, defining Resources object and value offset, physical resource-dictionary
+owner, and exact outer and inner key/value offsets. It intentionally does not copy or retain the
+requested property-name bytes; the bounded Content operand remains caller-owned. The resolver
+allocates no proof heap, exposes no `PdfDictionary`, and never calls `ByteSource::poll`. Snapshot
+checks bracket each cancellation probe, and runtime source change then cancellation override a
+resource or semantic fallback. Entry scans probe cooperative cancellation at most every 256
+visited entries.
 `AcquirePageContentJob` consumes that exact `MaterializedPage`, revalidates its handle against the
 paired `PageIndex` and strict attested authority, and retains the page beside every
 ordered content-stream proof. It accepts one unique Contents value: absence, null, and an empty
@@ -148,6 +165,12 @@ semantic responsibilities.
   whole-value aliases, and one nearest Resources scope; it does not claim general indirect-value
   equivalence or resource merging. The authorized Adobe snapshot acquired on 2026-07-14 has
   SHA-256 `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
+- [ISO 32000-1:2008, sections 7.8.3 and 14.6.2](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines page resource subdictionaries and the named property-list resources used by
+  marked-content operators. The M2 lookup slice proves only one direct `/Properties` dictionary
+  whose selected value is an indirect object reference; it does not open that target or claim
+  general resource-category resolution. The same authorized Adobe snapshot and SHA-256 above
+  apply.
 - [ISO 32000-1:2008, 7.9.2.2 and Annex D.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
   defines the `FE FF` UTF-16BE selection rule, supplementary-character requirement, and the
   PDFDocEncoding-to-Unicode mapping used by human-readable text strings. The authorized Adobe
