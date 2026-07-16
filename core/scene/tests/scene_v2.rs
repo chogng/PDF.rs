@@ -345,6 +345,16 @@ fn explicit_capability_dependencies_are_backward_only_unique_and_affect_support(
         )
         .unwrap();
     assert_eq!(repeated.value(), 2);
+    let soft_mask = primary
+        .add_requirement(
+            GraphicsCapability::SoftMask,
+            0,
+            CapabilityContext::Scene,
+            Vec::new(),
+            CapabilityStatus::Unsupported,
+        )
+        .unwrap();
+    assert_eq!(soft_mask.value(), 3);
     for invalid_dependencies in [vec![blend, color], vec![color, color]] {
         assert_eq!(
             primary
@@ -390,6 +400,8 @@ fn explicit_capability_dependencies_are_backward_only_unique_and_affect_support(
     let graphics = scene.graphics().unwrap();
     assert!(!graphics.is_supported());
     assert_eq!(graphics.requirements()[1].dependencies(), &[color]);
+    let canonical = String::from_utf8(scene.canonical_json_bytes().unwrap()).unwrap();
+    assert!(canonical.contains("\"capability\":\"soft-mask\""));
 }
 
 #[test]

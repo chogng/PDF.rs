@@ -241,6 +241,7 @@ fn unsupported_color_alpha_blend_and_group_requirements_remain_structured() {
         GraphicsCapability::DeviceColor,
         GraphicsCapability::ConstantAlpha,
         GraphicsCapability::Blend,
+        GraphicsCapability::SoftMask,
         GraphicsCapability::IsolatedGroup,
     ] {
         let mut builder =

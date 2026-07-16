@@ -906,6 +906,8 @@ pub enum GraphicsCapability {
     ConstantAlpha,
     /// Multiply or Screen blending.
     Blend,
+    /// Soft-mask transparency.
+    SoftMask,
     /// Basic unmasked images.
     Image,
     /// Embedded glyph outlines.

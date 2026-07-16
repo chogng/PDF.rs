@@ -489,6 +489,7 @@ fn graphics_capability_label(capability: GraphicsCapability) -> &'static [u8] {
         GraphicsCapability::DeviceColor => b"\"device-color\"",
         GraphicsCapability::ConstantAlpha => b"\"constant-alpha\"",
         GraphicsCapability::Blend => b"\"blend\"",
+        GraphicsCapability::SoftMask => b"\"soft-mask\"",
         GraphicsCapability::Image => b"\"image\"",
         GraphicsCapability::Glyph => b"\"glyph\"",
         GraphicsCapability::IsolatedGroup => b"\"isolated-group\"",
