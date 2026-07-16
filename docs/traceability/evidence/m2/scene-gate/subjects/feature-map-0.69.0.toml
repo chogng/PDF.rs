@@ -1,0 +1,639 @@
+schema = 1
+version = "0.69.0"
+status = "active"
+
+[[feature]]
+id = "core.ordered-page-index"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.ordered-page-index.v1"
+clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M2", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::page_index", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.inherited-page-values"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.inherited-page-values.v1"
+clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::page_materialization", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.page-content-acquisition"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.page-content-acquisition.v1"
+clauses = ["ISO-32000-1:2008/7.7.3", "ISO-32000-1:2008/7.8.2", "RPE-ARCH-001/5.6", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-003/9-12", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::page_content", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.content-operator-scanner"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.content-operator-scanner.v1"
+clauses = ["ISO-32000-1:2008/7.8.2", "RPE-ARCH-001/4.3-4.5", "RPE-ARCH-001/6.1-6.2", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-12", "RPE-STD-005/4-6"]
+modules = ["core/content"]
+tests = ["core/content::scanner", "core/content::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.page-property-lookup"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.page-property-lookup.v1"
+clauses = ["ISO-32000-1:2008/7.8.3", "ISO-32000-1:2008/14.6.2", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/6.1-6.2", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::page_properties", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.content-vm-scene-v1"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.content-vm-scene-v1"
+clauses = ["ISO-32000-1:2008/7.8.2", "ISO-32000-1:2008/7.8.3", "ISO-32000-1:2008/8.4.2", "ISO-32000-1:2008/8.4.3", "ISO-32000-1:2008/9.4", "ISO-32000-1:2008/14.6", "ISO-32000-1:2008/14.6.1", "ISO-32000-1:2008/14.6.2", "RPE-ARCH-001/6.1-6.2", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-12", "RPE-STD-005/4-6"]
+modules = ["core/content"]
+tests = ["core/content::vm", "core/content::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.scene-v1"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.scene-v1.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-8", "RPE-STD-005/4-6"]
+modules = ["core/scene"]
+tests = ["core/scene::scene_v1", "core/scene::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.scene-semantic-diff"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m2.scene-semantic-diff.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-001/5-9", "RPE-STD-003/7-8", "RPE-STD-005/4-6"]
+modules = ["core/scene"]
+tests = ["core/scene::scene_diff", "core/scene::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.m2-scene-gate"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m2.scene-gate.v1"
+clauses = ["RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/15.3/M2", "RPE-STD-003/7-8", "RPE-STD-004/5-6"]
+modules = ["tools/quality", "docs/traceability"]
+tests = ["tools/quality::m2_scene_gate", "tools/quality::m2_exit"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-repair-policy"
+owner = "parser-security"
+state = "REFERENCE"
+profile = "m1.r0-strict.v1"
+clauses = ["RPE-ARCH-001/5.3", "RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
+modules = ["core/xref", "core/object", "core/document"]
+tests = ["core/xref::traditional_xref", "core/object::object_behavior", "core/document::strict_base_open", "tools/quality::maturity"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.local-repair"
+owner = "parser-security"
+state = "REFERENCE"
+profile = "m1.r1-local-repair.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.5", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/9", "RPE-STD-005/8-9"]
+modules = ["core/xref", "core/object", "core/document"]
+tests = ["core/xref::local_repair", "core/xref::traditional_xref", "core/object::local_repair", "core/object::object_behavior", "core/document::local_repair_geometry", "core/document::local_repair_open", "tools/quality::maturity"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.m1-maturity-gate"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m1.maturity-gate.v1"
+clauses = ["RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-003/21", "RPE-STD-004/5-6"]
+modules = ["tools/quality", "docs/traceability"]
+tests = ["tools/quality::maturity"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.snapshot-byte-source"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.range-store.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-STD-002/7", "RPE-STD-005/8"]
+modules = ["core/bytes"]
+tests = ["core/bytes::range_store", "core/bytes::repository_policy", "runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.pdf-syntax"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.syntax-core.v1"
+clauses = ["RPE-ARCH-001/5.3", "RPE-STD-005/7"]
+modules = ["core/syntax"]
+tests = ["core/syntax::parser_behavior", "core/syntax::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.traditional-xref"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.traditional-xref.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/xref"]
+tests = ["core/xref::traditional_xref", "core/xref::traditional_revision", "core/xref::limit_config", "core/xref::source_error_policy", "core/xref::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.source-xref-anchor"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.source-xref-anchor.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/xref", "core/object"]
+tests = ["core/xref::final_startxref", "core/xref::xref_anchor", "core/xref::repository_policy", "core/object::object_behavior", "core/object::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.decoded-xref-stream-table"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.decoded-xref-stream-table.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/xref"]
+tests = ["core/xref::xref_stream", "core/xref::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.source-xref-stream-acquisition"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.source-xref-stream-acquisition.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/document", "core/filters", "core/object", "core/xref"]
+tests = ["core/document::source_xref_stream", "core/document::repository_policy", "core/object::staged_length", "core/xref::xref_stream"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.source-revision-chain-acquisition"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.source-revision-chain-acquisition.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/document", "core/filters", "core/xref", "core/object"]
+tests = ["core/document::source_revision_chain", "core/document::source_xref_stream", "core/document::acquired_object", "core/document::acquired_services", "core/xref::traditional_revision", "core/xref::revision_chain"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.source-acquired-document-services"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.source-acquired-document-services.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/5.6", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/5-10"]
+modules = ["core/document"]
+tests = ["core/document::acquired_object", "core/document::acquired_services", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.xref-revision-chain"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.xref-revision-chain.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/xref"]
+tests = ["core/xref::traditional_revision", "core/xref::revision_chain", "core/xref::xref_stream", "core/xref::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.stream-filter-decode"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.basic-stream-filters.v1"
+clauses = ["RPE-ARCH-001/5.6", "RPE-ARCH-001/15.3/M1", "RPE-STD-005/7-9"]
+modules = ["core/filters"]
+tests = ["core/filters::decode_behavior", "core/filters::predictor_behavior", "core/filters::dictionary_plan", "core/filters::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.indirect-object-framing"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.indirect-object-framing.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/object"]
+tests = ["core/object::object_behavior", "core/object::framing_matrix", "core/object::limit_config", "core/object::source_error_policy", "core/object::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.staged-stream-length-framing"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.staged-stream-length.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/object"]
+tests = ["core/object::staged_length", "core/object::object_behavior", "core/object::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.base-revision-candidate-index"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.strict-base-revision-index.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/document"]
+tests = ["core/document::revision_index", "core/document::limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.revision-aware-object-resolver"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.revision-aware-uncompressed-resolver.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/document"]
+tests = ["core/document::revision_resolver", "core/document::acquired_object", "core/document::acquired_services", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.object-stream-resolution"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.unfiltered-object-stream-resolution.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/6-7", "RPE-STD-005/7-10"]
+modules = ["core/object", "core/document"]
+tests = ["core/object::object_stream", "core/object::filtered_object_stream", "core/object::repository_policy", "core/document::compressed_resolver", "core/document::acquired_object", "core/document::acquired_services", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-base-revision-attestation"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.strict-base-revision-attestation.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/document"]
+tests = ["core/document::revision_attestation", "core/document::revision_attestation_limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-base-open"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.strict-base-open.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::strict_base_open", "core/document::repository_policy", "runtime/session::strict_base_open_coordinator", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.attested-object-access"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.attested-object-access.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/7-9"]
+modules = ["core/document"]
+tests = ["core/document::attested_object_access", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.attested-reference-chain-resolution"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.attested-reference-chain.v1"
+clauses = ["RPE-ARCH-001/5.4", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::reference_chain_resolution", "core/document::reference_chain_limit_config", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.attested-resident-footprint"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.attested-resident-footprint.v1"
+clauses = ["RPE-ARCH-001/5.3-5.4", "RPE-STD-005/5-9"]
+modules = ["core/syntax", "core/object", "core/document"]
+tests = ["core/syntax::parser_behavior", "core/object::object_behavior", "core/document::attested_object_access", "core/document::reference_chain_resolution", "core/document::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.pdf-text-string"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.pdf-text-string.v1"
+clauses = ["ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::text_string", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-outline"
+owner = "parser-security"
+state = "DIFFERENTIAL"
+profile = "m1.strict-outline.v1"
+clauses = ["ISO-32000-1:2008/7.3.9", "ISO-32000-1:2008/7.3.10", "ISO-32000-1:2008/7.7.2", "ISO-32000-1:2008/12.3.3", "ISO-32000-1:2008/7.9.2.2", "ISO-32000-1:2008/D.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-001/5-6", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::outline", "core/document::outline_limit_config", "core/document::local_repair_open", "core/document::acquired_services", "core/document::repository_policy", "tools/quality::m1_document_service_differential", "tools/quality::m1_document_service_maturity", "tools/quality::m1_document_service_fuzz"]
+fuzz_targets = ["fuzz.m1documentservices"]
+benchmarks = ["benchmark.m1-native-document-services"]
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.strict-page-count"
+owner = "parser-security"
+state = "DIFFERENTIAL"
+profile = "m1.strict-page-count.v1"
+clauses = ["ISO-32000-1:2008/7.7.3", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/11.5-11.7", "RPE-ARCH-001/15.3/M1", "RPE-STD-001/5-9", "RPE-STD-002/6-7", "RPE-STD-005/5-9"]
+modules = ["core/document"]
+tests = ["core/document::page_tree_count", "core/document::page_tree_limit_config", "core/document::local_repair_open", "core/document::acquired_services", "core/document::repository_policy", "tools/quality::m1_document_service_differential", "tools/quality::m1_document_service_maturity", "tools/quality::m1_document_service_fuzz", "tools/quality::native_object_loop"]
+fuzz_targets = ["fuzz.m1documentservices"]
+benchmarks = ["benchmark.m1-native-document-services"]
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.shared-attested-service-jobs"
+owner = "parser-security"
+state = "PLANNED"
+profile = "m1.shared-attested-service-jobs.v1"
+clauses = ["RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/9.1", "RPE-ARCH-001/15.3/M1"]
+modules = ["core/document"]
+tests = ["core/document::page_tree_count", "core/document::outline", "core/document::local_repair_open", "core/document::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.range-resume-arbiter"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.range-resume-arbiter.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.range-request-coalescer"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.range-request-coalescer.v1"
+clauses = ["RPE-ARCH-001/5.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::range_coalescer", "runtime/session::range_loopback_http", "runtime/session::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.range-loopback-http-e2e"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.range-loopback-http-e2e.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::range_loopback_http", "runtime/session::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.strict-base-open-job-owner"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.strict-base-open-job-owner.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::strict_base_open_owner", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.strict-base-open-coordinator"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.strict-base-open-coordinator.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/5", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy", "tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.m1-strict-document-session"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.strict-document-session.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/9.1", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1", "RPE-STD-002/5-7", "RPE-STD-005/8"]
+modules = ["runtime/session"]
+tests = ["runtime/session::m1_strict_document_session", "runtime/session::range_loopback_http", "runtime/session::range_resume", "runtime/session::strict_base_open_coordinator", "runtime/session::repository_policy"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.session-ready-store"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.session-ready-store.v1"
+clauses = ["RPE-ARCH-001/4.1-4.2", "RPE-ARCH-001/9.1", "RPE-STD-001/5-7", "RPE-STD-002/10", "RPE-STD-005/5-7"]
+modules = ["runtime/cache"]
+tests = ["runtime/cache::ready_store", "runtime/cache::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "runtime.ready-session-owner"
+owner = "runtime-platform"
+state = "PLANNED"
+profile = "m1.ready-session-owner.v1"
+clauses = ["RPE-ARCH-001/9.1", "RPE-ARCH-001/14.2", "RPE-STD-002/2", "RPE-STD-002/5", "RPE-STD-002/10", "RPE-STD-005/5", "RPE-STD-005/7"]
+modules = ["runtime/session"]
+tests = ["runtime/session::ready_owner", "runtime/session::repository_policy", "tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.minimal-pdf-generator"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.one-page-table.v1"
+clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/generate"]
+tests = ["tools/generate::tests", "tools/quality/tests/parser_mutation_smoke.rs", "tools/quality::native_object_loop", "tools/quality::native_range_resume_loop", "tools/quality::native_strict_open_runtime_loop", "infrastructure/synthetic-failure-bundle-001"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.native-object-loop"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m1.native-object-loop.v1"
+clauses = ["RPE-ARCH-001/12.6", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/quality"]
+tests = ["tools/quality::native_object_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.native-range-resume-loop"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m1.native-range-resume-loop.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/15.3/M1"]
+modules = ["tools/quality"]
+tests = ["tools/quality::native_range_resume_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.native-strict-open-runtime-loop"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m1.native-strict-open-runtime-loop.v1"
+clauses = ["RPE-ARCH-001/5.1-5.2", "RPE-ARCH-001/5.4", "RPE-ARCH-001/12.6", "RPE-ARCH-001/14.2", "RPE-ARCH-001/15.3/M1"]
+modules = ["tools/quality"]
+tests = ["tools/quality::native_strict_open_runtime_loop"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.canonical-diff"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-ARCH-001/12.10", "RPE-ARCH-001/12.18", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/compare"]
+tests = ["infrastructure/synthetic-failure-bundle-001", "tools/quality::m0_exit"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.failure-bundle"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-artifacts.v1"
+clauses = ["RPE-STD-003/19", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/quality"]
+tests = ["infrastructure/synthetic-failure-bundle-001", "tools/quality::m0_exit"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.baseline-protocol-boundary"
+owner = "baseline-release"
+state = "PLANNED"
+profile = "baseline-protocol-v2"
+clauses = ["AD-007", "RPE-ARCH-001/15.3/M0", "RPE-STD-003/14", "RPE-STD-004/9"]
+modules = ["tools/baseline"]
+tests = ["tools/baseline::tests", "tools/baseline::process_harness", "tools/baseline::pdfium_adapter_contract", "tools/baseline::pdfium_real_adapter", "tools/baseline::pdfium_outline_real_adapter", "tools/baseline::pdfium_page_count_real_adapter", "tools/baseline::pdfium_page_count_performance", "tools/baseline::repository_pdfium_probe", "tools/baseline::repository_pdfium_outline_probe", "tools/baseline::repository_pdfium_page_count_probe", "tools/baseline::repository_pdfium_page_count_performance_probe", "tools/quality::m0_exit"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.benchmark-harness"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.synthetic-benchmark-replay.v1"
+clauses = ["RPE-ARCH-001/12.21", "RPE-ARCH-001/12.22", "RPE-ARCH-001/12.23", "RPE-ARCH-001/15.3/M0", "RPE-STD-003/17"]
+modules = ["tools/benchmark"]
+tests = ["tools/benchmark/src/report.rs::tests", "tools/benchmark/tests/cli.rs", "tools/benchmark/tests/repository_report.rs", "tools/quality/tests/parser_mutation_smoke.rs"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "quality.corpus-manager"
+owner = "quality-corpus"
+state = "PLANNED"
+profile = "m0.t0-corpus-manifest.v1"
+clauses = ["RPE-ARCH-001/12.19", "RPE-ARCH-001/12.20", "RPE-ARCH-001/15.3/M0"]
+modules = ["tools/corpus"]
+tests = ["tools/corpus/src/manifest.rs::tests", "tools/corpus/tests/cli.rs", "tools/corpus/tests/repository_manifest.rs", "tools/quality/tests/parser_mutation_smoke.rs"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
