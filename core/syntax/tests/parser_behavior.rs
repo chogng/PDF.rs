@@ -6,8 +6,8 @@ use pdf_rs_bytes::{
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_syntax::{
-    DictionaryEntry, InputExtent, Located, ObjectRef, PdfDictionary, RealNotation, StringKind,
-    SyntaxCancellation, SyntaxError, SyntaxErrorCategory, SyntaxErrorCode, SyntaxInput,
+    DictionaryEntry, InputExtent, Located, NeverCancelled, ObjectRef, PdfDictionary, RealNotation,
+    StringKind, SyntaxCancellation, SyntaxError, SyntaxErrorCategory, SyntaxErrorCode, SyntaxInput,
     SyntaxLimitConfig, SyntaxLimitKind, SyntaxLimits, SyntaxObject, SyntaxParser, SyntaxPoll,
     SyntaxRecoverability,
 };
@@ -43,6 +43,16 @@ fn parser_at<'a>(
     limits: SyntaxLimits,
 ) -> SyntaxParser<'a> {
     SyntaxParser::new(input(bytes, base, end_of_input), limits).expect("parser input fits limits")
+}
+
+fn retained_parser<'a>(bytes: &'a [u8], max_retained_bytes: u64) -> SyntaxParser<'a> {
+    SyntaxParser::new_with_cancellation_and_retained_cap(
+        input(bytes, 0, true),
+        SyntaxLimits::default(),
+        &NeverCancelled,
+        max_retained_bytes,
+    )
+    .expect("parser input fits limits")
 }
 
 fn ready<T>(poll: SyntaxPoll<T>) -> T {
@@ -893,6 +903,112 @@ fn container_capacity_budget_uses_allocator_reported_bytes() {
     assert_eq!(limit.consumed(), initial_bytes);
     assert_eq!(limit.attempted(), initial_bytes);
     assert_eq!(preflight.stats().container_bytes(), initial_bytes);
+}
+
+#[test]
+fn runtime_retained_cap_uses_owned_allocator_capacity_at_exact_and_one_less_boundaries() {
+    let bytes = b"/AllocatorVisible ";
+    let mut baseline = parser(bytes, true);
+    ready(baseline.parse_object());
+    let exact_bytes = baseline.stats().owned_bytes();
+    assert!(exact_bytes > 0);
+    assert_eq!(baseline.stats().container_bytes(), 0);
+
+    let mut exact = retained_parser(bytes, exact_bytes);
+    ready(exact.parse_object());
+    assert_eq!(exact.stats().owned_bytes(), exact_bytes);
+
+    let mut one_less = retained_parser(bytes, exact_bytes - 1);
+    let limit = failed(one_less.parse_object())
+        .limit()
+        .expect("retained failure carries allocator-capacity context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::RetainedBytes);
+    assert_eq!(limit.limit(), exact_bytes - 1);
+    assert_eq!(limit.consumed(), 0);
+    assert!(limit.attempted() >= exact_bytes);
+    assert_eq!(one_less.stats().owned_bytes(), 0);
+}
+
+#[test]
+fn runtime_retained_cap_preflights_and_rechecks_container_capacity() {
+    let bytes = b"[null null null null null]";
+    let mut baseline = parser(bytes, true);
+    ready(baseline.parse_object());
+    let exact_bytes = baseline.stats().container_bytes();
+    assert!(exact_bytes > 0);
+    assert_eq!(baseline.stats().owned_bytes(), 0);
+
+    let mut exact = retained_parser(bytes, exact_bytes);
+    ready(exact.parse_object());
+    assert_eq!(exact.stats().container_bytes(), exact_bytes);
+
+    let mut one_less = retained_parser(bytes, exact_bytes - 1);
+    let limit = failed(one_less.parse_object())
+        .limit()
+        .expect("retained failure carries container-capacity context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::RetainedBytes);
+    assert_eq!(limit.limit(), exact_bytes - 1);
+    assert!(limit.consumed().checked_add(limit.attempted()).unwrap() > limit.limit());
+    assert_eq!(
+        one_less.stats().owned_bytes() + one_less.stats().container_bytes(),
+        limit.consumed(),
+        "a rejected capacity is never committed to retained statistics"
+    );
+}
+
+#[test]
+fn runtime_retained_cap_combines_owned_and_container_capacity() {
+    let bytes = b"[/A (BC)]";
+    let mut baseline = parser(bytes, true);
+    ready(baseline.parse_object());
+    let exact_bytes = baseline
+        .stats()
+        .owned_bytes()
+        .checked_add(baseline.stats().container_bytes())
+        .unwrap();
+    assert!(baseline.stats().owned_bytes() > 0);
+    assert!(baseline.stats().container_bytes() > 0);
+
+    let mut exact = retained_parser(bytes, exact_bytes);
+    ready(exact.parse_object());
+    assert_eq!(
+        exact.stats().owned_bytes() + exact.stats().container_bytes(),
+        exact_bytes
+    );
+
+    let mut one_less = retained_parser(bytes, exact_bytes - 1);
+    let limit = failed(one_less.parse_object()).limit().unwrap();
+    assert_eq!(limit.kind(), SyntaxLimitKind::RetainedBytes);
+    assert_eq!(limit.limit(), exact_bytes - 1);
+    assert!(limit.consumed().checked_add(limit.attempted()).unwrap() > limit.limit());
+}
+
+#[test]
+fn zero_runtime_retained_cap_allows_scalars_and_legacy_constructors_remain_uncapped() {
+    let mut scalar = retained_parser(b"null", 0);
+    ready(scalar.parse_object());
+    assert_eq!(scalar.stats().owned_bytes(), 0);
+    assert_eq!(scalar.stats().container_bytes(), 0);
+
+    let error = failed(retained_parser(b"/A", 0).parse_object());
+    let limit = error.limit().unwrap();
+    assert_eq!(limit.kind(), SyntaxLimitKind::RetainedBytes);
+    assert_eq!(
+        (limit.limit(), limit.consumed(), limit.attempted()),
+        (0, 0, 1)
+    );
+
+    let bytes = b"[/A (BC)]";
+    let mut legacy = SyntaxParser::new(input(bytes, 0, true), SyntaxLimits::default()).unwrap();
+    let legacy_value = ready(legacy.parse_object());
+    let mut legacy_with_cancellation = SyntaxParser::new_with_cancellation(
+        input(bytes, 0, true),
+        SyntaxLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap();
+    assert_eq!(ready(legacy_with_cancellation.parse_object()), legacy_value);
+    assert_eq!(legacy_with_cancellation.stats(), legacy.stats());
 }
 
 #[test]

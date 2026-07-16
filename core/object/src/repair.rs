@@ -7,7 +7,7 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_syntax::{ByteSpan, InputExtent, ObjectRef, SyntaxLimits};
 
-use crate::parser::{BoundaryParse, ParsedBoundary, parse_boundary};
+use crate::parser::{BoundaryContext, BoundaryParse, ParsedBoundary, parse_boundary};
 use crate::{
     DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget,
     IndirectObjectTargetKind, IndirectObjectValue, ObjectCancellation, ObjectEnvelopePoll,
@@ -1256,7 +1256,14 @@ impl OpenLocalObjectJob {
                 Some(target.xref_offset()),
             ));
         }
-        ObjectWorkCaps::new(remaining_read, remaining_parse)
+        match self.work_caps.max_retained_bytes() {
+            Some(max_retained_bytes) => ObjectWorkCaps::new_with_retained_bytes(
+                remaining_read,
+                remaining_parse,
+                max_retained_bytes,
+            ),
+            None => ObjectWorkCaps::new(remaining_read, remaining_parse),
+        }
     }
 
     fn charge_scan(&mut self, amount: u64, offset: Option<u64>) -> Result<(), ObjectError> {
@@ -1708,13 +1715,31 @@ fn scan_stream_boundaries(
                     Some(absolute),
                 )
             })?;
+        let remaining_retained_bytes = envelope
+            .work_caps()
+            .max_retained_bytes()
+            .map(|limit| {
+                limit
+                    .checked_sub(envelope.retained_heap_bytes())
+                    .ok_or_else(|| {
+                        ObjectError::for_code(
+                            ObjectErrorCode::InternalState,
+                            Some(target.reference()),
+                            Some(absolute),
+                        )
+                    })
+            })
+            .transpose()?;
         match parse_boundary(
-            target.snapshot().identity(),
-            target.reference(),
-            absolute,
+            BoundaryContext {
+                source: target.snapshot().identity(),
+                reference: target.reference(),
+                data_end: absolute,
+                syntax_limits: envelope.syntax_limits(),
+                max_retained_bytes: remaining_retained_bytes,
+            },
             &raw[position..candidate_end],
             InputExtent::MayContinue,
-            envelope.syntax_limits(),
             cancellation,
         ) {
             Ok(BoundaryParse::Complete(parsed)) => {

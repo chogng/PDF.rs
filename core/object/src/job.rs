@@ -9,8 +9,8 @@ use pdf_rs_bytes::{
 use pdf_rs_syntax::{ByteSpan, InputExtent, SyntaxLimits};
 
 use crate::parser::{
-    BoundaryParse, EnvelopeContext, EnvelopeParse, ParsedStreamEnvelope, parse_boundary,
-    parse_envelope,
+    BoundaryContext, BoundaryParse, EnvelopeContext, EnvelopeParse, ParsedStreamEnvelope,
+    parse_boundary, parse_envelope,
 };
 use crate::{
     DeclaredStreamLength, FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue,
@@ -500,6 +500,7 @@ impl OpenObjectJob {
                         object_upper_bound: self.target.object_upper_bound(),
                         allow_indirect_length: false,
                         syntax_limits: self.syntax_limits,
+                        max_retained_bytes: self.work_caps.max_retained_bytes(),
                     },
                     &bytes.bytes()[prefix_len..],
                     InputExtent::MayContinue,
@@ -664,13 +665,20 @@ impl OpenObjectJob {
                 if let Err(error) = self.charge_parse(window, Some(data_end)) {
                     return Some(self.fail(error));
                 }
+                let remaining_retained_bytes = match self.remaining_retained_bytes() {
+                    Ok(value) => value,
+                    Err(error) => return Some(self.fail(error)),
+                };
                 match parse_boundary(
-                    self.target.snapshot().identity(),
-                    self.target.reference(),
-                    data_end,
+                    BoundaryContext {
+                        source: self.target.snapshot().identity(),
+                        reference: self.target.reference(),
+                        data_end,
+                        syntax_limits: self.syntax_limits,
+                        max_retained_bytes: remaining_retained_bytes,
+                    },
                     bytes.bytes(),
                     InputExtent::MayContinue,
-                    self.syntax_limits,
                     cancellation,
                 ) {
                     Ok(BoundaryParse::Complete(boundary)) => {
@@ -759,6 +767,23 @@ impl OpenObjectJob {
             ));
         }
         Ok(())
+    }
+
+    fn remaining_retained_bytes(&self) -> Result<Option<u64>, ObjectError> {
+        self.work_caps
+            .max_retained_bytes()
+            .map(|limit| {
+                limit
+                    .checked_sub(self.stats.retained_heap_bytes)
+                    .ok_or_else(|| {
+                        ObjectError::for_code(
+                            ObjectErrorCode::InternalState,
+                            Some(self.target.reference()),
+                            None,
+                        )
+                    })
+            })
+            .transpose()
     }
 
     fn charge_read(&mut self, amount: u64, offset: Option<u64>) -> Result<(), ObjectError> {

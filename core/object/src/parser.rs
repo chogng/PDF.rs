@@ -17,6 +17,7 @@ pub(crate) struct EnvelopeContext {
     pub(crate) object_upper_bound: u64,
     pub(crate) allow_indirect_length: bool,
     pub(crate) syntax_limits: SyntaxLimits,
+    pub(crate) max_retained_bytes: Option<u64>,
 }
 
 pub(crate) enum EnvelopeParse {
@@ -47,6 +48,15 @@ pub(crate) enum BoundaryParse {
     Complete(ParsedBoundary),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct BoundaryContext {
+    pub(crate) source: SourceIdentity,
+    pub(crate) reference: ObjectRef,
+    pub(crate) data_end: u64,
+    pub(crate) syntax_limits: SyntaxLimits,
+    pub(crate) max_retained_bytes: Option<u64>,
+}
+
 pub(crate) struct ParsedBoundary {
     pub(crate) data_delimiter_span: ByteSpan,
     pub(crate) endstream_span: ByteSpan,
@@ -71,8 +81,13 @@ pub(crate) fn parse_envelope(
     let input = SyntaxInput::new(context.source, context.xref_offset, bytes, extent)
         .map_err(|error| ObjectError::from_syntax(error, Some(reference)))?;
     let adapter = SyntaxCancellationAdapter(cancellation);
-    let mut parser = SyntaxParser::new_with_cancellation(input, context.syntax_limits, &adapter)
-        .map_err(|error| ObjectError::from_syntax(error, Some(reference)))?;
+    let mut parser = syntax_parser(
+        input,
+        context.syntax_limits,
+        &adapter,
+        context.max_retained_bytes,
+    )
+    .map_err(|error| ObjectError::from_syntax(error, Some(reference)))?;
 
     let number = match required(
         parser.parse_object(),
@@ -240,24 +255,26 @@ fn retained_heap_bytes(
 }
 
 pub(crate) fn parse_boundary(
-    source: SourceIdentity,
-    reference: ObjectRef,
-    data_end: u64,
+    context: BoundaryContext,
     bytes: &[u8],
     extent: InputExtent,
-    syntax_limits: SyntaxLimits,
     cancellation: &dyn ObjectCancellation,
 ) -> Result<BoundaryParse, ObjectError> {
-    let input = SyntaxInput::new(source, data_end, bytes, extent)
-        .map_err(|error| ObjectError::from_syntax(error, Some(reference)))?;
+    let input = SyntaxInput::new(context.source, context.data_end, bytes, extent)
+        .map_err(|error| ObjectError::from_syntax(error, Some(context.reference)))?;
     let adapter = SyntaxCancellationAdapter(cancellation);
-    let mut parser = SyntaxParser::new_with_cancellation(input, syntax_limits, &adapter)
-        .map_err(|error| ObjectError::from_syntax(error, Some(reference)))?;
+    let mut parser = syntax_parser(
+        input,
+        context.syntax_limits,
+        &adapter,
+        context.max_retained_bytes,
+    )
+    .map_err(|error| ObjectError::from_syntax(error, Some(context.reference)))?;
 
     let data_delimiter_span = match required(
         parser.consume_stream_line_ending(),
-        reference,
-        data_end,
+        context.reference,
+        context.data_end,
         ObjectErrorCode::InvalidStreamBoundary,
     )? {
         Required::Ready(value) => value,
@@ -265,7 +282,7 @@ pub(crate) fn parse_boundary(
     };
     let endstream = match required(
         parser.parse_keyword(),
-        reference,
+        context.reference,
         data_delimiter_span.end_exclusive(),
         ObjectErrorCode::InvalidStreamBoundary,
     )? {
@@ -277,14 +294,14 @@ pub(crate) fn parse_boundary(
     {
         return Err(ObjectError::for_code(
             ObjectErrorCode::InvalidStreamBoundary,
-            Some(reference),
+            Some(context.reference),
             Some(endstream.span().start()),
         ));
     }
 
     let endobj = match required(
         parser.parse_keyword(),
-        reference,
+        context.reference,
         endstream.span().end_exclusive(),
         ObjectErrorCode::InvalidStreamBoundary,
     )? {
@@ -294,7 +311,7 @@ pub(crate) fn parse_boundary(
     if endobj.bytes() != b"endobj" {
         return Err(ObjectError::for_code(
             ObjectErrorCode::InvalidStreamBoundary,
-            Some(reference),
+            Some(context.reference),
             Some(endobj.span().start()),
         ));
     }
@@ -304,6 +321,23 @@ pub(crate) fn parse_boundary(
         endstream_span: endstream.span(),
         endobj_span: endobj.span(),
     }))
+}
+
+fn syntax_parser<'a>(
+    input: SyntaxInput<'a>,
+    limits: SyntaxLimits,
+    cancellation: &'a dyn SyntaxCancellation,
+    max_retained_bytes: Option<u64>,
+) -> Result<SyntaxParser<'a>, pdf_rs_syntax::SyntaxError> {
+    match max_retained_bytes {
+        Some(max_retained_bytes) => SyntaxParser::new_with_cancellation_and_retained_cap(
+            input,
+            limits,
+            cancellation,
+            max_retained_bytes,
+        ),
+        None => SyntaxParser::new_with_cancellation(input, limits, cancellation),
+    }
 }
 
 fn stream_length(

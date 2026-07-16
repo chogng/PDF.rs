@@ -7,7 +7,7 @@ use pdf_rs_bytes::{
 use pdf_rs_syntax::{ByteSpan, InputExtent, SyntaxLimits};
 
 use crate::parser::{
-    BoundaryParse, EnvelopeContext, EnvelopeParse, parse_boundary, parse_envelope,
+    BoundaryContext, BoundaryParse, EnvelopeContext, EnvelopeParse, parse_boundary, parse_envelope,
 };
 use crate::{
     FramedStream, IndirectObject, IndirectObjectTarget, IndirectObjectValue, ObjectCancellation,
@@ -294,6 +294,7 @@ impl OpenObjectEnvelopeJob {
                 object_upper_bound: self.target.object_upper_bound(),
                 allow_indirect_length: true,
                 syntax_limits: self.syntax_limits,
+                max_retained_bytes: self.work_caps.max_retained_bytes(),
             },
             &bytes.bytes()[prefix_len..],
             InputExtent::MayContinue,
@@ -467,6 +468,11 @@ impl OpenStreamBoundaryJob {
             || work_caps.max_parse_bytes() > sealed_caps.max_parse_bytes()
             || work_caps.max_read_bytes() < envelope_stats.read_bytes()
             || work_caps.max_parse_bytes() < envelope_stats.parse_bytes()
+            || !retained_cap_transition_is_valid(
+                sealed_caps.max_retained_bytes(),
+                work_caps.max_retained_bytes(),
+                envelope_stats.retained_heap_bytes(),
+            )
         {
             return Err(ObjectError::for_code(
                 ObjectErrorCode::InvalidLimits,
@@ -687,13 +693,24 @@ impl OpenStreamBoundaryJob {
                 ) {
                     return self.fail(error);
                 }
+                let remaining_retained_bytes = match remaining_retained_bytes(
+                    self.work_caps,
+                    self.stats.retained_heap_bytes,
+                    self.target,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => return self.fail(error),
+                };
                 match parse_boundary(
-                    self.target.snapshot().identity(),
-                    self.target.reference(),
-                    data_end,
+                    BoundaryContext {
+                        source: self.target.snapshot().identity(),
+                        reference: self.target.reference(),
+                        data_end,
+                        syntax_limits: self.syntax_limits,
+                        max_retained_bytes: remaining_retained_bytes,
+                    },
                     bytes.bytes(),
                     InputExtent::MayContinue,
-                    self.syntax_limits,
                     cancellation,
                 ) {
                     Ok(BoundaryParse::Complete(boundary)) => {
@@ -932,6 +949,39 @@ fn charge_parse(
     }
     stats.parse_bytes = total;
     Ok(())
+}
+
+fn remaining_retained_bytes(
+    caps: ObjectWorkCaps,
+    retained_heap_bytes: u64,
+    target: IndirectObjectTarget,
+) -> Result<Option<u64>, ObjectError> {
+    caps.max_retained_bytes()
+        .map(|limit| {
+            limit.checked_sub(retained_heap_bytes).ok_or_else(|| {
+                ObjectError::for_code(
+                    ObjectErrorCode::InternalState,
+                    Some(target.reference()),
+                    Some(target.xref_offset()),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn retained_cap_transition_is_valid(
+    sealed: Option<u64>,
+    replacement: Option<u64>,
+    retained_heap_bytes: u64,
+) -> bool {
+    match (sealed, replacement) {
+        (Some(sealed), Some(replacement)) => {
+            replacement <= sealed && replacement >= retained_heap_bytes
+        }
+        (Some(_), None) => false,
+        (None, Some(replacement)) => replacement >= retained_heap_bytes,
+        (None, None) => true,
+    }
 }
 
 fn grow_or_fail(

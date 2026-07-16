@@ -127,11 +127,17 @@ makes no ISO or R0 semantic coverage claim.
   accepted-envelope measurement even though the state has released the dictionary. Its opaque
   payload length is reported separately and never counted as retained heap bytes.
 - `ObjectWorkCaps` lets a parent composition job lend a nonzero cumulative read/parse slice that
-  cannot exceed either the fixed object-work hard ceiling or the object's configured totals. The
-  legacy constructor supplies the configured totals unchanged. A scoped read is charged before
-  `ByteSource::poll`, and a scoped parse window is charged before parser invocation, so exhausted
-  parent work cannot perform the rejected lower-layer operation. The scoped caps do not weaken
-  per-object envelope, boundary, stream, source, or syntax limits.
+  cannot exceed either the fixed object-work hard ceiling or the object's configured totals. Its
+  additive constructor can also lend an optional combined syntax retained-capacity ceiling,
+  including zero for allocation-free syntax. The legacy constructor and default object jobs remain
+  uncapped for retained capacity. A scoped read is charged before `ByteSource::poll`, a scoped parse
+  window is charged before parser invocation, and owned/container capacity is preflighted before
+  allocation and rechecked against allocator-reported capacity before adoption. Staged envelopes
+  seal the optional cap; boundary continuation may only keep or tighten it above already-retained
+  envelope capacity, and boundary parsing receives only the remaining slice. Strict, repair
+  candidate, and replay children preserve the same retained cap. The scoped caps do not weaken
+  per-object envelope, boundary, stream, source, or syntax limits, and lower retained-limit errors
+  keep exact `SyntaxLimit` context through `ObjectError::syntax_error`.
 - `OpenLocalObjectJob` accepts only an ordinary `XrefEntry` target and rejects an
   `XrefStreamAnchor` at construction with stable `RPE-OBJECT-0027` unsupported policy. This keeps
   header repair from rebuilding the anchor through the ordinary target constructor and silently
@@ -371,3 +377,5 @@ Native/external-engine differential is claimed in this bootstrap slice.
   claiming M1 exit.
 - 2026-07-15: Added a consuming equal-or-tighter staged-boundary work-cap transition with exact,
   one-less, cannot-widen, and cannot-revoke-consumed-work regressions for indirect-Length parents.
+- 2026-07-16: Added opt-in parent-lent syntax retained-capacity ceilings across one-shot, staged,
+  and repair validation children with exact lower-limit context and unchanged legacy work caps.

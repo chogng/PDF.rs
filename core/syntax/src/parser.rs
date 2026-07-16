@@ -248,6 +248,7 @@ enum TokenKind<'a> {
 pub struct SyntaxParser<'a> {
     input: SyntaxInput<'a>,
     limits: SyntaxLimits,
+    max_retained_bytes: Option<u64>,
     cancellation: &'a dyn SyntaxCancellation,
     cancellation_probe_countdown: u16,
     cursor: usize,
@@ -257,7 +258,7 @@ pub struct SyntaxParser<'a> {
 impl<'a> SyntaxParser<'a> {
     /// Creates a parser after enforcing the configured contiguous-input budget.
     pub fn new(input: SyntaxInput<'a>, limits: SyntaxLimits) -> Result<Self, SyntaxError> {
-        Self::new_with_cancellation(input, limits, &NEVER_CANCELLED)
+        Self::new_internal(input, limits, &NEVER_CANCELLED, None)
     }
 
     /// Creates a parser with a cooperative runtime cancellation probe.
@@ -265,6 +266,29 @@ impl<'a> SyntaxParser<'a> {
         input: SyntaxInput<'a>,
         limits: SyntaxLimits,
         cancellation: &'a dyn SyntaxCancellation,
+    ) -> Result<Self, SyntaxError> {
+        Self::new_internal(input, limits, cancellation, None)
+    }
+
+    /// Creates a parser with cancellation and an additive runtime retained-capacity ceiling.
+    ///
+    /// The cap covers the combined allocator-reported capacity of owned scalar bytes and
+    /// array/dictionary vectors. It is independent of the configured per-dimension syntax
+    /// limits and may be zero when the caller only permits allocation-free syntax.
+    pub fn new_with_cancellation_and_retained_cap(
+        input: SyntaxInput<'a>,
+        limits: SyntaxLimits,
+        cancellation: &'a dyn SyntaxCancellation,
+        max_retained_bytes: u64,
+    ) -> Result<Self, SyntaxError> {
+        Self::new_internal(input, limits, cancellation, Some(max_retained_bytes))
+    }
+
+    fn new_internal(
+        input: SyntaxInput<'a>,
+        limits: SyntaxLimits,
+        cancellation: &'a dyn SyntaxCancellation,
+        max_retained_bytes: Option<u64>,
     ) -> Result<Self, SyntaxError> {
         let input_len = u64::try_from(input.bytes.len()).map_err(|_| {
             SyntaxError::for_code(SyntaxErrorCode::InternalState, Some(input.base_offset))
@@ -281,6 +305,7 @@ impl<'a> SyntaxParser<'a> {
         Ok(Self {
             input,
             limits,
+            max_retained_bytes,
             cancellation,
             cancellation_probe_countdown: CANCELLATION_PROBE_INTERVAL,
             cursor: 0,
@@ -1628,6 +1653,7 @@ impl<'a> SyntaxParser<'a> {
                 requested_bytes,
                 offset,
             )?;
+            self.charge_retained(requested_bytes, offset)?;
             container
                 .try_reserve_exact(requested_capacity)
                 .map_err(|_| self.allocation_failure(offset, requested_bytes))?;
@@ -1661,6 +1687,7 @@ impl<'a> SyntaxParser<'a> {
                     Some(offset),
                 ))
             })?;
+        self.charge_retained(added_bytes, offset)?;
         self.stats.container_bytes = total_container_bytes;
         if total_container_bytes > self.limits.max_container_bytes {
             return Err(ParseFailure::Failed(SyntaxError::resource(
@@ -1682,6 +1709,7 @@ impl<'a> SyntaxParser<'a> {
             len,
             offset,
         )?;
+        self.charge_retained(len, offset)?;
         let len_usize = usize::try_from(len).map_err(|_| {
             ParseFailure::Failed(SyntaxError::resource(
                 SyntaxLimitKind::Allocation,
@@ -1714,7 +1742,17 @@ impl<'a> SyntaxParser<'a> {
             capacity,
             offset,
         )?;
-        self.stats.owned_bytes += capacity;
+        self.charge_retained(capacity, offset)?;
+        self.stats.owned_bytes = self
+            .stats
+            .owned_bytes
+            .checked_add(capacity)
+            .ok_or_else(|| {
+                ParseFailure::Failed(SyntaxError::for_code(
+                    SyntaxErrorCode::InternalState,
+                    Some(offset),
+                ))
+            })?;
         Ok(bytes)
     }
 
@@ -1801,6 +1839,29 @@ impl<'a> SyntaxParser<'a> {
             )));
         }
         Ok(())
+    }
+
+    fn charge_retained(&self, attempted: u64, offset: u64) -> ParseResult<()> {
+        let Some(limit) = self.max_retained_bytes else {
+            return Ok(());
+        };
+        let consumed = self
+            .stats
+            .owned_bytes
+            .checked_add(self.stats.container_bytes)
+            .ok_or_else(|| {
+                ParseFailure::Failed(SyntaxError::for_code(
+                    SyntaxErrorCode::InternalState,
+                    Some(offset),
+                ))
+            })?;
+        self.charge_total(
+            SyntaxLimitKind::RetainedBytes,
+            limit,
+            consumed,
+            attempted,
+            offset,
+        )
     }
 
     fn allocation_failure(&self, offset: u64, attempted: u64) -> ParseFailure {

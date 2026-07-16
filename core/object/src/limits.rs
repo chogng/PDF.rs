@@ -15,6 +15,7 @@ const HARD_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 pub struct ObjectWorkCaps {
     max_read_bytes: u64,
     max_parse_bytes: u64,
+    max_retained_bytes: Option<u64>,
 }
 
 impl ObjectWorkCaps {
@@ -34,13 +35,29 @@ impl ObjectWorkCaps {
         Ok(Self {
             max_read_bytes,
             max_parse_bytes,
+            max_retained_bytes: None,
         })
+    }
+
+    /// Validates cumulative work caps with an explicit child retained-capacity ceiling.
+    ///
+    /// A zero retained cap is valid and permits allocation-free object syntax. The retained cap
+    /// is additive to, and never widens, the configured syntax owned/container limits.
+    pub fn new_with_retained_bytes(
+        max_read_bytes: u64,
+        max_parse_bytes: u64,
+        max_retained_bytes: u64,
+    ) -> Result<Self, ObjectError> {
+        let mut caps = Self::new(max_read_bytes, max_parse_bytes)?;
+        caps.max_retained_bytes = Some(max_retained_bytes);
+        Ok(caps)
     }
 
     pub(crate) const fn from_limits(limits: ObjectLimits) -> Self {
         Self {
             max_read_bytes: limits.max_total_read_bytes,
             max_parse_bytes: limits.max_total_parse_bytes,
+            max_retained_bytes: None,
         }
     }
 
@@ -52,6 +69,11 @@ impl ObjectWorkCaps {
     /// Returns the cumulative complete-window parse ceiling lent to this job.
     pub const fn max_parse_bytes(self) -> u64 {
         self.max_parse_bytes
+    }
+
+    /// Returns the explicit child retained-capacity ceiling, when one was supplied.
+    pub const fn max_retained_bytes(self) -> Option<u64> {
+        self.max_retained_bytes
     }
 }
 

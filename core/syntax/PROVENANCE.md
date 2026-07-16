@@ -62,6 +62,13 @@ coverage claim.
   successful parse reports the exact vector capacity retained by all returned containers without
   changing the scalar owned-byte limit. Each attempt exposes its complete window size so future
   ByteSource jobs can conservatively sum retry work.
+- A composing runtime may opt into one additive retained-capacity ceiling through
+  `SyntaxParser::new_with_cancellation_and_retained_cap`. The ceiling combines owned scalar and
+  container vector capacity without changing the validated syntax profile. Every owned/container
+  growth preflights its selected requested capacity before allocation, then rechecks the
+  allocator-reported capacity before adopting it. Rejection retains exact redacted
+  `RetainedBytes` limit, consumed, and attempted context; uncapped constructors keep their prior
+  behavior.
 - Callers may bind a cooperative `SyntaxCancellation` probe. Every public parser operation checks
   cancellation before work, and every unbounded scanner/container loop checks again after at most
   256 iterations. Cancellation remains distinct from malformed input and resource exhaustion.
@@ -129,3 +136,6 @@ differential is claimed in this bootstrap slice.
 - 2026-07-15: Promoted allocator-reported container capacity from an evidence-only statistic to a
   validated public limit with complete selected-growth preflight and exact failed-attempt
   accounting.
+- 2026-07-16: Added an opt-in combined retained-capacity runtime ceiling with pre-allocation
+  requested-capacity checks, post-allocation actual-capacity checks, and unchanged legacy
+  constructors.

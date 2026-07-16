@@ -10,7 +10,7 @@ use pdf_rs_object::{
     ObjectErrorCode, ObjectJobContext, ObjectLimitKind, ObjectLimits, ObjectPoll, ObjectStats,
     ObjectWorkCaps, OpenObjectJob,
 };
-use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
+use pdf_rs_syntax::{ObjectRef, SyntaxLimitKind, SyntaxLimits};
 
 const MIB: u64 = 1024 * 1024;
 const HARD_MAX_TOTAL_BYTES: u64 = 256 * MIB;
@@ -122,6 +122,15 @@ fn work_caps_validate_positive_hard_bounded_values_and_getters() {
         let caps = ObjectWorkCaps::new(read, parse).expect("boundary caps must validate");
         assert_eq!(caps.max_read_bytes(), read);
         assert_eq!(caps.max_parse_bytes(), parse);
+        assert_eq!(caps.max_retained_bytes(), None);
+    }
+
+    for retained in [0, 1, u64::MAX] {
+        let caps = ObjectWorkCaps::new_with_retained_bytes(1, 1, retained)
+            .expect("retained caps do not widen object work");
+        assert_eq!(caps.max_read_bytes(), 1);
+        assert_eq!(caps.max_parse_bytes(), 1);
+        assert_eq!(caps.max_retained_bytes(), Some(retained));
     }
 
     for (read, parse) in [
@@ -136,6 +145,72 @@ fn work_caps_validate_positive_hard_bounded_values_and_getters() {
             ObjectErrorCode::InvalidLimits
         );
     }
+}
+
+#[test]
+fn retained_cap_is_enforced_by_the_child_syntax_parser_with_exact_lower_context() {
+    let (bytes, startxref) =
+        fixture(b"1 0 obj\n<< /Key (allocator-visible) /Items [null null] >>\nendobj\n");
+    let store = supplied_store(&bytes);
+    let limits = ObjectLimits::default();
+    let baseline = OpenObjectJob::new(
+        target(store.snapshot(), startxref),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+    )
+    .unwrap();
+    let (baseline_poll, baseline_stats) = poll_once(baseline, &store);
+    ready(baseline_poll);
+    let exact_retained = baseline_stats.retained_heap_bytes();
+    assert!(exact_retained > 1);
+
+    let exact_caps = ObjectWorkCaps::new_with_retained_bytes(
+        baseline_stats.read_bytes(),
+        baseline_stats.parse_bytes(),
+        exact_retained,
+    )
+    .unwrap();
+    let exact = OpenObjectJob::new_with_work_caps(
+        target(store.snapshot(), startxref),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+        exact_caps,
+    )
+    .unwrap();
+    let (exact_poll, exact_stats) = poll_once(exact, &store);
+    ready(exact_poll);
+    assert_eq!(exact_stats.retained_heap_bytes(), exact_retained);
+
+    let one_less_caps = ObjectWorkCaps::new_with_retained_bytes(
+        baseline_stats.read_bytes(),
+        baseline_stats.parse_bytes(),
+        exact_retained - 1,
+    )
+    .unwrap();
+    let one_less = OpenObjectJob::new_with_work_caps(
+        target(store.snapshot(), startxref),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+        one_less_caps,
+    )
+    .unwrap();
+    let (one_less_poll, one_less_stats) = poll_once(one_less, &store);
+    let error = failed(one_less_poll);
+    assert_eq!(error.code(), ObjectErrorCode::SyntaxFailure);
+    assert_eq!(error.limit(), None);
+    let syntax_error = error
+        .syntax_error()
+        .expect("object resource failure retains the lower syntax error");
+    let limit = syntax_error
+        .limit()
+        .expect("lower syntax retained failure carries exact context");
+    assert_eq!(limit.kind(), SyntaxLimitKind::RetainedBytes);
+    assert_eq!(limit.limit(), exact_retained - 1);
+    assert!(limit.consumed().checked_add(limit.attempted()).unwrap() > limit.limit());
+    assert!(one_less_stats.retained_heap_bytes() <= limit.limit());
 }
 
 #[test]
@@ -311,6 +386,7 @@ fn legacy_constructor_matches_explicit_configured_total_caps() {
     )
     .unwrap();
     assert_eq!(legacy.work_caps(), configured_caps);
+    assert_eq!(legacy.work_caps().max_retained_bytes(), None);
     let explicit = OpenObjectJob::new_with_work_caps(
         target(store.snapshot(), startxref),
         context(),

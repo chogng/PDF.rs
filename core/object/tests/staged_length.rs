@@ -293,6 +293,75 @@ fn boundary_phase_continues_the_envelope_cumulative_work_cap() {
 }
 
 #[test]
+fn staged_retained_caps_are_sealed_and_can_only_tighten_above_retained_state() {
+    let fixture = direct_fixture(b"ABC");
+    let store = supplied_store(&fixture.bytes, 0x50);
+    let limits = ObjectLimits::default();
+
+    let baseline_envelope = open_envelope(&store, &fixture);
+    let retained = baseline_envelope.retained_heap_bytes();
+    assert!(retained > 0);
+    let exact_claim = baseline_envelope.direct_length_claim().unwrap();
+    let exact_caps = ObjectWorkCaps::new_with_retained_bytes(
+        limits.max_total_read_bytes(),
+        limits.max_total_parse_bytes(),
+        retained,
+    )
+    .unwrap();
+    let mut exact =
+        OpenStreamBoundaryJob::new_with_work_caps(baseline_envelope, exact_claim, exact_caps)
+            .expect("an uncapped envelope may be tightened to its exact retained capacity");
+    assert!(matches!(
+        exact.poll(&store, &NeverCancelled),
+        ObjectPoll::Ready(_)
+    ));
+
+    let below_envelope = open_envelope(&store, &fixture);
+    let below_claim = below_envelope.direct_length_claim().unwrap();
+    let below_caps = ObjectWorkCaps::new_with_retained_bytes(
+        limits.max_total_read_bytes(),
+        limits.max_total_parse_bytes(),
+        retained - 1,
+    )
+    .unwrap();
+    assert_eq!(
+        OpenStreamBoundaryJob::new_with_work_caps(below_envelope, below_claim, below_caps,)
+            .unwrap_err()
+            .code(),
+        ObjectErrorCode::InvalidLimits
+    );
+
+    let mut capped_open = OpenObjectEnvelopeJob::new_with_work_caps(
+        target(store.snapshot(), &fixture),
+        context(),
+        limits,
+        SyntaxLimits::default(),
+        exact_caps,
+    )
+    .unwrap();
+    let capped_envelope = match capped_open.poll(&store, &NeverCancelled) {
+        ObjectEnvelopePoll::Stream(envelope) => envelope,
+        other => panic!("exact retained envelope must complete, got {other:?}"),
+    };
+    let capped_claim = capped_envelope.direct_length_claim().unwrap();
+    let uncapped_replacement = ObjectWorkCaps::new(
+        limits.max_total_read_bytes(),
+        limits.max_total_parse_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        OpenStreamBoundaryJob::new_with_work_caps(
+            capped_envelope,
+            capped_claim,
+            uncapped_replacement,
+        )
+        .unwrap_err()
+        .code(),
+        ObjectErrorCode::InvalidLimits
+    );
+}
+
+#[test]
 fn boundary_continuation_caps_can_only_tighten_unspent_envelope_work() {
     let fixture = indirect_fixture(3);
     let store = supplied_store(&fixture.bytes, 0x4a);

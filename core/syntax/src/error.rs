@@ -24,6 +24,8 @@ pub enum SyntaxLimitKind {
     ContainerEntries,
     /// Allocator-reported array and dictionary vector capacity bytes.
     ContainerBytes,
+    /// Combined allocator-reported owned scalar and container capacity bytes.
+    RetainedBytes,
     /// Nested array and dictionary depth.
     ContainerDepth,
     /// Fallible allocation within an already bounded operation.
