@@ -104,15 +104,16 @@ impl<'a> ContentScanJob<'a> {
             JobState::Failed(error) => return ContentScanPoll::Failed(*error),
             JobState::Pending => {}
         }
-        match run_scan(self.streams, self.limits, cancellation) {
-            RunOutcome::Ready(program) => {
+        let outcome = run_scan(self.streams, self.limits, cancellation);
+        self.stats = outcome.stats();
+        match outcome.into_terminal() {
+            ScanTerminal::Ready(program) => {
                 self.stats = program.stats();
                 let program = Arc::new(program);
                 self.state = JobState::Ready(Arc::clone(&program));
                 ContentScanPoll::Ready(program)
             }
-            RunOutcome::Failed { error, stats } => {
-                self.stats = stats;
+            ScanTerminal::Failed(error) => {
                 self.state = JobState::Failed(error);
                 ContentScanPoll::Failed(error)
             }
@@ -127,9 +128,9 @@ pub fn scan_content_streams(
     cancellation: &dyn ContentCancellation,
 ) -> Result<ContentProgram, ContentError> {
     validate_stream_order(streams)?;
-    match run_scan(streams, limits, cancellation) {
-        RunOutcome::Ready(program) => Ok(program),
-        RunOutcome::Failed { error, .. } => Err(error),
+    match run_scan(streams, limits, cancellation).into_terminal() {
+        ScanTerminal::Ready(program) => Ok(program),
+        ScanTerminal::Failed(error) => Err(error),
     }
 }
 
@@ -147,7 +148,7 @@ fn validate_stream_order(streams: &[DecodedContentStream<'_>]) -> Result<(), Con
     Ok(())
 }
 
-fn run_scan(
+pub(crate) fn run_scan(
     streams: &[DecodedContentStream<'_>],
     limits: ContentLimits,
     cancellation: &dyn ContentCancellation,
@@ -162,12 +163,33 @@ fn run_scan(
     }
 }
 
-enum RunOutcome {
+pub(crate) enum RunOutcome {
     Ready(ContentProgram),
     Failed {
         error: ContentError,
         stats: ContentScanStats,
     },
+}
+
+pub(crate) enum ScanTerminal {
+    Ready(ContentProgram),
+    Failed(ContentError),
+}
+
+impl RunOutcome {
+    pub(crate) const fn stats(&self) -> ContentScanStats {
+        match self {
+            Self::Ready(program) => program.stats(),
+            Self::Failed { stats, .. } => *stats,
+        }
+    }
+
+    pub(crate) fn into_terminal(self) -> ScanTerminal {
+        match self {
+            Self::Ready(program) => ScanTerminal::Ready(program),
+            Self::Failed { error, .. } => ScanTerminal::Failed(error),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

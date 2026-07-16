@@ -47,7 +47,12 @@ version = "0.1.0"
 name = "pdf-rs-content"
 version = "0.1.0"
 dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-document",
+ "pdf-rs-object",
+ "pdf-rs-scene",
  "pdf-rs-syntax",
+ "pdf-rs-xref",
 ]
 
 [[package]]

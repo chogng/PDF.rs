@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use pdf_rs_document::{DocumentError, DocumentErrorCode};
+
 use crate::ContentOperatorSource;
 
 /// Deterministic Content VM budget that rejected work or retained state.
@@ -92,6 +94,8 @@ pub enum ContentVmErrorCode {
     InvalidCompatibilityState,
     /// Marked-content begin/end structure is invalid or unbalanced.
     InvalidMarkedContentState,
+    /// The supplied byte source no longer matches the acquired Page snapshot.
+    SourceSnapshotMismatch,
     /// Cooperative cancellation was observed before atomic publication.
     Cancelled,
     /// A deterministic VM budget was exceeded.
@@ -111,6 +115,8 @@ pub enum ContentVmErrorCategory {
     Numeric,
     /// Invalid operator-state sequencing.
     State,
+    /// The immutable source generation changed before publication.
+    Source,
     /// Cooperative cancellation.
     Cancellation,
     /// Deterministic resource exhaustion.
@@ -126,6 +132,8 @@ pub enum ContentVmRecoverability {
     CorrectConfiguration,
     /// Correct malformed content operands or operator sequencing.
     CorrectInput,
+    /// Reopen the current source generation and reacquire the Page.
+    ReopenSource,
     /// Retry only under a current generation if still useful.
     RetryCurrentGeneration,
     /// Reduce work or use an approved larger budget.
@@ -173,6 +181,11 @@ impl ContentVmError {
             source,
             limit: Some(limit),
         }
+    }
+
+    pub(crate) const fn with_source(mut self, source: ContentOperatorSource) -> Self {
+        self.source = Some(source);
+        self
     }
 
     /// Returns the stable machine-readable error code.
@@ -264,6 +277,11 @@ const fn error_policy(
             ContentVmRecoverability::CorrectInput,
             "RPE-CONTENT-VM-0010",
         ),
+        ContentVmErrorCode::SourceSnapshotMismatch => (
+            ContentVmErrorCategory::Source,
+            ContentVmRecoverability::ReopenSource,
+            "RPE-CONTENT-VM-0014",
+        ),
         ContentVmErrorCode::Cancelled => (
             ContentVmErrorCategory::Cancellation,
             ContentVmRecoverability::RetryCurrentGeneration,
@@ -289,3 +307,165 @@ impl fmt::Display for ContentVmError {
 }
 
 impl Error for ContentVmError {}
+
+/// Stable unsupported feature selected only after required operand validation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContentUnsupportedKind {
+    /// A lexically valid operator is outside the sealed initial operator table.
+    UnknownOperator,
+    /// Marked-content point operator `MP` is outside the Scene-producing profile.
+    MarkedContentPoint,
+    /// Marked-content point operator `DP` is outside the Scene-producing profile.
+    MarkedContentPointProperties,
+    /// A `BDC` property operand is a direct content dictionary.
+    DirectContentPropertyDictionary,
+    /// The inherited Page `/Properties` dictionary is indirect.
+    IndirectPageProperties,
+    /// The selected Page property value is a direct dictionary.
+    DirectPagePropertyDictionary,
+}
+
+/// Content-redacted structured unsupported outcome.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ContentUnsupported {
+    kind: ContentUnsupportedKind,
+    source: ContentOperatorSource,
+    document_error: Option<DocumentError>,
+}
+
+impl ContentUnsupported {
+    pub(crate) const fn new(kind: ContentUnsupportedKind, source: ContentOperatorSource) -> Self {
+        Self {
+            kind,
+            source,
+            document_error: None,
+        }
+    }
+
+    pub(crate) fn from_document(
+        error: DocumentError,
+        source: ContentOperatorSource,
+    ) -> Option<Self> {
+        let kind = match error.code() {
+            DocumentErrorCode::UnsupportedIndirectPageProperties => {
+                ContentUnsupportedKind::IndirectPageProperties
+            }
+            DocumentErrorCode::UnsupportedDirectPagePropertyDictionary => {
+                ContentUnsupportedKind::DirectPagePropertyDictionary
+            }
+            _ => return None,
+        };
+        Some(Self {
+            kind,
+            source,
+            document_error: Some(error),
+        })
+    }
+
+    /// Returns the stable unsupported feature identity.
+    pub const fn kind(self) -> ContentUnsupportedKind {
+        self.kind
+    }
+
+    /// Returns the exact operator-token provenance.
+    pub const fn source(self) -> ContentOperatorSource {
+        self.source
+    }
+
+    /// Returns the preserved lower document error for an unsupported resource shape.
+    pub const fn document_error(self) -> Option<DocumentError> {
+        self.document_error
+    }
+
+    /// Returns the stable content-layer unsupported diagnostic identifier.
+    pub const fn diagnostic_id(self) -> &'static str {
+        match self.kind {
+            ContentUnsupportedKind::UnknownOperator => "RPE-CONTENT-UNSUPPORTED-0001",
+            ContentUnsupportedKind::MarkedContentPoint => "RPE-CONTENT-UNSUPPORTED-0002",
+            ContentUnsupportedKind::MarkedContentPointProperties => "RPE-CONTENT-UNSUPPORTED-0003",
+            ContentUnsupportedKind::DirectContentPropertyDictionary => {
+                "RPE-CONTENT-UNSUPPORTED-0004"
+            }
+            ContentUnsupportedKind::IndirectPageProperties => "RPE-CONTENT-UNSUPPORTED-0005",
+            ContentUnsupportedKind::DirectPagePropertyDictionary => "RPE-CONTENT-UNSUPPORTED-0006",
+        }
+    }
+}
+
+impl fmt::Debug for ContentUnsupported {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ContentUnsupported")
+            .field("kind", &self.kind)
+            .field("source", &self.source)
+            .field(
+                "document_diagnostic_id",
+                &self.document_error.map(DocumentError::diagnostic_id),
+            )
+            .field("content", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl fmt::Display for ContentUnsupported {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.diagnostic_id())
+    }
+}
+
+impl Error for ContentUnsupported {}
+
+/// Terminal lower-layer or VM failure preserved without lossy remapping.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum ContentVmFailure {
+    /// Ordered decoded-content scanning failed.
+    Content(crate::ContentError),
+    /// Page resource lookup or source validation failed.
+    Document(DocumentError),
+    /// Scene geometry, matrix arithmetic, or construction failed.
+    Scene(pdf_rs_scene::SceneError),
+    /// Content VM validation, state, cancellation, or budget failed.
+    Vm(ContentVmError),
+}
+
+impl ContentVmFailure {
+    /// Returns the exact stable diagnostic identifier of the preserved lower failure.
+    pub const fn diagnostic_id(self) -> &'static str {
+        match self {
+            Self::Content(error) => error.diagnostic_id(),
+            Self::Document(error) => error.diagnostic_id(),
+            Self::Scene(error) => error.diagnostic_id(),
+            Self::Vm(error) => error.diagnostic_id(),
+        }
+    }
+}
+
+impl fmt::Debug for ContentVmFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (kind, diagnostic_id) = match self {
+            Self::Content(error) => ("Content", error.diagnostic_id()),
+            Self::Document(error) => ("Document", error.diagnostic_id()),
+            Self::Scene(error) => ("Scene", error.diagnostic_id()),
+            Self::Vm(error) => ("Vm", error.diagnostic_id()),
+        };
+        formatter
+            .debug_struct("ContentVmFailure")
+            .field("kind", &kind)
+            .field("diagnostic_id", &diagnostic_id)
+            .field("content", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl fmt::Display for ContentVmFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Content(error) => fmt::Display::fmt(error, formatter),
+            Self::Document(error) => fmt::Display::fmt(error, formatter),
+            Self::Scene(error) => fmt::Display::fmt(error, formatter),
+            Self::Vm(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl Error for ContentVmFailure {}
