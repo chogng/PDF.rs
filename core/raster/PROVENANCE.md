@@ -7,8 +7,10 @@ subset, and atomically publishes a value-only `CanonicalPixelBuffer`.
 The initial output profile is top-down, opaque `sRGB-reference-v1`, straight-alpha RGBA8.
 M3-05 and M3-06 additionally freeze the project-owned `reference-raster-v1` geometry kernel:
 page-to-device mapping, checked fixed-point path flattening, 8x8 scalar coverage, registered
-stroke construction, and nested clip-mask composition. Color, compositing, glyph, image, and
-full renderer integration remain later M3 work.
+stroke construction, and nested clip-mask composition. M3-07 freezes `reference-color-v1` for
+DeviceGray, DeviceRGB, DeviceCMYK, constant alpha, premultiplied arithmetic, Normal, Multiply,
+Screen, and straight-alpha RGBA8 publication. Glyph, image, and full renderer integration remain
+later M3 work.
 
 `CanonicalPixelBuffer` is not the worker/session-owned transferable `Surface` lifecycle. It owns
 no `SurfaceId`, generation, epoch, acquire, transfer, release, timeout, shared memory, texture, or
@@ -17,9 +19,10 @@ platform handle. Those runtime and platform contracts belong to M4.
 # Semantic owner
 
 Graphics/Color owns the Reference output encoding, checked device-pixel geometry, deterministic
-command-plus-pixel fuel, cooperative cancellation schedule, pixel allocation and retention
-budgets, atomic publication, and terminal replay. `core/scene` owns immutable semantic commands,
-resources, provenance, features, page geometry, and runtime source/page binding.
+device-color conversion, premultiplied-alpha arithmetic and blending, command-plus-pixel fuel,
+cooperative cancellation schedule, pixel allocation and retention budgets, atomic publication,
+and terminal replay. `core/scene` owns immutable semantic commands, resources, provenance,
+features, page geometry, and runtime source/page binding.
 
 The product dependency is one-way from raster to Scene. Test-only dependencies on bytes and syntax
 construct public Scene fixtures; they do not enter the product graph.
@@ -51,8 +54,13 @@ resource-boundary tests, and review evidence are present. The kernels are compil
 dedicated `reference_geometry_kernel` integration harness until M3-10 connects them to
 `ReferenceRenderJob`.
 
-This is not a `REFERENCE` maturity promotion and not an O0/O1 pixel authority. It is not the final `reference-raster-v1` algorithm,
-integrated renderer, or the M3 exit gate.
+`m3.reference-color-compositing.v1` remains `PLANNED`. M3-07 completion means the fixed
+conversion, premultiplication, separable blend, publication-rounding, literal layered-shape,
+capability-rejection, and independent review evidence are present. The color kernel remains
+separate from `ReferenceRenderJob` until M3-10.
+
+This is not a `REFERENCE` maturity promotion and not an O0/O1 pixel authority. It is not the
+integrated `reference-raster-v1` renderer or the M3 exit gate.
 
 # Algorithms and derivations
 
@@ -110,6 +118,24 @@ integrated renderer, or the M3 exit gate.
   from dropped temporary geometry remain charged for the rest of that render attempt. This can
   reject early but cannot undercount live geometry; coverage and clip masks additionally maintain
   their own exact allocator-capacity and peak-retained limits.
+- `reference-color-v1` represents normalized channels as endpoint-inclusive Q16 integers in
+  `[0, 65_536]`. Scene `u16` endpoints are converted with nearest rounding; exact half-way
+  products and publication conversions round toward positive infinity.
+- DeviceGray replicates one channel and DeviceRGB preserves channel order. DeviceCMYK uses the
+  frozen additive-black rule `RGB = 1 - min(1, CMY + K)` independently per channel, without ICC
+  profiles, platform color management, rendering intents, overprint, or hidden fallback.
+- Working pixels are premultiplied project-sRGB Q16 and enforce `color <= alpha`; alpha zero
+  canonicalizes hidden color to transparent black. Constant alpha multiplies every premultiplied
+  channel and alpha with one rounded Q16 product.
+- Normal, Multiply, and Screen use the registered separable source-over equations. Each channel
+  constructs one nonnegative Q32 numerator and rounds once to Q16; output alpha is
+  `As + Ab * (1 - As)`. The kernels are allocation-free and fixed work per pixel.
+- Publication first unpremultiplies nonzero-alpha channels to Q16, then rounds each channel to
+  RGBA8. Alpha zero publishes `[0, 0, 0, 0]`; the exact half-intensity Q16 boundary publishes
+  eight-bit 128.
+- Scene values outside the typed device colors and three blend modes are never coerced into a
+  fallback paint. Unsupported color, alpha, blend, mask, or group requirements remain structured
+  capability outcomes before the staged color kernel or pixel publication.
 
 # Tests
 
@@ -136,14 +162,23 @@ integrated renderer, or the M3 exit gate.
 - Exact nested clip intersection, save, restore, application, retained-capacity accounting,
   constant-work retained queries, cancellation, depth limits, and one-byte-short transactional
   failures.
+- Literal DeviceGray, DeviceRGB, DeviceCMYK, saturation, endpoint, and Scene-unit conversion
+  vectors; exhaustive gray/RGB equivalence across all Scene `u16` values.
+- Premultiplied invariants, constant-alpha ties, exact unpremultiply/RGBA8 half-up boundaries, and
+  transparent-black canonicalization.
+- Independent boundary grids for Normal, Multiply, and Screen; literal multi-layer channel
+  vectors; commutativity and channel-permutation metamorphics where mathematically applicable.
+- An independently enumerated 3x3 layered-shape fixture combining Normal red, Multiply blue, and
+  half-alpha Screen green over opaque white with literal final RGBA8 pixels.
+- Structured unsupported outcomes for unsupported device-color, constant-alpha, blend, and group
+  requirements before visible command dispatch or pixel publication.
 
 # Known deviations and unsupported cases
 
 - No visible Scene command is supported yet by `ReferenceRenderJob`. The path, fill, stroke, and
-  clip kernels are frozen and reviewed but intentionally remain outside that job until the
-  integrated M3-10 command pipeline. Text, glyphs, images, colors, alpha, blend modes, groups,
-  masks, shadings, patterns, bounds indexes, and renderer capability decisions remain later M3
-  work.
+  clip and color/compositing kernels are frozen and reviewed but intentionally remain outside that
+  job until the integrated M3-10 command pipeline. Text, glyphs, images, groups, masks, shadings,
+  patterns, bounds indexes, and integrated renderer capability decisions remain later M3 work.
 - The fixed white output is a value contract for the current non-painting Scene subset, not proof
   that arbitrary pages render successfully.
 - The profile has no O0/O1 pixel authority, reviewed O3 golden, fuzz target, benchmark, maturity
@@ -153,6 +188,9 @@ integrated renderer, or the M3 exit gate.
 
 # History
 
+- 2026-07-16: Added staged `reference-color-v1` DeviceGray/RGB/CMYK conversion,
+  premultiplied constant alpha, Normal/Multiply/Screen source-over, exact straight RGBA8
+  publication, literal layered-shape expectations, and structured unsupported capability tests.
 - 2026-07-16: Added the staged `reference-raster-v1` Q32.32 geometry, 8x8 fill coverage,
   registered stroke, and nested clip-mask kernels with deterministic fuel, transient and retained
   memory accounting, cancellation, and analytic boundary tests.

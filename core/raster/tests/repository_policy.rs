@@ -156,8 +156,8 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
         );
     }
     for required in [
-        "It is not the final",
-        "`reference-raster-v1` algorithm",
+        "It is not the",
+        "integrated `reference-raster-v1` renderer",
         "not the worker/session-owned transferable `Surface` lifecycle",
         "No visible Scene command is supported yet",
         "no O0/O1 pixel authority",
@@ -396,7 +396,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "registered as `PLANNED`",
         "not a `REFERENCE` maturity promotion",
         "not an O0/O1 pixel authority",
-        "not the final `reference-raster-v1` algorithm",
+        "integrated `reference-raster-v1` renderer",
     ] {
         assert!(
             provenance.contains(required),

@@ -236,6 +236,49 @@ fn unsupported_capability_precedes_pixel_allocation_and_visible_command_dispatch
 }
 
 #[test]
+fn unsupported_color_alpha_blend_and_group_requirements_remain_structured() {
+    for capability in [
+        GraphicsCapability::DeviceColor,
+        GraphicsCapability::ConstantAlpha,
+        GraphicsCapability::Blend,
+        GraphicsCapability::IsolatedGroup,
+    ] {
+        let mut builder =
+            GraphicsSceneBuilder::new_v2(binding(), geometry(), GraphicsSceneLimits::default());
+        builder
+            .add_requirement(
+                capability,
+                u64::MAX,
+                CapabilityContext::Scene,
+                Vec::new(),
+                CapabilityStatus::Unsupported,
+            )
+            .unwrap();
+        let scene = Arc::new(builder.finish().unwrap());
+        let released = Arc::downgrade(&scene);
+        let mut job = ReferenceRenderJob::new(
+            scene,
+            ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
+            ReferenceRasterLimits::default(),
+        );
+        let unsupported = match job.poll(&Cancellation::never()) {
+            ReferenceRenderPoll::Unsupported(value) => value,
+            outcome => panic!("{capability:?} must remain structured unsupported: {outcome:?}"),
+        };
+        assert_eq!(
+            unsupported.kind(),
+            ReferenceRenderUnsupportedKind::VisibleGraphicsRequirement
+        );
+        assert_eq!(unsupported.index(), 0);
+        assert_eq!(unsupported.diagnostic_id(), "RPE-RASTER-0007");
+        assert!(
+            released.upgrade().is_none(),
+            "unsupported color-family requirement must release the source Scene"
+        );
+    }
+}
+
+#[test]
 fn empty_v2_scene_remains_an_explicit_nonpainting_white_result() {
     let scene = Arc::new(
         GraphicsSceneBuilder::new_v2(binding(), geometry(), GraphicsSceneLimits::default())

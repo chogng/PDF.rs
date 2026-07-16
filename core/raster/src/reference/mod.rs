@@ -1,10 +1,15 @@
 //! Bounded Reference pixel production for immutable Scene values.
 
+mod color;
 mod error;
 mod limits;
 mod model;
 mod render;
 
+pub use color::{
+    NormalizedQ16, PremultipliedRgbaQ16, ReferenceBlendMode, ReferenceColorProfile,
+    ReferenceDeviceColor, ReferenceSrgbQ16,
+};
 pub use error::{
     ReferenceRenderError, ReferenceRenderErrorCategory, ReferenceRenderErrorCode,
     ReferenceRenderLimit, ReferenceRenderLimitKind, ReferenceRenderRecoverability,
