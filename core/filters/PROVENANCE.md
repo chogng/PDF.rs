@@ -5,10 +5,11 @@ immutable `ByteSlice` and implements the internal no-filter identity path plus c
 `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`, and zlib-wrapped `FlateDecode` chains. A
 successful `DecodedStream` cannot be cloned or separated from its sealed `DecodeAttestation`.
 Canonical `FlateDecode` stages may additionally apply bounded TIFF Predictor 2 or PNG predictor
-values at or above 10 with explicit defaulted parameters. `FilterPlan::from_pdf_dictionary`
-provides the filters-owned shared direct-metadata canonicalizer used by object-stream composition
-to bind a parsed stream dictionary to an attested plan; the separate source-xref bootstrap policy
-is recorded below pending explicit reconciliation.
+values at or above 10 with explicit defaulted parameters. `FilterPlan::preflight_pdf_dictionary`
+validates the same complete direct metadata without allocating a plan and returns the exact
+declared filter count. `FilterPlan::from_pdf_dictionary` provides the filters-owned shared direct-metadata canonicalizer
+used by object-stream composition to bind a parsed stream dictionary to an attested plan. The
+separate source-xref bootstrap policy is recorded below pending explicit reconciliation.
 
 This crate performs no object resolution, Range polling, file/network access, async scheduling,
 decryption, image decoding, cache insertion, or external-engine fallback.
@@ -104,6 +105,10 @@ ISO/O0 conformance claim.
   abbreviations, malformed shapes, unknown keys, and duplicate/noninteger predictor fields are
   rejected. `from_pdf_names` and direct-dictionary canonicalization share the private
   `canonical_pdf_filter` full-name mapper, so the mapping remains centralized.
+- `FilterPlan::preflight_pdf_dictionary` reuses the unique-key, filter-shape, canonical-name, and
+  decode-parameter validators without allocating either plan vector. It returns zero for an absent
+  filter and the exact declared filter count otherwise, with `FilterCount` enforced against the
+  supplied intrinsic profile before any parent filter-count-proportional admission.
 - Dictionary canonicalization applies the validated `max_filters` limit before allocating the two
   exact vectors owned by the returned `FilterPlan`, creates no additional
   filter-count-proportional temporary vector, validates retained plan heap against the same

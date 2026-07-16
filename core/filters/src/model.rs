@@ -43,6 +43,14 @@ pub struct FilterPlan {
     stages: Vec<FilterStage>,
 }
 
+#[derive(Clone, Copy)]
+struct PdfDictionaryPlanMetadata<'a> {
+    filter: Option<&'a SyntaxObject>,
+    decode_parameters: Option<&'a SyntaxObject>,
+    filter_count: usize,
+    array_filter: bool,
+}
+
 impl FilterPlan {
     /// Builds an ordered plan from already canonical filter identifiers.
     pub fn new(filters: &[StreamFilter]) -> Result<Self, DecodeError> {
@@ -90,6 +98,23 @@ impl FilterPlan {
         Ok(plan)
     }
 
+    /// Validates one strict stream dictionary's direct filter metadata without allocating a plan.
+    ///
+    /// The returned count is the exact number of declared filters. An absent `/Filter` returns
+    /// zero. The complete supported metadata shape, filter names, and decode parameters are
+    /// checked before publication so a caller can reserve exact filter-count-proportional state
+    /// before invoking [`Self::from_pdf_dictionary`].
+    pub fn preflight_pdf_dictionary<C: DecodeCancellation + ?Sized>(
+        dictionary: &PdfDictionary,
+        limits: DecodeLimits,
+        cancellation: &C,
+    ) -> Result<u16, DecodeError> {
+        let metadata = preflight_pdf_dictionary_metadata(dictionary, limits, cancellation)?;
+        validate_pdf_dictionary_metadata(metadata, cancellation)?;
+        u16::try_from(metadata.filter_count)
+            .map_err(|_| DecodeError::for_code(DecodeErrorCode::InternalState, None))
+    }
+
     /// Canonicalizes one strict stream dictionary's direct filter metadata.
     ///
     /// `/Filter` must be absent, one full canonical name, or a nonempty array of full canonical
@@ -107,24 +132,19 @@ impl FilterPlan {
         limits: DecodeLimits,
         cancellation: &C,
     ) -> Result<Self, DecodeError> {
-        check_metadata_cancelled(cancellation)?;
-        let filter = unique_metadata_value(dictionary, b"Filter", cancellation)?;
-        let decode_parameters = unique_metadata_value(dictionary, b"DecodeParms", cancellation)?;
+        let metadata = preflight_pdf_dictionary_metadata(dictionary, limits, cancellation)?;
+        validate_pdf_dictionary_metadata(metadata, cancellation)?;
+        let filter = metadata.filter;
+        let decode_parameters = metadata.decode_parameters;
         let Some(filter) = filter else {
-            if decode_parameters.is_some() {
-                return Err(DecodeError::for_code(
-                    DecodeErrorCode::InvalidDecodeParameters,
-                    None,
-                ));
-            }
             let plan = Self::new(&[])?;
             check_metadata_cancelled(cancellation)?;
             plan.validate_retained_heap_limit(limits.max_filters())?;
             return Ok(plan);
         };
 
-        let (filter_count, array_filter) =
-            canonical_filter_shape(filter, limits.max_filters(), cancellation)?;
+        let filter_count = metadata.filter_count;
+        let array_filter = metadata.array_filter;
         let mut plan = Self::allocate(filter_count, limits.max_filters())?;
         match filter {
             SyntaxObject::Name(name) => {
@@ -294,6 +314,121 @@ impl FilterPlan {
         }
         Ok(attempted)
     }
+}
+
+fn preflight_pdf_dictionary_metadata<'a, C: DecodeCancellation + ?Sized>(
+    dictionary: &'a PdfDictionary,
+    limits: DecodeLimits,
+    cancellation: &C,
+) -> Result<PdfDictionaryPlanMetadata<'a>, DecodeError> {
+    check_metadata_cancelled(cancellation)?;
+    let filter = unique_metadata_value(dictionary, b"Filter", cancellation)?;
+    let decode_parameters = unique_metadata_value(dictionary, b"DecodeParms", cancellation)?;
+    let Some(filter) = filter else {
+        if decode_parameters.is_some() {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::InvalidDecodeParameters,
+                None,
+            ));
+        }
+        check_metadata_cancelled(cancellation)?;
+        return Ok(PdfDictionaryPlanMetadata {
+            filter: None,
+            decode_parameters: None,
+            filter_count: 0,
+            array_filter: false,
+        });
+    };
+    let (filter_count, array_filter) =
+        canonical_filter_shape(filter, limits.max_filters(), cancellation)?;
+    Ok(PdfDictionaryPlanMetadata {
+        filter: Some(filter),
+        decode_parameters,
+        filter_count,
+        array_filter,
+    })
+}
+
+fn validate_pdf_dictionary_metadata<C: DecodeCancellation + ?Sized>(
+    metadata: PdfDictionaryPlanMetadata<'_>,
+    cancellation: &C,
+) -> Result<(), DecodeError> {
+    let Some(filter) = metadata.filter else {
+        check_metadata_cancelled(cancellation)?;
+        return Ok(());
+    };
+    match filter {
+        SyntaxObject::Name(name) => {
+            canonical_pdf_filter(name.bytes(), 0)?;
+        }
+        SyntaxObject::Array(values) => {
+            for (index, value) in values.values().iter().enumerate() {
+                check_metadata_cancelled(cancellation)?;
+                let SyntaxObject::Name(name) = value.value() else {
+                    return Err(DecodeError::for_code(
+                        DecodeErrorCode::InvalidDecodeParameters,
+                        Some(
+                            u16::try_from(index)
+                                .expect("validated hard filter count always fits u16"),
+                        ),
+                    ));
+                };
+                canonical_pdf_filter(
+                    name.bytes(),
+                    u16::try_from(index).expect("validated hard filter count always fits u16"),
+                )?;
+            }
+        }
+        _ => unreachable!("filter shape was validated above"),
+    }
+
+    match (metadata.array_filter, metadata.decode_parameters) {
+        (_, None) | (_, Some(SyntaxObject::Null)) => {}
+        (false, Some(SyntaxObject::Dictionary(parameters))) => {
+            let SyntaxObject::Name(name) = filter else {
+                unreachable!("a single filter was validated as one name")
+            };
+            let filter = canonical_pdf_filter(name.bytes(), 0)?;
+            canonical_parameter_stage(filter, parameters, 0, cancellation)?;
+        }
+        (true, Some(SyntaxObject::Array(parameters)))
+            if parameters.values().len() == metadata.filter_count =>
+        {
+            let SyntaxObject::Array(filters) = filter else {
+                unreachable!("an array filter was validated as one array")
+            };
+            for (index, (filter, value)) in
+                filters.values().iter().zip(parameters.values()).enumerate()
+            {
+                check_metadata_cancelled(cancellation)?;
+                let filter_index =
+                    u16::try_from(index).expect("validated hard filter count always fits u16");
+                let SyntaxObject::Name(name) = filter.value() else {
+                    unreachable!("filter names were validated above")
+                };
+                let filter = canonical_pdf_filter(name.bytes(), filter_index)?;
+                match value.value() {
+                    SyntaxObject::Null => {}
+                    SyntaxObject::Dictionary(parameters) => {
+                        canonical_parameter_stage(filter, parameters, filter_index, cancellation)?;
+                    }
+                    _ => {
+                        return Err(DecodeError::for_code(
+                            DecodeErrorCode::InvalidDecodeParameters,
+                            Some(filter_index),
+                        ));
+                    }
+                }
+            }
+        }
+        (true, Some(SyntaxObject::Array(_))) | (true, Some(_)) | (false, Some(_)) => {
+            return Err(DecodeError::for_code(
+                DecodeErrorCode::InvalidDecodeParameters,
+                None,
+            ));
+        }
+    }
+    check_metadata_cancelled(cancellation)
 }
 
 fn unique_metadata_value<'a>(

@@ -28,6 +28,28 @@ fn plan(bytes: &[u8]) -> Result<FilterPlan, pdf_rs_filters::DecodeError> {
 }
 
 #[test]
+fn dictionary_preflight_returns_the_exact_declared_filter_count_without_a_plan() {
+    for (bytes, expected) in [
+        (b"<< /Length 0 >>".as_slice(), 0),
+        (b"<< /Filter /FlateDecode >>".as_slice(), 1),
+        (
+            b"<< /Filter [/ASCIIHexDecode /FlateDecode] /DecodeParms [null <<>>] >>".as_slice(),
+            2,
+        ),
+    ] {
+        assert_eq!(
+            FilterPlan::preflight_pdf_dictionary(
+                &dictionary(bytes),
+                DecodeLimits::default(),
+                &NeverCancelled,
+            )
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn direct_dictionary_canonicalization_preserves_order_nulls_and_predictor_defaults() {
     assert!(plan(b"<< /Length 0 >>").unwrap().is_empty());
     let null_chain =
@@ -98,16 +120,37 @@ fn dictionary_filter_count_is_rejected_before_plan_publication() {
         ..DecodeLimitConfig::default()
     };
     let limits = DecodeLimits::validate(config).unwrap();
-    let error = FilterPlan::from_pdf_dictionary(
-        &dictionary(b"<< /Filter [/ASCIIHexDecode /FlateDecode] >>"),
-        limits,
+    for error in [
+        FilterPlan::preflight_pdf_dictionary(
+            &dictionary(b"<< /Filter [/ASCIIHexDecode /FlateDecode] >>"),
+            limits,
+            &NeverCancelled,
+        )
+        .unwrap_err(),
+        FilterPlan::from_pdf_dictionary(
+            &dictionary(b"<< /Filter [/ASCIIHexDecode /FlateDecode] >>"),
+            limits,
+            &NeverCancelled,
+        )
+        .unwrap_err(),
+    ] {
+        assert_eq!(error.code(), DecodeErrorCode::ResourceLimit);
+        assert_eq!(error.limit().unwrap().kind(), DecodeLimitKind::FilterCount);
+        assert_eq!(error.limit().unwrap().limit(), 1);
+        assert_eq!(error.limit().unwrap().consumed(), 0);
+        assert_eq!(error.limit().unwrap().attempted(), 2);
+    }
+}
+
+#[test]
+fn dictionary_preflight_rejects_unsupported_metadata_before_plan_allocation() {
+    let error = FilterPlan::preflight_pdf_dictionary(
+        &dictionary(b"<< /Filter /UnknownDecode >>"),
+        DecodeLimits::default(),
         &NeverCancelled,
     )
     .unwrap_err();
-    assert_eq!(error.code(), DecodeErrorCode::ResourceLimit);
-    assert_eq!(error.limit().unwrap().kind(), DecodeLimitKind::FilterCount);
-    assert_eq!(error.limit().unwrap().limit(), 1);
-    assert_eq!(error.limit().unwrap().attempted(), 2);
+    assert_eq!(error.code(), DecodeErrorCode::UnsupportedFilter);
 }
 
 struct CancelAfter {
