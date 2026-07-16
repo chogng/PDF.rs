@@ -142,7 +142,9 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
         "pub enum PageSegmentEvidence",
         "pub(crate) struct PageIndexNodeEvidence",
         "pub(crate) fn from_lazy_root(",
-        "pub(crate) fn validate_new_node(",
+        "pub(crate) fn validate_new_node_shape(",
+        "segment_order: Arc<Vec<usize>>",
+        "fn merge_sorted_nodes(",
         "pub(crate) struct ValidatedPageOrder",
         "pub(crate) fn admit(",
         "DocumentLimitKind::PageIndexBytes",
@@ -163,6 +165,9 @@ fn m2_page_index_build_and_lazy_lookup_are_traceable_without_overclaim() {
         "pub fn lookup_page(",
         "pub fn lookup_page_owned(",
         "DocumentErrorCode::PageIndexOutOfBounds",
+        "struct PendingNodeIndex",
+        "fn insert_pending_index(",
+        "fn reserve_pending_storage(",
     ] {
         assert!(
             page_index_job.contains(required),

@@ -1021,7 +1021,17 @@ struct FrontierState {
     next_index: u32,
     replacements: Vec<PageSegmentSummary>,
     pending_nodes: Vec<PageIndexNodeEvidence>,
+    pending_index: Vec<PendingNodeIndex>,
+    pending_root: Option<usize>,
     retained_bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PendingNodeIndex {
+    node_index: usize,
+    left: Option<usize>,
+    right: Option<usize>,
+    height: u32,
 }
 
 enum ParsedPageTreeNode {
@@ -1283,6 +1293,8 @@ impl LookupPageJob<'_> {
             next_index: segment.start_index(),
             replacements: Vec::new(),
             pending_nodes: Vec::new(),
+            pending_index: Vec::new(),
+            pending_root: None,
             retained_bytes: 0,
         };
         if let Some(children) = segment.children() {
@@ -1690,7 +1702,7 @@ impl LookupPageJob<'_> {
             reference,
             Some(count_offset),
         )?;
-        self.discover_children(reference, depth, &children, cancellation)?;
+        self.discover_children(reference, depth, &children, 0, cancellation)?;
         let Some(frontier) = self.frontier.as_mut() else {
             return Err(DocumentError::for_code(
                 DocumentErrorCode::InternalState,
@@ -1743,8 +1755,19 @@ impl LookupPageJob<'_> {
                 )
             })?;
         let parsed = self.parse_page_tree_node(object, Some(parent), depth, false, cancellation)?;
-        if let ParsedPageTreeNode::Pages { children, .. } = &parsed {
-            self.discover_children(edge.reference(), depth, children, cancellation)?;
+        if let ParsedPageTreeNode::Pages {
+            children,
+            retained_child_bytes,
+            ..
+        } = &parsed
+        {
+            self.discover_children(
+                edge.reference(),
+                depth,
+                children,
+                *retained_child_bytes,
+                cancellation,
+            )?;
         }
         let complete_tree_proof = self
             .page_index
@@ -1872,6 +1895,7 @@ impl LookupPageJob<'_> {
         parent: ObjectRef,
         parent_depth: u32,
         children: &[PageIndexChild],
+        transient_child_bytes: u64,
         cancellation: &dyn DocumentCancellation,
     ) -> Result<(), DocumentError> {
         if children.is_empty() {
@@ -1880,53 +1904,66 @@ impl LookupPageJob<'_> {
         let child_depth = parent_depth.checked_add(1).ok_or_else(|| {
             DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
         })?;
-        {
-            let Some(frontier) = self.frontier.as_mut() else {
-                return Err(DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(parent),
-                    None,
-                ));
-            };
-            let before =
-                retained_node_bytes(frontier.pending_nodes.capacity()).ok_or_else(|| {
-                    DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
-                })?;
-            frontier
-                .pending_nodes
-                .try_reserve_exact(children.len())
-                .map_err(|_| {
-                    DocumentError::page_tree_resource(
-                        DocumentLimitKind::PageTreeTraversalBytes,
-                        self.limits.max_retained_traversal_bytes(),
-                        frontier.retained_bytes,
-                        u64::MAX,
-                        parent,
-                        children.first().map(|child| child.edge_offset()),
-                    )
-                })?;
-            let after =
-                retained_node_bytes(frontier.pending_nodes.capacity()).ok_or_else(|| {
-                    DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
-                })?;
-            let added = after.checked_sub(before).ok_or_else(|| {
+        let page_index = self.page_index.as_ref().ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+        })?;
+        let pending_count = self
+            .frontier
+            .as_ref()
+            .map(|frontier| frontier.pending_nodes.len())
+            .ok_or_else(|| {
                 DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
             })?;
-            frontier.retained_bytes =
-                frontier.retained_bytes.checked_add(added).ok_or_else(|| {
-                    DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
-                })?;
-            if frontier.retained_bytes > self.limits.max_retained_traversal_bytes() {
-                return Err(DocumentError::page_tree_resource(
-                    DocumentLimitKind::PageTreeTraversalBytes,
-                    self.limits.max_retained_traversal_bytes(),
-                    frontier.retained_bytes.saturating_sub(added),
-                    added,
-                    parent,
-                    children.first().map(|child| child.edge_offset()),
-                ));
+        {
+            let frontier = self.frontier.as_ref().ok_or_else(|| {
+                DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+            })?;
+            for child in children {
+                reject_existing_discovery(page_index, frontier, parent, *child)?;
             }
         }
+        let discovered = page_index
+            .discovered_node_count()
+            .checked_add(pending_count)
+            .and_then(|count| count.checked_add(children.len()))
+            .and_then(|count| u64::try_from(count).ok())
+            .ok_or_else(|| {
+                DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+            })?;
+        if discovered > self.limits.max_nodes() {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeNodes,
+                self.limits.max_nodes(),
+                u64::try_from(page_index.discovered_node_count() + pending_count)
+                    .unwrap_or(u64::MAX),
+                u64::try_from(children.len()).unwrap_or(u64::MAX),
+                parent,
+                children.first().map(PageIndexChild::edge_offset),
+            ));
+        }
+        let maximum_pending = usize::try_from(self.limits.max_nodes())
+            .ok()
+            .and_then(|maximum| maximum.checked_sub(page_index.discovered_node_count()))
+            .ok_or_else(|| {
+                DocumentError::for_code(DocumentErrorCode::InternalState, Some(parent), None)
+            })?;
+        let Some(frontier) = self.frontier.as_mut() else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(parent),
+                None,
+            ));
+        };
+        reserve_pending_storage(
+            self.limits,
+            &mut self.stats,
+            frontier,
+            children.len(),
+            maximum_pending,
+            transient_child_bytes,
+            parent,
+            children.first().map(PageIndexChild::edge_offset),
+        )?;
 
         for (index, child) in children.iter().enumerate() {
             if index % CANCELLATION_PROBE_INTERVAL == 0 && cancellation.is_cancelled() {
@@ -1936,33 +1973,35 @@ impl LookupPageJob<'_> {
                     Some(child.edge_offset()),
                 ));
             }
-            let node = {
-                let page_index = self.page_index.as_ref().ok_or_else(|| {
-                    DocumentError::for_code(
-                        DocumentErrorCode::InternalState,
-                        Some(parent),
-                        Some(child.edge_offset()),
-                    )
-                })?;
-                let pending = self
-                    .frontier
-                    .as_ref()
-                    .map(|frontier| frontier.pending_nodes.as_slice())
-                    .ok_or_else(|| {
-                        DocumentError::for_code(
-                            DocumentErrorCode::InternalState,
-                            Some(parent),
-                            Some(child.edge_offset()),
-                        )
-                    })?;
-                page_index.validate_new_node(
-                    parent,
-                    child.reference(),
-                    child.edge_offset(),
-                    child_depth,
-                    pending,
-                )?
-            };
+            let page_index = self.page_index.as_ref().ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(parent),
+                    Some(child.edge_offset()),
+                )
+            })?;
+            let frontier = self.frontier.as_ref().ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(parent),
+                    Some(child.edge_offset()),
+                )
+            })?;
+            let parent_node = discovered_node(page_index, frontier, parent).ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(parent),
+                    Some(child.edge_offset()),
+                )
+            })?;
+            reject_existing_discovery(page_index, frontier, parent, *child)?;
+            let node = page_index.validate_new_node_shape(
+                parent_node,
+                child.reference(),
+                child.edge_offset(),
+                child_depth,
+                frontier.pending_nodes.len(),
+            )?;
             let Some(frontier) = self.frontier.as_mut() else {
                 return Err(DocumentError::for_code(
                     DocumentErrorCode::InternalState,
@@ -1971,6 +2010,7 @@ impl LookupPageJob<'_> {
                 ));
             };
             frontier.pending_nodes.push(node);
+            insert_pending_index(frontier, child.reference())?;
         }
         for child in children {
             self.authority.attestation(child.reference())?;
@@ -2622,6 +2662,388 @@ fn validate_parent(
     }
 }
 
+fn discovered_node(
+    page_index: &PageIndex,
+    frontier: &FrontierState,
+    reference: ObjectRef,
+) -> Option<PageIndexNodeEvidence> {
+    page_index
+        .node(reference)
+        .or_else(|| pending_node(frontier, reference))
+}
+
+fn reject_existing_discovery(
+    page_index: &PageIndex,
+    frontier: &FrontierState,
+    parent: ObjectRef,
+    child: PageIndexChild,
+) -> Result<(), DocumentError> {
+    if discovered_node(page_index, frontier, child.reference()).is_none() {
+        return Ok(());
+    }
+    let mut ancestor = Some(parent);
+    let mut remaining = page_index
+        .discovered_node_count()
+        .checked_add(frontier.pending_nodes.len())
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(child.reference()),
+                Some(child.edge_offset()),
+            )
+        })?;
+    while let Some(reference) = ancestor {
+        if reference == child.reference() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::PageTreeCycle,
+                Some(child.reference()),
+                Some(child.edge_offset()),
+            ));
+        }
+        if remaining == 0 {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                Some(child.edge_offset()),
+            ));
+        }
+        remaining -= 1;
+        let node = discovered_node(page_index, frontier, reference).ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                Some(child.edge_offset()),
+            )
+        })?;
+        ancestor = node.parent();
+    }
+    Err(DocumentError::for_code(
+        DocumentErrorCode::DuplicatePageTreeNode,
+        Some(child.reference()),
+        Some(child.edge_offset()),
+    ))
+}
+
+fn pending_node(frontier: &FrontierState, reference: ObjectRef) -> Option<PageIndexNodeEvidence> {
+    let mut current = frontier.pending_root;
+    while let Some(index) = current {
+        let entry = frontier.pending_index.get(index)?;
+        let node = frontier.pending_nodes.get(entry.node_index)?;
+        match reference.cmp(&node.reference()) {
+            std::cmp::Ordering::Less => current = entry.left,
+            std::cmp::Ordering::Greater => current = entry.right,
+            std::cmp::Ordering::Equal => return Some(*node),
+        }
+    }
+    None
+}
+
+fn insert_pending_index(
+    frontier: &mut FrontierState,
+    reference: ObjectRef,
+) -> Result<(), DocumentError> {
+    let node_index = frontier.pending_nodes.len().checked_sub(1).ok_or_else(|| {
+        DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), None)
+    })?;
+    if frontier.pending_nodes[node_index].reference() != reference
+        || frontier.pending_index.len() != node_index
+    {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(reference),
+            None,
+        ));
+    }
+    let index = frontier.pending_index.len();
+    frontier.pending_index.push(PendingNodeIndex {
+        node_index,
+        left: None,
+        right: None,
+        height: 1,
+    });
+    let root = insert_pending_index_at(
+        &frontier.pending_nodes,
+        &mut frontier.pending_index,
+        frontier.pending_root,
+        index,
+        reference,
+    )?;
+    frontier.pending_root = Some(root);
+    Ok(())
+}
+
+fn insert_pending_index_at(
+    nodes: &[PageIndexNodeEvidence],
+    index: &mut [PendingNodeIndex],
+    root: Option<usize>,
+    inserted: usize,
+    reference: ObjectRef,
+) -> Result<usize, DocumentError> {
+    let Some(root) = root else {
+        return Ok(inserted);
+    };
+    let root_reference = index
+        .get(root)
+        .and_then(|entry| nodes.get(entry.node_index))
+        .map(PageIndexNodeEvidence::reference)
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), None)
+        })?;
+    match reference.cmp(&root_reference) {
+        std::cmp::Ordering::Less => {
+            let child =
+                insert_pending_index_at(nodes, index, index[root].left, inserted, reference)?;
+            index[root].left = Some(child);
+        }
+        std::cmp::Ordering::Greater => {
+            let child =
+                insert_pending_index_at(nodes, index, index[root].right, inserted, reference)?;
+            index[root].right = Some(child);
+        }
+        std::cmp::Ordering::Equal => {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                None,
+            ));
+        }
+    }
+    rebalance_pending_index(index, root)
+}
+
+fn rebalance_pending_index(
+    index: &mut [PendingNodeIndex],
+    root: usize,
+) -> Result<usize, DocumentError> {
+    update_pending_height(index, root)?;
+    let balance = pending_balance(index, root)?;
+    if balance > 1 {
+        let left = index[root]
+            .left
+            .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+        if pending_balance(index, left)? < 0 {
+            let rotated = rotate_pending_left(index, left)?;
+            index[root].left = Some(rotated);
+        }
+        return rotate_pending_right(index, root);
+    }
+    if balance < -1 {
+        let right = index[root]
+            .right
+            .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+        if pending_balance(index, right)? > 0 {
+            let rotated = rotate_pending_right(index, right)?;
+            index[root].right = Some(rotated);
+        }
+        return rotate_pending_left(index, root);
+    }
+    Ok(root)
+}
+
+fn rotate_pending_left(
+    index: &mut [PendingNodeIndex],
+    root: usize,
+) -> Result<usize, DocumentError> {
+    let pivot = index[root]
+        .right
+        .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+    let middle = index[pivot].left;
+    index[root].right = middle;
+    index[pivot].left = Some(root);
+    update_pending_height(index, root)?;
+    update_pending_height(index, pivot)?;
+    Ok(pivot)
+}
+
+fn rotate_pending_right(
+    index: &mut [PendingNodeIndex],
+    root: usize,
+) -> Result<usize, DocumentError> {
+    let pivot = index[root]
+        .left
+        .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+    let middle = index[pivot].right;
+    index[root].left = middle;
+    index[pivot].right = Some(root);
+    update_pending_height(index, root)?;
+    update_pending_height(index, pivot)?;
+    Ok(pivot)
+}
+
+fn update_pending_height(index: &mut [PendingNodeIndex], root: usize) -> Result<(), DocumentError> {
+    let left = pending_height(index, index[root].left);
+    let right = pending_height(index, index[root].right);
+    index[root].height = left
+        .max(right)
+        .checked_add(1)
+        .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+    Ok(())
+}
+
+fn pending_balance(index: &[PendingNodeIndex], root: usize) -> Result<i64, DocumentError> {
+    let entry = index
+        .get(root)
+        .ok_or_else(|| DocumentError::for_code(DocumentErrorCode::InternalState, None, None))?;
+    Ok(
+        i64::from(pending_height(index, entry.left))
+            - i64::from(pending_height(index, entry.right)),
+    )
+}
+
+fn pending_height(index: &[PendingNodeIndex], root: Option<usize>) -> u32 {
+    root.and_then(|root| index.get(root))
+        .map_or(0, |entry| entry.height)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reserve_pending_storage(
+    limits: PageTreeLimits,
+    stats: &mut PageLookupStats,
+    frontier: &mut FrontierState,
+    additional: usize,
+    maximum_pending: usize,
+    transient_child_bytes: u64,
+    reference: ObjectRef,
+    offset: Option<u64>,
+) -> Result<(), DocumentError> {
+    let needed = frontier
+        .pending_nodes
+        .len()
+        .checked_add(additional)
+        .filter(|needed| *needed <= maximum_pending)
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let target_node_capacity = if needed <= frontier.pending_nodes.capacity() {
+        frontier.pending_nodes.capacity()
+    } else {
+        let doubled = frontier
+            .pending_nodes
+            .capacity()
+            .max(1)
+            .checked_mul(2)
+            .unwrap_or(maximum_pending);
+        needed.max(doubled.min(maximum_pending))
+    };
+    let current_node_bytes =
+        retained_node_bytes(frontier.pending_nodes.capacity()).ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let current_index_bytes = retained_pending_index_bytes(frontier.pending_index.capacity())
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let target_node_bytes = retained_node_bytes(target_node_capacity).ok_or_else(|| {
+        DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+    })?;
+    let target_index_bytes =
+        retained_pending_index_bytes(frontier.pending_index.capacity().max(target_node_capacity))
+            .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let minimum_added = target_node_bytes
+        .checked_sub(current_node_bytes)
+        .and_then(|nodes| {
+            target_index_bytes
+                .checked_sub(current_index_bytes)
+                .and_then(|index| nodes.checked_add(index))
+        })
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let minimum_peak = frontier
+        .retained_bytes
+        .checked_add(minimum_added)
+        .and_then(|bytes| bytes.checked_add(transient_child_bytes))
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    if minimum_peak > limits.max_retained_traversal_bytes() {
+        return Err(DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            frontier.retained_bytes,
+            minimum_added.saturating_add(transient_child_bytes),
+            reference,
+            offset,
+        ));
+    }
+
+    if target_node_capacity > frontier.pending_nodes.capacity() {
+        frontier
+            .pending_nodes
+            .try_reserve_exact(target_node_capacity - frontier.pending_nodes.len())
+            .map_err(|_| {
+                DocumentError::page_tree_resource(
+                    DocumentLimitKind::PageTreeTraversalBytes,
+                    limits.max_retained_traversal_bytes(),
+                    frontier.retained_bytes,
+                    minimum_added.saturating_add(transient_child_bytes),
+                    reference,
+                    offset,
+                )
+            })?;
+    }
+    if target_node_capacity > frontier.pending_index.capacity() {
+        frontier
+            .pending_index
+            .try_reserve_exact(target_node_capacity - frontier.pending_index.len())
+            .map_err(|_| {
+                DocumentError::page_tree_resource(
+                    DocumentLimitKind::PageTreeTraversalBytes,
+                    limits.max_retained_traversal_bytes(),
+                    frontier.retained_bytes,
+                    minimum_added.saturating_add(transient_child_bytes),
+                    reference,
+                    offset,
+                )
+            })?;
+    }
+    let actual_node_bytes =
+        retained_node_bytes(frontier.pending_nodes.capacity()).ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let actual_index_bytes = retained_pending_index_bytes(frontier.pending_index.capacity())
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let actual_added = actual_node_bytes
+        .checked_sub(current_node_bytes)
+        .and_then(|nodes| {
+            actual_index_bytes
+                .checked_sub(current_index_bytes)
+                .and_then(|index| nodes.checked_add(index))
+        })
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let actual_retained = frontier
+        .retained_bytes
+        .checked_add(actual_added)
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    let actual_peak = actual_retained
+        .checked_add(transient_child_bytes)
+        .ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
+        })?;
+    if actual_peak > limits.max_retained_traversal_bytes() {
+        return Err(DocumentError::page_tree_resource(
+            DocumentLimitKind::PageTreeTraversalBytes,
+            limits.max_retained_traversal_bytes(),
+            frontier.retained_bytes,
+            actual_added.saturating_add(transient_child_bytes),
+            reference,
+            offset,
+        ));
+    }
+    frontier.retained_bytes = actual_retained;
+    stats.peak_retained_traversal_bytes = stats.peak_retained_traversal_bytes.max(actual_peak);
+    Ok(())
+}
+
 fn reserve_replacement_storage(
     limits: PageTreeLimits,
     stats: &mut PageLookupStats,
@@ -2682,6 +3104,12 @@ fn retained_node_bytes(nodes: usize) -> Option<u64> {
         .checked_mul(u64::try_from(mem::size_of::<PageIndexNodeEvidence>()).ok()?)
 }
 
+fn retained_pending_index_bytes(entries: usize) -> Option<u64> {
+    u64::try_from(entries)
+        .ok()?
+        .checked_mul(u64::try_from(mem::size_of::<PendingNodeIndex>()).ok()?)
+}
+
 fn retained_frontier_bytes(children: usize, replacements: usize) -> Option<u64> {
     let children = retained_children_bytes(children)?;
     let replacements = u64::try_from(replacements)
@@ -2697,4 +3125,124 @@ fn root_bootstrap_bytes(children: usize, nodes: usize) -> Option<u64> {
     retained_children
         .checked_add(duplicate_probe)?
         .checked_add(retained_nodes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PageTreeLimitConfig;
+
+    fn object_ref(number: u32) -> ObjectRef {
+        ObjectRef::new(number, 0).expect("test reference is nonzero")
+    }
+
+    #[test]
+    fn pending_discovery_combines_transient_children_before_allocation() {
+        let base_retained = 64;
+        let pending_bytes =
+            retained_node_bytes(1).unwrap() + retained_pending_index_bytes(1).unwrap();
+        let transient_child_bytes = retained_children_bytes(1).unwrap();
+        let maximum = base_retained + pending_bytes + transient_child_bytes - 1;
+        let limits = PageTreeLimits::validate(PageTreeLimitConfig {
+            max_nodes: 4,
+            max_depth: 4,
+            max_pages: 4,
+            max_kids_per_node: 4,
+            max_total_object_read_bytes: 1 << 20,
+            max_total_object_parse_bytes: 1 << 20,
+            max_retained_traversal_bytes: maximum,
+        })
+        .unwrap();
+        let reference = object_ref(2);
+        let mut frontier = FrontierState {
+            segment_index: 0,
+            segment: PageSegmentSummary::pages(
+                0,
+                1,
+                reference,
+                None,
+                1,
+                PageSegmentEvidence::DeclaredCount,
+                None,
+                Some(Vec::new()),
+            ),
+            count_offset: None,
+            children_ready: true,
+            children: Vec::new(),
+            next_child: 0,
+            next_index: 0,
+            replacements: Vec::new(),
+            pending_nodes: Vec::new(),
+            pending_index: Vec::new(),
+            pending_root: None,
+            retained_bytes: base_retained,
+        };
+        let mut stats = PageLookupStats::default();
+        let error = reserve_pending_storage(
+            limits,
+            &mut stats,
+            &mut frontier,
+            1,
+            3,
+            transient_child_bytes,
+            reference,
+            None,
+        )
+        .expect_err("combined transient and pending storage must be rejected before allocation");
+        assert_eq!(error.code(), DocumentErrorCode::ResourceLimit);
+        assert_eq!(
+            error.limit().unwrap().kind(),
+            DocumentLimitKind::PageTreeTraversalBytes
+        );
+        assert_eq!(frontier.pending_nodes.capacity(), 0);
+        assert_eq!(frontier.pending_index.capacity(), 0);
+    }
+
+    #[test]
+    fn pending_node_index_remains_balanced_for_ordered_references() {
+        let reference = object_ref(2);
+        let mut frontier = FrontierState {
+            segment_index: 0,
+            segment: PageSegmentSummary::pages(
+                0,
+                1,
+                reference,
+                None,
+                1,
+                PageSegmentEvidence::DeclaredCount,
+                None,
+                Some(Vec::new()),
+            ),
+            count_offset: None,
+            children_ready: true,
+            children: Vec::new(),
+            next_child: 0,
+            next_index: 0,
+            replacements: Vec::new(),
+            pending_nodes: Vec::with_capacity(1_024),
+            pending_index: Vec::with_capacity(1_024),
+            pending_root: None,
+            retained_bytes: 0,
+        };
+        for number in 3..=1_026 {
+            let reference = object_ref(number);
+            frontier.pending_nodes.push(PageIndexNodeEvidence::new(
+                reference,
+                Some(object_ref(2)),
+                u64::from(number),
+                2,
+            ));
+            insert_pending_index(&mut frontier, reference).unwrap();
+        }
+        let root = frontier.pending_root.expect("nonempty index has a root");
+        assert!(frontier.pending_index[root].height <= 16);
+        for number in 3..=1_026 {
+            assert_eq!(
+                pending_node(&frontier, object_ref(number))
+                    .expect("every inserted reference remains searchable")
+                    .reference(),
+                object_ref(number)
+            );
+        }
+    }
 }

@@ -439,6 +439,7 @@ pub struct PageIndex {
     catalog: StrictCatalog,
     page_count: u32,
     segments: Arc<Vec<PageSegmentSummary>>,
+    segment_order: Arc<Vec<usize>>,
     nodes: Arc<Vec<PageIndexNodeEvidence>>,
     retained_index_bytes: u64,
     stats: PageIndexStats,
@@ -516,6 +517,19 @@ impl PageIndex {
         self.tree_limits
     }
 
+    /// Returns one discovered-node identity from the reference-ordered retained table.
+    pub(crate) fn node(&self, reference: ObjectRef) -> Option<PageIndexNodeEvidence> {
+        self.nodes
+            .binary_search_by_key(&reference, PageIndexNodeEvidence::reference)
+            .ok()
+            .map(|index| self.nodes[index])
+    }
+
+    /// Returns the number of globally discovered Page or Pages identities.
+    pub(crate) fn discovered_node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Reports whether one exact discovered-node edge is already retained.
     pub(crate) fn node_matches(
         &self,
@@ -524,7 +538,7 @@ impl PageIndex {
         edge_offset: u64,
         depth: u32,
     ) -> bool {
-        self.nodes.iter().any(|node| {
+        self.node(reference).is_some_and(|node| {
             node.reference() == reference
                 && node.parent() == parent
                 && node.edge_offset() == edge_offset
@@ -532,28 +546,16 @@ impl PageIndex {
         })
     }
 
-    /// Validates one newly discovered child against the active ancestor chain and all retained or
-    /// transaction-local discoveries.
-    ///
-    /// Active-ancestor membership is checked before duplicate reachability so an edge back to an
-    /// ancestor preserves the M1 `PageTreeCycle` precedence even though that ancestor is also
-    /// already present in the global discovery table.
-    pub(crate) fn validate_new_node(
+    /// Validates the bounded shape of one globally unique newly discovered child.
+    pub(crate) fn validate_new_node_shape(
         &self,
-        parent: ObjectRef,
+        parent: PageIndexNodeEvidence,
         child: ObjectRef,
         edge_offset: u64,
         depth: u32,
-        pending: &[PageIndexNodeEvidence],
+        pending_count: usize,
     ) -> Result<PageIndexNodeEvidence, DocumentError> {
-        let parent_node = find_unique_node(&self.nodes, pending, parent).ok_or_else(|| {
-            DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(parent),
-                Some(edge_offset),
-            )
-        })?;
-        let expected_depth = parent_node.depth().checked_add(1).ok_or_else(|| {
+        let expected_depth = parent.depth().checked_add(1).ok_or_else(|| {
             DocumentError::for_code(
                 DocumentErrorCode::InternalState,
                 Some(child),
@@ -568,62 +570,10 @@ impl PageIndex {
             ));
         }
 
-        let mut ancestor = Some(parent);
-        let mut remaining = self
-            .nodes
-            .len()
-            .checked_add(pending.len())
-            .and_then(|count| count.checked_add(1))
-            .ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(child),
-                    Some(edge_offset),
-                )
-            })?;
-        while let Some(reference) = ancestor {
-            if reference == child {
-                return Err(DocumentError::for_code(
-                    DocumentErrorCode::PageTreeCycle,
-                    Some(child),
-                    Some(edge_offset),
-                ));
-            }
-            if remaining == 0 {
-                return Err(DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(reference),
-                    Some(edge_offset),
-                ));
-            }
-            remaining -= 1;
-            let node = find_unique_node(&self.nodes, pending, reference).ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(reference),
-                    Some(edge_offset),
-                )
-            })?;
-            ancestor = node.parent();
-        }
-
-        if self
-            .nodes
-            .iter()
-            .chain(pending.iter())
-            .any(|node| node.reference() == child)
-        {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::DuplicatePageTreeNode,
-                Some(child),
-                Some(edge_offset),
-            ));
-        }
-
         let discovered = self
             .nodes
             .len()
-            .checked_add(pending.len())
+            .checked_add(pending_count)
             .and_then(|count| count.checked_add(1))
             .and_then(|count| u64::try_from(count).ok())
             .ok_or_else(|| {
@@ -656,7 +606,7 @@ impl PageIndex {
 
         Ok(PageIndexNodeEvidence::new(
             child,
-            Some(parent),
+            Some(parent.reference()),
             edge_offset,
             depth,
         ))
@@ -839,7 +789,7 @@ impl PageIndex {
         page_count: u32,
         count_offset: u64,
         children: Vec<PageIndexChild>,
-        nodes: Vec<PageIndexNodeEvidence>,
+        mut nodes: Vec<PageIndexNodeEvidence>,
         mut stats: PageIndexStats,
         tree_limits: PageTreeLimits,
         index_limits: PageIndexLimits,
@@ -960,6 +910,8 @@ impl PageIndex {
                 ));
             }
         }
+        nodes.sort_unstable_by_key(PageIndexNodeEvidence::reference);
+        let complete_tree_proof = page_count == 0 && children.is_empty();
 
         let mut segments = Vec::new();
         segments
@@ -975,7 +927,7 @@ impl PageIndex {
             Some(count_offset),
             Some(children),
         ));
-        stats.complete_tree_proof = false;
+        stats.complete_tree_proof = complete_tree_proof;
         Self::from_segments(
             catalog,
             page_count,
@@ -1102,18 +1054,49 @@ impl PageIndex {
             ));
         }
 
-        let mut validated_new_nodes = Vec::new();
-        validated_new_nodes
-            .try_reserve_exact(new_nodes.len())
-            .map_err(|_| {
-                page_index_resource(
-                    self.limits,
-                    replaced.object(),
+        let mut validated_new_nodes = new_nodes;
+        validated_new_nodes.sort_unstable_by_key(PageIndexNodeEvidence::reference);
+        if let Some(duplicate) = validated_new_nodes
+            .windows(2)
+            .find(|pair| pair[0].reference() == pair[1].reference())
+            .map(|pair| pair[1])
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicatePageTreeNode,
+                Some(duplicate.reference()),
+                Some(duplicate.edge_offset()),
+            ));
+        }
+        let discovered = self
+            .nodes
+            .len()
+            .checked_add(validated_new_nodes.len())
+            .and_then(|count| u64::try_from(count).ok())
+            .ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(replaced.object()),
                     expanded.count_offset().or(replaced.count_offset()),
-                    u64::MAX,
                 )
             })?;
-        for node in new_nodes {
+        if discovered > self.tree_limits.max_nodes() {
+            return Err(DocumentError::page_tree_resource(
+                DocumentLimitKind::PageTreeNodes,
+                self.tree_limits.max_nodes(),
+                u64::try_from(self.nodes.len()).unwrap_or(u64::MAX),
+                u64::try_from(validated_new_nodes.len()).unwrap_or(u64::MAX),
+                replaced.object(),
+                expanded.count_offset().or(replaced.count_offset()),
+            ));
+        }
+        for node in &validated_new_nodes {
+            if self.node(node.reference()).is_some() {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::DuplicatePageTreeNode,
+                    Some(node.reference()),
+                    Some(node.edge_offset()),
+                ));
+            }
             let parent = node.parent().ok_or_else(|| {
                 DocumentError::for_code(
                     DocumentErrorCode::InternalState,
@@ -1121,21 +1104,31 @@ impl PageIndex {
                     Some(node.edge_offset()),
                 )
             })?;
-            let validated = self.validate_new_node(
-                parent,
-                node.reference(),
-                node.edge_offset(),
-                node.depth(),
-                &validated_new_nodes,
-            )?;
-            if validated != node {
+            let parent_node = self.node(parent).or_else(|| {
+                validated_new_nodes
+                    .binary_search_by_key(&parent, PageIndexNodeEvidence::reference)
+                    .ok()
+                    .map(|index| validated_new_nodes[index])
+            });
+            let Some(parent_node) = parent_node else {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(parent),
+                    Some(node.edge_offset()),
+                ));
+            };
+            if parent_node
+                .depth()
+                .checked_add(1)
+                .is_none_or(|depth| depth != node.depth())
+                || u64::from(node.depth()) > self.tree_limits.max_depth()
+            {
                 return Err(DocumentError::for_code(
                     DocumentErrorCode::InternalState,
                     Some(node.reference()),
                     Some(node.edge_offset()),
                 ));
             }
-            validated_new_nodes.push(validated);
         }
         let node_len = self
             .nodes
@@ -1157,8 +1150,7 @@ impl PageIndex {
                 u64::MAX,
             )
         })?;
-        nodes.extend(self.nodes.iter().copied());
-        nodes.extend(validated_new_nodes);
+        merge_sorted_nodes(&mut nodes, &self.nodes, &validated_new_nodes);
         for (edge, replacement) in expanded_children.iter().zip(&replacements) {
             if !node_matches_in(
                 &nodes,
@@ -1200,7 +1192,6 @@ impl PageIndex {
         segments.push(expanded);
         segments.extend(self.segments[segment_index + 1..].iter().cloned());
         segments.extend(replacements);
-        recompute_segment_evidence(&mut segments)?;
         Self::from_segments(
             self.catalog,
             self.page_count,
@@ -1243,7 +1234,7 @@ impl PageIndex {
     fn from_segments(
         catalog: StrictCatalog,
         page_count: u32,
-        segments: Vec<PageSegmentSummary>,
+        mut segments: Vec<PageSegmentSummary>,
         nodes: Vec<PageIndexNodeEvidence>,
         stats: PageIndexStats,
         tree_limits: PageTreeLimits,
@@ -1264,8 +1255,20 @@ impl PageIndex {
                 offset,
             ));
         }
-        let retained_index_bytes =
-            retained_page_index_bytes(&segments, &nodes).ok_or_else(|| {
+        if nodes
+            .windows(2)
+            .any(|pair| pair[0].reference() >= pair[1].reference())
+        {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(reference),
+                offset,
+            ));
+        }
+        let segment_order = build_segment_order(&segments, limits, reference, offset)?;
+        recompute_segment_evidence(&mut segments, &segment_order)?;
+        let retained_index_bytes = retained_page_index_bytes(&segments, &segment_order, &nodes)
+            .ok_or_else(|| {
                 DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), offset)
             })?;
         if retained_index_bytes > limits.max_retained_index_bytes() {
@@ -1280,6 +1283,7 @@ impl PageIndex {
             catalog,
             page_count,
             segments: Arc::new(segments),
+            segment_order: Arc::new(segment_order),
             nodes: Arc::new(nodes),
             retained_index_bytes,
             stats,
@@ -1319,20 +1323,24 @@ impl ValidatedPageOrder {
     }
 }
 
-fn find_unique_node<'a>(
-    published: &'a [PageIndexNodeEvidence],
-    pending: &'a [PageIndexNodeEvidence],
-    reference: ObjectRef,
-) -> Option<&'a PageIndexNodeEvidence> {
-    let mut matches = published
-        .iter()
-        .chain(pending.iter())
-        .filter(|node| node.reference() == reference);
-    let result = matches.next()?;
-    if matches.next().is_some() {
-        return None;
+fn merge_sorted_nodes(
+    destination: &mut Vec<PageIndexNodeEvidence>,
+    published: &[PageIndexNodeEvidence],
+    pending: &[PageIndexNodeEvidence],
+) {
+    let mut published_index = 0;
+    let mut pending_index = 0;
+    while published_index < published.len() && pending_index < pending.len() {
+        if published[published_index].reference() < pending[pending_index].reference() {
+            destination.push(published[published_index]);
+            published_index += 1;
+        } else {
+            destination.push(pending[pending_index]);
+            pending_index += 1;
+        }
     }
-    Some(result)
+    destination.extend_from_slice(&published[published_index..]);
+    destination.extend_from_slice(&pending[pending_index..]);
 }
 
 fn node_matches_in(
@@ -1342,15 +1350,65 @@ fn node_matches_in(
     edge_offset: u64,
     depth: u32,
 ) -> bool {
-    nodes.iter().any(|node| {
-        node.reference() == reference
-            && node.parent() == parent
-            && node.edge_offset() == edge_offset
-            && node.depth() == depth
-    })
+    nodes
+        .binary_search_by_key(&reference, PageIndexNodeEvidence::reference)
+        .ok()
+        .is_some_and(|index| {
+            let node = nodes[index];
+            node.reference() == reference
+                && node.parent() == parent
+                && node.edge_offset() == edge_offset
+                && node.depth() == depth
+        })
 }
 
-fn recompute_segment_evidence(segments: &mut [PageSegmentSummary]) -> Result<(), DocumentError> {
+fn build_segment_order(
+    segments: &[PageSegmentSummary],
+    limits: PageIndexLimits,
+    reference: ObjectRef,
+    offset: Option<u64>,
+) -> Result<Vec<usize>, DocumentError> {
+    let mut order = Vec::new();
+    order
+        .try_reserve_exact(segments.len())
+        .map_err(|_| page_index_resource(limits, reference, offset, u64::MAX))?;
+    order.extend(0..segments.len());
+    order.sort_unstable_by_key(|index| segments[*index].object());
+    if order
+        .windows(2)
+        .any(|pair| segments[pair[0]].object() == segments[pair[1]].object())
+    {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            Some(reference),
+            offset,
+        ));
+    }
+    Ok(order)
+}
+
+fn segment_index_by_reference(
+    segments: &[PageSegmentSummary],
+    order: &[usize],
+    reference: ObjectRef,
+) -> Option<usize> {
+    order
+        .binary_search_by_key(&reference, |index| segments[*index].object())
+        .ok()
+        .map(|index| order[index])
+}
+
+fn recompute_segment_evidence(
+    segments: &mut [PageSegmentSummary],
+    segment_order: &[usize],
+) -> Result<(), DocumentError> {
+    if segment_order.len() != segments.len() {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InternalState,
+            None,
+            None,
+        ));
+    }
     for segment in segments.iter() {
         if segment.kind() == PageIndexSegmentKind::Page
             && (segment.page_count() != 1
@@ -1366,103 +1424,96 @@ fn recompute_segment_evidence(segments: &mut [PageSegmentSummary]) -> Result<(),
         }
     }
 
-    let max_depth = segments
-        .iter()
-        .map(PageSegmentSummary::depth)
-        .max()
-        .unwrap_or(0);
-    for depth in (1..=max_depth).rev() {
-        for index in 0..segments.len() {
-            if segments[index].kind() != PageIndexSegmentKind::Pages
-                || segments[index].depth() != depth
-            {
-                continue;
-            }
-            let Some(children) = segments[index].children.clone() else {
-                continue;
-            };
-            if children.is_empty() {
-                if segments[index].evidence() != PageSegmentEvidence::DeclaredCount {
-                    segments[index].evidence = PageSegmentEvidence::CompleteSubtree;
-                }
-                continue;
-            }
-
-            let object = segments[index].object();
-            let count_offset = segments[index].count_offset();
-            let child_depth = depth.checked_add(1).ok_or_else(|| {
-                DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(object),
-                    count_offset,
-                )
-            })?;
-            let mut cursor = segments[index].start_index();
-            let end_index = segments[index].end_index();
-            let mut found = 0_usize;
-            let mut complete = true;
-            for edge in children.iter() {
-                let mut matches = segments.iter().filter(|candidate| {
-                    candidate.object() == edge.reference()
-                        && candidate.parent() == Some(object)
-                        && candidate.depth() == child_depth
-                });
-                let Some(child) = matches.next() else {
-                    continue;
-                };
-                if matches.next().is_some()
-                    || child.start_index() != cursor
-                    || child.end_index() > end_index
-                {
-                    return Err(DocumentError::for_code(
-                        DocumentErrorCode::InternalState,
-                        Some(edge.reference()),
-                        Some(edge.edge_offset()),
-                    ));
-                }
-                cursor = child.end_index();
-                found = found.checked_add(1).ok_or_else(|| {
-                    DocumentError::for_code(
-                        DocumentErrorCode::InternalState,
-                        Some(object),
-                        count_offset,
-                    )
-                })?;
-                complete &= matches!(
-                    child.evidence(),
-                    PageSegmentEvidence::ExactPage | PageSegmentEvidence::CompleteSubtree
-                );
-            }
-            if found == 0 {
-                segments[index].evidence = PageSegmentEvidence::DeclaredCount;
-                continue;
-            }
-            if found != children.len() {
-                return Err(DocumentError::for_code(
-                    DocumentErrorCode::InternalState,
-                    Some(object),
-                    count_offset,
-                ));
-            }
-            if cursor != end_index {
+    for index in (0..segments.len()).rev() {
+        if segments[index].kind() != PageIndexSegmentKind::Pages {
+            continue;
+        }
+        let Some(children) = segments[index].children.clone() else {
+            continue;
+        };
+        let object = segments[index].object();
+        let count_offset = segments[index].count_offset();
+        if children.is_empty() {
+            if segments[index].page_count() != 0 {
                 return Err(DocumentError::for_code(
                     DocumentErrorCode::PageTreeCountMismatch,
                     Some(object),
                     count_offset,
                 ));
             }
-            segments[index].evidence = if complete {
-                PageSegmentEvidence::CompleteSubtree
-            } else {
-                PageSegmentEvidence::ValidatedPartition
-            };
+            segments[index].evidence = PageSegmentEvidence::CompleteSubtree;
+            continue;
         }
+
+        let child_depth = segments[index].depth().checked_add(1).ok_or_else(|| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(object), count_offset)
+        })?;
+        let mut cursor = segments[index].start_index();
+        let end_index = segments[index].end_index();
+        let mut found = 0_usize;
+        let mut complete = true;
+        for edge in children.iter() {
+            let Some(child_index) =
+                segment_index_by_reference(segments, segment_order, edge.reference())
+            else {
+                continue;
+            };
+            let child = &segments[child_index];
+            if child_index <= index
+                || child.parent() != Some(object)
+                || child.depth() != child_depth
+                || child.start_index() != cursor
+                || child.end_index() > end_index
+            {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(edge.reference()),
+                    Some(edge.edge_offset()),
+                ));
+            }
+            cursor = child.end_index();
+            found = found.checked_add(1).ok_or_else(|| {
+                DocumentError::for_code(
+                    DocumentErrorCode::InternalState,
+                    Some(object),
+                    count_offset,
+                )
+            })?;
+            complete &= matches!(
+                child.evidence(),
+                PageSegmentEvidence::ExactPage | PageSegmentEvidence::CompleteSubtree
+            );
+        }
+        if found == 0 {
+            segments[index].evidence = PageSegmentEvidence::DeclaredCount;
+            continue;
+        }
+        if found != children.len() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InternalState,
+                Some(object),
+                count_offset,
+            ));
+        }
+        if cursor != end_index {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::PageTreeCountMismatch,
+                Some(object),
+                count_offset,
+            ));
+        }
+        segments[index].evidence = if complete {
+            PageSegmentEvidence::CompleteSubtree
+        } else {
+            PageSegmentEvidence::ValidatedPartition
+        };
     }
     Ok(())
 }
 
 fn retained_page_index_bytes(
     segments: &Vec<PageSegmentSummary>,
+    segment_order: &Vec<usize>,
     nodes: &Vec<PageIndexNodeEvidence>,
 ) -> Option<u64> {
     let summaries = u64::try_from(segments.capacity())
@@ -1471,16 +1522,22 @@ fn retained_page_index_bytes(
     let discovered = u64::try_from(nodes.capacity())
         .ok()?
         .checked_mul(u64::try_from(mem::size_of::<PageIndexNodeEvidence>()).ok()?)?;
-    segments
-        .iter()
-        .try_fold(summaries.checked_add(discovered)?, |total, segment| {
+    let segment_lookup = u64::try_from(segment_order.capacity())
+        .ok()?
+        .checked_mul(u64::try_from(mem::size_of::<usize>()).ok()?)?;
+    segments.iter().try_fold(
+        summaries
+            .checked_add(segment_lookup)?
+            .checked_add(discovered)?,
+        |total, segment| {
             let child_bytes = segment.children.as_ref().map_or(Some(0), |children| {
                 u64::try_from(children.capacity())
                     .ok()?
                     .checked_mul(u64::try_from(mem::size_of::<PageIndexChild>()).ok()?)
             })?;
             total.checked_add(child_bytes)
-        })
+        },
+    )
 }
 
 fn page_index_resource(

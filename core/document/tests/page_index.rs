@@ -239,6 +239,39 @@ fn cross_sibling_duplicate_fixture() -> Fixture {
     )
 }
 
+fn empty_root_fixture() -> Fixture {
+    fixture(
+        &[
+            (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+            (
+                2,
+                b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+            ),
+        ],
+        3,
+        0xc9,
+    )
+}
+
+fn empty_sibling_fixture() -> Fixture {
+    fixture(
+        &[
+            (1, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+            (
+                2,
+                b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 1 >>\nendobj\n",
+            ),
+            (
+                3,
+                b"3 0 obj\n<< /Type /Pages /Parent 2 0 R /Kids [] /Count 0 >>\nendobj\n",
+            ),
+            (4, b"4 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n"),
+        ],
+        5,
+        0xca,
+    )
+}
+
 fn object_ref(number: u32) -> ObjectRef {
     ObjectRef::new(number, 0).expect("test object reference is nonzero")
 }
@@ -811,6 +844,38 @@ fn lookup_rejects_tree_limits_different_from_the_index_before_work() {
     };
     assert_eq!(error.code(), DocumentErrorCode::InvalidLimits);
     assert_eq!(error.reference(), Some(object_ref(2)));
+}
+
+#[test]
+fn opened_empty_page_trees_publish_complete_subtree_evidence() {
+    let empty_root = empty_root_fixture();
+    let authority = ready_index(&empty_root);
+    let store = supplied_store(&empty_root);
+    let index = build_ready(&authority, &store, 7_122);
+    assert!(index.is_empty());
+    assert!(index.is_complete());
+    assert!(index.stats().has_complete_tree_proof());
+    let root = assert_segment(&index, object_ref(2), 0, 0, PageIndexSegmentKind::Pages);
+    assert_eq!(root.evidence(), PageSegmentEvidence::CompleteSubtree);
+    assert_eq!(root.validated_count(), Some(0));
+    assert_eq!(root.partitioned_count(), Some(0));
+    assert_eq!(root.retained_kid_count(), Some(0));
+
+    let empty_sibling = empty_sibling_fixture();
+    let authority = ready_index(&empty_sibling);
+    let store = supplied_store(&empty_sibling);
+    let initial = build_ready(&authority, &store, 7_123);
+    let (lookup, _) = lookup_ready(&authority, &initial, 0, &store, 7_124);
+    assert_eq!(lookup.handle().object(), object_ref(4));
+    let complete = lookup.page_index();
+    assert!(complete.is_complete());
+    let empty = assert_segment(complete, object_ref(3), 0, 0, PageIndexSegmentKind::Pages);
+    assert_eq!(empty.evidence(), PageSegmentEvidence::CompleteSubtree);
+    assert_eq!(empty.validated_count(), Some(0));
+    assert_eq!(
+        assert_segment(complete, object_ref(2), 0, 1, PageIndexSegmentKind::Pages,).evidence(),
+        PageSegmentEvidence::CompleteSubtree
+    );
 }
 
 #[test]
