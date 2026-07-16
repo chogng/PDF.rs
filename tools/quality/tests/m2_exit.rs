@@ -398,15 +398,16 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     assert!(symlink_guard < destructive_clean);
     assert!(destructive_clean < debug_1);
 
-    let shared_checks = "fmt,clippy,test,parser-mutation-smoke,case-manifests,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle";
+    let shared_checks = "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle";
     assert!(quality_main.contains(&format!("checks: \"{shared_checks}\"")));
     assert!(
         quality_main.contains(&format!("checks: \"{shared_checks},doc\"")),
         "PR selection must add documentation to the shared local M2 closure"
     );
     assert!(
-        quality_main
-            .contains("local/pr checks include m2-scene-gate profile replay and m2-exit closure")
+        quality_main.contains(
+            "local/pr checks include the M3 raster-oracle contract, M2 Scene profile replay, and M2 exit closure"
+        )
     );
     for required in [
         "if outcome.kind != OutcomeKind::Ready",

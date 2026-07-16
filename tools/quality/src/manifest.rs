@@ -92,6 +92,16 @@ const OPTIONAL_SECTION_FIELDS: &[(&str, &[&str])] = &[
             "service_sha256",
             "scene_artifact",
             "scene_sha256",
+            "pixel_artifact",
+            "pixel_sha256",
+        ],
+    ),
+    (
+        "pixel_oracle",
+        &[
+            "reference_identity",
+            "review_evidence",
+            "review_evidence_sha256",
         ],
     ),
     (
@@ -99,6 +109,17 @@ const OPTIONAL_SECTION_FIELDS: &[(&str, &[&str])] = &[
         &["max_pages", "max_outline_items", "max_range_resident_bytes"],
     ),
 ];
+
+const OPTIONAL_SECTION_SCHEMAS: &[(&str, &[&str])] = &[(
+    "pixel_oracle",
+    &[
+        "level",
+        "derivation",
+        "reviewers",
+        "reference_may_generate",
+        "last_reviewed",
+    ],
+)];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// A case manifest that has passed structural and value-shape validation.
@@ -267,6 +288,16 @@ pub fn validate_manifest(input: &str) -> Result<CaseManifest, Vec<ManifestDiagno
             }
         }
     }
+    for (section, required_keys) in OPTIONAL_SECTION_SCHEMAS {
+        let Some(values) = parsed.sections.get(*section) else {
+            continue;
+        };
+        for key in *required_keys {
+            if !values.contains_key(*key) {
+                diagnostics.push(ManifestDiagnostic::field("RPE-MANIFEST-0010", section, key));
+            }
+        }
+    }
 
     if diagnostics.is_empty() {
         validate_value_shapes(&parsed.sections, &mut diagnostics);
@@ -291,6 +322,11 @@ fn parse(input: &str) -> Result<ParsedManifest, ManifestDiagnostic> {
         .iter()
         .map(|(section, keys)| (*section, keys.iter().copied().collect()))
         .collect();
+    known.extend(
+        OPTIONAL_SECTION_SCHEMAS
+            .iter()
+            .map(|(section, keys)| (*section, keys.iter().copied().collect())),
+    );
     for (section, keys) in OPTIONAL_SECTION_FIELDS {
         let allowed = known
             .get_mut(section)
@@ -562,6 +598,142 @@ fn validate_value_shapes(
         ));
     }
 
+    let pixel_artifact = optional_value(sections, "expected", "pixel_artifact");
+    let pixel_hash = optional_value(sections, "expected", "pixel_sha256");
+    validate_path_hash_pair(
+        diagnostics,
+        "expected",
+        "pixel_artifact",
+        pixel_artifact,
+        "pixel_sha256",
+        pixel_hash,
+    );
+    let native_runners =
+        parse_string_array(value(sections, "runners", "native")).unwrap_or_default();
+    let is_m3_reference_case = native_runners.contains(&"tools/quality::m3_reference_gate");
+    let expects_pixel = value(sections, "expected", "pixel") == "true";
+    let pixel_oracle = sections.get("pixel_oracle");
+    if is_m3_reference_case && expects_pixel && pixel_artifact.is_none() && pixel_hash.is_none() {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0010",
+            "expected",
+            "pixel_artifact",
+        ));
+    } else if expects_pixel && pixel_artifact.is_some() && pixel_oracle.is_none() {
+        diagnostics.push(ManifestDiagnostic::section(
+            "RPE-MANIFEST-0010",
+            "pixel_oracle",
+        ));
+    } else if expects_pixel && pixel_artifact.is_none() && pixel_oracle.is_some() {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0010",
+            "expected",
+            "pixel_artifact",
+        ));
+    } else if !expects_pixel && (pixel_artifact.is_some() || pixel_hash.is_some()) {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0025",
+            "expected",
+            if pixel_artifact.is_some() {
+                "pixel_artifact"
+            } else {
+                "pixel_sha256"
+            },
+        ));
+    }
+    if !expects_pixel && pixel_oracle.is_some() {
+        diagnostics.push(ManifestDiagnostic::section(
+            "RPE-MANIFEST-0025",
+            "pixel_oracle",
+        ));
+    }
+
+    let reference_identity = optional_value(sections, "pixel_oracle", "reference_identity");
+    if let Some(identity) = reference_identity
+        && unquote(identity).is_none_or(|identity| !is_content_reference(identity))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0031",
+            "pixel_oracle",
+            "reference_identity",
+        ));
+    }
+    let review_evidence = optional_value(sections, "pixel_oracle", "review_evidence");
+    let review_evidence_hash = optional_value(sections, "pixel_oracle", "review_evidence_sha256");
+    validate_path_hash_pair(
+        diagnostics,
+        "pixel_oracle",
+        "review_evidence",
+        review_evidence,
+        "review_evidence_sha256",
+        review_evidence_hash,
+    );
+
+    if let Some(pixel_oracle) = pixel_oracle {
+        validate_pixel_oracle_shapes(pixel_oracle, diagnostics);
+        let oracle = pixel_oracle
+            .get("level")
+            .and_then(|value| unquote(value))
+            .unwrap_or_default();
+        let reference_may_generate = pixel_oracle
+            .get("reference_may_generate")
+            .is_some_and(|value| value == "true");
+        match oracle {
+            "O0" | "O1" => {
+                if reference_may_generate {
+                    diagnostics.push(ManifestDiagnostic::field(
+                        "RPE-MANIFEST-0026",
+                        "pixel_oracle",
+                        "reference_may_generate",
+                    ));
+                }
+                if reference_identity.is_some()
+                    || review_evidence.is_some()
+                    || review_evidence_hash.is_some()
+                {
+                    diagnostics.push(ManifestDiagnostic::field(
+                        "RPE-MANIFEST-0027",
+                        "pixel_oracle",
+                        if reference_identity.is_some() {
+                            "reference_identity"
+                        } else {
+                            "review_evidence"
+                        },
+                    ));
+                }
+            }
+            "O3" => {
+                if !reference_may_generate {
+                    diagnostics.push(ManifestDiagnostic::field(
+                        "RPE-MANIFEST-0027",
+                        "pixel_oracle",
+                        "reference_may_generate",
+                    ));
+                }
+                if reference_identity.is_none() {
+                    diagnostics.push(ManifestDiagnostic::field(
+                        "RPE-MANIFEST-0010",
+                        "pixel_oracle",
+                        "reference_identity",
+                    ));
+                }
+                if review_evidence.is_none() && review_evidence_hash.is_none() {
+                    diagnostics.push(ManifestDiagnostic::field(
+                        "RPE-MANIFEST-0010",
+                        "pixel_oracle",
+                        "review_evidence",
+                    ));
+                }
+                validate_independent_reviewers(sections, pixel_oracle, diagnostics);
+            }
+            _ => diagnostics.push(ManifestDiagnostic::field(
+                "RPE-MANIFEST-0029",
+                "pixel_oracle",
+                "level",
+            )),
+        }
+    }
+
     let case_id = unquote(value(sections, "identity", "id")).unwrap_or_default();
     if case_id.is_empty()
         || case_id.starts_with('/')
@@ -642,6 +814,147 @@ fn validate_value_shapes(
     }
 }
 
+fn validate_pixel_oracle_shapes(
+    pixel_oracle: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<ManifestDiagnostic>,
+) {
+    for key in ["level", "derivation", "last_reviewed"] {
+        let Some(value) = pixel_oracle.get(key) else {
+            continue;
+        };
+        if unquote(value).is_none_or(|value| value.trim().is_empty()) {
+            diagnostics.push(ManifestDiagnostic::field(
+                "RPE-MANIFEST-0011",
+                "pixel_oracle",
+                key,
+            ));
+        }
+    }
+    if pixel_oracle
+        .get("derivation")
+        .and_then(|value| unquote(value))
+        .is_none_or(|value| !is_content_reference(value))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0030",
+            "pixel_oracle",
+            "derivation",
+        ));
+    }
+    if pixel_oracle
+        .get("reviewers")
+        .is_none_or(|value| !is_string_array(value, true))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0016",
+            "pixel_oracle",
+            "reviewers",
+        ));
+    }
+    if pixel_oracle
+        .get("reviewers")
+        .and_then(|value| parse_string_array(value))
+        .is_some_and(|reviewers| {
+            reviewers.iter().any(|reviewer| {
+                let reviewer = reviewer.to_ascii_lowercase();
+                reviewer.contains("pending")
+                    || reviewer.contains("placeholder")
+                    || reviewer.contains("required")
+                    || reviewer.contains("todo")
+                    || reviewer == "tbd"
+            })
+        })
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0022",
+            "pixel_oracle",
+            "reviewers",
+        ));
+    }
+    if pixel_oracle
+        .get("reference_may_generate")
+        .is_none_or(|value| !matches!(value.as_str(), "true" | "false"))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0015",
+            "pixel_oracle",
+            "reference_may_generate",
+        ));
+    }
+    if pixel_oracle
+        .get("last_reviewed")
+        .and_then(|value| unquote(value))
+        .is_none_or(|value| !is_canonical_date(value))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0023",
+            "pixel_oracle",
+            "last_reviewed",
+        ));
+    }
+}
+
+fn validate_path_hash_pair(
+    diagnostics: &mut Vec<ManifestDiagnostic>,
+    section: &str,
+    path_key: &str,
+    path: Option<&str>,
+    hash_key: &str,
+    hash: Option<&str>,
+) {
+    if path.is_some() != hash.is_some() {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0010",
+            section,
+            if path.is_some() { hash_key } else { path_key },
+        ));
+    }
+    if let Some(path) = path
+        && unquote(path).is_none_or(|path| !is_canonical_relative_path(path))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0011",
+            section,
+            path_key,
+        ));
+    }
+    if let Some(hash) = hash
+        && unquote(hash).is_none_or(|hash| !is_sha256(hash))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0012",
+            section,
+            hash_key,
+        ));
+    }
+}
+
+fn validate_independent_reviewers(
+    sections: &BTreeMap<String, BTreeMap<String, String>>,
+    pixel_oracle: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<ManifestDiagnostic>,
+) {
+    let reviewers = pixel_oracle
+        .get("reviewers")
+        .and_then(|value| parse_string_array(value))
+        .unwrap_or_default();
+    let owner = unquote(value(sections, "identity", "owner")).unwrap_or_default();
+    let normalized = reviewers
+        .iter()
+        .map(|reviewer| reviewer.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    if reviewers.len() < 2
+        || normalized.len() != reviewers.len()
+        || normalized.contains(&owner.to_ascii_lowercase())
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0028",
+            "pixel_oracle",
+            "reviewers",
+        ));
+    }
+}
+
 fn optional_value<'a>(
     sections: &'a BTreeMap<String, BTreeMap<String, String>>,
     section: &str,
@@ -657,6 +970,17 @@ fn is_sha256(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
         && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_content_reference(value: &str) -> bool {
+    let Some((path, digest)) = value.rsplit_once("#sha256:") else {
+        return false;
+    };
+    is_canonical_relative_path(path)
+        && digest.len() == 64
+        && digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }

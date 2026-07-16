@@ -44,6 +44,15 @@ and CI repeats that gate in two debug and two release processes before byte-comp
 outputs for profile-stable replay. The evidence closes only the bounded initial marked-content
 Scene producer; paths, painting, clipping, text showing, fonts, images, Forms, rendering, broader
 resources, product Session/IPC, and browser or desktop integration remain excluded.
+The M3 raster-oracle contract is likewise a pre-promotion quality boundary. A new optional
+`pixel_oracle` table separates pixel authority from the case-wide oracle so one future case may
+retain independent semantic authority while using a separately reviewed O3 pixel regression.
+M3 Reference cases pair canonical pixel artifacts with exact SHA-256 values. O0/O1 pixel authority
+forbids Reference generation; O3 requires a content-addressed canonical `reference-raster-v1`
+identity artifact, at least two
+independent reviewer roles, and canonical hash-bound review evidence. The case validator resolves
+every linked component without symlinks, preflights bytes from case budgets, verifies raw hashes,
+strictly decodes canonical pixels, checks render dimensions, and performs no expected-file writes.
 
 # Semantic owner
 
@@ -77,6 +86,13 @@ An optional document-service extension requires `expected.service` and its lower
 together with positive page, outline-item, and Range-resident budgets. The extension is all-or-none:
 service expectations without every service budget, or service budgets without a service artifact,
 are rejected. Canonical paths cannot be absolute, empty, traversing, aliased, or backslash-based.
+The optional pixel extension pairs `expected.pixel_artifact` with `expected.pixel_sha256`. New M3
+Reference runners additionally require `pixel_oracle`; its derivation is a content-addressed case
+file. O0/O1 reject Reference generation and O3-only fields. O3 requires generation attribution,
+the frozen implementation identity artifact, unique reviewer roles independent of the case owner,
+and a review artifact that binds case ID, derivation, pixel path/hash, the exact Reference identity
+content reference, reviewer
+roles, independence, and pass verdict. Existing M0-M2 cases remain valid without this extension.
 
 The separate M1 maturity reader accepts canonical root records, profile records, and string arrays,
 including the multiline arrays used by the companion traceability maps. Every profile freezes
@@ -458,6 +474,9 @@ duration evidence, a nightly campaign, or CANARY-scale corpus evidence.
 
 # History
 
+- 2026-07-16: Added read-only M3 pixel-oracle validation with independent O0/O1 authority,
+  reviewed O3 identity/evidence binding, strict canonical pixel decoding, budget and symlink
+  rejection, and an explicit CI regression target that preserves existing M0-M2 cases.
 - 2026-07-15: Promoted R0/R1 to REFERENCE and strict page-count/outline to DIFFERENTIAL with 28
   content-addressed, ledger-bound artifacts; added a separate two-role optional-field adjudication,
   two disjoint holdouts and full-session replay, positive same-Native-scope raw samples, project-reference

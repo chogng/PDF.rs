@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use bundle::build_synthetic_failure_bundle;
-use manifest::validate_manifest_file;
 use maturity::validate_maturity_file;
+use pdf_rs_quality::case_contract::validate_case_file;
 use purity::{check_product_build_closure, check_product_manifests, prepare_product_build_proof};
 
 struct Selection {
@@ -31,12 +31,12 @@ fn selection_for(lane: &str) -> Option<Selection> {
         "local" => Some(Selection {
             lane: "local",
             reason: "pre-submit feedback for code and deterministic T0 infrastructure",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
         }),
         "pr" => Some(Selection {
             lane: "pr",
             reason: "merge gate for the complete required Rust quality baseline",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
         }),
         _ => None,
     }
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
             if arguments.next().is_some() {
                 return usage();
             }
-            match validate_manifest_file(Path::new(&path)) {
+            match validate_case_file(Path::new(&path)) {
                 Ok(manifest) => {
                     println!("case_id={}", manifest.case_id());
                     println!("source_hash={}", manifest.source_sha256());
@@ -241,7 +241,7 @@ fn print_selection(selection: Selection) {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>\nlocal/pr checks include m2-scene-gate profile replay and m2-exit closure"
+        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>\nlocal/pr checks include the M3 raster-oracle contract, M2 Scene profile replay, and M2 exit closure"
     );
     ExitCode::from(2)
 }
@@ -259,8 +259,8 @@ fn print_build_closure_violations(violations: Vec<purity::BuildClosureViolation>
 
 fn validate_case_tree(root: &Path) -> ExitCode {
     let mut paths = Vec::new();
-    if collect_case_manifests(root, &mut paths).is_err() {
-        eprintln!("RPE-MANIFEST-0001");
+    if let Err(path) = collect_case_manifests(root, &mut paths) {
+        eprintln!("RPE-CASE-0014 path={}", path.display());
         return ExitCode::FAILURE;
     }
     paths.sort();
@@ -272,7 +272,7 @@ fn validate_case_tree(root: &Path) -> ExitCode {
     let mut failed = false;
     let mut identities: BTreeMap<String, PathBuf> = BTreeMap::new();
     for path in &paths {
-        match validate_manifest_file(path) {
+        match validate_case_file(path) {
             Ok(manifest) => {
                 let case_id = manifest.case_id();
                 let relative_directory = path
@@ -322,14 +322,15 @@ fn validate_case_tree(root: &Path) -> ExitCode {
     }
 }
 
-fn collect_case_manifests(root: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            continue;
-        }
+fn collect_case_manifests(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), PathBuf> {
+    let entries = fs::read_dir(root).map_err(|_| root.to_path_buf())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| root.to_path_buf())?;
         let path = entry.path();
+        let file_type = entry.file_type().map_err(|_| path.clone())?;
+        if file_type.is_symlink() {
+            return Err(path);
+        }
         if file_type.is_dir() {
             collect_case_manifests(&path, output)?;
         } else if file_type.is_file() && entry.file_name() == "case.toml" {
