@@ -1,0 +1,82 @@
+schema = 1
+
+[identity]
+id = "content/m2-scene/resource-marked-content-properties"
+title = "Marked-content properties resolve through the direct page resource scope"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["7.8.3", "14.6.2", "RPE-ARCH-001/15.3/M2"]
+interpretation = "Span P BDC resolves P through the page direct Resources Properties dictionary to object reference 5 0 R without opening the referenced dictionary object, then emits a balanced marked-content Scene pair."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/content/m2-scene/resource-marked-content-properties/input.pdf"
+sha256 = "sha256:50081ce0272a5698781ee760db6034b255742e74156b143d35141bd601ccba00"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-vm-scene-v1", "core.page-property-lookup"]
+requirements = ["m2.content-vm-scene-v1", "m2.page-property-lookup.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+scene_artifact = "expected/scene.json"
+scene_sha256 = "sha256:b49a37d9c617a38cdfbc9ee3c3a86ef6e3a691220923f2403ac6bfa363d17b7c"
+text = false
+pixel = false
+diagnostic = false
+capability = false
+error = false
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic dictionary evaluation: the unique Resources Properties P entry is exactly object reference 5 0 R, and the balanced Span BDC and EMC pair is the only Scene-visible work."
+reviewers = ["scene-gate-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 8
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 8
+max_group_depth = 8
+operator_fuel = 256
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "scene-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m2_scene_gate"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the bounded page-property lookup Scene v1 case"]

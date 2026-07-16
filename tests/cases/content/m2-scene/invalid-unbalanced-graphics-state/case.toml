@@ -1,0 +1,80 @@
+schema = 1
+
+[identity]
+id = "content/m2-scene/invalid-unbalanced-graphics-state"
+title = "Unbalanced graphics state rejects otherwise balanced marked content"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.4.2", "14.6", "RPE-ARCH-001/15.3/M2"]
+interpretation = "The marked-content pair is balanced, but a final unmatched q leaves the graphics stack nonempty and must reject without publishing a partial Scene."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/content/m2-scene/invalid-unbalanced-graphics-state/input.pdf"
+sha256 = "sha256:ff6f0896c84db5e92595d1ea4544953d04d9eacb5953f9cf27f70a6bdcb9c303"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-vm-scene-v1"]
+requirements = ["m2.content-vm-scene-v1"]
+
+[validity]
+class = "invalid"
+strict_expected = "RPE-CONTENT-VM-0007"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic stack evaluation: one q push and zero Q pops leave graphics depth one at end of content, selecting the exact invalid-graphics-state diagnostic."
+reviewers = ["scene-gate-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 8
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 8
+max_group_depth = 8
+operator_fuel = 256
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "scene-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m2_scene_gate"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the bounded unbalanced-graphics-state case"]

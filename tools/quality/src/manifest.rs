@@ -85,7 +85,15 @@ const SECTION_SCHEMAS: &[(&str, &[&str])] = &[
 ];
 
 const OPTIONAL_SECTION_FIELDS: &[(&str, &[&str])] = &[
-    ("expected", &["service", "service_sha256"]),
+    (
+        "expected",
+        &[
+            "service",
+            "service_sha256",
+            "scene_artifact",
+            "scene_sha256",
+        ],
+    ),
     (
         "budget",
         &["max_pages", "max_outline_items", "max_range_resident_bytes"],
@@ -501,6 +509,59 @@ fn validate_value_shapes(
         }
     }
 
+    let scene_artifact = optional_value(sections, "expected", "scene_artifact");
+    let scene_hash = optional_value(sections, "expected", "scene_sha256");
+    if scene_artifact.is_some() != scene_hash.is_some() {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0010",
+            "expected",
+            if scene_artifact.is_some() {
+                "scene_sha256"
+            } else {
+                "scene_artifact"
+            },
+        ));
+    }
+    if let Some(scene_artifact) = scene_artifact
+        && unquote(scene_artifact).is_none_or(|path| !is_canonical_relative_path(path))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0011",
+            "expected",
+            "scene_artifact",
+        ));
+    }
+    if let Some(scene_hash) = scene_hash
+        && unquote(scene_hash).is_none_or(|hash| !is_sha256(hash))
+    {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0012",
+            "expected",
+            "scene_sha256",
+        ));
+    }
+    let expects_scene = value(sections, "expected", "scene") == "true";
+    let requires_scene_artifact = expects_scene
+        && parse_string_array(value(sections, "runners", "native"))
+            .is_some_and(|runners| runners.contains(&"tools/quality::m2_scene_gate"));
+    if requires_scene_artifact && scene_artifact.is_none() && scene_hash.is_none() {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0010",
+            "expected",
+            "scene_artifact",
+        ));
+    } else if !expects_scene && (scene_artifact.is_some() || scene_hash.is_some()) {
+        diagnostics.push(ManifestDiagnostic::field(
+            "RPE-MANIFEST-0024",
+            "expected",
+            if scene_artifact.is_some() {
+                "scene_artifact"
+            } else {
+                "scene_sha256"
+            },
+        ));
+    }
+
     let case_id = unquote(value(sections, "identity", "id")).unwrap_or_default();
     if case_id.is_empty()
         || case_id.starts_with('/')
@@ -781,7 +842,7 @@ strict_expected = "success"
 recovery_expected = "not-applicable"
 [expected]
 parse = true
-scene = true
+scene = false
 text = true
 pixel = true
 diagnostic = true
@@ -957,6 +1018,87 @@ entries = ["2026-07-13: introduced"]
 
         let input = VALID.replace("watchdog_ms = 500", "watchdog_ms = 500\nmax_pages = 8");
         assert!(validate_manifest(&input).is_err());
+    }
+
+    #[test]
+    fn accepts_content_addressed_scene_expectations() {
+        let input = VALID
+            .replace(
+                "scene = false",
+                "scene = true\nscene_artifact = \"expected/scene.json\"\nscene_sha256 = \"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"",
+            )
+            .replace(
+                "native = [\"synthetic-m0\"]",
+                "native = [\"tools/quality::m2_scene_gate\"]",
+            );
+        let manifest = validate_manifest(&input).unwrap();
+        assert_eq!(
+            manifest.string("expected", "scene_artifact"),
+            Some("expected/scene.json")
+        );
+    }
+
+    #[test]
+    fn rejects_unpaired_or_noncanonical_scene_evidence() {
+        let hash = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        for addition in [
+            "scene_artifact = \"expected/scene.json\"".to_owned(),
+            format!("scene_sha256 = \"{hash}\""),
+            format!("scene_artifact = \"expected/../scene.json\"\nscene_sha256 = \"{hash}\""),
+            "scene_artifact = \"/expected/scene.json\"\nscene_sha256 = \"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"".to_owned(),
+            "scene_artifact = \"expected/scene.json\"\nscene_sha256 = \"sha256:ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"".to_owned(),
+        ] {
+            let input = VALID
+                .replace("scene = false", &format!("scene = true\n{addition}"))
+                .replace(
+                    "native = [\"synthetic-m0\"]",
+                    "native = [\"tools/quality::m2_scene_gate\"]",
+                );
+            assert!(validate_manifest(&input).is_err(), "addition={addition}");
+        }
+    }
+
+    #[test]
+    fn m2_scene_runner_requires_a_golden_pair() {
+        let input = VALID.replace("scene = false", "scene = true").replace(
+            "native = [\"synthetic-m0\"]",
+            "native = [\"tools/quality::m2_scene_gate\"]",
+        );
+        assert!(validate_manifest(&input).unwrap_err().iter().any(|error| {
+            error.code == "RPE-MANIFEST-0010"
+                && error.section.as_deref() == Some("expected")
+                && error.key.as_deref() == Some("scene_artifact")
+        }));
+    }
+
+    #[test]
+    fn scene_false_forbids_a_golden_pair() {
+        for (addition, key) in [
+            ("scene_artifact = \"expected/scene.json\"", "scene_artifact"),
+            (
+                "scene_sha256 = \"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"",
+                "scene_sha256",
+            ),
+            (
+                "scene_artifact = \"expected/scene.json\"\nscene_sha256 = \"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"",
+                "scene_artifact",
+            ),
+        ] {
+            let input = VALID.replace("scene = false", &format!("scene = false\n{addition}"));
+            assert!(
+                validate_manifest(&input).unwrap_err().iter().any(|error| {
+                    error.code == "RPE-MANIFEST-0024"
+                        && error.section.as_deref() == Some("expected")
+                        && error.key.as_deref() == Some(key)
+                }),
+                "addition={addition}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_m2_scene_channels_remain_compatible_without_a_golden_pair() {
+        assert!(validate_manifest(&VALID.replace("scene = false", "scene = true")).is_ok());
     }
 
     #[test]

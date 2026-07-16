@@ -1,0 +1,82 @@
+schema = 1
+
+[identity]
+id = "content/m2-scene/valid-state-and-marked-content"
+title = "Balanced content state emits only marked-content Scene commands"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.4.2", "8.4.3", "9.4", "14.6", "RPE-ARCH-001/15.3/M2"]
+interpretation = "Balanced graphics, text, compatibility, and marked-content state succeeds; an unknown operator inside BX and EX is ignored, and only the Span marked-content pair enters Scene v1."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/content/m2-scene/valid-state-and-marked-content/input.pdf"
+sha256 = "sha256:0cf75dfe46eae052c87ead1d833eb2f5f326ce33022fc7fe55aeff3360c70280"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-vm-scene-v1"]
+requirements = ["m2.content-vm-scene-v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+scene_artifact = "expected/scene.json"
+scene_sha256 = "sha256:7a686fe3461e12fbc3d89f51a113cd10f3bd535a27be0624da21b65c402b3661"
+text = false
+pixel = false
+diagnostic = false
+capability = false
+error = false
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic operator evaluation: every state pair is balanced, the q and Q pair restores the identity CTM, and exactly one Span BMC and EMC pair is scene-visible."
+reviewers = ["scene-gate-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 8
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 8
+max_group_depth = 8
+operator_fuel = 256
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "scene-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m2_scene_gate"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the bounded balanced-state Scene v1 case"]

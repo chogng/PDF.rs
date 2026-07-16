@@ -1,0 +1,80 @@
+schema = 1
+
+[identity]
+id = "content/m2-scene/source-change-before-resume"
+title = "Source change before resume invalidates Scene publication"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["14.6", "RPE-ARCH-001/15.3/M2"]
+interpretation = "The input is a valid balanced Span marked-content pair, but the harness changes the source snapshot after strict preparation and before resumed content execution, selecting source mismatch and no Scene."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/content/m2-scene/source-change-before-resume/input.pdf"
+sha256 = "sha256:d9cdbfcc62b9addbb5c82e32dd0405232f50c4ba97d19e4644882733741f364f"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-vm-scene-v1"]
+requirements = ["m2.content-vm-scene-v1"]
+
+[validity]
+class = "valid"
+strict_expected = "RPE-CONTENT-VM-0014"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic runtime schedule: strict preparation binds one source snapshot, then the harness changes it before resume so source mismatch precedes publication."
+reviewers = ["scene-gate-review"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 4096
+max_objects = 8
+max_resolve_depth = 8
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 1
+max_path_segments = 1
+max_scene_commands = 8
+max_group_depth = 8
+operator_fuel = 256
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 1
+height = 1
+dpr_milli = 1000
+color_profile = "not-applicable"
+alpha = "not-applicable"
+antialias = "not-applicable"
+renderer_epoch = "scene-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m2_scene_gate"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the bounded source-change-before-resume case"]
