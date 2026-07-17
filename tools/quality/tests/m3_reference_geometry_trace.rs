@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.73.0";
+const TRACE_VERSION: &str = "0.74.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "213652f80d9d8c6749102f0aa7d6d53163e5ac3c";
 const IMPLEMENTATION_TREE: &str = "de487ccfee70952024ea15b16e5c497794ec3269";
@@ -120,7 +120,14 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
     color
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-07 completion is exact");
-    for index in 8..=11 {
+    let image = table_record(&plan_text, "work_item", "M3-08");
+    image
+        .expect_string("status", "complete")
+        .expect("M3-08 status is exact");
+    image
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-08 completion is exact");
+    for index in 9..=11 {
         let id = format!("M3-{index:02}");
         table_record(&plan_text, "work_item", &id)
             .expect_string("status", "planned")

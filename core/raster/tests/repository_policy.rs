@@ -201,8 +201,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.73.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.73.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.74.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.74.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -277,10 +277,13 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "core.content-graphics-v2",
         "core.scene-graphics-v2",
         "core.reference-color-compositing",
+        "core.basic-image-xobjects",
         "\"core/raster\"",
         "core/raster::reference_foundation",
         "core/raster::reference_color",
+        "core/raster::reference_image",
         "tools/quality::m3_reference_color_trace",
+        "tools/quality::m3_basic_image_trace",
         "M3-03 adds the incompatible m3.scene-graphics-v2.v1 schema",
         "M3-04 adds the first bounded producer",
         "M3-05 and M3-06 add independently bounded pure raster kernels",
@@ -297,7 +300,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let reference_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/8.1-8.3")
         .expect("Reference architecture requirement must be registered");
     for required in [
-        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\"]",
+        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\", \"core.basic-image-xobjects\"]",
         "implementation = [\"core/raster\"]",
         "sRGB-reference-v1",
         "reference-color-v1",
@@ -317,13 +320,16 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         .expect("M3 milestone requirement must be registered");
     for required in [
         "core.reference-color-compositing",
+        "core.basic-image-xobjects",
         "M3-01 through M3-04 close the bounded pixel foundation",
         "M3-05 and M3-06 close the commit-pinned geometry/coverage and stroke/clip stages",
-        "M3-07 now closes the commit-pinned color/compositing stage",
-        "M3-08 through M3-11 still own images, glyphs",
+        "M3-07 closes project-owned DeviceGray/RGB/CMYK conversion",
+        "M3-08 now closes the commit-pinned basic unmasked Image XObject slice",
+        "M3-09 through M3-11 still own glyph text",
         "tools/quality::m3_raster_oracle_contract",
         "tools/quality::m3_content_graphics_trace",
         "tools/quality::m3_reference_color_trace",
+        "tools/quality::m3_basic_image_trace",
         "tools/quality::purity",
         "does not claim integrated visible PDF rendering",
         "status = \"partial\"",
@@ -397,7 +403,10 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "{id} must retain its completion date"
         );
     }
-    for index in 8..=11 {
+    let image = record_with_id(&plan, "work_item", "M3-08").expect("M3-08 work item must exist");
+    assert!(image.contains("status = \"complete\""));
+    assert!(image.contains("completed_at = 2026-07-16"));
+    for index in 9..=11 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));

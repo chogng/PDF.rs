@@ -1,5 +1,5 @@
 schema = 1
-version = "0.73.0"
+version = "0.74.0"
 status = "active"
 
 [[feature]]
@@ -178,6 +178,18 @@ profile = "m3.reference-color-compositing.v1"
 clauses = ["ISO-32000-1:2008/8.6", "ISO-32000-1:2008/11.3.2-11.3.4", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
 modules = ["core/raster"]
 tests = ["core/raster::reference_color", "core/raster::reference_scene_v2_boundary", "core/raster::repository_policy", "tools/quality::m3_reference_color_trace"]
+fuzz_targets = []
+benchmarks = []
+introduced_in = "0.1.0"
+
+[[feature]]
+id = "core.basic-image-xobjects"
+owner = "graphics-color"
+state = "PLANNED"
+profile = "m3.basic-image-xobjects.v1"
+clauses = ["ISO-32000-1:2008/7.8.3", "ISO-32000-1:2008/8.9", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/6.1-6.2", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3", "RPE-STD-001/3", "RPE-STD-001/5-11", "RPE-STD-003/8-9", "RPE-STD-003/12", "RPE-STD-005/4-7", "RPE-STD-005/11"]
+modules = ["core/document", "core/content", "core/scene", "core/raster"]
+tests = ["core/document::image_xobject", "core/content::scanner", "core/content::vm_graphics", "core/content::repository_policy", "core/scene::scene_v2", "core/raster::reference_image", "core/raster::repository_policy", "tools/quality::m3_basic_image_trace"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

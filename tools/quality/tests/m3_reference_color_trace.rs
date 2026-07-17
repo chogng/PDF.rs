@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.73.0";
+const TRACE_VERSION: &str = "0.74.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "127ee3cac4ab5595abbecd6438e6e309a58b23cb";
 const IMPLEMENTATION_TREE: &str = "c5e3ba0d5cd5e5de7b30845bb177e196ec8655b7";
@@ -286,7 +286,14 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
         ],
     )
     .expect("M3-07 acceptance is exact");
-    for index in 8..=11 {
+    let image = table_record(&plan_text, "work_item", "M3-08");
+    image
+        .expect_string("status", "complete")
+        .expect("M3-08 status is exact");
+    image
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-08 completion is exact");
+    for index in 9..=11 {
         let id = format!("M3-{index:02}");
         table_record(&plan_text, "work_item", &id)
             .expect_string("status", "planned")
@@ -409,9 +416,9 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
         (
             "RPE-ARCH-001/15.3/M3",
             &[
-                "M3-07 now closes",
-                "independently enumerated 3x3 layered-shape fixture",
-                "M3-08 through M3-11",
+                "M3-07 closes project-owned",
+                "M3-08 now closes",
+                "M3-09 through M3-11",
             ][..],
         ),
     ] {
