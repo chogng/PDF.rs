@@ -78,6 +78,42 @@ diff --recursive --brief \
     "$m2_scene_gate_root/release-1"
 
 cargo test --locked -p pdf-rs-quality --test m2_exit
+
+m3_reference_gate_root="target/ci-artifacts/m3-reference-gate"
+if [[ "$m3_reference_gate_root" != "target/ci-artifacts/m3-reference-gate" ]]; then
+    echo "refusing to clean unexpected M3 Reference gate root: $m3_reference_gate_root" >&2
+    exit 1
+fi
+if [[ -L "target" || -L "target/ci-artifacts" || -L "$m3_reference_gate_root" ]]; then
+    echo "refusing to clean M3 Reference gate root through a symbolic link" >&2
+    exit 1
+fi
+rm -rf -- "$m3_reference_gate_root"
+mkdir -p -- \
+    "$m3_reference_gate_root/debug-1" \
+    "$m3_reference_gate_root/debug-2" \
+    "$m3_reference_gate_root/release-1" \
+    "$m3_reference_gate_root/release-2"
+
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/debug-1" \
+    cargo test --locked --package pdf-rs-quality --test m3_reference_gate
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/debug-2" \
+    cargo test --locked --package pdf-rs-quality --test m3_reference_gate
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/release-1" \
+    cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/release-2" \
+    cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate
+
+diff --recursive --brief \
+    "$m3_reference_gate_root/debug-1" \
+    "$m3_reference_gate_root/debug-2"
+diff --recursive --brief \
+    "$m3_reference_gate_root/release-1" \
+    "$m3_reference_gate_root/release-2"
+diff --recursive --brief \
+    "$m3_reference_gate_root/debug-1" \
+    "$m3_reference_gate_root/release-1"
+
 cargo run --quiet --package pdf-rs-quality -- \
     validate-m1-maturity docs/traceability/capability-profiles.toml
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .

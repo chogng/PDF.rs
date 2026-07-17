@@ -606,12 +606,14 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     assert!(debug_2 < release_1);
     assert!(release_1 < release_2);
 
-    let diff_positions = positions(&ci, "diff --recursive --brief");
+    let m2_exit = position(&ci, "cargo test --locked -p pdf-rs-quality --test m2_exit");
+    let m2_gate_ci = &ci[..m2_exit];
+    let diff_positions = positions(m2_gate_ci, "diff --recursive --brief");
     assert_eq!(diff_positions.len(), 3);
     assert!(release_2 < diff_positions[0]);
-    let first_diff = &ci[diff_positions[0]..diff_positions[1]];
-    let second_diff = &ci[diff_positions[1]..diff_positions[2]];
-    let third_diff = &ci[diff_positions[2]..];
+    let first_diff = &m2_gate_ci[diff_positions[0]..diff_positions[1]];
+    let second_diff = &m2_gate_ci[diff_positions[1]..diff_positions[2]];
+    let third_diff = &m2_gate_ci[diff_positions[2]..];
     assert!(first_diff.contains("\"$m2_scene_gate_root/debug-1\""));
     assert!(first_diff.contains("\"$m2_scene_gate_root/debug-2\""));
     assert!(second_diff.contains("\"$m2_scene_gate_root/release-1\""));
@@ -619,7 +621,6 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     assert!(third_diff.contains("\"$m2_scene_gate_root/debug-1\""));
     assert!(third_diff.contains("\"$m2_scene_gate_root/release-1\""));
 
-    let m2_exit = position(&ci, "cargo test --locked -p pdf-rs-quality --test m2_exit");
     let m1_maturity = position(
         &ci,
         "validate-m1-maturity docs/traceability/capability-profiles.toml",
