@@ -2680,21 +2680,28 @@ fn assert_ci_diff_triplet(ci: &str, gate: &str) {
         ("release-1", "release-2"),
         ("debug-1", "release-1"),
     ] {
-        let pair = format!("\"${variable}/{left}\" \\\n    \"${variable}/{right}\"");
-        assert!(
-            ci.contains(&pair),
-            "CI is missing {gate} comparison inputs {left}/{right}"
+        let command = ci_diff_command(variable, left, right);
+        assert_eq!(
+            ci.matches(command.as_str()).count(),
+            1,
+            "CI must contain exactly one {gate} comparison command for {left}/{right}"
         );
     }
-    assert!(
-        ci.matches("diff --recursive --brief").count() >= 6,
-        "CI must retain three M2 and three M3 recursive byte comparisons"
+    assert_eq!(
+        ci.matches("diff --recursive --brief").count(),
+        6,
+        "CI must contain exactly three M2 and three M3 recursive byte comparisons"
     );
 }
 
 fn ci_diff_position(ci: &str, variable: &str, left: &str, right: &str) -> usize {
-    let pair = format!("\"${variable}/{left}\" \\\n    \"${variable}/{right}\"");
-    position(ci, &pair)
+    position(ci, &ci_diff_command(variable, left, right))
+}
+
+fn ci_diff_command(variable: &str, left: &str, right: &str) -> String {
+    format!(
+        "diff --recursive --brief \\\n    \"${variable}/{left}\" \\\n    \"${variable}/{right}\""
+    )
 }
 
 fn string_set<'a>(values: &'a [&'a str]) -> BTreeSet<&'a str> {
