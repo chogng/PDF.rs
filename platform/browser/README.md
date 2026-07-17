@@ -1,7 +1,10 @@
-# Browser host baseline
+# Browser host and Worker boundary
 
 M5-01 establishes a reproducible browser-host package around the generated
-Engine protocol. It does not yet claim a deployable viewer or Worker lifecycle.
+Engine protocol. M5-02 adds the single-Worker host supervisor, negotiated event
+boundary, bounded command/event queues, explicit processing turns, virtual
+clock, fault containment, and epoch replacement. These slices do not yet claim
+a deployable viewer or a Native Wasm engine integration.
 
 ## Pinned tools
 
@@ -78,15 +81,40 @@ identity, duplicate or regressing sequence, malformed codec value, lifecycle
 mismatch, unsupported capability, or resource failure leaves the sequence
 uncommitted.
 
-The admission object is a state gate, not the M5-02 Worker supervisor. Its
-caller remains responsible for authoritative transitions and must record a new
-Open or GetPageMetrics request and a newly accepted SetViewport generation
-immediately after successful decoding. Construction requires explicit session,
-request, and Surface capacities within module hard maxima. Identities and
-terminal tombstones remain counted for the full Worker epoch so a closed
-session, terminal request, or reclaimed Surface cannot be revived or reused;
-a new Worker epoch gets a new admission object. Generation high-watermarks are
-monotonic and keyed by their already-counted session.
+The M5-02 supervisor owns separate queued-admission and successfully-sent
+ledgers. Queue admission reserves identities and monotonic sequence numbers,
+but a Worker outcome is authorized only after the corresponding `postMessage`
+succeeds. The sent ledger records Open, GetPageMetrics, SetViewport, close,
+shutdown, and event-side lifecycle transitions. Construction requires explicit
+session, request, Surface, inbound, outbound, critical, and replaceable
+capacities within module hard maxima.
+Identities and terminal tombstones remain counted for the full Worker epoch so
+a closed session, terminal request, or reclaimed Surface cannot be revived or
+reused; restart terminates the old port before creating a new admission object
+and Worker identity. Generation high-watermarks are monotonic and keyed by
+their already-counted session.
+
+Worker callbacks only enqueue an opaque physical resource table or a stable
+fault marker. Handshake decoding, generated validation, lifecycle mutation,
+application event delivery, and outbound sending occur only through explicit
+bounded turns. Host Hello must be sent before EngineHello is accepted, and
+HelloAccept must be sent before Ready is accepted. Independent queue capacities
+reserve command and event space without changing canonical sequence order:
+draining always chooses the smallest retained sequence across ordinary,
+critical, and coalesced viewport queues. Replaced viewport frames may leave a
+legal sequence gap but can never make an older retained frame regress.
+Application delivery likewise selects the smallest retained event sequence
+across critical and coalesced progress queues; replacing progress updates its
+delivery position to the replacement's sequence.
+
+The injected monotonic clock makes startup and graceful-shutdown deadlines
+deterministic. A malformed frame, messageerror, Worker error, unexpected
+termination, queue overflow, transport failure, or deadline expiry terminates
+the live port, clears pending epoch work, and publishes one bounded,
+content-free supervisor `WorkerFault` with an explicit host-transport or
+engine-protocol origin. Old callbacks carry an epoch token and are ignored after
+restart. Graceful-shutdown time begins only after its command is successfully
+sent.
 
 This receiver-side API cannot determine whether an `ArrayBuffer` was transferred
 or cloned: structured-clone delivery exposes no transfer-list provenance.
@@ -96,14 +124,16 @@ ownership. If receiver validation fails after a real transfer, the sender is
 already detached; the receiver discards the rejected resource rather than
 claiming that ownership was rolled back.
 
-Surface event decoding, JavaScript `ImageBitmap` or SharedArrayBuffer adoption,
-DOM presentation, atomic publication, and the complete lease ledger are not
-implemented by M5-01. The Rust worker crate contains pointer-free manifest
-primitives that validate declared capabilities, extents, isolation facts, and
-fence observations supplied by a future adapter. M5-05 must bind those facts to
-the decoded `SurfaceReady` event, perform the actual browser-object and atomic
-checks, and keep stale resources on the release or reclaim path. OffscreenCanvas
-remains a future Worker-private staging option and is never a wire Surface.
+M5-02 decodes Surface event control data and validates the negotiated resource
+slot count, but deliberately leaves each out-of-band value opaque. JavaScript
+`ImageBitmap` or SharedArrayBuffer adoption, DOM presentation, atomic
+publication, and the complete lease ledger are not implemented in this slice.
+The Rust worker crate contains pointer-free manifest primitives that validate
+declared capabilities, extents, isolation facts, and fence observations
+supplied by a future adapter. M5-05 must bind those facts to the decoded
+`SurfaceReady` event, perform the actual browser-object and atomic checks, and
+keep stale resources on the release or reclaim path. OffscreenCanvas remains a
+future Worker-private staging option and is never a wire Surface.
 
 The Rust adapter receives only pointer-free control and resource metadata.
 Neither side allows a raw Wasm pointer or `WebAssembly.Memory` to cross a Worker
