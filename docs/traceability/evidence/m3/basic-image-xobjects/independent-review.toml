@@ -60,7 +60,7 @@ reviewed_surfaces = [
   "proof-bound Page XObject lookup and strict identity-or-Flate basic image acquisition",
   "single immutable Content semantic plan, exact resumable image cache, and atomic Scene publication",
   "Scene ImageResource and DrawImage identity, transform, paint, bounds, and provenance",
-  "bounded reference image mapping, nearest and bilinear sampling, device-color conversion, clip, and compositing",
+  "bounded reference image mapping, nearest-neighbor sampling, structured interpolation rejection, device-color conversion, clip, and compositing",
   "semantic-error precedence, source and cancellation guards, terminal replay, and non-publication outcomes",
 ]
 reviewed_subjects = [
@@ -128,6 +128,7 @@ closed_findings = [
   "P1 singular image transform: the zero-area draw now preserves the backdrop with zero samples and conversions instead of failing or publishing fallback pixels.",
   "P1 action-owned retention: unique path and dash capacity is charged once across FillStrokeClip, save/restore, dash replacement, and Pending image-plan retention.",
   "P1 staged boundary: reference-image-v1 remains outside ReferenceRenderJob until M3-10 and cannot claim final pixel authority.",
+  "P2 declared sampling scope: follow-up trace audit matched the exact nearest-neighbor-only implementation; Interpolate true remains structured unsupported and the incorrect expanded-sampling wording was removed.",
 ]
 open_p0 = 0
 open_p1 = 0

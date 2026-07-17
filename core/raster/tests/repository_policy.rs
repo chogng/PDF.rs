@@ -301,8 +301,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.74.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.74.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.75.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.75.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),

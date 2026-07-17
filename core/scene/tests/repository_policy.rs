@@ -132,8 +132,8 @@ fn m2_scene_profiles_remain_planned_after_the_bounded_normative_gate_closes() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.74.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.74.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.75.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.75.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),

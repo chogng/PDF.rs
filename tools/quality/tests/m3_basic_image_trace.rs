@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.74.0";
+const TRACE_VERSION: &str = "0.75.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "fe379fe1eb2ab5398f627a2db2835bcf41dc3bb0";
 const IMPLEMENTATION_TREE: &str = "8a314214f5abe7c0eca0354ef7c616356966ac77";
@@ -441,7 +441,12 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
         (
             "ISO-32000-1:2008/8.9",
             ISO_SNAPSHOT,
-            &["reference-image-v1", "Masks, soft masks"][..],
+            &[
+                "reference-image-v1",
+                "nearest-neighbor sampling",
+                "Interpolate-true rejection",
+                "Masks, soft masks",
+            ][..],
         ),
         (
             "RPE-ARCH-001/5.8-5.9",
@@ -461,7 +466,12 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
         (
             "RPE-ARCH-001/8.1-8.3",
             ARCH_SNAPSHOT,
-            &["reference-image-v1", "not mounted into ReferenceRenderJob"][..],
+            &[
+                "reference-image-v1",
+                "nearest-neighbor sampling",
+                "Interpolate true remains a structured unsupported outcome",
+                "not mounted into ReferenceRenderJob",
+            ][..],
         ),
         (
             "RPE-ARCH-001/15.3/M3",
@@ -502,6 +512,7 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
     for marker in [
         "`reference-image-v1`",
         "basic unmasked image",
+        "samples nearest-neighbor texels",
         "separate from `ReferenceRenderJob` until M3-10",
         "not a `REFERENCE` maturity promotion",
         "not an O0/O1 pixel authority",
@@ -512,6 +523,26 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
             "Raster provenance is missing {marker:?}"
         );
     }
+    let review = read_text(
+        &root,
+        "docs/traceability/evidence/m3/basic-image-xobjects/independent-review.toml",
+    );
+    assert!(
+        review.contains("nearest-neighbor sampling, structured interpolation rejection"),
+        "review scope must match the exact staged sampling policy"
+    );
+    assert!(
+        !review.contains("bilinear"),
+        "M3-08 review evidence must not claim unimplemented bilinear sampling"
+    );
+    let document_image = read_text(&root, "core/document/src/image_xobject.rs");
+    assert!(document_image.contains("SyntaxObject::Boolean(true) =>"));
+    assert!(document_image.contains("ImageXObjectUnsupportedKind::Interpolation"));
+    let raster_image = read_text(&root, "core/raster/src/reference/image.rs");
+    assert!(raster_image.contains("if image.interpolate()"));
+    assert!(raster_image.contains("ImageFailure::UnsupportedInterpolation"));
+    let raster_image_tests = read_text(&root, "core/raster/tests/reference_image.rs");
+    assert!(raster_image_tests.contains("interpolated_and_mismatched_inputs_fail_structurally"));
 
     let ci = read_text(&root, "scripts/ci.sh");
     let color = position(

@@ -12,7 +12,7 @@ use evidence::{
     verify_reviewed_subjects, verify_subject_entries,
 };
 
-const TRACE_VERSION: &str = "0.74.0";
+const TRACE_VERSION: &str = "0.75.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const M1_PAGE_TREE_SHA256: &str =
     "e680abd131a3a4da61262eb152820c3e4f6252c6396a15447039713da3a0f5e1";

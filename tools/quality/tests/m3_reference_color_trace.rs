@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.74.0";
+const TRACE_VERSION: &str = "0.75.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "127ee3cac4ab5595abbecd6438e6e309a58b23cb";
 const IMPLEMENTATION_TREE: &str = "c5e3ba0d5cd5e5de7b30845bb177e196ec8655b7";
