@@ -78,7 +78,10 @@ retain no pixel artifact, and CI runs the independent oracle model before two de
 gate replays with three recursive artifact comparisons. The repository-only M3 exit then recomputes
 the complete 25-file artifact topology and hash from a fresh replay, verifies the four maturity
 artifacts and their subject graph, preserves the immutable M1 and complete M2 gates, and requires a
-commit/tree/hash-bound two-role SHIP review before M3 can be marked complete.
+commit/tree/hash-bound two-role SHIP review before M3 can be marked complete. CI expands every
+gate-output and exit-input path from the repository-root `$PWD` before Cargo starts the test process,
+so M2 and M3 writers populate the same guarded directories that the six recursive comparisons and
+the M3 exit inspect rather than package-relative lookalikes.
 
 # Semantic owner
 

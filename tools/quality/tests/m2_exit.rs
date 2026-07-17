@@ -400,10 +400,10 @@ fn m2_normative_cases_and_evidence_are_exact_and_content_addressed() {
         .expect_array(
             "commands",
             &[
-                "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
-                "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
-                "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
-                "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+                "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+                "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+                "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+                "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
                 "diff --recursive --brief target/ci-artifacts/m2-scene-gate/debug-1 target/ci-artifacts/m2-scene-gate/debug-2",
                 "diff --recursive --brief target/ci-artifacts/m2-scene-gate/release-1 target/ci-artifacts/m2-scene-gate/release-2",
                 "diff --recursive --brief target/ci-artifacts/m2-scene-gate/debug-1 target/ci-artifacts/m2-scene-gate/release-1",
@@ -581,19 +581,19 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     );
     let debug_1 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-1\"",
     );
     let debug_2 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-2\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-2\"",
     );
     let release_1 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/release-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/release-1\"",
     );
     let release_2 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/release-2\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/release-2\"",
     );
     assert!(validate_cases < raster_oracle);
     assert!(raster_oracle < content_graphics_trace);

@@ -17,16 +17,16 @@ exit_test = "tools/quality::m3_exit"
 commands = [
   "cargo run --quiet --package pdf-rs-quality -- validate-cases tests/cases",
   "cargo test --locked --package pdf-rs-quality --test m3_reference_oracle_model",
-  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
-  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=target/ci-artifacts/m3-reference-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
-  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=target/ci-artifacts/m3-reference-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
-  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=target/ci-artifacts/m3-reference-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
+  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=$PWD/target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
+  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=$PWD/target/ci-artifacts/m3-reference-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
+  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=$PWD/target/ci-artifacts/m3-reference-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
+  "PDF_RS_M3_REFERENCE_GATE_OUTPUT=$PWD/target/ci-artifacts/m3-reference-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
   "diff --recursive --brief target/ci-artifacts/m3-reference-gate/debug-1 target/ci-artifacts/m3-reference-gate/debug-2",
   "diff --recursive --brief target/ci-artifacts/m3-reference-gate/release-1 target/ci-artifacts/m3-reference-gate/release-2",
   "diff --recursive --brief target/ci-artifacts/m3-reference-gate/debug-1 target/ci-artifacts/m3-reference-gate/release-1",
   "cargo test --locked --package pdf-rs-quality --test m3_reference_raster_trace",
   "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml",
-  "PDF_RS_M3_REFERENCE_EXIT_INPUT=target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_exit",
+  "PDF_RS_M3_REFERENCE_EXIT_INPUT=$PWD/target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_exit",
 ]
 case_count = 12
 ready_case_count = 5

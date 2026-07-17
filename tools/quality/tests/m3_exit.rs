@@ -1151,12 +1151,12 @@ fn m1_page_tree_and_m2_exit_evidence_remain_immutable_and_ci_precedes_m3() {
     let ci = read_utf8(&root.join("scripts/ci.sh"));
     let m2_debug = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-1\"",
     );
     let m2_exit = position(&ci, "cargo test --locked -p pdf-rs-quality --test m2_exit");
     let m3_debug = position(
         &ci,
-        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/debug-1\"",
+        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/debug-1\"",
     );
     assert!(
         m2_debug < m2_exit && m2_exit < m3_debug,
@@ -1381,7 +1381,7 @@ fn m3_normative_replay_and_final_independent_review_are_complete_and_hash_bound(
         "release-1",
         "release-2",
         "validate-m1-maturity docs/traceability/capability-profiles.toml",
-        "PDF_RS_M3_REFERENCE_EXIT_INPUT=target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_exit",
+        "PDF_RS_M3_REFERENCE_EXIT_INPUT=$PWD/target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_exit",
     ] {
         assert!(
             replay_commands
@@ -1441,11 +1441,11 @@ fn m3_normative_replay_and_final_independent_review_are_complete_and_hash_bound(
         .expect_array(
             "commands",
             &[
-                "cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
-                "cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
+                "PDF_RS_M3_REFERENCE_GATE_OUTPUT=$PWD/target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
+                "PDF_RS_M3_REFERENCE_GATE_OUTPUT=$PWD/target/ci-artifacts/m3-reference-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
                 "cargo test --locked --package pdf-rs-quality --test m3_reference_oracle_model",
                 "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml",
-                "PDF_RS_M3_REFERENCE_EXIT_INPUT=target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_exit",
+                "PDF_RS_M3_REFERENCE_EXIT_INPUT=$PWD/target/ci-artifacts/m3-reference-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m3_exit",
                 "cargo test --locked --package pdf-rs-quality --test m2_exit",
                 "cargo fmt --all --check",
                 "cargo clippy --workspace --all-targets --all-features -- -D warnings",
@@ -1745,19 +1745,19 @@ fn m3_plan_trace_and_ci_are_closed_only_after_replay_maturity_and_ship_review() 
     );
     let m2_debug_1 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-1\"",
     );
     let m2_debug_2 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-2\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-2\"",
     );
     let m2_release_1 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/release-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/release-1\"",
     );
     let m2_release_2 = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/release-2\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/release-2\"",
     );
     let m2_debug_diff = ci_diff_position(&ci, "m2_scene_gate_root", "debug-1", "debug-2");
     let m2_release_diff = ci_diff_position(&ci, "m2_scene_gate_root", "release-1", "release-2");
@@ -1769,19 +1769,19 @@ fn m3_plan_trace_and_ci_are_closed_only_after_replay_maturity_and_ship_review() 
     );
     let m3_debug_1 = position(
         &ci,
-        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/debug-1\"",
+        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/debug-1\"",
     );
     let m3_debug_2 = position(
         &ci,
-        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/debug-2\"",
+        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/debug-2\"",
     );
     let m3_release_1 = position(
         &ci,
-        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/release-1\"",
+        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/release-1\"",
     );
     let m3_release_2 = position(
         &ci,
-        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/release-2\"",
+        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/release-2\"",
     );
     let m3_debug_diff = ci_diff_position(&ci, "m3_reference_gate_root", "debug-1", "debug-2");
     let m3_release_diff = ci_diff_position(&ci, "m3_reference_gate_root", "release-1", "release-2");
@@ -1796,7 +1796,7 @@ fn m3_plan_trace_and_ci_are_closed_only_after_replay_maturity_and_ship_review() 
     );
     let m3_exit = exact_line_position(
         &ci,
-        "PDF_RS_M3_REFERENCE_EXIT_INPUT=\"$m3_reference_gate_root/debug-1\" cargo test --locked --package pdf-rs-quality --test m3_exit",
+        "PDF_RS_M3_REFERENCE_EXIT_INPUT=\"$PWD/$m3_reference_gate_root/debug-1\" cargo test --locked --package pdf-rs-quality --test m3_exit",
     );
     let purity = position(&ci, "check-product-purity .");
     assert!(
@@ -1826,7 +1826,7 @@ fn m3_plan_trace_and_ci_are_closed_only_after_replay_maturity_and_ship_review() 
     for replay in ["debug-1", "debug-2", "release-1", "release-2"] {
         assert!(
             ci.contains(&format!(
-                "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/{replay}\""
+                "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/{replay}\""
             )),
             "CI is missing fresh M3 replay {replay}"
         );
@@ -2171,6 +2171,7 @@ fn expected_final_review_subject_paths() -> BTreeSet<String> {
             "docs/traceability/data-ledger.toml",
             "docs/traceability/feature-map.toml",
             "docs/traceability/spec-map.toml",
+            "docs/traceability/evidence/m2/scene-gate/normative-replay.toml",
             "docs/traceability/evidence/m3/reference-raster-integration/independent-review.toml",
             "plan/m3.toml",
             "plan/r0.toml",
@@ -2191,7 +2192,7 @@ fn expected_final_review_subject_paths() -> BTreeSet<String> {
     );
     assert_eq!(
         expected.len(),
-        84,
+        85,
         "formal final-review subject closure changed"
     );
     expected

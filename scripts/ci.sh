@@ -58,13 +58,13 @@ mkdir -p -- \
     "$m2_scene_gate_root/release-1" \
     "$m2_scene_gate_root/release-2"
 
-PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/debug-1" \
+PDF_RS_M2_SCENE_GATE_OUTPUT="$PWD/$m2_scene_gate_root/debug-1" \
     cargo test --locked --package pdf-rs-quality --test m2_scene_gate
-PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/debug-2" \
+PDF_RS_M2_SCENE_GATE_OUTPUT="$PWD/$m2_scene_gate_root/debug-2" \
     cargo test --locked --package pdf-rs-quality --test m2_scene_gate
-PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/release-1" \
+PDF_RS_M2_SCENE_GATE_OUTPUT="$PWD/$m2_scene_gate_root/release-1" \
     cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate
-PDF_RS_M2_SCENE_GATE_OUTPUT="$m2_scene_gate_root/release-2" \
+PDF_RS_M2_SCENE_GATE_OUTPUT="$PWD/$m2_scene_gate_root/release-2" \
     cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate
 
 diff --recursive --brief \
@@ -97,13 +97,13 @@ mkdir -p -- \
     "$m3_reference_gate_root/release-1" \
     "$m3_reference_gate_root/release-2"
 
-PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/debug-1" \
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$PWD/$m3_reference_gate_root/debug-1" \
     cargo test --locked --package pdf-rs-quality --test m3_reference_gate
-PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/debug-2" \
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$PWD/$m3_reference_gate_root/debug-2" \
     cargo test --locked --package pdf-rs-quality --test m3_reference_gate
-PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/release-1" \
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$PWD/$m3_reference_gate_root/release-1" \
     cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate
-PDF_RS_M3_REFERENCE_GATE_OUTPUT="$m3_reference_gate_root/release-2" \
+PDF_RS_M3_REFERENCE_GATE_OUTPUT="$PWD/$m3_reference_gate_root/release-2" \
     cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate
 
 diff --recursive --brief \
@@ -120,7 +120,7 @@ cargo test --locked --package pdf-rs-quality --test m3_reference_raster_trace
 
 cargo run --quiet --package pdf-rs-quality -- \
     validate-m1-maturity docs/traceability/capability-profiles.toml
-PDF_RS_M3_REFERENCE_EXIT_INPUT="$m3_reference_gate_root/debug-1" cargo test --locked --package pdf-rs-quality --test m3_exit
+PDF_RS_M3_REFERENCE_EXIT_INPUT="$PWD/$m3_reference_gate_root/debug-1" cargo test --locked --package pdf-rs-quality --test m3_exit
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .
 
 product_build_root="$(mktemp -d "${TMPDIR:-/tmp}/pdf-rs-product-build.XXXXXX")"

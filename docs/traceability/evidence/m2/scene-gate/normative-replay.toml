@@ -15,10 +15,10 @@ reviewer_roles = ["parser-security", "spec-conformance"]
 runner = "tools/quality::m2_scene_gate"
 exit_test = "tools/quality::m2_exit"
 commands = [
-  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
-  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
-  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
-  "PDF_RS_M2_SCENE_GATE_OUTPUT=target/ci-artifacts/m2-scene-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/debug-1 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/debug-2 cargo test --locked --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/release-1 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
+  "PDF_RS_M2_SCENE_GATE_OUTPUT=$PWD/target/ci-artifacts/m2-scene-gate/release-2 cargo test --locked --release --package pdf-rs-quality --test m2_scene_gate",
   "diff --recursive --brief target/ci-artifacts/m2-scene-gate/debug-1 target/ci-artifacts/m2-scene-gate/debug-2",
   "diff --recursive --brief target/ci-artifacts/m2-scene-gate/release-1 target/ci-artifacts/m2-scene-gate/release-2",
   "diff --recursive --brief target/ci-artifacts/m2-scene-gate/debug-1 target/ci-artifacts/m2-scene-gate/release-1",

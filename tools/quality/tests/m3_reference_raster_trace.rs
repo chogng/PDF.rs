@@ -411,7 +411,7 @@ fn m3_reference_ci_and_provenance_preserve_scope_and_m1() {
     let ci = read_text(&root, "scripts/ci.sh");
     let gate = position(
         &ci,
-        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$m3_reference_gate_root/debug-1\"",
+        "PDF_RS_M3_REFERENCE_GATE_OUTPUT=\"$PWD/$m3_reference_gate_root/debug-1\"",
     );
     let trace = position(
         &ci,

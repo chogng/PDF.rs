@@ -603,7 +603,7 @@ fn m3_basic_text_ci_and_provenance_preserve_scope_and_m1() {
     );
     let m2_replay = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-1\"",
     );
     assert!(image < text && text < m2_replay);
     let quality_main = read_text(&root, "tools/quality/src/main.rs");

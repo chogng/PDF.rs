@@ -308,7 +308,7 @@ fn m3_geometry_gate_is_selected_before_m2_replay_and_preserves_m1() {
     );
     let m2_replay = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-1\"",
     );
     assert!(content < geometry);
     assert!(geometry < color);

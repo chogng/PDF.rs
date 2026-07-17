@@ -564,7 +564,7 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
     );
     let m2_replay = position(
         &ci,
-        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$m2_scene_gate_root/debug-1\"",
+        "PDF_RS_M2_SCENE_GATE_OUTPUT=\"$PWD/$m2_scene_gate_root/debug-1\"",
     );
     assert!(color < image);
     assert!(image < m2_replay);
