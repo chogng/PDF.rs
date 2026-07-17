@@ -42,6 +42,8 @@ dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-document",
  "pdf-rs-object",
+ "pdf-rs-policy",
+ "pdf-rs-scene",
  "pdf-rs-syntax",
  "pdf-rs-xref",
 ]

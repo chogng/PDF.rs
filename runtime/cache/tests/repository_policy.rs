@@ -82,6 +82,7 @@ fn product_dependencies_are_only_the_declared_in_repository_core_layers() {
             "pdf-rs-bytes",
             "pdf-rs-document",
             "pdf-rs-object",
+            "pdf-rs-policy",
             "pdf-rs-syntax",
         ])
     );
