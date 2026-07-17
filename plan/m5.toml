@@ -1,0 +1,195 @@
+schema = 1
+milestone = "M5"
+title = "Browser vertical slice"
+status = "planned"
+depends_on = ["M2"]
+start_gates = ["M4-01"]
+exit_dependencies = ["M4-02", "M4-03", "M4"]
+exit_gate = "Chromium, Firefox, and WebKit complete the bounded Native-only reading flow; browser resources and dependencies contain no external PDF engine."
+max_parallel_work_items = 3
+
+principles = [
+  "Start implementation only after M4-01 freezes the canonical protocol and Surface schema; consume M4-02 CapabilityDecision and M4-03 Native RenderPlan without a browser-specific fork.",
+  "Create at most one live Dedicated Native Engine Worker per viewer and keep all PDF parsing, Scene construction, capability evaluation, scheduling, caching, and raster work off the main thread.",
+  "Keep TypeScript limited to host lifecycle, immutable-source transport, viewport virtualization, DOM, Canvas, input, transfer lists, and generated protocol validation; it owns no PDF semantics.",
+  "Prefer OffscreenCanvas or transferable ImageBitmap, retain transferable ArrayBuffer as the compatibility path, and enable SharedArrayBuffer only after explicit capability negotiation and cross-origin isolation.",
+  "Treat every structured-clone message and transfer list as untrusted input and validate it before allocation, Wasm-memory access, DOM mutation, or handle adoption.",
+  "Release event listeners, ports, workers, observers, bitmaps, buffers, fetches, and surfaces on replacement, unmount, session close, Worker fault, and viewer shutdown.",
+  "Keep PDFium, PDF.js, MuPDF, browser extensions, remote rendering services, and every other external PDF engine outside the product resource graph and recovery policy.",
+  "Use real Chromium, Firefox, and WebKit runs for the exit gate; capability absence is tested as an explicit negotiated path rather than hidden by browser-specific mocks.",
+]
+
+registered_scope = [
+  "Generated TypeScript protocol types and runtime validators for the bounded M4/M5 handshake, open, Range, viewport, capability, Surface, release, close, fault, and shutdown flow.",
+  "A single Dedicated Worker supervisor that owns one Native engine epoch, validates messages, bounds queues, and replaces a failed Worker only after the old epoch is terminal.",
+  "Local-file and immutable HTTP source opening with Range, no-Range, strong validators, source-change detection, cancellation, and transferable ProvideData segments.",
+  "Negotiated OffscreenCanvas, ImageBitmap, transferable ArrayBuffer, and optional SharedArrayBuffer Surface presentation with generation and lifecycle checks.",
+  "A thin page-virtualizing viewer that completes first viewport, continuous scroll, zoom, rotation, DPR, resize, stale-result suppression, structured failure display, and clean close.",
+  "Real Chromium, Firefox, and WebKit coverage plus resource, Wasm import, worker graph, CSP, service-worker, dependency, source-map, and network scans proving a Native-only product graph.",
+]
+
+excluded_scope = [
+  "PDF parsing, content interpretation, fonts, text extraction, raster semantics, capability policy, and cache semantics in TypeScript or the browser main thread.",
+  "WebGPU, GPU fallback, mandatory SharedArrayBuffer or Wasm threads, multiple concurrent PDF workers, browser extensions, and platform-specific shared-memory requirements.",
+  "Selection, copy, search, links, annotations, forms, save, complete accessibility, and the complete M6 release-r0-v1 experience.",
+  "Graphics or document capability expansion beyond the accepted M4 Native profile, DEFAULT or STABLE promotion, and any external PDF engine product dependency or runtime fallback.",
+]
+
+[[work_item]]
+id = "M5-01"
+title = "Generated browser contract and build baseline"
+lane = "browser-contract"
+status = "planned"
+depends_on = ["M4-01"]
+outcome = "A reproducible browser package and Wasm build consume the frozen schema as generated TypeScript types, validators, message IDs, schema hash, and compatibility vectors."
+acceptance = [
+  "The browser package, locked Node toolchain, TypeScript configuration, Wasm target, build outputs, and check commands are explicit and reproducible.",
+  "No command, event, correlation, capability, error, or Surface field is independently handwritten in TypeScript, and the protocol boundary exposes no unbounded any type.",
+  "Validators check object shape, integer range, enum, payload length, sequence, Worker/session/request/generation correlation, transfer-slot count, and mandatory capability before use.",
+  "Validation errors are content-redacted and bounded; unknown optional fields follow negotiated minor-version rules.",
+  "Generator check mode proves committed TypeScript and Rust bindings match the same canonical schema and exact schema hash.",
+  "Node-side tests replay valid, truncated, oversized, stale-epoch, duplicate-sequence, unknown-variant, and transfer-slot mismatch vectors.",
+  "The browser and Wasm product packages never depend on tools, baseline, ../pdfium, or an external PDF engine.",
+]
+
+[[work_item]]
+id = "M5-02"
+title = "Single Worker host lifecycle and bounded transport"
+lane = "browser-worker"
+status = "planned"
+depends_on = ["M5-01"]
+outcome = "One host-side supervisor owns the Dedicated Worker lifecycle, negotiated protocol epoch, bounded command and event queues, and deterministic fault replacement."
+acceptance = [
+  "The supervisor models NotStarted, Starting, Ready, Draining, Stopped, and Failed and never has more than one live product PDF Worker.",
+  "Handshake negotiates protocol/schema, OffscreenCanvas, ImageBitmap, transferable buffers, optional shared memory, maximum message bytes, and transfer slots before Open.",
+  "Worker ingress validates structured-clone data before touching transfers or Wasm, and host completion only queues protocol work rather than invoking engine logic inline.",
+  "Critical release, close, fault, and terminal traffic remains deliverable under bounded queue pressure while replaceable viewport and progress traffic can coalesce.",
+  "Worker messageerror, error, termination, and restart map to bounded WorkerFault and a new epoch that invalidates every old session, request, and Surface.",
+  "A fake MessagePort and virtual clock cover disorder, duplication, schema mismatch, queue saturation, close, fault, late old-epoch traffic, restart, and terminal cleanup without wall-clock sleeps.",
+]
+
+[[work_item]]
+id = "M5-03"
+title = "Thin TypeScript viewer and viewport model"
+lane = "browser-viewer"
+status = "planned"
+depends_on = ["M5-01"]
+outcome = "A testable virtualized viewer shell owns page DOM, Canvas presentation, interaction state, and complete monotonic viewport generations without implementing PDF semantics."
+acceptance = [
+  "Page DOM owns presentation only; no PDF object, content, font, image, color, capability, or raster semantic is implemented in TypeScript.",
+  "Scroll, zoom, rotation, DPR, resize, optional-content identity, revision, quality, and output changes produce complete monotonic viewport generations.",
+  "Intersection and resize observations are coalesced under bounded host policy; the current generation alone can update visible Canvas state.",
+  "Unsupported, rejected, budget, source-integrity, cancelled, transport, and Worker faults map by stable code and decision rather than parsed error strings.",
+  "An injected fake EngineClient tests viewport virtualization, at least three rapid generations, stale-result suppression, structured failure states, and focus-preserving unmount.",
+  "Unmount disconnects observers and listeners, cancels scheduled host work, releases adopted presentation resources, and closes its client ownership.",
+]
+
+[[work_item]]
+id = "M5-04"
+title = "Immutable browser source and Range transport"
+lane = "browser-source"
+status = "planned"
+depends_on = ["M5-02"]
+outcome = "A bounded host source bridge serves local or HTTP immutable snapshots through exact transferable DataTicket segments without running parser work in browser callbacks."
+acceptance = [
+  "HTTP acquisition validates strong ETag or equivalent identity, If-Range, 206 Content-Range, requested and returned ranges, total length, segment length, status, and source snapshot.",
+  "A valid non-Range 200 response can freeze one bounded whole-source snapshot; slow, truncated, disconnected, CORS, validator-change, and source-change paths are structured.",
+  "Local-file bytes and HTTP segments bind one immutable SourceIdentity and exact DataTicket; duplicate, overlap, foreign ticket, late completion, and mismatched snapshot are rejected.",
+  "ProvideData uses actual ArrayBuffer transfer-list slots, verifies detachment or loss of sender ownership, and never sends a Wasm pointer across realms.",
+  "Fetch or file completion only submits a validated command; it does not resume Native parser code on the browser callback stack.",
+  "Cancel, close, Worker fault, and restart abort or drain host acquisition, and late completion releases bytes without publishing to a stale epoch.",
+]
+
+[[work_item]]
+id = "M5-05"
+title = "Transferable browser Surface paths"
+lane = "browser-surface"
+status = "planned"
+depends_on = ["M4-01", "M4-02", "M4-03", "M5-02"]
+outcome = "The Worker and viewer negotiate and safely present Native surfaces through OffscreenCanvas, ImageBitmap, transferable ArrayBuffer, or optional shared memory."
+acceptance = [
+  "Every path validates Surface owner, Worker epoch, session, generation, renderer epoch, config hash, dimensions, stride, format, alpha, byte range, and transfer slot on both sides.",
+  "OffscreenCanvas is preferred when supported; ImageBitmap and ArrayBuffer are explicit degradations that preserve identical Native RenderPlan and capability semantics.",
+  "SharedArrayBuffer is unreachable without cross-origin isolation and negotiated support; ordinary Wasm pointers never cross Worker or realm boundaries.",
+  "Stale surfaces are never displayed but are always released or acknowledged; replacement, duplicate release, ImageBitmap close, lease reclaim, session close, and Worker fault are idempotent.",
+  "Wasm-local views require the same Worker and memory epoch and are rebuilt or rejected after memory growth.",
+  "Capability-matrix tests exercise every supported and unsupported transport combination without changing PDF support decisions.",
+]
+
+[[work_item]]
+id = "M5-06"
+title = "Native Wasm Engine Worker integration"
+lane = "browser-worker"
+status = "planned"
+depends_on = ["M4-02", "M4-03", "M5-04", "M5-05"]
+outcome = "One native-worker adapter instantiates one PDF.rs Wasm engine and maps the generated protocol, immutable-source bridge, Native RenderPlan, and transferable Surface lifecycle without duplicating policy in TypeScript."
+acceptance = [
+  "The production Worker loads exactly one hash-bound PDF.rs engine.wasm and one generated glue entry after protocol capability negotiation.",
+  "Native code owns parsing, Scene creation, capability evaluation, RenderPlan selection, scheduling, caching, raster work, and Surface publication; TypeScript only adapts browser capabilities.",
+  "A self-authored fixture completes Open, NeedData, ProvideData, DocumentReady, SetViewport, CapabilityReported, SurfaceReady, ReleaseSurface, CloseSession, and Shutdown.",
+  "Unsupported, rejected, budget, cancellation, source-change, stale generation, and close never publish blank or partial Surface success.",
+  "The integration cannot relabel M3 CanonicalPixelBuffer as a transferable product Surface and cannot retry through an external engine.",
+  "Wasm imports, exports, memory growth, traps, panic mapping, message sizes, transfer counts, and shutdown ownership have bounded integration tests.",
+]
+
+[[work_item]]
+id = "M5-07"
+title = "Integrated browser reading and fault loop"
+lane = "browser-viewer"
+status = "planned"
+depends_on = ["M5-03", "M5-06"]
+outcome = "The real viewer and Native Worker complete local and remote open, first display, continuous viewport changes, structured failures, Worker restart, and complete cleanup."
+acceptance = [
+  "Local file and immutable URL sources reach document-ready state, display page status, and complete first preview and first full-quality viewport.",
+  "Continuous scroll, zoom, rotation, DPR, and resize drive bounded generations; at least three rapid generations with out-of-order completion display zero stale Surface.",
+  "CapabilityDecision and EngineError produce stable user-visible states without parsing diagnostic text or looking for an external fallback.",
+  "Worker crash and restart terminate the old epoch, reject every late handle, and reopen only from host-owned source and viewport state.",
+  "Page replacement, document close, unmount, repeated close, protocol fault, failed startup, and Worker shutdown return listener, observer, port, Worker, fetch, bitmap, transfer, and Surface counts to zero.",
+]
+
+[[work_item]]
+id = "M5-08"
+title = "Browser product resource purity"
+lane = "browser-quality"
+status = "planned"
+depends_on = ["M5-01", "M5-06"]
+outcome = "Build-time and runtime resource scans prove the browser product graph contains only PDF.rs Native engine artifacts and approved host assets."
+acceptance = [
+  "Dependency lock, module graph, bundled resources, source maps, Wasm imports, Worker graph, CSP, service-worker precache, and network manifest are canonical and bounded.",
+  "Scans reject PDFium, PDF.js, MuPDF, remote renderer endpoints, dynamic external-engine downloads, and unregistered executable or Wasm payloads.",
+  "The product build remains independent of the separate tools/baseline graph and succeeds when ../pdfium is absent.",
+  "A browser network trace proves the bounded reading flow requests only the declared viewer, PDF.rs Wasm, Worker, and selected source resources.",
+  "Licenses, source, hashes, semantic ownership, budgets, Wasm policy, and replacement plans for every shipped third-party browser leaf are registered before the artifact can pass.",
+]
+
+[[work_item]]
+id = "M5-09"
+title = "Three-engine browser reading gate"
+lane = "browser-e2e"
+status = "planned"
+depends_on = ["M5-07", "M5-08"]
+outcome = "Real Chromium, Firefox, and WebKit runs complete the bounded Native-only reading loop across the declared transport and device matrix."
+acceptance = [
+  "Each engine completes Worker startup, Native open, Range and no-Range acquisition, first preview, first full viewport, continuous scroll, zoom, rotation, DPR, resize, stale-generation suppression, close, and shutdown.",
+  "The matrix records locked runner and browser versions, CI image, OS, architecture, DPR, viewport, OffscreenCanvas, ImageBitmap, shared-memory isolation, Wasm identity, schema hash, and renderer epoch.",
+  "Every engine runs a forced transferable fallback, while engines that actually support OffscreenCanvas additionally prove the real Offscreen path; WebKit is not required to claim an unavailable capability.",
+  "ETag change, message disorder, Worker restart, duplicate release, shared-memory negotiation failure, and lifecycle cleanup use controllable events or barriers rather than correctness sleeps.",
+  "Screenshots, protocol traces, Surface accounting, network logs, console diagnostics, and timing summaries are content-redacted and reproducible.",
+  "No panic, hang, messageerror, unhandled rejection, stale display, leaked resource, unexpected unsupported, or undeclared network request remains open.",
+]
+
+[[work_item]]
+id = "M5-10"
+title = "M5 browser milestone gate"
+lane = "quality"
+status = "planned"
+depends_on = ["M4", "M5-09"]
+outcome = "Repository and real-browser replay plus independent review close the bounded M5 milestone on the accepted M4 contracts."
+acceptance = [
+  "M4-01 protocol and Surface schema, M4-02 CapabilityDecision, and M4-03 Native RenderPlan are accepted and unchanged by the browser implementation.",
+  "Fresh generated-binding, Node model, Wasm integration, Chromium, Firefox, WebKit, resource-purity, and product-closure runs pass from a clean checkout.",
+  "Normalized deterministic artifacts replay byte-identically where required, while browser-environment fields are explicit rather than hidden by tolerance or retries.",
+  "M1, M2, M3, and M4 exit gates remain unchanged and passing, and the browser product graph remains independent of all baseline tooling.",
+  "Independent runtime-platform, quality-corpus, and baseline-release review reports no open P0-P2 finding.",
+  "The milestone record is marked complete only after every required child and the repository-only m5_exit gate are complete.",
+]

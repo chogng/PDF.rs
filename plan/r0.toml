@@ -3,7 +3,7 @@ id = "r0-development-plan"
 version = "0.3.0"
 status = "active"
 planning_basis = "RPE-ARCH-001 v0.3, sections 2.6 and 15.3"
-last_updated = 2026-07-16
+last_updated = 2026-07-17
 max_parallel_milestones = 2
 max_parallel_work_items_per_milestone = 3
 
@@ -181,6 +181,9 @@ deliverables = [
   "desktop open, scroll, and zoom vertical slice",
 ]
 exit_gate = "R0-eligible basic pages reach CANARY and the desktop Native-only reading loop is usable."
+status = "in_progress"
+started_at = 2026-07-17
+execution_plan = "plan/m4.toml"
 
 [[milestone]]
 id = "M5"
@@ -200,6 +203,8 @@ deliverables = [
   "TypeScript viewer",
 ]
 exit_gate = "Chromium, Firefox, and WebKit complete the R0 reading flow; resource and dependency scans find no external PDF engine."
+status = "planned"
+execution_plan = "plan/m5.toml"
 
 [[milestone]]
 id = "M6"

@@ -1,0 +1,224 @@
+schema = 1
+milestone = "M4"
+title = "Fast CPU and desktop vertical slice"
+status = "in_progress"
+started_at = 2026-07-17
+depends_on = ["M3"]
+exit_gate = "R0-eligible basic pages reach CANARY and the desktop Native-only reading loop is usable."
+max_parallel_work_items = 3
+
+principles = [
+  "Freeze the canonical Engine protocol and Surface schema before browser or desktop adapters implement transport-specific bindings.",
+  "Keep CapabilityDecision and Native RenderPlan backend-neutral, versioned, bounded, and auditable before any expensive raster work starts.",
+  "Treat the independently reviewed M3 Reference profile as the registered differential target for Fast CPU, never as an automatic specification oracle.",
+  "Use complete source, revision, Scene, viewport, output, renderer, and policy identities for every product tile and cache lookup.",
+  "Make viewport replacement, cancellation, backpressure, Surface release, session close, and Worker restart explicit deterministic state transitions.",
+  "Publish only complete Native surfaces; unsupported, rejected, cancelled, stale, source-changed, and resource-limited work never becomes a partial display result.",
+  "Keep PDFium and every other external PDF engine outside product dependencies, runtime recovery, IPC, desktop packaging, and user-visible pixels.",
+  "Interpret the three logical lanes as dependency and review limits; M4 and M5 may proceed in parallel only after M4-01 freezes their shared contract.",
+]
+
+registered_scope = [
+  "A canonical protocol and generated Rust, TypeScript, and desktop-codec bindings for the bounded open, viewport, capability, Surface, release, close, and shutdown flow.",
+  "A versioned Native RenderPlan and CapabilityDecision for the registered M3 Reference graphics subset and its Fast CPU implementation.",
+  "Deterministic product-tile planning, complete cache keys, bounded admission and eviction, viewport priority, fairness, generation cancellation, and stale-result suppression.",
+  "A Fast CPU tiled renderer whose registered outputs are differentially checked against reviewed Reference expectations and whose long loops cooperate with cancellation.",
+  "Worker/session-owned immutable Surface metadata, shared-memory transfer, one-shot publication, idempotent release, lease reclaim, close invalidation, and epoch validation.",
+  "A bounded desktop host and Native worker vertical slice that opens a local immutable source and completes scroll, zoom, rotation, stale-generation, and shutdown flows.",
+  "CANARY evidence for the explicitly registered R0-eligible basic-page cohort, including rollback, support-rate, correctness, stability, and fixed-scope performance records.",
+]
+
+excluded_scope = [
+  "GPU rendering, WebGPU, native shared textures, platform color management, system-font fallback, and graphics capabilities outside the registered M3 subset.",
+  "Selection, copy, search, links, annotations, forms, saving, accessibility, advanced text, and the complete M6 release-r0-v1 experience.",
+  "Persistent cross-user cache, distributed rendering, unbounded work stealing, speculative network access, and arbitrary filesystem access by the engine worker.",
+  "DEFAULT or STABLE promotion, broad PDF compatibility, and any product fallback to an external PDF engine.",
+]
+
+[[work_item]]
+id = "M4-01"
+title = "Canonical Engine protocol and Surface schema freeze"
+lane = "shared-contract"
+status = "in_progress"
+depends_on = []
+outcome = "One bounded canonical schema generates compatible Rust, TypeScript, and desktop-codec contracts for the M4/M5 reading flow and records an immutable schema identity."
+acceptance = [
+  "The schema owns protocol version, message IDs, envelopes, endpoint capabilities, correlation identities, state preconditions, payload limits, transfer slots, and sensitive-field metadata.",
+  "Surface metadata and mutually exclusive browser, shared-memory, and local-worker transports define checked dimensions, stride, offset, length, generation, config hash, renderer epoch, and owner identities.",
+  "Generated Rust and TypeScript validators reject malformed envelopes before payload allocation or handle access; the desktop codec uses the same field registry and compatibility vectors.",
+  "Old/new minor compatibility, major mismatch, unknown mandatory capability, duplicate sequence, transfer-slot mismatch, and checked-arithmetic boundaries have deterministic tests.",
+  "The generator is reproducible, generated files are checked rather than rewritten by CI, and the schema hash is bound into build and test evidence.",
+  "Completion satisfies the r0-development-plan start gate named protocol-and-surface-schema-frozen and unblocks M5-01.",
+]
+
+[[work_item]]
+id = "M4-02"
+title = "Versioned product CapabilityDecision"
+lane = "runtime-policy"
+status = "planned"
+depends_on = ["M4-01"]
+outcome = "One product capability policy evaluates the complete Scene requirement graph before expensive rendering and publishes a bounded auditable decision."
+acceptance = [
+  "CapabilityDecision distinguishes Supported, Unsupported, and Rejected with profile, policy, scope, missing requirements, contributors, and optional source location.",
+  "The evaluator consumes every GraphicsScene requirement and dependency rather than treating the producer's Supported or Unsupported summary as the product decision.",
+  "Static capability evaluation completes before high-resolution raster allocation and cannot silently drop unsupported commands, resources, requirements, or dependencies.",
+  "Unsupported and Rejected remain distinct from EngineError, ResourceLimit, cancellation, and source integrity; none can invoke or allocate an external-engine fallback.",
+  "Requirement, dependency, parameter, contributor, and location retention are independently bounded with deterministic precedence and canonical ordering.",
+  "Supported, unsupported, rejected, malformed dependency graph, exact limit, one-less, cancellation, and deterministic replay have model and boundary tests.",
+  "The accepted decision contract is consumed unchanged by both the M4 desktop and M5 browser lanes.",
+]
+
+[[work_item]]
+id = "M4-03"
+title = "Native RenderPlan and complete render identities"
+lane = "runtime-policy"
+status = "planned"
+depends_on = ["M4-02"]
+outcome = "A backend-neutral immutable RenderPlan fixes every semantic, viewport, tile, output, policy, and renderer identity needed to produce Native surfaces."
+acceptance = [
+  "RenderPlan binds source identity, document revision, page, Scene hash, viewport generation, geometry, zoom, DPR, rotation, optional-content identity, annotation revision, quality, output profile, render-config hash, renderer epoch, and bounded tile set.",
+  "TileKey contains the complete source, revision, Scene, viewport, tile-coordinate, output, configuration, and epoch identities required by its declared cache scope.",
+  "Only a Supported CapabilityDecision can create a publishable plan; Unsupported and Rejected preserve their exact decision without a partial tile set.",
+  "The selected backend is always Native, and retry policy can only choose another declared Native backend with a new render-config hash or renderer epoch.",
+  "Canonical ordering and hashing are independent of thread, allocator, address, platform handle, and runtime scheduling order.",
+  "Every single-field identity mutation changes equality or hash as appropriate; exact-limit, one-less, cancellation, stale generation, and deterministic replay tests cover plan publication.",
+  "The accepted RenderPlan contract is consumed unchanged by both the M4 desktop and M5 browser lanes.",
+]
+
+[[work_item]]
+id = "M4-04"
+title = "Fast CPU tiled renderer"
+lane = "fast-raster"
+status = "planned"
+depends_on = ["M4-03"]
+outcome = "A bounded Native Fast CPU backend consumes immutable RenderPlans and publishes complete product tiles for the registered graphics subset."
+acceptance = [
+  "Command bounds drive deterministic tile binning and preserve source order within every tile.",
+  "Scalar kernels define the Fast CPU semantic baseline; architecture-specific acceleration can only enter through a tested kernel interface.",
+  "Tile halos, clipping, image and glyph sampling, compositing, and output conversion are explicit in the render-config identity.",
+  "Pixels, commands, bins, retained bytes, intermediate surfaces, fuel, and cancellation intervals are independently bounded before atomic tile publication.",
+  "Whole-page versus tile composition and tile-order permutations are metamorphic; registered Fast output is differentially checked against independently reviewed Reference expectations.",
+  "The Fast implementation does not call ReferenceRenderJob or slice a Reference whole-page buffer while claiming an independent backend.",
+  "No platform graphics stack, external engine, filesystem, network, or unsafe code enters the pure Fast renderer.",
+]
+
+[[work_item]]
+id = "M4-05"
+title = "Complete product tile cache"
+lane = "runtime-cache"
+status = "planned"
+depends_on = ["M4-03"]
+outcome = "A bounded cache retains only successful immutable Native tiles under complete identities and deterministic admission and eviction policy."
+acceptance = [
+  "The key includes source identity, document revision, page, Scene hash, zoom bucket, device scale, rotation, tile coordinates, optional-content identity, annotation revision, render-config hash, and renderer epoch.",
+  "Lookup and admission reject incomplete, foreign-session, stale-epoch, stale-revision, unsupported, cancelled, failed, or source-changed values.",
+  "Resident metadata and pixel capacity are charged with checked arithmetic; protected viewport and recent-use segments have deterministic bounded eviction.",
+  "Session close releases session-only ownership, renderer epoch changes invalidate old values naturally, and repeated close returns stable zero-current-resource evidence.",
+  "Exact key hits, every single-field miss, admission rejection, replacement, pressure eviction, cancellation, and close have model and boundary tests.",
+]
+
+[[work_item]]
+id = "M4-06"
+title = "Viewport scheduler and generation arbitration"
+lane = "runtime-scheduler"
+status = "planned"
+depends_on = ["M4-03"]
+outcome = "One deterministic bounded scheduler prioritizes visible tiles, prevents starvation, coalesces replaceable viewport work, and suppresses stale generations."
+acceptance = [
+  "P0-P4 priorities, center and edge distance, predicted scroll direction, enqueue order, and bounded aging form a total deterministic scheduling key.",
+  "Queue capacity and per-session reservations are precharged; critical cancel, close, release, failure, and completion work cannot be silently dropped.",
+  "A newer viewport generation cancels or supersedes old tile jobs without invalidating shared immutable lower-layer work.",
+  "Completion and cancellation use one terminal arbiter; stale completed results release resources and never enter the visible tile stream.",
+  "Model tests cover fairness, starvation bounds, queue pressure, duplicate jobs, rapid scroll/zoom, session close, Worker shutdown, and every relevant arrival ordering without wall-clock sleeps.",
+]
+
+[[work_item]]
+id = "M4-07"
+title = "Surface owner and shared-memory lifecycle"
+lane = "runtime-surface"
+status = "planned"
+depends_on = ["M4-01", "M4-03"]
+outcome = "A Worker/session owner turns complete Native pixel values into immutable shared-memory Surface envelopes with explicit transfer, release, reclaim, and invalidation."
+acceptance = [
+  "Surface IDs are unique within one Worker epoch and retain Worker, session, generation, renderer epoch, render-config, dimensions, stride, format, alpha, and exact byte range.",
+  "Allocation, import, publication, acquire, one-shot transfer, idempotent release, lease reclaim, session close, and Worker restart follow the lifecycle standard.",
+  "Producer and consumer independently validate stride times height, offset plus length, access mode, owner, session, epoch, generation, format, and platform-handle class.",
+  "No mutable pixel access remains after publication; failure, cancellation, and stale work drop private storage before any SurfaceReady event.",
+  "A virtual clock and fake handle table test duplicate release, late release, lease expiry, foreign owner, stale epoch, close, crash, and zero-current-resource evidence.",
+]
+
+[[work_item]]
+id = "M4-08"
+title = "Native render worker and session integration"
+lane = "runtime-platform"
+status = "planned"
+depends_on = ["M4-02", "M4-03", "M4-04", "M4-05", "M4-06", "M4-07"]
+outcome = "One Native Worker registry composes protocol validation, session ownership, RenderPlan evaluation, scheduling, caching, Fast rendering, and Surface events."
+acceptance = [
+  "Worker and Session IDs are never reused within an epoch, every command observes its state precondition, and every request has one terminal outcome.",
+  "Open and viewport ingress are parser-free actor turns; Range completion, raster completion, release, close, and shutdown re-enter only through bounded queues.",
+  "CapabilityReported precedes expensive unsupported work, and every SurfaceReady event binds one supported Native RenderPlan, exact generation, backend, and renderer epoch.",
+  "Backpressure preserves critical lifecycle messages while coalescing replaceable viewport and progress traffic.",
+  "Source change, cancellation, session close, disconnect, and Worker restart leave no live session Surface or queued publication and never invoke an external engine.",
+]
+
+[[work_item]]
+id = "M4-09"
+title = "Authenticated desktop IPC and worker process"
+lane = "desktop"
+status = "planned"
+depends_on = ["M4-01", "M4-07", "M4-08"]
+outcome = "An authenticated length-bounded desktop transport starts an isolated Native worker, transfers source and shared-memory capabilities, and contains disconnects and faults."
+acceptance = [
+  "The host grants only an immutable local-source capability and shared-memory handles; the worker owns no arbitrary filesystem or network access.",
+  "The authenticated length-bounded desktop codec transfers the same logical messages and Surface metadata as the canonical schema, including an exact out-of-band handle table.",
+  "Peer identity, frame length, sequence, handle count, handle rights, session owner, Worker epoch, and disconnect are validated before payload or shared-memory access.",
+  "Codec and worker panic cannot unwind across the process boundary; fault and restart create a new epoch and invalidate every old session, request, and Surface.",
+  "Real child-process tests cover malformed frames, foreign and stale handles, disconnect during render, worker crash, restart, late traffic, and bounded shutdown.",
+  "Product build and package scans contain only Native PDF.rs components and no PDFium, PDF.js, MuPDF, or other external PDF engine.",
+]
+
+[[work_item]]
+id = "M4-10"
+title = "Desktop Native-only reading vertical slice"
+lane = "desktop"
+status = "planned"
+depends_on = ["M4-09"]
+outcome = "One explicitly selected desktop target completes local open, display, scroll, zoom, rotation, resize, release, close, and shutdown against the isolated Native worker."
+acceptance = [
+  "The selected M4 desktop OS, UI mechanism, IPC mechanism, sandbox boundary, and shared-memory format are recorded before implementation evidence is accepted.",
+  "The UI process contains no PDF parser, Scene builder, raster backend, or external PDF engine and consumes only generated protocol events and validated Surface handles.",
+  "A deterministic host controller displays only the newest generation, releases every stale or replaced Surface, and exposes structured unsupported and resource outcomes.",
+  "Integration tests cover initial open, first preview, first full viewport, continuous scroll, zoom, rotation, resize, rapid generation replacement, unsupported page, worker disconnect, restart, and clean shutdown.",
+  "Normal close, repeated close, crash, and host exit release or reclaim every Surface and leave zero Worker/session resources.",
+]
+
+[[work_item]]
+id = "M4-11"
+title = "R0 basic-page differential and CANARY gate"
+lane = "quality"
+status = "planned"
+depends_on = ["M4-04", "M4-08", "M4-10"]
+outcome = "The explicitly registered basic-page Fast CPU profile advances through DIFFERENTIAL evidence and a bounded CANARY cohort without widening the supported feature set."
+acceptance = [
+  "Registered O0/O1/O3 cases, tile metamorphics, Fast-versus-Reference geometry and pixel diffs, lifecycle faults, and fixed-seed fuzz replay pass with no open critical or major finding.",
+  "At least 1,000 eligible holdout pages complete without panic, hang, partial pixels, unexpected unsupported, or external-engine fallback; denominators and exclusions are recorded.",
+  "Fixed-scope release measurements record first preview, first full viewport, tile latency, throughput, memory, cache behavior, cancellation latency, and comparable baseline context.",
+  "A versioned capability flag, cohort identity, rollback trigger, and rollback rehearsal prove CANARY can disable the profile without changing Unsupported semantics.",
+  "The promotion record binds implementation, renderer epoch, schema hash, corpus hash, environment, raw measurements, reviewers, and all product-purity scans.",
+]
+
+[[work_item]]
+id = "M4-12"
+title = "M4 desktop milestone gate"
+lane = "quality"
+status = "planned"
+depends_on = ["M4-11"]
+outcome = "Repository-only replay and independent review close the bounded M4 milestone while preserving every earlier immutable gate."
+acceptance = [
+  "Fresh debug and release executions produce byte-identical normalized protocol, RenderPlan, scheduler, cache, Surface, desktop, and qualification artifacts where determinism is required.",
+  "The canonical schema and generated bindings remain clean after generation checks, and M5 consumes the accepted M4-01, M4-02, and M4-03 contracts without a fork.",
+  "M1, M2, and M3 exit gates remain unchanged and passing; product dependency closure and purity scans include every new Native crate and artifact.",
+  "Independent runtime-platform, graphics-color, and quality review reports no open P0-P2 finding.",
+  "The milestone record is marked complete only after every required child and the repository-only m4_exit gate are complete.",
+]

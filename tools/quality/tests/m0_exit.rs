@@ -19,7 +19,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         .expect("the plan has a top-level header");
     assert_line(plan_header, "version = \"0.3.0\"");
     assert_line(plan_header, "status = \"active\"");
-    assert_line(plan_header, "last_updated = 2026-07-16");
+    assert_line(plan_header, "last_updated = 2026-07-17");
 
     let m0 = array_record(PLAN, "[[milestone]]", "M0");
     for required in [
