@@ -74,6 +74,38 @@ fn black() -> Paint {
     )
 }
 
+fn glyph_outline() -> GlyphOutline {
+    GlyphOutline::new(
+        GraphicsResourceSource::new(ObjectRef::new(9, 0).unwrap(), 42, 11),
+        7,
+        1_000,
+        path(),
+    )
+    .unwrap()
+}
+
+fn repeated_glyph_scene(
+    max_retained_bytes: u64,
+) -> Result<pdf_rs_scene::Scene, pdf_rs_scene::SceneError> {
+    let limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+        max_glyphs: 3,
+        max_retained_bytes,
+        ..GraphicsSceneLimitConfig::default()
+    })?;
+    let mut builder = GraphicsSceneBuilder::new_v2(binding(7), geometry(), limits);
+    builder.draw_glyph_run(
+        vec![
+            GlyphUse::new(glyph_outline(), Matrix::IDENTITY, 65),
+            GlyphUse::new(glyph_outline(), Matrix::IDENTITY, 65),
+            GlyphUse::new(glyph_outline(), Matrix::IDENTITY, 65),
+        ],
+        black(),
+        SceneBounds::Page,
+        source(0),
+    )?;
+    builder.finish()
+}
+
 fn builder() -> GraphicsSceneBuilder {
     GraphicsSceneBuilder::new_v2(binding(1), geometry(), GraphicsSceneLimits::default())
 }
@@ -642,13 +674,31 @@ fn retained_capacity_includes_nested_payloads_and_compacts_caller_slack() {
 }
 
 #[test]
-fn geometric_growth_falls_back_to_exact_capacity_at_retained_boundary() {
-    let mut measured = builder();
-    measured.append_save(SceneBounds::Empty, source(0)).unwrap();
-    let one_command = measured.retained_bytes().unwrap();
-    let command_slot = one_command / 2;
-    assert_eq!(one_command, command_slot * 2);
-    let exact_retained = command_slot.checked_mul(5).unwrap();
+fn geometric_growth_falls_back_to_exact_capacity_at_transaction_live_boundary() {
+    let accepts = |max_retained_bytes| {
+        let limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+            max_retained_bytes,
+            ..GraphicsSceneLimitConfig::default()
+        })
+        .unwrap();
+        let mut candidate = GraphicsSceneBuilder::new_v2(binding(6), geometry(), limits);
+        (0..5).all(|index| {
+            candidate
+                .append_save(SceneBounds::Empty, source(index))
+                .is_ok()
+        })
+    };
+    let mut lower = 1_u64;
+    let mut upper = GraphicsSceneLimitConfig::default().max_retained_bytes;
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        if accepts(middle) {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    let exact_retained = lower;
 
     let exact_limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
         max_retained_bytes: exact_retained,
@@ -661,7 +711,7 @@ fn geometric_growth_falls_back_to_exact_capacity_at_retained_boundary() {
             .append_save(SceneBounds::Empty, source(index))
             .unwrap();
     }
-    assert_eq!(exact.retained_bytes().unwrap(), exact_retained);
+    assert!(exact.retained_bytes().unwrap() <= exact_retained);
 
     let one_less_limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
         max_retained_bytes: exact_retained - 1,
@@ -679,6 +729,90 @@ fn geometric_growth_falls_back_to_exact_capacity_at_retained_boundary() {
         .unwrap_err();
     assert_eq!(error.code(), SceneErrorCode::ResourceLimit);
     assert_eq!(error.limit().unwrap().kind(), SceneLimitKind::RetainedBytes);
+}
+
+#[test]
+fn glyph_transaction_retained_boundary_is_exact_atomic_and_interns_repeated_outlines() {
+    let mut lower = 1_u64;
+    let mut upper = GraphicsSceneLimitConfig::default().max_retained_bytes;
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        if repeated_glyph_scene(middle).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    let minimum = lower;
+    let exact = repeated_glyph_scene(minimum).unwrap();
+    let graphics = exact.graphics().unwrap();
+    assert_eq!(graphics.commands().len(), 1);
+    assert_eq!(graphics.resources().len(), 1);
+    let GraphicsCommand::DrawGlyphRun(run) = graphics.commands()[0].command() else {
+        panic!("expected glyph run")
+    };
+    assert_eq!(run.glyphs().len(), 3);
+    assert!(graphics.stats().retained_bytes() <= minimum);
+
+    let limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+        max_glyphs: 3,
+        max_retained_bytes: minimum - 1,
+        ..GraphicsSceneLimitConfig::default()
+    })
+    .unwrap();
+    let mut failed = GraphicsSceneBuilder::new_v2(binding(7), geometry(), limits);
+    let outline = glyph_outline();
+    let error = failed
+        .draw_glyph_run(
+            vec![
+                GlyphUse::new(outline.clone(), Matrix::IDENTITY, 65),
+                GlyphUse::new(outline.clone(), Matrix::IDENTITY, 65),
+                GlyphUse::new(outline, Matrix::IDENTITY, 65),
+            ],
+            black(),
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), SceneErrorCode::ResourceLimit);
+    assert_eq!(error.limit().unwrap().kind(), SceneLimitKind::RetainedBytes);
+    let failed_scene = failed.finish().unwrap();
+    let failed_graphics = failed_scene.graphics().unwrap();
+    assert!(failed_graphics.commands().is_empty());
+    assert!(failed_graphics.resources().is_empty());
+    assert!(failed_graphics.requirements().is_empty());
+    assert_eq!(failed_graphics.stats().retained_bytes(), 0);
+
+    let mut retry = GraphicsSceneBuilder::new_v2(binding(7), geometry(), limits);
+    let outline = glyph_outline();
+    retry
+        .draw_glyph_run(
+            vec![
+                GlyphUse::new(outline.clone(), Matrix::IDENTITY, 65),
+                GlyphUse::new(outline.clone(), Matrix::IDENTITY, 65),
+                GlyphUse::new(outline, Matrix::IDENTITY, 65),
+            ],
+            black(),
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap_err();
+    retry
+        .draw_glyph_run(
+            vec![GlyphUse::new(glyph_outline(), Matrix::IDENTITY, 65)],
+            black(),
+            SceneBounds::Page,
+            source(1),
+        )
+        .unwrap();
+    let retried = retry.finish().unwrap();
+    let retried = retried.graphics().unwrap();
+    assert_eq!(retried.commands().len(), 1);
+    assert_eq!(retried.resources().len(), 1);
+    let GraphicsCommand::DrawGlyphRun(run) = retried.commands()[0].command() else {
+        panic!("expected glyph run")
+    };
+    assert_eq!(run.glyphs().len(), 1);
 }
 
 #[test]

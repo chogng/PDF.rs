@@ -89,6 +89,10 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
         fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance is readable");
     let diff = fs::read_to_string(crate_root.join("src/diff.rs"))
         .expect("semantic Scene diff source is readable");
+    let graphics = fs::read_to_string(crate_root.join("src/graphics.rs"))
+        .expect("graphics Scene values are readable");
+    let graphics_builder = fs::read_to_string(crate_root.join("src/graphics_builder.rs"))
+        .expect("graphics Scene builder is readable");
 
     assert!(!canonical.contains("binding().source()"));
     assert!(!canonical.contains("stable_id"));
@@ -113,6 +117,32 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
     assert!(diff.contains("SceneLimitKind::DiffCanonicalBytes"));
     assert!(!diff.contains("expected_binding.source()"));
     assert!(!diff.contains("actual_binding.source()"));
+    assert!(graphics.contains("pub fn try_push_quadratic"));
+    assert!(graphics.contains("fn from_reserved"));
+    for required in [
+        "GlyphRun::from_reserved",
+        "glyph_input_nested",
+        "precommand_resource_nested",
+        "transaction_transient",
+        "planned_live_retained",
+        "live_retained",
+    ] {
+        assert!(
+            graphics_builder.contains(required),
+            "graphics glyph transaction must retain invariant marker {required:?}"
+        );
+    }
+    for required in [
+        "deterministic quadratic-to-cubic conversion",
+        "combined live peak",
+        "distinct allocations",
+        "one-less retained boundary",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "Scene provenance must document {required:?}"
+        );
+    }
 }
 
 #[test]

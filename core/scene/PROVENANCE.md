@@ -1,11 +1,11 @@
 # Scope
 
-`core/scene` is the first immutable Native Scene v1 product foundation. It retains bounded page
-geometry, ordered semantic marked-content commands, stable marked-content property resources,
-one-to-one decoded-coordinate command provenance, a deterministic feature report, the complete
-validated limit profile, allocator-reported retained-capacity accounting, and a bounded
-content-redacted semantic diff. A bounded `SceneBuilder` is the only public Scene construction
-path.
+`core/scene` owns the immutable Native Scene v1 foundation and the incompatible graphics-capable
+Scene v2 schema. It retains bounded page geometry, ordered semantic commands, stable first-use
+resources (including project-owned glyph outlines), one-to-one decoded-coordinate command
+provenance, explicit capability requirements, validated limit profiles, allocator-reported
+retained-capacity accounting, and a bounded content-redacted semantic diff. `SceneBuilder` and
+`GraphicsSceneBuilder` are the only public construction paths for their respective schemas.
 
 The crate performs no PDF byte acquisition, object resolution, content scanning, operator
 interpretation, resource inheritance, rendering, cache insertion, file or network access, async
@@ -49,6 +49,10 @@ separate M2 normative Scene gate.
 - `m2.scene-semantic-diff.v1` independently owns fixed-order semantic comparison, fixed-size
   content-redacted changed/added/removed records, complete-result difference and retained-capacity
   admission, and canonical Scene-diff JSON under a separate output ceiling.
+- `m3.scene-graphics-v2.v1` owns the incompatible bounded path/paint/clip/image/glyph/group command
+  schema. Its glyph slice retains exact font/decode source identity, font-local glyph ID,
+  units-per-em, deterministic outline geometry, positioned character codes and glyph-to-page
+  transforms; it does not own PDF text semantics, font parsing, shaping, hinting, or rasterization.
 - Both profiles remain `PLANNED` maturity records even though plan item M2-04 is complete.
   Completion means the bounded implementation, normative empty/structural/invalid/budget tests,
   provenance, and repository registration are present; it does not promote either capability to
@@ -66,6 +70,11 @@ separate M2 normative Scene gate.
   structured numeric failure rather than saturation or platform-dependent floating behavior.
   Singular matrices remain valid PDF semantics and are retained unchanged; this foundation does
   not expose matrix inversion.
+- `PathResourceBuilder::try_push_quadratic` converts one exact quadratic segment to one cubic
+  segment without floating point. Each cubic control component is derived as
+  `(endpoint + 2 * quadratic_control) / 3` in checked integer fixed-point arithmetic, rounded to
+  nearest with exact ties away from zero. Content therefore hands TrueType quadratic outlines to
+  Scene through one deterministic, platform-independent representation.
 - `SceneRect` admits only positive-area `[left, bottom, right, top]` coordinates whose width and
   height are representable `SceneScalar` values. `PageGeometry` separately retains MediaBox,
   CropBox, and one canonical quarter-turn rotation.
@@ -79,6 +88,18 @@ separate M2 normative Scene gate.
   rechecks one-to-one pairing, resource IDs, resource references, command balance, depth, count,
   name, and retained-capacity limits. An unclosed, underflowed, or over-budget marked-content
   sequence never publishes a partial Scene.
+- Graphics-v2 glyph append is one transaction. Before any command/resource/stat publication it
+  admits the combined live peak of the persistent builder, caller glyph storage and outline
+  backing during indexing, requested and pending resource tables, resource IDs, capability input,
+  auto-generated requirements, positioned-glyph storage, and every simultaneously live
+  replacement vector. Planned capacities are checked before reserve and allocator-reported actual
+  capacities are checked immediately afterward. After the command callback consumes caller glyph
+  storage, only the interned pending outline payload remains charged. Equal glyph-outline values,
+  including values backed by distinct allocations, receive one first-use resource ID while every
+  positioned glyph remains in the command. Any one-less retained boundary leaves commands,
+  resources, requirements, and glyph counters unpublished. Because the public retained limit also
+  bounds this working peak, the minimum successful transaction limit can exceed the final
+  `GraphicsSceneStats::retained_bytes` value; that statistic reports published ownership only.
 - A fallibly reserved builder-only index stores `(ObjectRef, ResourceId)` entries in `ObjectRef`
   order. Hand-written binary search gives deterministic logarithmic lookup while resource IDs
   remain the zero-based first-command-use order in the separate resource vector. Each lookup
@@ -131,6 +152,9 @@ separate M2 normative Scene gate.
   limits, command/provenance pairing, and content-redacted Debug output.
 - Repository policy checks for dependency direction, product I/O exclusion, no external engines,
   and canonical-source identity omission.
+- Deterministic quadratic-to-cubic conversion, repeated-glyph interning across shared and distinct
+  outline backing, exact combined transaction-retention admission, one-less rejection, failure
+  atomicity, and post-failure glyph-counter reuse.
 - Source-identity-noise equality, schema/binding/geometry/feature/resource/command/provenance
   section coverage, stable changed/added/removed order, exact canonical diff golden bytes, every
   zero limit, one-less difference/retention/canonical budgets, fixed record size, redacted Debug,
@@ -139,9 +163,11 @@ separate M2 normative Scene gate.
 
 # Known deviations and unsupported cases
 
-- Scene v1 Stage A contains only begin/end marked-content commands and marked-content properties
-  resources. Paths, clips, graphics state, text, glyphs, images, color, transparency, groups,
-  optional content, spatial indexes, and renderer adapters remain future work.
+- Scene v1 remains the deliberately narrow begin/end marked-content schema. Scene v2 adds bounded
+  paths, clips, graphics state, basic images, positioned embedded-glyph outlines, device color,
+  blend/alpha requirements, and isolated groups. PDF text interpretation, font acquisition and
+  parsing, shaping, hinting, system fonts, optional content, spatial indexes, and renderer adapters
+  remain outside this crate.
 - The builder-only resource lookup index is transient and therefore absent from the published
   Scene `retained_bytes` statistic, but its actual vector capacity is charged while the builder is
   live and is exposed by `SceneBuilder::retained_bytes` for a future combined Content VM state
@@ -160,6 +186,9 @@ separate M2 normative Scene gate.
 
 # History
 
+- 2026-07-16: Added the Scene-v2 glyph handoff with deterministic quadratic-to-cubic conversion,
+  first-use outline interning, positioned glyph runs, combined transient/final retained admission,
+  and exact one-less atomicity coverage for shared and distinct outline backing.
 - 2026-07-16: Replaced the builder-only hash table with a deterministic ordered resource index,
   charged its actual vector capacity to retained memory, and bounded comparison and insertion
   work independently.

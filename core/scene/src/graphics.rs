@@ -112,6 +112,7 @@ impl PathResource {
 pub struct PathResourceBuilder {
     segments: Vec<PathSegment>,
     active_subpath: bool,
+    current_point: Option<ScenePoint>,
 }
 
 impl PathResourceBuilder {
@@ -120,6 +121,7 @@ impl PathResourceBuilder {
         Self {
             segments: Vec::new(),
             active_subpath: false,
+            current_point: None,
         }
     }
 
@@ -150,8 +152,8 @@ impl PathResourceBuilder {
 
     /// Validates and appends one normalized construction segment.
     pub fn try_push(&mut self, segment: PathSegment) -> Result<(), SceneError> {
-        let next_active = match segment {
-            PathSegment::MoveTo(_) => true,
+        let (next_active, next_point) = match segment {
+            PathSegment::MoveTo(point) => (true, Some(point)),
             PathSegment::LineTo(_) | PathSegment::CubicTo { .. } if !self.active_subpath => {
                 return Err(SceneError::for_code(
                     SceneErrorCode::InvalidCommandSequence,
@@ -164,15 +166,39 @@ impl PathResourceBuilder {
                     None,
                 ));
             }
-            PathSegment::ClosePath => false,
-            PathSegment::LineTo(_) | PathSegment::CubicTo { .. } => true,
+            PathSegment::ClosePath => (false, None),
+            PathSegment::LineTo(point) => (true, Some(point)),
+            PathSegment::CubicTo { end, .. } => (true, Some(end)),
         };
         if self.segments.len() == self.segments.capacity() {
             self.try_reserve_exact(1)?;
         }
         self.segments.push(segment);
         self.active_subpath = next_active;
+        self.current_point = next_point;
         Ok(())
+    }
+
+    /// Appends one quadratic Bézier as its mathematically equivalent cubic.
+    ///
+    /// Scene paths deliberately expose one canonical cubic representation. Both generated
+    /// controls are rounded once to the nearest nine-decimal Scene scalar, with ties away from
+    /// zero, so TrueType producers do not depend on floating-point behavior.
+    pub fn try_push_quadratic(
+        &mut self,
+        control: ScenePoint,
+        end: ScenePoint,
+    ) -> Result<(), SceneError> {
+        let start = self
+            .current_point
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::InvalidCommandSequence, None))?;
+        let control_1 = quadratic_cubic_control(start, control)?;
+        let control_2 = quadratic_cubic_control(end, control)?;
+        self.try_push(PathSegment::CubicTo {
+            control_1,
+            control_2,
+            end,
+        })
     }
 
     /// Seals the already validated segments in O(1) without rescanning or copying their buffer.
@@ -181,6 +207,38 @@ impl PathResourceBuilder {
             segments: Arc::new(self.segments),
         }
     }
+}
+
+fn quadratic_cubic_control(
+    endpoint: ScenePoint,
+    control: ScenePoint,
+) -> Result<ScenePoint, SceneError> {
+    Ok(ScenePoint::new(
+        weighted_third(endpoint.x(), control.x())?,
+        weighted_third(endpoint.y(), control.y())?,
+    ))
+}
+
+fn weighted_third(endpoint: SceneScalar, control: SceneScalar) -> Result<SceneScalar, SceneError> {
+    let numerator = i128::from(endpoint.scaled())
+        .checked_add(
+            i128::from(control.scaled())
+                .checked_mul(2)
+                .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?,
+        )
+        .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?;
+    let quotient = numerator / 3;
+    let remainder = numerator % 3;
+    let rounded = if remainder.abs() * 2 >= 3 {
+        quotient
+            .checked_add(if numerator.is_negative() { -1 } else { 1 })
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?
+    } else {
+        quotient
+    };
+    i64::try_from(rounded)
+        .map(SceneScalar::from_scaled)
+        .map_err(|_| SceneError::for_code(SceneErrorCode::NumericOverflow, None))
 }
 
 /// PDF path fill rule.
@@ -779,6 +837,22 @@ impl GlyphRun {
         })
     }
 
+    pub(crate) fn from_reserved(
+        glyphs: Vec<PositionedGlyph>,
+        paint: Paint,
+    ) -> Result<Self, SceneError> {
+        if glyphs.is_empty() {
+            return Err(SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                None,
+            ));
+        }
+        Ok(Self {
+            glyphs: Arc::new(glyphs),
+            paint,
+        })
+    }
+
     /// Borrows positioned glyphs.
     pub fn glyphs(&self) -> &[PositionedGlyph] {
         &self.glyphs
@@ -1176,7 +1250,10 @@ impl GraphicsSceneStats {
         }
     }
 
-    /// Returns allocator-reported retained capacity, including nested vectors.
+    /// Returns final published allocator-reported retained capacity, including nested vectors.
+    ///
+    /// Builder transaction-live working retention can be higher and is independently admitted by
+    /// the same graphics retained-byte limit before publication.
     pub const fn retained_bytes(self) -> u64 {
         self.retained_bytes
     }
@@ -1355,6 +1432,47 @@ mod tests {
         assert_eq!(
             all_zero_dash.finish(SceneScalar::ZERO).unwrap_err().code(),
             SceneErrorCode::InvalidCommandSequence
+        );
+    }
+
+    #[test]
+    fn quadratic_segments_convert_to_one_deterministically_rounded_cubic() {
+        let mut missing_start = PathResourceBuilder::new();
+        let control = ScenePoint::new(SceneScalar::ONE, SceneScalar::from_scaled(-1_000_000_000));
+        let end = ScenePoint::new(
+            SceneScalar::from_scaled(2_000_000_000),
+            SceneScalar::from_scaled(-2_000_000_000),
+        );
+        assert_eq!(
+            missing_start
+                .try_push_quadratic(control, end)
+                .unwrap_err()
+                .code(),
+            SceneErrorCode::InvalidCommandSequence
+        );
+
+        let start = ScenePoint::new(SceneScalar::ZERO, SceneScalar::ZERO);
+        let mut path = PathResourceBuilder::new();
+        path.try_push(PathSegment::MoveTo(start)).unwrap();
+        path.try_push_quadratic(control, end).unwrap();
+        path.try_push(PathSegment::LineTo(start)).unwrap();
+        assert_eq!(
+            path.finish().segments(),
+            [
+                PathSegment::MoveTo(start),
+                PathSegment::CubicTo {
+                    control_1: ScenePoint::new(
+                        SceneScalar::from_scaled(666_666_667),
+                        SceneScalar::from_scaled(-666_666_667),
+                    ),
+                    control_2: ScenePoint::new(
+                        SceneScalar::from_scaled(1_333_333_333),
+                        SceneScalar::from_scaled(-1_333_333_333),
+                    ),
+                    end,
+                },
+                PathSegment::LineTo(start),
+            ]
         );
     }
 }

@@ -43,7 +43,10 @@ pub struct GraphicsSceneLimitConfig {
     pub max_state_depth: u32,
     /// Maximum isolated-group nesting depth.
     pub max_group_depth: u32,
-    /// Maximum conservative logical retained bytes.
+    /// Maximum builder transaction-live and published retained bytes.
+    ///
+    /// Transaction admission includes simultaneously live inputs, pending values, and replacement
+    /// vectors, so the minimum successful limit can exceed the final published Scene statistic.
     pub max_retained_bytes: u64,
     /// Maximum resource comparisons and payload comparison units.
     pub max_resource_index_work: u64,
@@ -154,7 +157,9 @@ impl GraphicsSceneLimits {
         self.config.max_group_depth
     }
 
-    /// Returns the maximum conservative logical retained bytes.
+    /// Returns the maximum builder transaction-live and published retained bytes.
+    ///
+    /// This is a working-peak bound, not only a bound on final `GraphicsSceneStats` retention.
     pub const fn max_retained_bytes(self) -> u64 {
         self.config.max_retained_bytes
     }
@@ -269,17 +274,21 @@ impl GraphicsSceneBuilder {
         validate_fill_bounds(&path, transform, bounds)?;
         self.append_with_resources(
             vec![GraphicsResource::Path(path)],
-            |ids| GraphicsCommand::Clip {
-                path: ids[0],
-                rule,
-                transform,
+            |ids, _| {
+                Ok(GraphicsCommand::Clip {
+                    path: ids[0],
+                    rule,
+                    transform,
+                })
             },
             bounds,
             source,
-            &[(
+            vec![(
                 GraphicsCapability::Clip,
                 u64::from(rule == FillRule::EvenOdd),
             )],
+            0,
+            0,
             0,
         )
     }
@@ -299,15 +308,19 @@ impl GraphicsSceneBuilder {
             paint_capabilities(paint, GraphicsCapability::PathFill, rule_parameter(rule));
         self.append_with_resources(
             vec![GraphicsResource::Path(path)],
-            |ids| GraphicsCommand::Fill {
-                path: ids[0],
-                rule,
-                paint,
-                transform,
+            |ids, _| {
+                Ok(GraphicsCommand::Fill {
+                    path: ids[0],
+                    rule,
+                    paint,
+                    transform,
+                })
             },
             bounds,
             source,
-            &capabilities,
+            capabilities,
+            0,
+            0,
             0,
         )
     }
@@ -326,15 +339,19 @@ impl GraphicsSceneBuilder {
         let capabilities = paint_capabilities(paint, GraphicsCapability::PathStroke, 0);
         self.append_with_resources(
             vec![GraphicsResource::Path(path)],
-            |ids| GraphicsCommand::Stroke {
-                path: ids[0],
-                paint,
-                style,
-                transform,
+            |ids, _| {
+                Ok(GraphicsCommand::Stroke {
+                    path: ids[0],
+                    paint,
+                    style,
+                    transform,
+                })
             },
             bounds,
             source,
-            &capabilities,
+            capabilities,
+            0,
+            0,
             0,
         )
     }
@@ -365,17 +382,21 @@ impl GraphicsSceneBuilder {
         ));
         self.append_with_resources(
             vec![GraphicsResource::Path(path)],
-            |ids| GraphicsCommand::FillStroke {
-                path: ids[0],
-                rule,
-                fill,
-                stroke,
-                style,
-                transform,
+            |ids, _| {
+                Ok(GraphicsCommand::FillStroke {
+                    path: ids[0],
+                    rule,
+                    fill,
+                    stroke,
+                    style,
+                    transform,
+                })
             },
             bounds,
             source,
-            &capabilities,
+            capabilities,
+            0,
+            0,
             0,
         )
     }
@@ -400,15 +421,19 @@ impl GraphicsSceneBuilder {
         append_alpha_blend_capabilities(&mut capabilities, alpha, blend_mode);
         self.append_with_resources(
             vec![GraphicsResource::Image(image)],
-            |ids| GraphicsCommand::DrawImage {
-                image: ids[0],
-                transform,
-                alpha,
-                blend_mode,
+            |ids, _| {
+                Ok(GraphicsCommand::DrawImage {
+                    image: ids[0],
+                    transform,
+                    alpha,
+                    blend_mode,
+                })
             },
             bounds,
             source,
-            &capabilities,
+            capabilities,
+            0,
+            0,
             0,
         )
     }
@@ -429,29 +454,102 @@ impl GraphicsSceneBuilder {
         }
         validate_nonempty_bounds(bounds)?;
         let glyph_count = u64::try_from(glyphs.len()).map_err(|_| internal())?;
-        let resources = glyphs
-            .iter()
-            .map(|glyph| GraphicsResource::GlyphOutline(glyph.outline().clone()))
-            .collect::<Vec<_>>();
+        ensure_total(
+            SceneLimitKind::Glyphs,
+            self.limits.max_glyphs(),
+            self.glyphs,
+            glyph_count,
+        )?;
+        let persistent_retained = self.retained_bytes()?;
+        let glyph_input_retained = capacity_bytes::<GlyphUse>(glyphs.capacity())?;
+        let glyph_input_nested = glyphs.iter().try_fold(0_u64, |retained, glyph| {
+            retained
+                .checked_add(glyph.outline().outline().retained_bytes()?)
+                .ok_or_else(internal)
+        })?;
+        let positioned_retained = capacity_bytes::<PositionedGlyph>(glyphs.len())?;
+        let resource_retained = capacity_bytes::<GraphicsResource>(glyphs.len())?;
+        let id_retained = capacity_bytes::<GraphicsResourceId>(glyphs.len())?;
+        let append_nominal = resource_retained
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(id_retained))
+            .ok_or_else(internal)?;
+        let command_nominal = resource_retained
+            .checked_add(id_retained)
+            .and_then(|value| value.checked_add(positioned_retained))
+            .ok_or_else(internal)?;
+        let glyph_append_nominal = glyph_input_retained
+            .checked_add(glyph_input_nested)
+            .and_then(|value| value.checked_add(append_nominal.max(command_nominal)))
+            .ok_or_else(internal)?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            glyph_append_nominal,
+        )?;
+        let mut resources = Vec::new();
+        resources
+            .try_reserve_exact(glyphs.len())
+            .map_err(|_| allocation(self.limits.max_retained_bytes()))?;
+        let resource_actual = capacity_bytes::<GraphicsResource>(resources.capacity())?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            glyph_input_retained
+                .checked_add(glyph_input_nested)
+                .and_then(|value| value.checked_add(resource_actual))
+                .and_then(|value| value.checked_add(resource_retained))
+                .and_then(|value| value.checked_add(id_retained))
+                .ok_or_else(internal)?,
+        )?;
+        for glyph in &glyphs {
+            resources.push(GraphicsResource::GlyphOutline(glyph.outline().clone()));
+        }
         let capabilities = paint_capabilities(paint, GraphicsCapability::Glyph, glyph_count);
+        let allocation_limit = self.limits.max_retained_bytes();
         self.append_with_resources(
             resources,
-            |ids| {
-                let positioned = glyphs
-                    .iter()
-                    .zip(ids)
-                    .map(|(glyph, id)| {
-                        PositionedGlyph::new(*id, glyph.transform(), glyph.character_code())
-                    })
-                    .collect::<Vec<_>>();
-                GraphicsCommand::DrawGlyphRun(
-                    GlyphRun::new(positioned, paint).expect("nonempty input yields nonempty run"),
-                )
+            move |ids, append_transient| {
+                ensure_total(
+                    SceneLimitKind::RetainedBytes,
+                    allocation_limit,
+                    persistent_retained,
+                    append_transient
+                        .checked_add(positioned_retained)
+                        .ok_or_else(internal)?,
+                )?;
+                let mut positioned = Vec::new();
+                positioned
+                    .try_reserve_exact(glyphs.len())
+                    .map_err(|_| allocation(allocation_limit))?;
+                let positioned_actual = capacity_bytes::<PositionedGlyph>(positioned.capacity())?;
+                ensure_total(
+                    SceneLimitKind::RetainedBytes,
+                    allocation_limit,
+                    persistent_retained,
+                    append_transient
+                        .checked_add(positioned_actual)
+                        .ok_or_else(internal)?,
+                )?;
+                for (glyph, id) in glyphs.into_iter().zip(ids) {
+                    positioned.push(PositionedGlyph::new(
+                        *id,
+                        glyph.transform(),
+                        glyph.character_code(),
+                    ));
+                }
+                Ok(GraphicsCommand::DrawGlyphRun(GlyphRun::from_reserved(
+                    positioned, paint,
+                )?))
             },
             bounds,
             source,
-            &capabilities,
+            capabilities,
             glyph_count,
+            glyph_input_retained,
+            glyph_input_nested,
         )
     }
 
@@ -477,10 +575,12 @@ impl GraphicsSceneBuilder {
         append_alpha_blend_capabilities(&mut capabilities, alpha, blend_mode);
         self.append_with_resources(
             Vec::new(),
-            |_| GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode },
+            |_, _| Ok(GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode }),
             bounds,
             source,
-            &capabilities,
+            capabilities,
+            0,
+            0,
             0,
         )?;
         self.group_depth = next;
@@ -526,7 +626,7 @@ impl GraphicsSceneBuilder {
             CapabilityRequirement::new(id, capability, parameter, context, dependencies, status)?;
         let additional_nested = requirement.retained_bytes()?;
         let (resources_replacement, commands_replacement, requirements_replacement, retained) =
-            self.prepare_storage(0, 0, 1, additional_nested)?;
+            self.prepare_storage(0, 0, 1, additional_nested, additional_nested)?;
         install_replacement(&mut self.resources, resources_replacement);
         install_replacement(&mut self.commands, commands_replacement);
         install_replacement(&mut self.requirements, requirements_replacement);
@@ -586,7 +686,16 @@ impl GraphicsSceneBuilder {
         bounds: SceneBounds,
         source: CommandSource,
     ) -> Result<(), SceneError> {
-        self.append_with_resources(Vec::new(), |_| command, bounds, source, &[], 0)
+        self.append_with_resources(
+            Vec::new(),
+            |_, _| Ok(command),
+            bounds,
+            source,
+            Vec::new(),
+            0,
+            0,
+            0,
+        )
     }
 
     #[allow(
@@ -596,20 +705,69 @@ impl GraphicsSceneBuilder {
     fn append_with_resources(
         &mut self,
         requested: Vec<GraphicsResource>,
-        make_command: impl FnOnce(&[GraphicsResourceId]) -> GraphicsCommand,
+        make_command: impl FnOnce(&[GraphicsResourceId], u64) -> Result<GraphicsCommand, SceneError>,
         bounds: SceneBounds,
         source: CommandSource,
-        capabilities: &[(GraphicsCapability, u64)],
+        capabilities: Vec<(GraphicsCapability, u64)>,
         glyph_count: u64,
+        command_input_transient: u64,
+        preindex_nested_transient: u64,
     ) -> Result<(), SceneError> {
         let command_index = self.next_command_index()?;
+        let persistent_retained = self.retained_bytes()?;
+        let requested_retained = capacity_bytes::<GraphicsResource>(requested.capacity())?;
+        let capabilities_retained =
+            capacity_bytes::<(GraphicsCapability, u64)>(capabilities.capacity())?;
+        let pending_nominal = capacity_bytes::<GraphicsResource>(requested.len())?;
+        let ids_nominal = capacity_bytes::<GraphicsResourceId>(requested.len())?;
+        let initial_transient = requested_retained
+            .checked_add(capabilities_retained)
+            .and_then(|value| value.checked_add(command_input_transient))
+            .and_then(|value| value.checked_add(preindex_nested_transient))
+            .and_then(|value| value.checked_add(pending_nominal))
+            .and_then(|value| value.checked_add(ids_nominal))
+            .ok_or_else(internal)?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            initial_transient,
+        )?;
         let mut pending = Vec::<GraphicsResource>::new();
         pending
             .try_reserve_exact(requested.len())
             .map_err(|_| allocation(self.limits.max_retained_bytes()))?;
+        let pending_actual = capacity_bytes::<GraphicsResource>(pending.capacity())?;
+        let pending_transient = requested_retained
+            .checked_add(capabilities_retained)
+            .and_then(|value| value.checked_add(command_input_transient))
+            .and_then(|value| value.checked_add(preindex_nested_transient))
+            .and_then(|value| value.checked_add(pending_actual))
+            .and_then(|value| value.checked_add(ids_nominal))
+            .ok_or_else(internal)?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            pending_transient,
+        )?;
         let mut ids = Vec::<GraphicsResourceId>::new();
         ids.try_reserve_exact(requested.len())
             .map_err(|_| allocation(self.limits.max_retained_bytes()))?;
+        let ids_actual = capacity_bytes::<GraphicsResourceId>(ids.capacity())?;
+        let indexed_transient = requested_retained
+            .checked_add(capabilities_retained)
+            .and_then(|value| value.checked_add(command_input_transient))
+            .and_then(|value| value.checked_add(preindex_nested_transient))
+            .and_then(|value| value.checked_add(pending_actual))
+            .and_then(|value| value.checked_add(ids_actual))
+            .ok_or_else(internal)?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            indexed_transient,
+        )?;
         for resource in requested {
             let mut existing = None;
             for index in 0..self.resources.len() {
@@ -698,17 +856,62 @@ impl GraphicsSceneBuilder {
             u64::from(pending_resource_count),
         )?;
 
-        let pending_requirements = self.prepare_auto_requirements(command_index, capabilities)?;
+        let pending_resource_nested = nested_retained_for_resources(&pending)?;
+        let precommand_resource_nested = pending_resource_nested.max(preindex_nested_transient);
+        let requirement_count = unique_capability_count(&capabilities);
+        let requirements_nominal = capacity_bytes::<CapabilityRequirement>(requirement_count)?;
+        let before_requirements = pending_actual
+            .checked_add(ids_actual)
+            .and_then(|value| value.checked_add(capabilities_retained))
+            .and_then(|value| value.checked_add(command_input_transient))
+            .and_then(|value| value.checked_add(precommand_resource_nested))
+            .and_then(|value| value.checked_add(requirements_nominal))
+            .ok_or_else(internal)?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            before_requirements,
+        )?;
+        let pending_requirements =
+            self.prepare_auto_requirements(command_index, &capabilities, requirement_count)?;
         self.ensure_requirement_capacity(pending_requirements.len(), 0)?;
-        let command = make_command(&ids);
-        let additional_nested =
-            nested_retained_for_append(&pending, &command, &pending_requirements)?;
+        let pending_requirements_retained =
+            capacity_bytes::<CapabilityRequirement>(pending_requirements.capacity())?;
+        let pending_requirement_nested = nested_retained_for_requirements(&pending_requirements)?;
+        let append_transient = pending_actual
+            .checked_add(ids_actual)
+            .and_then(|value| value.checked_add(capabilities_retained))
+            .and_then(|value| value.checked_add(command_input_transient))
+            .and_then(|value| value.checked_add(precommand_resource_nested))
+            .and_then(|value| value.checked_add(pending_requirements_retained))
+            .and_then(|value| value.checked_add(pending_requirement_nested))
+            .ok_or_else(internal)?;
+        ensure_total(
+            SceneLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            persistent_retained,
+            append_transient,
+        )?;
+        let command = make_command(&ids, append_transient)?;
+        let command_nested = command.retained_bytes()?;
+        let additional_nested = pending_resource_nested
+            .checked_add(command_nested)
+            .and_then(|value| value.checked_add(pending_requirement_nested))
+            .ok_or_else(internal)?;
+        let transaction_transient = pending_actual
+            .checked_add(ids_actual)
+            .and_then(|value| value.checked_add(capabilities_retained))
+            .and_then(|value| value.checked_add(pending_requirements_retained))
+            .and_then(|value| value.checked_add(additional_nested))
+            .ok_or_else(internal)?;
         let (resources_replacement, commands_replacement, requirements_replacement, retained) =
             self.prepare_storage(
                 pending.len(),
                 1,
                 pending_requirements.len(),
                 additional_nested,
+                transaction_transient,
             )?;
         install_replacement(&mut self.resources, resources_replacement);
         install_replacement(&mut self.commands, commands_replacement);
@@ -741,11 +944,12 @@ impl GraphicsSceneBuilder {
         &self,
         command_index: u32,
         capabilities: &[(GraphicsCapability, u64)],
+        requirement_count: usize,
     ) -> Result<Vec<CapabilityRequirement>, SceneError> {
         let context = CapabilityContext::Command(command_index);
         let mut pending = Vec::new();
         pending
-            .try_reserve_exact(capabilities.len())
+            .try_reserve_exact(requirement_count)
             .map_err(|_| allocation(self.limits.max_retained_bytes()))?;
         for &(capability, parameter) in capabilities {
             if pending.iter().any(|requirement: &CapabilityRequirement| {
@@ -848,6 +1052,7 @@ impl GraphicsSceneBuilder {
         additional_commands: usize,
         additional_requirements: usize,
         additional_nested: u64,
+        transaction_transient: u64,
     ) -> Result<
         (
             Option<Vec<GraphicsResourceEntry>>,
@@ -862,10 +1067,13 @@ impl GraphicsSceneBuilder {
             additional_commands,
             additional_requirements,
             additional_nested,
+            transaction_transient,
             true,
         )?;
-        if geometric.3 <= self.limits.max_retained_bytes() {
-            return Ok(geometric);
+        if geometric.3 <= self.limits.max_retained_bytes()
+            && geometric.4 <= self.limits.max_retained_bytes()
+        {
+            return Ok((geometric.0, geometric.1, geometric.2, geometric.3));
         }
         drop(geometric);
         let exact = self.prepare_storage_mode(
@@ -873,17 +1081,21 @@ impl GraphicsSceneBuilder {
             additional_commands,
             additional_requirements,
             additional_nested,
+            transaction_transient,
             false,
         )?;
-        if exact.3 <= self.limits.max_retained_bytes() {
-            return Ok(exact);
+        if exact.3 <= self.limits.max_retained_bytes()
+            && exact.4 <= self.limits.max_retained_bytes()
+        {
+            return Ok((exact.0, exact.1, exact.2, exact.3));
         }
         let consumed = self.retained_bytes()?;
+        let required = exact.3.max(exact.4);
         Err(limit(
             SceneLimitKind::RetainedBytes,
             self.limits.max_retained_bytes(),
             consumed,
-            exact.3.saturating_sub(consumed),
+            required.saturating_sub(consumed),
         ))
     }
 
@@ -897,12 +1109,14 @@ impl GraphicsSceneBuilder {
         additional_commands: usize,
         additional_requirements: usize,
         additional_nested: u64,
+        transaction_transient: u64,
         geometric: bool,
     ) -> Result<
         (
             Option<Vec<GraphicsResourceEntry>>,
             Option<Vec<GraphicsCommandRecord>>,
             Option<Vec<CapabilityRequirement>>,
+            u64,
             u64,
         ),
         SceneError,
@@ -938,8 +1152,26 @@ impl GraphicsSceneBuilder {
             requirement_capacity,
             nested,
         )?;
-        if planned_retained > self.limits.max_retained_bytes() {
-            return Ok((None, None, None, planned_retained));
+        let persistent_retained = self.retained_bytes()?;
+        let planned_replacements = replacement_capacity_bytes(&self.resources, resource_capacity)?
+            .checked_add(replacement_capacity_bytes(
+                &self.commands,
+                command_capacity,
+            )?)
+            .and_then(|value| {
+                value.checked_add(
+                    replacement_capacity_bytes(&self.requirements, requirement_capacity).ok()?,
+                )
+            })
+            .ok_or_else(internal)?;
+        let planned_live_retained = persistent_retained
+            .checked_add(transaction_transient)
+            .and_then(|value| value.checked_add(planned_replacements))
+            .ok_or_else(internal)?;
+        if planned_retained > self.limits.max_retained_bytes()
+            || planned_live_retained > self.limits.max_retained_bytes()
+        {
+            return Ok((None, None, None, planned_retained, planned_live_retained));
         }
         let resources = prepare_replacement(
             &self.resources,
@@ -968,7 +1200,15 @@ impl GraphicsSceneBuilder {
                 .map_or(self.requirements.capacity(), Vec::capacity),
             nested,
         )?;
-        Ok((resources, commands, requirements, retained))
+        let replacement_retained = option_capacity_bytes(&resources)?
+            .checked_add(option_capacity_bytes(&commands)?)
+            .and_then(|value| value.checked_add(option_capacity_bytes(&requirements).ok()?))
+            .ok_or_else(internal)?;
+        let live_retained = persistent_retained
+            .checked_add(transaction_transient)
+            .and_then(|value| value.checked_add(replacement_retained))
+            .ok_or_else(internal)?;
+        Ok((resources, commands, requirements, retained, live_retained))
     }
 
     fn charge_resource_comparison(
@@ -1176,23 +1416,34 @@ fn resource_totals(resources: &[GraphicsResource]) -> Result<(u64, u64), SceneEr
     Ok((path_segments, image_bytes))
 }
 
-fn nested_retained_for_append(
-    resources: &[GraphicsResource],
-    command: &GraphicsCommand,
-    requirements: &[CapabilityRequirement],
-) -> Result<u64, SceneError> {
-    let mut retained = command.retained_bytes()?;
+fn nested_retained_for_resources(resources: &[GraphicsResource]) -> Result<u64, SceneError> {
+    let mut retained = 0_u64;
     for resource in resources {
         retained = retained
             .checked_add(resource.retained_bytes()?)
             .ok_or_else(internal)?;
     }
+    Ok(retained)
+}
+
+fn nested_retained_for_requirements(
+    requirements: &[CapabilityRequirement],
+) -> Result<u64, SceneError> {
+    let mut retained = 0_u64;
     for requirement in requirements {
         retained = retained
             .checked_add(requirement.retained_bytes()?)
             .ok_or_else(internal)?;
     }
     Ok(retained)
+}
+
+fn unique_capability_count(capabilities: &[(GraphicsCapability, u64)]) -> usize {
+    capabilities
+        .iter()
+        .enumerate()
+        .filter(|(index, capability)| !capabilities[..*index].contains(capability))
+        .count()
 }
 
 fn retained_for_capacities(
@@ -1259,6 +1510,20 @@ fn prepare_replacement<T>(
         .try_reserve_exact(requested)
         .map_err(|_| allocation(allocation_limit))?;
     Ok(Some(replacement))
+}
+
+fn replacement_capacity_bytes<T>(values: &Vec<T>, requested: usize) -> Result<u64, SceneError> {
+    if requested <= values.capacity() {
+        Ok(0)
+    } else {
+        capacity_bytes::<T>(requested)
+    }
+}
+
+fn option_capacity_bytes<T>(values: &Option<Vec<T>>) -> Result<u64, SceneError> {
+    values
+        .as_ref()
+        .map_or(Ok(0), |values| capacity_bytes::<T>(values.capacity()))
 }
 
 fn install_replacement<T>(values: &mut Vec<T>, replacement: Option<Vec<T>>) {
