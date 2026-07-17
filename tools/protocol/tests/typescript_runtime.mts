@@ -28,11 +28,13 @@ import {
   validateCapabilityDecision,
   validateCommandEnvelope,
   validateCorrelation,
+  validateDataSegment,
   validateEndpointCapabilities,
   validateEnvelopeHeader,
   validateEnvelopeHeaderForMinor,
   validateEventEnvelope,
   validateProtocolHello,
+  validateProvideDataTransferLengths,
   validateSurfaceReclaimedEvent,
   validateSurfaceTransport,
 } from "../../../platform/browser/generated/engine-protocol.ts";
@@ -211,6 +213,14 @@ const provide = {
   },
 };
 expect(validateCommandEnvelope(provide, 2), "canonical transfer slot coverage");
+expect(
+  validateProvideDataTransferLengths(provide.command.payload, [1n, 1n]),
+  "canonical transfer byte lengths",
+);
+expect(
+  !validateProvideDataTransferLengths(provide.command.payload, [1n, 2n]),
+  "actual transfer byte length mismatch",
+);
 expect(
   !validateCommandEnvelope(
     {
@@ -556,6 +566,41 @@ for (const raw of jsonArray(invalidDocument.vectors, "invalid vectors")) {
       );
       break;
     }
+    case "provide-data-zero-range":
+    case "provide-data-range-overflow":
+    case "provide-data-length-mismatch":
+    case "provide-data-transfer-length-mismatch": {
+      const candidate = {
+        range: {
+          start: BigInt(jsonString(vector.range_start, `${name}.range_start`)),
+          len: BigInt(jsonString(vector.range_len, `${name}.range_len`)),
+        },
+        slot: 0,
+        byte_length: BigInt(
+          jsonString(vector.byte_length, `${name}.byte_length`),
+        ),
+      };
+      const transferLength = BigInt(
+        jsonString(vector.transfer_length, `${name}.transfer_length`),
+      );
+      if (name === "provide-data-transfer-length-mismatch") {
+        expect(
+          validateDataSegment(candidate) &&
+            !validateProvideDataTransferLengths(
+              {
+                ticket: 1n,
+                source,
+                segments: [candidate],
+              },
+              [transferLength],
+            ),
+          name,
+        );
+      } else {
+        expect(!validateDataSegment(candidate), name);
+      }
+      break;
+    }
     case "surface-stride-too-small": {
       const width = jsonNumber(vector.width, `${name}.width`);
       const height = jsonNumber(vector.height, `${name}.height`);
@@ -648,4 +693,4 @@ for (const raw of jsonArray(invalidDocument.vectors, "invalid vectors")) {
       throw new Error(`unregistered invalid vector ${name}`);
   }
 }
-expect(replayedInvalid.size === 14, "all invalid vectors replayed");
+expect(replayedInvalid.size === 18, "all invalid vectors replayed");

@@ -3,8 +3,9 @@ use std::fmt;
 use crate::{
     BrowserTransferKind, CanvasId, CapabilityDecisionHash, CorrelationRequirement, EndpointRole,
     FrameMessagePolicy, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES, MAX_TRANSFER_SLOTS,
-    MESSAGE_ID_SET_VIEWPORT, MIN_COMPATIBLE_MINOR, MemoryEpoch, NativeBackend, PlatformHandle,
-    ProtocolError, ProtocolErrorCode, ProtocolHello, ProtocolLimits, RenderConfigHash,
+    MESSAGE_ID_PROVIDE_DATA, MESSAGE_ID_SET_VIEWPORT, MIN_COMPATIBLE_MINOR, MemoryEpoch,
+    NativeBackend, PROVIDE_DATA_COMMAND_SEGMENTS_MAX_COUNT, PlatformHandle, ProtocolError,
+    ProtocolErrorCode, ProtocolHello, ProtocolLimits, ProvideDataCommand, RenderConfigHash,
     RenderPlanHash, RenderPlanId, RendererEpoch, SCHEMA_HASH, SceneHash, SessionId,
     SetViewportCommand, SurfaceMetadata, SurfaceRegion, SurfaceTransport,
     VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT, ViewportRequest, WorkerId, descriptor_by_id,
@@ -566,6 +567,46 @@ impl ProtocolValidator {
             ));
         }
         self.validate_viewport_request(&command.viewport)
+    }
+
+    /// Validates one ProvideData command against its actual received transfer byte lengths.
+    pub fn validate_provide_data(
+        &self,
+        correlation: &crate::Correlation,
+        command: &ProvideDataCommand,
+        worker: WorkerId,
+        session: SessionId,
+        transfer_lengths: &[u64],
+    ) -> Result<(), ProtocolError> {
+        self.validate_correlation(MESSAGE_ID_PROVIDE_DATA, correlation, worker, Some(session))?;
+        if command.segments.is_empty()
+            || command.segments.len() > PROVIDE_DATA_COMMAND_SEGMENTS_MAX_COUNT
+            || command.segments.len() != transfer_lengths.len()
+            || transfer_lengths.len() > usize::from(self.limits.max_transfer_slots())
+        {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidTransferCount,
+            ));
+        }
+
+        for (index, segment) in command.segments.iter().enumerate() {
+            if segment.range.len == 0 || segment.range.len != segment.byte_length {
+                return Err(ProtocolError::for_code(ProtocolErrorCode::InvalidDataRange));
+            }
+            segment
+                .range
+                .start
+                .checked_add(segment.range.len)
+                .ok_or_else(|| ProtocolError::for_code(ProtocolErrorCode::NumericOverflow))?;
+
+            let slot = usize::from(segment.slot);
+            if slot != index || transfer_lengths[slot] != segment.byte_length {
+                return Err(ProtocolError::for_code(
+                    ProtocolErrorCode::InvalidTransferBinding,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Validates Surface owner, generation, epoch, layout, format, range, and transfer binding.

@@ -815,6 +815,7 @@ const isU8 = (value: unknown): value is number => Number.isInteger(value) && Num
 const isU16 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 0xffff;\n\
 const isU32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 0xffffffff;\n\
 const isI32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= -0x80000000 && Number(value) <= 0x7fffffff;\n\
+const MAX_U64 = 0xffffffffffffffffn;\n\
 const isU64 = (value: unknown): value is bigint => typeof value === \"bigint\" && value >= 0n && value <= 0xffffffffffffffffn;\n\
 const isFixedBytes = (value: unknown, length: number): value is Uint8Array => value instanceof Uint8Array && value.byteLength === length;\n\
 const gcdU32 = (left: number, right: number): number => {\n\
@@ -1051,6 +1052,18 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   if ((capabilities.mandatory & ~capabilities.supported) !== 0n) return false;\n",
         );
     }
+    if record.name == "ByteRange" {
+        out.push_str(
+            "  const range = value as unknown as ByteRange;\n\
+  if (range.len === 0n || range.start > MAX_U64 - range.len) return false;\n",
+        );
+    }
+    if record.name == "DataSegment" {
+        out.push_str(
+            "  const segment = value as unknown as DataSegment;\n\
+  if (segment.byte_length !== segment.range.len) return false;\n",
+        );
+    }
     if record.name == "ProtocolHello" {
         out.push_str(
             "  const hello = value as unknown as ProtocolHello;\n\
@@ -1188,6 +1201,14 @@ const validateTransferBinding = (message: Command | Event, transferSlots: number
     default: return true;\n\
   }\n\
 };\n\
+export function validateProvideDataTransferLengths(command: ProvideDataCommand, transferLengths: readonly bigint[]): boolean {\n\
+  return transferLengths.length > 0\n\
+    && transferLengths.length === command.segments.length\n\
+    && transferLengths.length <= MAX_TRANSFER_SLOTS\n\
+    && command.segments.every((segment, index) => segment.slot === index\n\
+      && isU64(transferLengths[index])\n\
+      && transferLengths[index] === segment.byte_length);\n\
+}\n\
 const validatePayloadCorrelation = (correlation: Correlation, message: Command | Event): boolean => {\n\
   switch (message.type) {\n\
     case \"SetViewport\": return correlation.generation === message.payload.viewport.generation;\n\
@@ -1530,15 +1551,46 @@ fn generate_invalid_vectors(protocol: &Protocol, digest: &[u8; 32]) -> String {
         .expect("canonical schema has Hello");
     let header = desktop_header_hex(protocol.major, protocol.minor, hello.id, 0, 0, 1);
     let zero_sequence = desktop_header_hex(protocol.major, protocol.minor, hello.id, 0, 0, 0);
+    let vectors = [
+        format!(
+            "    {{\"name\":\"truncated-header\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"TruncatedHeader\"}}",
+            &header[..18]
+        ),
+        format!(
+            "    {{\"name\":\"payload-length-mismatch\",\"frame_hex\":\"{header}00\",\"transfer_slots\":0,\"expected_error\":\"FrameLengthMismatch\"}}"
+        ),
+        format!(
+            "    {{\"name\":\"zero-sequence\",\"frame_hex\":\"{zero_sequence}\",\"transfer_slots\":0,\"expected_error\":\"NonMonotonicSequence\"}}"
+        ),
+        "    {\"name\":\"unknown-message\",\"message_type\":65535,\"expected_error\":\"UnknownMessage\"}".to_owned(),
+        format!(
+            "    {{\"name\":\"unsupported-flags\",\"message_type\":{},\"flags\":1,\"expected_error\":\"InvalidFlags\"}}",
+            hello.id
+        ),
+        format!(
+            "    {{\"name\":\"missing-required-correlation\",\"message_type\":{},\"correlation\":{{}},\"expected_error\":\"InvalidCorrelation\"}}",
+            hello.id
+        ),
+        format!(
+            "    {{\"name\":\"transfer-count-out-of-range\",\"message_type\":{},\"transfer_slots\":1,\"expected_error\":\"InvalidTransferCount\"}}",
+            hello.id
+        ),
+        "    {\"name\":\"provide-data-duplicate-slot\",\"message_type\":4,\"transfer_slots\":2,\"slots\":[0,0],\"expected_error\":\"InvalidTransferBinding\"}".to_owned(),
+        "    {\"name\":\"provide-data-zero-range\",\"range_start\":\"0\",\"range_len\":\"0\",\"byte_length\":\"0\",\"transfer_length\":\"0\",\"expected_error\":\"InvalidDataRange\"}".to_owned(),
+        "    {\"name\":\"provide-data-range-overflow\",\"range_start\":\"18446744073709551615\",\"range_len\":\"1\",\"byte_length\":\"1\",\"transfer_length\":\"1\",\"expected_error\":\"NumericOverflow\"}".to_owned(),
+        "    {\"name\":\"provide-data-length-mismatch\",\"range_start\":\"0\",\"range_len\":\"4\",\"byte_length\":\"3\",\"transfer_length\":\"3\",\"expected_error\":\"InvalidDataRange\"}".to_owned(),
+        "    {\"name\":\"provide-data-transfer-length-mismatch\",\"range_start\":\"0\",\"range_len\":\"4\",\"byte_length\":\"4\",\"transfer_length\":\"3\",\"expected_error\":\"InvalidTransferBinding\"}".to_owned(),
+        "    {\"name\":\"surface-stride-too-small\",\"width\":100,\"height\":1,\"stride\":1,\"byte_length\":\"1\",\"expected_error\":\"InvalidSurfaceLayout\"}".to_owned(),
+        "    {\"name\":\"surface-range-overflow\",\"byte_offset\":\"18446744073709551615\",\"byte_length\":\"1\",\"region_length\":\"18446744073709551615\",\"expected_error\":\"NumericOverflow\"}".to_owned(),
+        "    {\"name\":\"surface-reclaimed-missing-reason\",\"message_type\":113,\"payload\":{\"surface\":1},\"expected_error\":\"MissingRequiredField\"}".to_owned(),
+        "    {\"name\":\"unknown-mandatory-capability\",\"mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}".to_owned(),
+        "    {\"name\":\"mandatory-not-supported-by-endpoint\",\"supported\":\"0x3e\",\"mandatory\":\"0x01\",\"expected_error\":\"InvalidEndpointCapabilities\"}".to_owned(),
+        "    {\"name\":\"silent-decision-truncation\",\"missing_total\":17,\"missing_count\":16,\"missing_completeness\":\"Complete\",\"expected_error\":\"InvalidCapabilityDecision\"}".to_owned(),
+    ];
     format!(
-        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"schema_sha256\": \"{}\",\n  \"vectors\": [\n    {{\"name\":\"truncated-header\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"TruncatedHeader\"}},\n    {{\"name\":\"payload-length-mismatch\",\"frame_hex\":\"{}00\",\"transfer_slots\":0,\"expected_error\":\"FrameLengthMismatch\"}},\n    {{\"name\":\"zero-sequence\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"NonMonotonicSequence\"}},\n    {{\"name\":\"unknown-message\",\"message_type\":65535,\"expected_error\":\"UnknownMessage\"}},\n    {{\"name\":\"unsupported-flags\",\"message_type\":{},\"flags\":1,\"expected_error\":\"InvalidFlags\"}},\n    {{\"name\":\"missing-required-correlation\",\"message_type\":{},\"correlation\":{{}},\"expected_error\":\"InvalidCorrelation\"}},\n    {{\"name\":\"transfer-count-out-of-range\",\"message_type\":{},\"transfer_slots\":1,\"expected_error\":\"InvalidTransferCount\"}},\n    {{\"name\":\"provide-data-duplicate-slot\",\"message_type\":4,\"transfer_slots\":2,\"slots\":[0,0],\"expected_error\":\"InvalidTransferBinding\"}},\n    {{\"name\":\"surface-stride-too-small\",\"width\":100,\"height\":1,\"stride\":1,\"byte_length\":\"1\",\"expected_error\":\"InvalidSurfaceLayout\"}},\n    {{\"name\":\"surface-range-overflow\",\"byte_offset\":\"18446744073709551615\",\"byte_length\":\"1\",\"region_length\":\"18446744073709551615\",\"expected_error\":\"NumericOverflow\"}},\n    {{\"name\":\"surface-reclaimed-missing-reason\",\"message_type\":113,\"payload\":{{\"surface\":1}},\"expected_error\":\"MissingRequiredField\"}},\n    {{\"name\":\"unknown-mandatory-capability\",\"mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}},\n    {{\"name\":\"mandatory-not-supported-by-endpoint\",\"supported\":\"0x3e\",\"mandatory\":\"0x01\",\"expected_error\":\"InvalidEndpointCapabilities\"}},\n    {{\"name\":\"silent-decision-truncation\",\"missing_total\":17,\"missing_count\":16,\"missing_completeness\":\"Complete\",\"expected_error\":\"InvalidCapabilityDecision\"}}\n  ]\n}}\n",
+        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"schema_sha256\": \"{}\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
         lowercase_hex(digest),
-        &header[..18],
-        header,
-        zero_sequence,
-        hello.id,
-        hello.id,
-        hello.id
+        vectors.join(",\n")
     )
 }
 
@@ -1628,6 +1680,10 @@ mod tests {
         );
         let vectors = super::generate_invalid_vectors(&protocol, &[0x5a; 32]);
         assert!(vectors.contains("\"correlation\":{}"));
+        assert!(vectors.contains("\"name\":\"provide-data-zero-range\""));
+        assert!(vectors.contains("\"name\":\"provide-data-range-overflow\""));
+        assert!(vectors.contains("\"name\":\"provide-data-length-mismatch\""));
+        assert!(vectors.contains("\"name\":\"provide-data-transfer-length-mismatch\""));
     }
 
     #[test]

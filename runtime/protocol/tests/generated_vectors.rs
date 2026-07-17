@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_rs_protocol::{
-    DesktopFrameDecoder, EndpointCapabilities, EndpointRole, HandshakeCompatibility,
-    MIN_COMPATIBLE_MINOR, PROTOCOL_GENERATOR_VERSION, PROTOCOL_MAJOR, PROTOCOL_MINOR,
-    ProtocolErrorCode, ProtocolHello, ProtocolLimits, ProtocolValidator, SCHEMA_HASH,
-    SCHEMA_SHA256_HEX, SequenceTracker,
+    ByteRange, Correlation, DataSegment, DataTicket, DesktopFrameDecoder, EndpointCapabilities,
+    EndpointRole, HandshakeCompatibility, MIN_COMPATIBLE_MINOR, PROTOCOL_GENERATOR_VERSION,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR, ProtocolErrorCode, ProtocolHello, ProtocolLimits,
+    ProtocolValidator, ProvideDataCommand, SCHEMA_HASH, SCHEMA_SHA256_HEX, SequenceTracker,
+    SessionId, SourceIdentity, WorkerId,
 };
 
 const COMPATIBILITY_VECTORS: &str =
@@ -163,6 +164,74 @@ fn generated_invalid_frame_vectors_replay_against_desktop_decoder() {
 }
 
 #[test]
+fn generated_provide_data_range_vectors_replay_against_rust_validator() {
+    let validator = ProtocolValidator::new(ProtocolLimits::default());
+    let worker = WorkerId::new(1);
+    let session = SessionId::new(2);
+    let correlation = Correlation {
+        worker,
+        session: Some(session),
+        request: None,
+        generation: None,
+    };
+    let mut replayed = BTreeSet::new();
+
+    for vector in INVALID_VECTORS
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.starts_with("{\"name\":\"provide-data-") && line.contains("\"range_start\"")
+        })
+        .map(parse_flat_object)
+    {
+        let name = string(&vector, "name");
+        assert!(replayed.insert(name.to_owned()), "duplicate vector {name}");
+        let segment = DataSegment {
+            range: ByteRange {
+                start: string(&vector, "range_start").parse().unwrap(),
+                len: string(&vector, "range_len").parse().unwrap(),
+            },
+            slot: 0,
+            byte_length: string(&vector, "byte_length").parse().unwrap(),
+        };
+        let command = ProvideDataCommand {
+            ticket: DataTicket::new(3),
+            source: SourceIdentity {
+                stable_id: [0x51; 32],
+                revision: 4,
+            },
+            segments: vec![segment],
+        };
+        assert_eq!(
+            validator
+                .validate_provide_data(
+                    &correlation,
+                    &command,
+                    worker,
+                    session,
+                    &[string(&vector, "transfer_length").parse().unwrap()],
+                )
+                .unwrap_err()
+                .code(),
+            protocol_error(string(&vector, "expected_error")),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        replayed,
+        [
+            "provide-data-length-mismatch",
+            "provide-data-range-overflow",
+            "provide-data-transfer-length-mismatch",
+            "provide-data-zero-range",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+}
+
+#[test]
 fn desktop_registry_contains_nested_codec_tags_fields_privacy_and_outcomes() {
     for exact in [
         "generator_version 0.1.0",
@@ -285,6 +354,9 @@ fn protocol_error(value: &str) -> ProtocolErrorCode {
         "IncompatibleSchema" => ProtocolErrorCode::IncompatibleSchema,
         "UnknownMandatoryCapability" => ProtocolErrorCode::UnknownMandatoryCapability,
         "InvalidEndpointCapabilities" => ProtocolErrorCode::InvalidEndpointCapabilities,
+        "InvalidDataRange" => ProtocolErrorCode::InvalidDataRange,
+        "InvalidTransferBinding" => ProtocolErrorCode::InvalidTransferBinding,
+        "NumericOverflow" => ProtocolErrorCode::NumericOverflow,
         _ => panic!("unregistered generated error {value}"),
     }
 }

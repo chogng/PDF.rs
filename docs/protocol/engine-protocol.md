@@ -150,6 +150,14 @@ pub struct Correlation {
 6. payload schema、枚举、字符串、数组和 handle；
 7. command 的状态机前置条件。
 
+Desktop binary transport 的 `payload_len` 是 header 后实际编码 payload 字节数。Browser
+structured-clone transport 不使用浏览器实现私有的 clone 大小；它对 schema payload 使用确定的
+logical typed-tree 计数：null 为 1 字节，boolean 为 2 字节，number/bigint 为 9 字节，
+string/`Uint8Array` 为 5 字节加 UTF-8/内容长度，array/record 为 5 字节加子项，record key
+按排序顺序各计 4 字节加 UTF-8 长度。共享引用按每次 tree occurrence 计数；cycle、accessor、
+symbol key、exotic prototype、超过 65,536 个节点或超过消息上限都拒绝。transfer list 的实际
+资源字节不计入 logical payload，必须通过 segment/Surface 的显式长度和 slot 规则另行逐项绑定。
+
 任何乘加、offset/len 和 allocation 都使用 checked arithmetic。未知 mandatory 字段/variant 返回协议错误；未知 optional 字段按 minor 兼容规则忽略并保留诊断计数。
 
 ## 7. ID 与 sequence
@@ -220,7 +228,9 @@ Host                                      Engine
 
 - `Open` source descriptor 不授予 Core 任意网络/文件权限；Host/source service 负责读取。
 - `NeedData` 包含 `SourceIdentity`、ticket、ranges、priority 和 checkpoint opaque identity。
-- `ProvideData` 必须引用相同 source snapshot，并验证 bytes 恰好覆盖声明范围。
+- `ProvideData` 必须引用相同 source snapshot；每个 `ByteRange` 非空且 exclusive end
+  使用 checked arithmetic，`DataSegment.byte_length == range.len`，slot 按 segment
+  顺序唯一覆盖实际 transfer table，并验证每个实际 transfer 的 byte length 恰好覆盖声明范围。
 - ticket 只完成一次；重复 completion 返回 `DuplicateTicketCompletion`。
 - source validator 改变时 Host 发送 source error，Engine 以 `SourceChanged` 终止 session。
 - Data arrival 只重新入队 job，不在 command 解码栈内执行 parser。

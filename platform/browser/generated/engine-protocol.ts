@@ -24,6 +24,7 @@ const isU8 = (value: unknown): value is number => Number.isInteger(value) && Num
 const isU16 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 0xffff;
 const isU32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 0xffffffff;
 const isI32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= -0x80000000 && Number(value) <= 0x7fffffff;
+const MAX_U64 = 0xffffffffffffffffn;
 const isU64 = (value: unknown): value is bigint => typeof value === "bigint" && value >= 0n && value <= 0xffffffffffffffffn;
 const isFixedBytes = (value: unknown, length: number): value is Uint8Array => value instanceof Uint8Array && value.byteLength === length;
 const gcdU32 = (left: number, right: number): number => {
@@ -422,6 +423,8 @@ export function validateByteRange(value: unknown): value is ByteRange {
   if (!isRecord(value) || !exactKeys(value, ["start", "len"], [])) return false;
   if (!(isU64(value.start))) return false;
   if (!(isU64(value.len))) return false;
+  const range = value as unknown as ByteRange;
+if (range.len === 0n || range.start > MAX_U64 - range.len) return false;
   return true;
 }
 
@@ -436,6 +439,8 @@ export function validateDataSegment(value: unknown): value is DataSegment {
   if (!(validateByteRange(value.range))) return false;
   if (!(isU16(value.slot))) return false;
   if (!(isU64(value.byte_length))) return false;
+  const segment = value as unknown as DataSegment;
+if (segment.byte_length !== segment.range.len) return false;
   return true;
 }
 
@@ -1195,6 +1200,14 @@ case "LocalMemory": return transferSlots === 0;
 default: return true;
 }
 };
+export function validateProvideDataTransferLengths(command: ProvideDataCommand, transferLengths: readonly bigint[]): boolean {
+return transferLengths.length > 0
+&& transferLengths.length === command.segments.length
+&& transferLengths.length <= MAX_TRANSFER_SLOTS
+&& command.segments.every((segment, index) => segment.slot === index
+&& isU64(transferLengths[index])
+&& transferLengths[index] === segment.byte_length);
+}
 const validatePayloadCorrelation = (correlation: Correlation, message: Command | Event): boolean => {
 switch (message.type) {
 case "SetViewport": return correlation.generation === message.payload.viewport.generation;

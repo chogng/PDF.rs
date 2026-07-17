@@ -38,6 +38,8 @@ generated definitions and must not maintain a second command, event, or field re
   zero, duplicates, and regressions are rejected without moving the accepted sequence.
 - All sizes, strides, offsets, and exclusive ends use checked arithmetic. A Surface byte range must
   fit both protocol limits and the declared shared-memory region.
+- ProvideData ranges are non-empty with checked exclusive ends. Declared range and byte lengths,
+  canonical slot order, and actual transfer byte lengths must all match before bytes are exposed.
 - Surface handles and payload bytes never appear in `Debug`, `Display`, or stable protocol errors.
 - Protocol failures never invoke an external PDF engine and never convert malformed input into a
   successful empty payload or Surface.

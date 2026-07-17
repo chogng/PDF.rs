@@ -60,6 +60,10 @@ pub enum ProtocolErrorCode {
     InvalidEndpointCapabilities,
     /// Viewport geometry, scale, revision, generation, or canonical ordering is invalid.
     InvalidViewport,
+    /// A data range is empty or disagrees with its declared byte length.
+    InvalidDataRange,
+    /// A data segment refers to a missing, duplicate, or wrong-length transfer slot.
+    InvalidTransferBinding,
     /// Surface render-plan, scene, decision, configuration, or backend identity is stale.
     InvalidSurfacePlan,
     /// Surface placement does not match the accepted render plan.
@@ -100,6 +104,8 @@ impl ProtocolErrorCode {
             Self::InvalidSurfaceRegion => "RPE-PROTOCOL-0028",
             Self::InvalidEndpointCapabilities => "RPE-PROTOCOL-0029",
             Self::InvalidViewport => "RPE-PROTOCOL-0030",
+            Self::InvalidDataRange => "RPE-PROTOCOL-0031",
+            Self::InvalidTransferBinding => "RPE-PROTOCOL-0032",
         }
     }
 }
@@ -176,7 +182,8 @@ impl ProtocolError {
             ),
             ProtocolErrorCode::UnknownMessage
             | ProtocolErrorCode::InvalidFlags
-            | ProtocolErrorCode::InvalidViewport => (
+            | ProtocolErrorCode::InvalidViewport
+            | ProtocolErrorCode::InvalidDataRange => (
                 ProtocolErrorCategory::Message,
                 ProtocolRecoverability::RejectFrame,
             ),
@@ -188,7 +195,9 @@ impl ProtocolError {
                 ProtocolErrorCategory::Correlation,
                 ProtocolRecoverability::RejectFrame,
             ),
-            ProtocolErrorCode::InvalidTransferCount | ProtocolErrorCode::InvalidSurfaceSlot => (
+            ProtocolErrorCode::InvalidTransferCount
+            | ProtocolErrorCode::InvalidTransferBinding
+            | ProtocolErrorCode::InvalidSurfaceSlot => (
                 ProtocolErrorCategory::Transfer,
                 ProtocolRecoverability::RejectFrame,
             ),
