@@ -34,8 +34,8 @@ generated definitions and must not maintain a second command, event, or field re
   flags, payload length, complete frame length, global and message limits, transfer count, and
   receive-direction sequence have all been accepted. A decoded command or event is not dispatched
   until its generated payload schema and correlation shape are also accepted.
-- Receive-direction sequence trackers are independent. Gaps are allowed; duplicates and
-  regressions are rejected without moving the accepted sequence.
+- Receive-direction sequence trackers are independent. Sequences start at one. Gaps are allowed;
+  zero, duplicates, and regressions are rejected without moving the accepted sequence.
 - All sizes, strides, offsets, and exclusive ends use checked arithmetic. A Surface byte range must
   fit both protocol limits and the declared shared-memory region.
 - Surface handles and payload bytes never appear in `Debug`, `Display`, or stable protocol errors.
@@ -46,5 +46,5 @@ generated definitions and must not maintain a second command, event, or field re
 
 `src/generated.rs` is generated data. It must be reproduced by the pinned protocol generator from
 the canonical schema and must not be edited as handwritten implementation. Repository tests bind
-the generated marker, schema hash, descriptor registry, and handwritten validation adapter so
-schema drift fails closed.
+the generated marker, generator version, schema hash, nested codec registry, compatibility and
+invalid vectors, and handwritten validation adapter so schema drift fails closed.

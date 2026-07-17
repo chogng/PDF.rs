@@ -5,6 +5,7 @@ use crate::hash::{lowercase_hex, sha256};
 use crate::model::{EnumDef, MessageKind, Presence, Primitive, Privacy, Protocol, Type};
 
 pub const SCHEMA_HASH_TRUNCATION: &str = "sha256-first-16-bytes";
+pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedFile {
@@ -147,6 +148,17 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
     writeln!(out, "pub const PROTOCOL_MINOR: u16 = {};", protocol.minor).unwrap();
     writeln!(
         out,
+        "pub const PROTOCOL_GENERATOR_VERSION: &str = \"{GENERATOR_VERSION}\";"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const MIN_COMPATIBLE_MINOR: u16 = {};",
+        protocol.minor
+    )
+    .unwrap();
+    writeln!(
+        out,
         "pub const MAX_MESSAGE_BYTES: u32 = {};",
         protocol.max_message_bytes
     )
@@ -186,15 +198,39 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
     )
     .unwrap();
     writeln!(out, "pub const ENVELOPE_HEADER_BYTES: usize = 20;\n").unwrap();
+    for record in &protocol.records {
+        for field in &record.fields {
+            if let Type::List(_, limit) | Type::Bytes(limit) = &field.ty {
+                writeln!(
+                    out,
+                    "pub const {}_{}_MAX_COUNT: usize = {};",
+                    screaming_snake_case(&record.name),
+                    screaming_snake_case(&field.name),
+                    limit
+                )
+                .unwrap();
+            }
+        }
+    }
+    out.push('\n');
 
     for scalar in &protocol.scalars {
         let rust = rust_primitive(scalar.primitive);
-        writeln!(
-            out,
-            "#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]\npub struct {}({rust});",
-            scalar.name
-        )
-        .unwrap();
+        if scalar.name == "PlatformHandle" {
+            writeln!(
+                out,
+                "#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]\npub struct {}({rust});",
+                scalar.name
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                out,
+                "#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]\npub struct {}({rust});",
+                scalar.name
+            )
+            .unwrap();
+        }
         if matches!(scalar.primitive, Primitive::Bytes16 | Primitive::Bytes32) {
             writeln!(
                 out,
@@ -210,6 +246,13 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
             )
             .unwrap();
         }
+        if scalar.name == "PlatformHandle" {
+            writeln!(
+                out,
+                "impl core::fmt::Debug for PlatformHandle {{\n    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n        formatter.write_str(\"PlatformHandle([REDACTED])\")\n    }}\n}}\n"
+            )
+            .unwrap();
+        }
     }
 
     for enumeration in &protocol.enums {
@@ -218,16 +261,59 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
     write_endpoint_capability_constants(&mut out, protocol);
 
     for record in &protocol.records {
-        writeln!(out, "#[derive(Clone, Debug, Eq, PartialEq)]").unwrap();
+        let has_redacted_field = record
+            .fields
+            .iter()
+            .any(|field| field.privacy != Privacy::Public);
+        if has_redacted_field {
+            writeln!(out, "#[derive(Clone, Eq, PartialEq)]").unwrap();
+        } else {
+            writeln!(out, "#[derive(Clone, Debug, Eq, PartialEq)]").unwrap();
+        }
         writeln!(out, "pub struct {} {{", record.name).unwrap();
         for field in &record.fields {
             writeln!(out, "    pub {}: {},", field.name, rust_type(&field.ty)).unwrap();
         }
         writeln!(out, "}}\n").unwrap();
+        if has_redacted_field {
+            writeln!(
+                out,
+                "impl core::fmt::Debug for {} {{\n    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n        let mut output = formatter.debug_struct(\"{}\");",
+                record.name, record.name
+            )
+            .unwrap();
+            for field in &record.fields {
+                if field.privacy == Privacy::Public {
+                    writeln!(
+                        out,
+                        "        output.field(\"{}\", &self.{});",
+                        field.name, field.name
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        out,
+                        "        output.field(\"{}\", &\"[REDACTED]\");",
+                        field.name
+                    )
+                    .unwrap();
+                }
+            }
+            writeln!(out, "        output.finish()\n    }}\n}}\n").unwrap();
+        }
     }
 
     for union in &protocol.unions {
-        writeln!(out, "#[derive(Clone, Debug, Eq, PartialEq)]").unwrap();
+        let has_redacted_field = union
+            .variants
+            .iter()
+            .flat_map(|variant| &variant.fields)
+            .any(|field| field.privacy != Privacy::Public);
+        if has_redacted_field {
+            writeln!(out, "#[derive(Clone, Eq, PartialEq)]").unwrap();
+        } else {
+            writeln!(out, "#[derive(Clone, Debug, Eq, PartialEq)]").unwrap();
+        }
         writeln!(out, "pub enum {} {{", union.name).unwrap();
         for variant in &union.variants {
             if variant.fields.is_empty() {
@@ -241,6 +327,14 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
             }
         }
         writeln!(out, "}}\n").unwrap();
+        if has_redacted_field {
+            writeln!(
+                out,
+                "impl core::fmt::Debug for {} {{\n    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n        formatter.write_str(\"{}([REDACTED])\")\n    }}\n}}\n",
+                union.name, union.name
+            )
+            .unwrap();
+        }
     }
 
     write_message_enums(&mut out, protocol);
@@ -327,6 +421,16 @@ fn write_message_enums(out: &mut String, protocol: &Protocol) {
 }
 
 fn write_descriptors(out: &mut String, protocol: &Protocol) {
+    for message in &protocol.messages {
+        writeln!(
+            out,
+            "pub const MESSAGE_ID_{}: u16 = {};",
+            screaming_snake_case(&message.name),
+            message.id
+        )
+        .unwrap();
+    }
+    out.push('\n');
     out.push_str(
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
 pub enum MessageKind { Command, Event }\n\n\
@@ -365,7 +469,7 @@ pub struct MessageDescriptor {\n\
     pub max_transfer_slots: u16,\n\
     pub max_payload_bytes: u32,\n\
     pub fields: &'static [FieldDescriptor],\n\
-    pub terminal_events: &'static [u16],\n\
+    pub outcome_events: &'static [u16],\n\
 }\n\n",
     );
 
@@ -412,7 +516,7 @@ pub struct MessageDescriptor {\n\
                 .collect::<Vec<_>>();
             writeln!(
                 out,
-                "const {}_TERMINAL_EVENTS: &[u16] = &[{}];",
+                "const {}_OUTCOME_EVENTS: &[u16] = &[{}];",
                 screaming_snake_case(&message.name),
                 ids.join(", ")
             )
@@ -432,15 +536,15 @@ pub struct MessageDescriptor {\n\
             .filter(|message| message.kind == kind)
         {
             let prefix = screaming_snake_case(&message.name);
-            let terminal_events = if kind == MessageKind::Command {
-                format!("{prefix}_TERMINAL_EVENTS")
+            let outcome_events = if kind == MessageKind::Command {
+                format!("{prefix}_OUTCOME_EVENTS")
             } else {
                 "&[]".into()
             };
             let (worker, session, request, generation) = correlation_shape(&message.correlation);
             writeln!(
                 out,
-                "    MessageDescriptor {{ kind: MessageKind::{}, name: \"{}\", id: {}, payload: \"{}\", state: \"{}\", correlation: \"{}\", correlation_shape: CorrelationShape {{ worker: CorrelationRequirement::{worker}, session: CorrelationRequirement::{session}, request: CorrelationRequirement::{request}, generation: CorrelationRequirement::{generation} }}, replayable: {}, terminal: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, fields: {prefix}_FIELDS, terminal_events: {terminal_events} }},",
+                "    MessageDescriptor {{ kind: MessageKind::{}, name: \"{}\", id: {}, payload: \"{}\", state: \"{}\", correlation: \"{}\", correlation_shape: CorrelationShape {{ worker: CorrelationRequirement::{worker}, session: CorrelationRequirement::{session}, request: CorrelationRequirement::{request}, generation: CorrelationRequirement::{generation} }}, replayable: {}, terminal: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, fields: {prefix}_FIELDS, outcome_events: {outcome_events} }},",
                 if kind == MessageKind::Command { "Command" } else { "Event" },
                 message.name,
                 message.id,
@@ -583,6 +687,17 @@ fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
     .unwrap();
     writeln!(
         out,
+        "export const PROTOCOL_GENERATOR_VERSION = \"{GENERATOR_VERSION}\" as const;"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const MIN_COMPATIBLE_MINOR = {} as const;",
+        protocol.minor
+    )
+    .unwrap();
+    writeln!(
+        out,
         "export const MAX_MESSAGE_BYTES = {} as const;",
         protocol.max_message_bytes
     )
@@ -701,7 +816,17 @@ const isU16 = (value: unknown): value is number => Number.isInteger(value) && Nu
 const isU32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 0xffffffff;\n\
 const isI32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= -0x80000000 && Number(value) <= 0x7fffffff;\n\
 const isU64 = (value: unknown): value is bigint => typeof value === \"bigint\" && value >= 0n && value <= 0xffffffffffffffffn;\n\
-const isFixedBytes = (value: unknown, length: number): value is Uint8Array => value instanceof Uint8Array && value.byteLength === length;\n\n",
+const isFixedBytes = (value: unknown, length: number): value is Uint8Array => value instanceof Uint8Array && value.byteLength === length;\n\
+const gcdU32 = (left: number, right: number): number => {\n\
+  let a = left;\n\
+  let b = right;\n\
+  while (b !== 0) {\n\
+    const remainder = a % b;\n\
+    a = b;\n\
+    b = remainder;\n\
+  }\n\
+  return a;\n\
+};\n\n",
     );
 }
 
@@ -798,7 +923,7 @@ export interface MessageDescriptor {\n\
   readonly min_transfer_slots: number;\n\
   readonly max_transfer_slots: number;\n\
   readonly max_payload_bytes: number;\n\
-  readonly terminal_events: readonly number[];\n\
+  readonly outcome_events: readonly number[];\n\
 }\n\n",
     );
     for message in &protocol.messages {
@@ -831,7 +956,7 @@ export interface MessageDescriptor {\n\
             .join(", ");
         writeln!(
             out,
-            "  {{ kind: \"{}\", name: \"{}\", id: {}, payload: \"{}\", state: \"{}\", correlation: \"{}\", correlation_shape: {{ worker: \"{}\", session: \"{}\", request: \"{}\", generation: \"{}\" }}, replayable: {}, terminal: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, terminal_events: [{}] }},",
+            "  {{ kind: \"{}\", name: \"{}\", id: {}, payload: \"{}\", state: \"{}\", correlation: \"{}\", correlation_shape: {{ worker: \"{}\", session: \"{}\", request: \"{}\", generation: \"{}\" }}, replayable: {}, terminal: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, outcome_events: [{}] }},",
             message.kind.schema_name(),
             message.name,
             message.id,
@@ -913,7 +1038,7 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
             "  const header = value as unknown as EnvelopeHeader;\n\
   const descriptor = descriptorById(header.message_type);\n\
   if (descriptor === undefined) return false;\n\
-  if (header.major !== PROTOCOL_MAJOR || header.minor > PROTOCOL_MINOR) return false;\n\
+  if (header.major !== PROTOCOL_MAJOR || header.minor < MIN_COMPATIBLE_MINOR || header.minor > PROTOCOL_MINOR) return false;\n\
   if ((header.flags & ~descriptor.allowed_flags) !== 0) return false;\n\
   if (header.payload_len > MAX_MESSAGE_BYTES || header.payload_len > descriptor.max_payload_bytes) return false;\n\
   if (header.sequence === 0n) return false;\n",
@@ -929,8 +1054,33 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
     if record.name == "ProtocolHello" {
         out.push_str(
             "  const hello = value as unknown as ProtocolHello;\n\
+  if (hello.major !== PROTOCOL_MAJOR || hello.minor < MIN_COMPATIBLE_MINOR || hello.minor > PROTOCOL_MINOR) return false;\n\
   if (hello.max_message_bytes === 0 || hello.max_message_bytes > MAX_MESSAGE_BYTES) return false;\n\
   if (hello.max_transfer_slots === 0 || hello.max_transfer_slots > MAX_TRANSFER_SLOTS) return false;\n",
+        );
+    }
+    if record.name == "PageGeometry" {
+        out.push_str(
+            "  const geometry = value as unknown as PageGeometry;\n\
+  if (!geometry.identity.some((byte) => byte !== 0)) return false;\n\
+  if (geometry.media_box_width_milli_points === 0 || geometry.media_box_height_milli_points === 0 || geometry.crop_box_width_milli_points === 0 || geometry.crop_box_height_milli_points === 0) return false;\n",
+        );
+    }
+    if record.name == "PageViewport" {
+        out.push_str(
+            "  const page = value as unknown as PageViewport;\n\
+  if (page.clip_width_milli_points === 0 || page.clip_height_milli_points === 0) return false;\n",
+        );
+    }
+    if record.name == "ViewportRequest" {
+        out.push_str(
+            "  const viewport = value as unknown as ViewportRequest;\n\
+  if (viewport.generation === 0n || viewport.document_revision === 0n || viewport.zoom_numerator === 0 || viewport.zoom_denominator === 0 || viewport.device_scale_milli === 0) return false;\n\
+  if (gcdU32(viewport.zoom_numerator, viewport.zoom_denominator) !== 1) return false;\n\
+  const pageIndexes = new Set(viewport.visible_pages.map((page) => page.page_index));\n\
+  if (pageIndexes.size !== viewport.visible_pages.length) return false;\n\
+  const pageIdentities = new Set(viewport.visible_pages.map((page) => Array.from(page.geometry.identity).join(\",\")));\n\
+  if (pageIdentities.size !== viewport.visible_pages.length) return false;\n",
         );
     }
     if record.name == "CapabilityDecision" {
@@ -1038,21 +1188,44 @@ const validateTransferBinding = (message: Command | Event, transferSlots: number
     default: return true;\n\
   }\n\
 };\n\
+const validatePayloadCorrelation = (correlation: Correlation, message: Command | Event): boolean => {\n\
+  switch (message.type) {\n\
+    case \"SetViewport\": return correlation.generation === message.payload.viewport.generation;\n\
+    case \"Cancel\": return correlation.request === message.payload.target;\n\
+    case \"Ready\": return correlation.worker === message.payload.worker;\n\
+    case \"DocumentReady\": return correlation.session === undefined || correlation.session === message.payload.session;\n\
+    case \"SurfaceReady\": return correlation.worker === message.payload.metadata.owner.worker\n\
+      && correlation.session === message.payload.metadata.owner.session\n\
+      && correlation.generation === message.payload.metadata.generation;\n\
+    case \"RequestCancelled\": return correlation.request === message.payload.target;\n\
+    case \"SessionClosed\": return correlation.session === message.payload.session;\n\
+    case \"WorkerStopped\": return correlation.worker === message.payload.worker;\n\
+    default: return true;\n\
+  }\n\
+};\n\
 const validateEnvelopeDescriptor = (header: EnvelopeHeader, correlation: Correlation, message: Command | Event, kind: MessageKind, transferSlots: number): boolean => {\n\
   const descriptor = descriptorById(header.message_type);\n\
   return descriptor !== undefined\n\
     && descriptor.kind === kind\n\
     && descriptor.name === message.type\n\
     && validateDescriptorCorrelation(correlation, descriptor)\n\
-    && validateTransferBinding(message, transferSlots, descriptor);\n\
+    && validateTransferBinding(message, transferSlots, descriptor)\n\
+    && validatePayloadCorrelation(correlation, message);\n\
 };\n\
-export function validateCommandEnvelope(value: unknown, transferSlots = 0): value is CommandEnvelope {\n\
-  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"command\"], []) || !validateEnvelopeHeader(value.header) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return false;\n\
+export function validateEnvelopeHeaderForMinor(value: unknown, negotiatedMinor: number): value is EnvelopeHeader {\n\
+  return Number.isInteger(negotiatedMinor)\n\
+    && negotiatedMinor >= MIN_COMPATIBLE_MINOR\n\
+    && negotiatedMinor <= PROTOCOL_MINOR\n\
+    && validateEnvelopeHeader(value)\n\
+    && value.minor === negotiatedMinor;\n\
+}\n\
+export function validateCommandEnvelope(value: unknown, transferSlots = 0, negotiatedMinor: number = PROTOCOL_MINOR): value is CommandEnvelope {\n\
+  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"command\"], []) || !validateEnvelopeHeaderForMinor(value.header, negotiatedMinor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return false;\n\
   const envelope = value as unknown as CommandEnvelope;\n\
   return validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.command, \"command\", transferSlots);\n\
 }\n\
-export function validateEventEnvelope(value: unknown, transferSlots = 0): value is EventEnvelope {\n\
-  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"event\"], []) || !validateEnvelopeHeader(value.header) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return false;\n\
+export function validateEventEnvelope(value: unknown, transferSlots = 0, negotiatedMinor: number = PROTOCOL_MINOR): value is EventEnvelope {\n\
+  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"event\"], []) || !validateEnvelopeHeaderForMinor(value.header, negotiatedMinor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return false;\n\
   const envelope = value as unknown as EventEnvelope;\n\
   return validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.event, \"event\", transferSlots);\n\
 }\n",
@@ -1115,6 +1288,8 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
         protocol.name, protocol.major, protocol.minor
     )
     .unwrap();
+    writeln!(out, "generator_version {GENERATOR_VERSION}").unwrap();
+    writeln!(out, "compatible_minor_min {}", protocol.minor).unwrap();
     writeln!(out, "schema_sha256 {}", lowercase_hex(digest)).unwrap();
     writeln!(out, "wire_schema_hash {}", lowercase_hex(&digest[..16])).unwrap();
     writeln!(out, "schema_hash_truncation {SCHEMA_HASH_TRUNCATION}").unwrap();
@@ -1129,6 +1304,84 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
         ("sequence", "u64", 12, 8),
     ] {
         writeln!(out, "header_field {name} {ty} {offset} {bytes}").unwrap();
+    }
+    for scalar in &protocol.scalars {
+        writeln!(
+            out,
+            "scalar {} {}",
+            scalar.name,
+            scalar.primitive.schema_name()
+        )
+        .unwrap();
+    }
+    for enumeration in &protocol.enums {
+        writeln!(
+            out,
+            "enum {} {}",
+            enumeration.name,
+            enumeration.repr.schema_name()
+        )
+        .unwrap();
+        for variant in &enumeration.variants {
+            writeln!(
+                out,
+                "enum_variant {} {} {}",
+                enumeration.name, variant.name, variant.tag
+            )
+            .unwrap();
+        }
+    }
+    for record in &protocol.records {
+        writeln!(out, "record {}", record.name).unwrap();
+        for field in &record.fields {
+            writeln!(
+                out,
+                "record_field {} {} {} {} {} {}",
+                record.name,
+                field.name,
+                field.ty.schema_name(),
+                if field.presence == Presence::Required {
+                    "required"
+                } else {
+                    "optional"
+                },
+                match field.privacy {
+                    Privacy::Public => "public",
+                    Privacy::Private => "private",
+                    Privacy::Sensitive => "sensitive",
+                },
+                type_limit(&field.ty)
+            )
+            .unwrap();
+        }
+    }
+    for union in &protocol.unions {
+        writeln!(out, "union {} {}", union.name, union.repr.schema_name()).unwrap();
+        for variant in &union.variants {
+            writeln!(
+                out,
+                "union_variant {} {} {}",
+                union.name, variant.name, variant.tag
+            )
+            .unwrap();
+            for field in &variant.fields {
+                writeln!(
+                    out,
+                    "union_variant_field {} {} {} {} {} {}",
+                    union.name,
+                    variant.name,
+                    field.name,
+                    field.ty.schema_name(),
+                    match field.privacy {
+                        Privacy::Public => "public",
+                        Privacy::Private => "private",
+                        Privacy::Sensitive => "sensitive",
+                    },
+                    type_limit(&field.ty)
+                )
+                .unwrap();
+            }
+        }
     }
     if let Some(capabilities) = protocol
         .enums
@@ -1199,7 +1452,7 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
 
 fn generate_hash_registry(digest: &[u8; 32]) -> String {
     format!(
-        "algorithm sha256\ncanonical_source protocol/engine.protocol\nfull_sha256 {}\nwire_hash {}\nwire_hash_bytes 16\ntruncation_policy {SCHEMA_HASH_TRUNCATION}\n",
+        "algorithm sha256\ngenerator_version {GENERATOR_VERSION}\ncanonical_source protocol/engine.protocol\nfull_sha256 {}\nwire_hash {}\nwire_hash_bytes 16\ntruncation_policy {SCHEMA_HASH_TRUNCATION}\n",
         lowercase_hex(digest),
         lowercase_hex(&digest[..16])
     )
@@ -1208,28 +1461,64 @@ fn generate_hash_registry(digest: &[u8; 32]) -> String {
 fn generate_compatibility_vectors(protocol: &Protocol, digest: &[u8; 32]) -> String {
     let full = lowercase_hex(digest);
     let wire = lowercase_hex(&digest[..16]);
+    let minimum_minor = protocol.minor;
+    let mut fork_hash = digest[..16].to_vec();
+    fork_hash[0] ^= 0xff;
+    let fork_wire = lowercase_hex(&fork_hash);
+    let mut vectors = vec![format!(
+        "    {{\"name\":\"exact-schema\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected\":\"ExactSchema\"}}",
+        protocol.major, protocol.minor, protocol.major, protocol.minor
+    )];
+    if protocol.minor > 0 {
+        vectors.push(format!(
+            "    {{\"name\":\"unregistered-older-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"11111111111111111111111111111111\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMinor\"}}",
+            protocol.major,
+            protocol.minor,
+            protocol.major,
+            protocol.minor - 1
+        ));
+    }
+    if protocol.minor < u16::MAX {
+        vectors.push(format!(
+            "    {{\"name\":\"future-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{fork_wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMinor\"}}",
+            protocol.major,
+            protocol.minor,
+            protocol.major,
+            protocol.minor + 1
+        ));
+    }
+    vectors.extend([
+        format!(
+            "    {{\"name\":\"same-minor-schema-fork\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{fork_wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"IncompatibleSchema\"}}",
+            protocol.major, protocol.minor, protocol.major, protocol.minor
+        ),
+        format!(
+            "    {{\"name\":\"unknown-optional-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x800000000000003f\",\"peer_mandatory\":\"0x00\",\"expected\":\"ExactSchema\"}}",
+            protocol.major, protocol.minor, protocol.major, protocol.minor
+        ),
+        format!(
+            "    {{\"name\":\"unknown-mandatory-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}}",
+            protocol.major, protocol.minor, protocol.major, protocol.minor
+        ),
+        format!(
+            "    {{\"name\":\"mandatory-not-supported-by-endpoint\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3e\",\"peer_mandatory\":\"0x01\",\"expected_error\":\"InvalidEndpointCapabilities\"}}",
+            protocol.major, protocol.minor, protocol.major, protocol.minor
+        ),
+        format!(
+            "    {{\"name\":\"major-mismatch\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMajor\"}}",
+            protocol.major,
+            protocol.minor,
+            if protocol.major == u16::MAX {
+                protocol.major - 1
+            } else {
+                protocol.major + 1
+            },
+            protocol.minor
+        ),
+    ]);
     format!(
-        "{{\n  \"schema_sha256\": \"{full}\",\n  \"wire_schema_hash\": \"{wire}\",\n  \"truncation_policy\": \"{SCHEMA_HASH_TRUNCATION}\",\n  \"vectors\": [\n    {{\"name\":\"exact-schema\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"same_hash\":true,\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected\":\"ExactSchema\"}},\n    {{\"name\":\"compatible-older-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"same_hash\":false,\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected\":\"CompatibleMinor\"}},\n    {{\"name\":\"unknown-optional-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"same_hash\":true,\"peer_supported\":\"0x800000000000003f\",\"peer_mandatory\":\"0x00\",\"expected\":\"ExactSchema\"}},\n    {{\"name\":\"unknown-mandatory-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"same_hash\":true,\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}},\n    {{\"name\":\"major-mismatch\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"same_hash\":true,\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMajor\"}}\n  ]\n}}\n",
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor.saturating_sub(1),
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor,
-        protocol.major,
-        protocol.minor,
-        protocol.major.saturating_add(1),
-        protocol.minor
+        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"schema_sha256\": \"{full}\",\n  \"wire_schema_hash\": \"{wire}\",\n  \"truncation_policy\": \"{SCHEMA_HASH_TRUNCATION}\",\n  \"minimum_compatible_minor\": {minimum_minor},\n  \"vectors\": [\n{}\n  ]\n}}\n",
+        vectors.join(",\n")
     )
 }
 
@@ -1240,11 +1529,13 @@ fn generate_invalid_vectors(protocol: &Protocol, digest: &[u8; 32]) -> String {
         .find(|message| message.name == "Hello")
         .expect("canonical schema has Hello");
     let header = desktop_header_hex(protocol.major, protocol.minor, hello.id, 0, 0, 1);
+    let zero_sequence = desktop_header_hex(protocol.major, protocol.minor, hello.id, 0, 0, 0);
     format!(
-        "{{\n  \"schema_sha256\": \"{}\",\n  \"vectors\": [\n    {{\"name\":\"truncated-header\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"TruncatedHeader\"}},\n    {{\"name\":\"payload-length-mismatch\",\"frame_hex\":\"{}00\",\"transfer_slots\":0,\"expected_error\":\"FrameLengthMismatch\"}},\n    {{\"name\":\"unknown-message\",\"message_type\":65535,\"expected_error\":\"UnknownMessage\"}},\n    {{\"name\":\"unsupported-flags\",\"message_type\":{},\"flags\":1,\"expected_error\":\"InvalidFlags\"}},\n    {{\"name\":\"missing-required-correlation\",\"message_type\":{},\"correlation\":{{}},\"expected_error\":\"InvalidCorrelation\"}},\n    {{\"name\":\"transfer-count-out-of-range\",\"message_type\":{},\"transfer_slots\":1,\"expected_error\":\"InvalidTransferCount\"}},\n    {{\"name\":\"provide-data-duplicate-slot\",\"message_type\":4,\"transfer_slots\":2,\"slots\":[0,0],\"expected_error\":\"InvalidTransferBinding\"}},\n    {{\"name\":\"surface-stride-too-small\",\"width\":100,\"height\":1,\"stride\":1,\"byte_length\":\"1\",\"expected_error\":\"InvalidSurfaceLayout\"}},\n    {{\"name\":\"surface-range-overflow\",\"byte_offset\":\"18446744073709551615\",\"byte_length\":\"1\",\"region_length\":\"18446744073709551615\",\"expected_error\":\"NumericOverflow\"}},\n    {{\"name\":\"surface-reclaimed-missing-reason\",\"message_type\":113,\"payload\":{{\"surface\":1}},\"expected_error\":\"MissingRequiredField\"}},\n    {{\"name\":\"unknown-mandatory-capability\",\"mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}},\n    {{\"name\":\"silent-decision-truncation\",\"missing_total\":17,\"missing_count\":16,\"missing_completeness\":\"Complete\",\"expected_error\":\"InvalidCapabilityDecision\"}}\n  ]\n}}\n",
+        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"schema_sha256\": \"{}\",\n  \"vectors\": [\n    {{\"name\":\"truncated-header\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"TruncatedHeader\"}},\n    {{\"name\":\"payload-length-mismatch\",\"frame_hex\":\"{}00\",\"transfer_slots\":0,\"expected_error\":\"FrameLengthMismatch\"}},\n    {{\"name\":\"zero-sequence\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"NonMonotonicSequence\"}},\n    {{\"name\":\"unknown-message\",\"message_type\":65535,\"expected_error\":\"UnknownMessage\"}},\n    {{\"name\":\"unsupported-flags\",\"message_type\":{},\"flags\":1,\"expected_error\":\"InvalidFlags\"}},\n    {{\"name\":\"missing-required-correlation\",\"message_type\":{},\"correlation\":{{}},\"expected_error\":\"InvalidCorrelation\"}},\n    {{\"name\":\"transfer-count-out-of-range\",\"message_type\":{},\"transfer_slots\":1,\"expected_error\":\"InvalidTransferCount\"}},\n    {{\"name\":\"provide-data-duplicate-slot\",\"message_type\":4,\"transfer_slots\":2,\"slots\":[0,0],\"expected_error\":\"InvalidTransferBinding\"}},\n    {{\"name\":\"surface-stride-too-small\",\"width\":100,\"height\":1,\"stride\":1,\"byte_length\":\"1\",\"expected_error\":\"InvalidSurfaceLayout\"}},\n    {{\"name\":\"surface-range-overflow\",\"byte_offset\":\"18446744073709551615\",\"byte_length\":\"1\",\"region_length\":\"18446744073709551615\",\"expected_error\":\"NumericOverflow\"}},\n    {{\"name\":\"surface-reclaimed-missing-reason\",\"message_type\":113,\"payload\":{{\"surface\":1}},\"expected_error\":\"MissingRequiredField\"}},\n    {{\"name\":\"unknown-mandatory-capability\",\"mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}},\n    {{\"name\":\"mandatory-not-supported-by-endpoint\",\"supported\":\"0x3e\",\"mandatory\":\"0x01\",\"expected_error\":\"InvalidEndpointCapabilities\"}},\n    {{\"name\":\"silent-decision-truncation\",\"missing_total\":17,\"missing_count\":16,\"missing_completeness\":\"Complete\",\"expected_error\":\"InvalidCapabilityDecision\"}}\n  ]\n}}\n",
         lowercase_hex(digest),
         &header[..18],
         header,
+        zero_sequence,
         hello.id,
         hello.id,
         hello.id
@@ -1304,8 +1595,15 @@ mod tests {
         let protocol = parse_schema(SCHEMA).unwrap();
         let vectors = generate_compatibility_vectors(&protocol, &[0x5a; 32]);
         assert!(vectors.contains("\"expected\":\"ExactSchema\""));
-        assert!(vectors.contains("\"expected\":\"CompatibleMinor\""));
+        assert!(!vectors.contains("\"expected\":\"CompatibleMinor\""));
+        assert!(vectors.contains("\"generator_version\": \"0.1.0\""));
+        assert!(vectors.contains("\"minimum_compatible_minor\": 2"));
+        assert!(vectors.contains("\"name\":\"unregistered-older-minor\""));
+        assert!(vectors.contains("\"name\":\"future-minor\""));
+        assert!(vectors.contains("\"name\":\"same-minor-schema-fork\""));
+        assert!(vectors.contains("\"peer_schema_hash\""));
         assert!(vectors.contains("\"expected_error\":\"UnknownMandatoryCapability\""));
+        assert!(vectors.contains("\"expected_error\":\"InvalidEndpointCapabilities\""));
     }
 
     #[test]

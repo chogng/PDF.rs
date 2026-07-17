@@ -106,9 +106,10 @@ impl SequenceTracker {
     }
 
     fn validate(&self, candidate: u64) -> Result<(), ProtocolError> {
-        if self
-            .last_accepted
-            .is_some_and(|last_accepted| candidate <= last_accepted)
+        if candidate == 0
+            || self
+                .last_accepted
+                .is_some_and(|last_accepted| candidate <= last_accepted)
         {
             return Err(ProtocolError::for_code(
                 ProtocolErrorCode::NonMonotonicSequence,
@@ -485,7 +486,7 @@ mod tests {
         let policy = policy(7, 0, 4, 0, 0);
         let mut host_to_engine = SequenceTracker::new();
         let mut engine_to_host = SequenceTracker::new();
-        for sequence in [0, 8, u64::MAX] {
+        for sequence in [1, 8, u64::MAX] {
             let bytes = frame(PROTOCOL_MAJOR, PROTOCOL_MINOR, 7, 0, 0, sequence, b"");
             decoder
                 .decode(&bytes, 0, policy, &mut host_to_engine)
@@ -496,7 +497,7 @@ mod tests {
             .decode(&independent, 0, policy, &mut engine_to_host)
             .unwrap();
 
-        for rejected in [u64::MAX, 8, 0] {
+        for rejected in [u64::MAX, 8, 1, 0] {
             let bytes = frame(PROTOCOL_MAJOR, PROTOCOL_MINOR, 7, 0, 0, rejected, b"");
             let error = decoder
                 .decode(&bytes, 0, policy, &mut host_to_engine)

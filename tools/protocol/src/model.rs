@@ -57,6 +57,7 @@ pub struct UnionVariant {
 pub struct UnionField {
     pub name: String,
     pub ty: Type,
+    pub privacy: Privacy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -179,7 +180,14 @@ impl Protocol {
                         if index != 0 {
                             out.push(',');
                         }
-                        write!(out, "{}:{}", field.name, field.ty.schema_name()).unwrap();
+                        write!(
+                            out,
+                            "{}:{}:{}",
+                            field.name,
+                            field.ty.schema_name(),
+                            field.privacy.schema_name()
+                        )
+                        .unwrap();
                     }
                 }
                 out.push('\n');

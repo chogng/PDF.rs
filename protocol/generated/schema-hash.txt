@@ -1,6 +1,7 @@
 algorithm sha256
+generator_version 0.1.0
 canonical_source protocol/engine.protocol
-full_sha256 89f342ea6861040e18fc5598431e1b9e6172356a40e363e8b8fce3522571400c
-wire_hash 89f342ea6861040e18fc5598431e1b9e
+full_sha256 7bafe655ec2ddb58fc8df4184da6e722c924307bbf6e0a68e91f7b292f708ee5
+wire_hash 7bafe655ec2ddb58fc8df4184da6e722
 wire_hash_bytes 16
 truncation_policy sha256-first-16-bytes

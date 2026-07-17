@@ -1,9 +1,10 @@
 use pdf_rs_protocol::{
     COMMAND_DESCRIPTORS, Correlation, DESKTOP_BYTE_ORDER, DESKTOP_FRAME_HEADER_BYTES,
     DesktopFrameDecoder, ENVELOPE_HEADER_BYTES, EVENT_DESCRIPTORS, EndpointCapabilities,
-    EndpointRole, HandshakeCompatibility, KNOWN_ENDPOINT_CAPABILITIES, PROTOCOL_MAJOR,
-    PROTOCOL_MINOR, ProtocolErrorCode, ProtocolHello, ProtocolLimits, ProtocolValidator, RequestId,
-    SCHEMA_HASH, SequenceTracker, SessionId, WorkerId,
+    EndpointRole, HandshakeCompatibility, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES,
+    MAX_TRANSFER_SLOTS, MIN_COMPATIBLE_MINOR, PROTOCOL_MAJOR, PROTOCOL_MINOR, ProtocolErrorCode,
+    ProtocolHello, ProtocolLimits, ProtocolValidator, RequestId, SCHEMA_HASH, SequenceTracker,
+    SessionId, WorkerId,
 };
 
 fn hello(
@@ -80,7 +81,7 @@ fn frame_policy_and_fixed_header_are_derived_from_the_generated_registry() {
 }
 
 #[test]
-fn exact_and_compatible_minor_handshakes_negotiate_bounds_and_known_capabilities() {
+fn exact_handshake_negotiates_bounds_and_known_capabilities() {
     let validator = ProtocolValidator::new(ProtocolLimits::default());
     let known = KNOWN_ENDPOINT_CAPABILITIES;
     assert_ne!(
@@ -115,34 +116,7 @@ fn exact_and_compatible_minor_handshakes_negotiate_bounds_and_known_capabilities
     );
     assert_eq!(accepted.capabilities(), known);
 
-    if PROTOCOL_MINOR > 0 {
-        let mut older_hash = SCHEMA_HASH;
-        older_hash[0] ^= 0xff;
-        let older = hello(
-            EndpointRole::Engine,
-            known,
-            0,
-            PROTOCOL_MINOR - 1,
-            older_hash,
-        );
-        let compatible = validator.validate_handshake(&local, &older).unwrap();
-        assert_eq!(
-            compatible.compatibility(),
-            HandshakeCompatibility::CompatibleMinor
-        );
-        assert_eq!(compatible.minor(), PROTOCOL_MINOR - 1);
-
-        let new_engine = hello(EndpointRole::Engine, known, 0, PROTOCOL_MINOR, SCHEMA_HASH);
-        let old_host = hello(EndpointRole::Host, known, 0, PROTOCOL_MINOR - 1, older_hash);
-        let reverse = validator
-            .validate_handshake(&new_engine, &old_host)
-            .unwrap();
-        assert_eq!(
-            reverse.compatibility(),
-            HandshakeCompatibility::CompatibleMinor
-        );
-        assert_eq!(reverse.minor(), PROTOCOL_MINOR - 1);
-    }
+    assert_eq!(MIN_COMPATIBLE_MINOR, PROTOCOL_MINOR);
 }
 
 #[test]
@@ -184,6 +158,41 @@ fn unknown_and_missing_mandatory_capabilities_have_distinct_stable_failures() {
         .unwrap_err();
     assert_eq!(error.code(), ProtocolErrorCode::MissingMandatoryCapability);
     assert_eq!(error.diagnostic_id(), "RPE-PROTOCOL-0026");
+
+    for invalid in [
+        hello(
+            EndpointRole::Host,
+            KNOWN_ENDPOINT_CAPABILITIES & !one_known,
+            one_known,
+            PROTOCOL_MINOR,
+            SCHEMA_HASH,
+        ),
+        hello(
+            EndpointRole::Engine,
+            KNOWN_ENDPOINT_CAPABILITIES & !one_known,
+            one_known,
+            PROTOCOL_MINOR,
+            SCHEMA_HASH,
+        ),
+    ] {
+        let (local, peer) = if invalid.endpoint_role == EndpointRole::Host {
+            (
+                invalid,
+                hello(
+                    EndpointRole::Engine,
+                    KNOWN_ENDPOINT_CAPABILITIES,
+                    0,
+                    PROTOCOL_MINOR,
+                    SCHEMA_HASH,
+                ),
+            )
+        } else {
+            (local.clone(), invalid)
+        };
+        let error = validator.validate_handshake(&local, &peer).unwrap_err();
+        assert_eq!(error.code(), ProtocolErrorCode::InvalidEndpointCapabilities);
+        assert_eq!(error.diagnostic_id(), "RPE-PROTOCOL-0029");
+    }
 }
 
 #[test]
@@ -247,6 +256,34 @@ fn same_minor_schema_fork_role_version_and_endpoint_limits_fail_closed() {
             },
             ProtocolErrorCode::InvalidEndpointLimits,
         ),
+        (
+            {
+                let mut value = hello(
+                    EndpointRole::Engine,
+                    KNOWN_ENDPOINT_CAPABILITIES,
+                    0,
+                    PROTOCOL_MINOR,
+                    SCHEMA_HASH,
+                );
+                value.max_message_bytes = MAX_MESSAGE_BYTES + 1;
+                value
+            },
+            ProtocolErrorCode::InvalidEndpointLimits,
+        ),
+        (
+            {
+                let mut value = hello(
+                    EndpointRole::Engine,
+                    KNOWN_ENDPOINT_CAPABILITIES,
+                    0,
+                    PROTOCOL_MINOR,
+                    SCHEMA_HASH,
+                );
+                value.max_transfer_slots = MAX_TRANSFER_SLOTS + 1;
+                value
+            },
+            ProtocolErrorCode::InvalidEndpointLimits,
+        ),
     ];
     for (peer, expected) in cases {
         assert_eq!(
@@ -255,6 +292,73 @@ fn same_minor_schema_fork_role_version_and_endpoint_limits_fail_closed() {
                 .unwrap_err()
                 .code(),
             expected
+        );
+    }
+}
+
+#[test]
+fn handshake_accepts_only_the_generated_minor_compatibility_window() {
+    let validator = ProtocolValidator::new(ProtocolLimits::default());
+    let local = hello(
+        EndpointRole::Host,
+        KNOWN_ENDPOINT_CAPABILITIES,
+        0,
+        PROTOCOL_MINOR,
+        SCHEMA_HASH,
+    );
+    let mut different_hash = SCHEMA_HASH;
+    different_hash[0] ^= 0xff;
+
+    if MIN_COMPATIBLE_MINOR > 0 {
+        let too_old = hello(
+            EndpointRole::Engine,
+            KNOWN_ENDPOINT_CAPABILITIES,
+            0,
+            MIN_COMPATIBLE_MINOR - 1,
+            different_hash,
+        );
+        assert_eq!(
+            validator
+                .validate_handshake(&local, &too_old)
+                .unwrap_err()
+                .code(),
+            ProtocolErrorCode::UnsupportedMinor
+        );
+    }
+
+    if PROTOCOL_MINOR < u16::MAX {
+        for schema_hash in [different_hash, SCHEMA_HASH] {
+            let future = hello(
+                EndpointRole::Engine,
+                KNOWN_ENDPOINT_CAPABILITIES,
+                0,
+                PROTOCOL_MINOR + 1,
+                schema_hash,
+            );
+            assert_eq!(
+                validator
+                    .validate_handshake(&local, &future)
+                    .unwrap_err()
+                    .code(),
+                ProtocolErrorCode::UnsupportedMinor
+            );
+        }
+    }
+
+    if MIN_COMPATIBLE_MINOR < PROTOCOL_MINOR {
+        let dishonest_exact_hash = hello(
+            EndpointRole::Engine,
+            KNOWN_ENDPOINT_CAPABILITIES,
+            0,
+            MIN_COMPATIBLE_MINOR,
+            SCHEMA_HASH,
+        );
+        assert_eq!(
+            validator
+                .validate_handshake(&local, &dishonest_exact_hash)
+                .unwrap_err()
+                .code(),
+            ProtocolErrorCode::IncompatibleSchema
         );
     }
 }

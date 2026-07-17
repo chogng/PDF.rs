@@ -13,10 +13,12 @@ capability bits, and lifecycle events.
 # Algorithms and derivations
 
 - The parser accepts only bounded ASCII, LF-terminated canonical text and rejects alternate spacing,
-  duplicate definitions, unknown types/outcomes, reserved union discriminants, and values outside
-  fixed schema or message limits.
-- The generator uses one parsed model for all six output files. Output order, spelling, and paths
-  are fixed; generation has no timestamp, environment, or discovery-order input.
+  duplicate definitions, unknown types/outcomes, signed enum/union representations, reserved or
+  overflowing union discriminants, oversized enum/union collections, missing union-field privacy,
+  and values outside fixed schema or message limits.
+- The generator uses one parsed model for all six output files. Output order, spelling, paths, and
+  the package-version identity embedded in each output class are fixed; generation has no
+  timestamp, environment, or discovery-order input.
 - The full schema identity is SHA-256 over the exact canonical schema bytes. The 16-byte handshake
   identity is the first 16 digest bytes under the named `sha256-first-16-bytes` policy.
 - `generate <repository-root>` is the only writing mode. `--check <repository-root>` regenerates in

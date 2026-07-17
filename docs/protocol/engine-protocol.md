@@ -41,7 +41,7 @@
 - 消息 ID 注册表；
 - schema hash 和兼容性测试向量；
 
-禁止手工维护彼此独立的 Rust/TypeScript/IPC 字段定义。协议文档示例必须依据生成的桌面字段注册表复核；生成器版本和 schema hash 必须进入构建与发布证据。
+禁止手工维护彼此独立的 Rust/TypeScript/IPC 字段定义。协议文档示例必须依据生成的桌面字段注册表复核；Rust/TypeScript 常量、桌面字段注册表、hash registry 和 JSON 向量都必须携带同一生成器版本，生成器版本和 schema hash 必须进入构建与发布证据。
 
 当前 canonical source 是 `protocol/engine.protocol`。在仓库根目录使用以下命令生成或校验全部派生文件：
 
@@ -106,13 +106,13 @@ Host                         Engine
 ```
 
 - major 不同：拒绝连接。
-- `supported` 是端点实际实现的 capability bit set；`mandatory` 是该端点要求对端必须支持的 bit set，且本端 `mandatory` 不得包含本端未支持的 bit。
+- `supported` 是端点实际实现的 capability bit set；`mandatory` 是该端点要求对端必须支持的 bit set，且本端 `mandatory` 不得包含本端未支持的 bit；违反后者以 `InvalidEndpointCapabilities` 拒绝连接。
 - 任一端点的 `mandatory` 含未知 bit：以 `UnknownMandatoryCapability` 拒绝连接。
 - `local.mandatory & !peer.supported != 0` 或 `peer.mandatory & !local.supported != 0`：以 `MissingMandatoryCapability` 拒绝连接。
 - 协商结果只能使用 `local.supported & peer.supported & known_capabilities`；未知但非 mandatory 的 supported bit 可以忽略，不得据此访问新 payload、handle 或 transport。
-- major 相同、minor 与 capability 规则兼容时才允许连接；协商 minor 取双方较小值。
+- major 相同、minor 位于生成的 compatibility window 且 capability 规则兼容时才允许连接。仓库没有可认证的 0.1 canonical schema/hash，因此协议 0.2 的当前生成窗口只包含 minor 2；旧 minor、未来 minor 和未注册组合都以 `UnsupportedMinor` 拒绝。只有未来把旧 schema 的精确 wire hash 纳入 canonical 生成注册表并加入双向重放后，窗口才可扩展。当前端点固定声明当前 minor，协商 minor 取 peer minor。
 - wire schema hash 相同：启用精确 schema 快路径；它仍不能绕过 mandatory capability、endpoint role、消息大小或 transfer-slot 校验。
-- wire schema hash 不同但 minor 不同：只能按同 major 的生成兼容向量继续；wire schema hash 不同且双方声明同一 minor 时拒绝。
+- wire schema hash 不同但 minor 不同：只能按同 major、精确旧 hash 的生成兼容注册继续；当前注册为空，因此拒绝。wire schema hash 不同且双方声明同一 minor 时同样拒绝。
 - 协商完成前只允许握手、关闭和协议错误消息。
 - 每次 Worker 启动生成新的 `WorkerId`/epoch。
 
@@ -158,7 +158,7 @@ pub struct Correlation {
 - `SessionId` 在同一 Worker epoch 内不重用。
 - `RequestId` 由 command 发起方生成，在 session 内唯一。
 - `DataTicket`、`SurfaceId` 和 ChangeSet revision 由 owner 生成。
-- 每个发送方向维护单调递增 `sequence`；它用于检测重复/倒退和调试，不保证跨方向全序。
+- 每个发送方向维护从 1 开始的单调递增 `sequence`；0、重复和倒退都以 `NonMonotonicSequence` 拒绝。它用于检测重放和调试，不保证跨方向全序。
 - transport 可以乱序传输时，接收端仍按 command/event 语义处理；不得仅按 sequence 排序后假装依赖成立。
 - ID/epoch 不匹配的迟到消息丢弃，并记录脱敏协议指标。
 
@@ -179,7 +179,7 @@ pub struct Correlation {
 | `CloseSession` | 非 Closed | 不创建 | 幂等关闭 session |
 | `Shutdown` | Worker Ready | 不创建 | 有界 drain 后关闭 Worker |
 
-每个 command schema 必须声明：最大 payload、是否可重放、所有权、状态前置条件、预算、敏感字段和唯一终态。
+每个 command schema 必须声明：最大 payload、是否可重放、所有权、状态前置条件、预算、敏感字段和可能产生的 outcome events。生成 descriptor 将它们命名为 `outcome_events`；stream outcome 不得被误称为终态。创建 Request 的 command 另行遵守唯一终态规则。
 
 ## 9. Event 集
 
@@ -199,7 +199,7 @@ pub struct Correlation {
 | `SaveComplete` | 是（Save） | 输出 identity/hash/bytes 摘要 |
 | `RequestCancelled` | 是 | request 唯一取消终态 |
 | `RequestFailed` | 是 | 稳定 EngineError |
-| `SurfaceReclaimed` | 否 | 超时/close 后 handle 失效通知 |
+| `SurfaceReclaimed` | 否 | ReleaseSurface ack 或超时/close 后 handle 失效通知，reason 区分原因 |
 | `SessionClosed` | 是（Session） | session 不再产生新事件 |
 | `WorkerStopped` | 是（Worker） | 正常 shutdown 后 Worker epoch 终止 |
 | `WorkerFault` | Worker 终态 | Worker epoch 失效 |

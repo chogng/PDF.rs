@@ -56,6 +56,10 @@ pub enum ProtocolErrorCode {
     UnknownMandatoryCapability,
     /// The peer does not advertise a required known endpoint capability.
     MissingMandatoryCapability,
+    /// An endpoint requires a capability that it does not itself advertise as supported.
+    InvalidEndpointCapabilities,
+    /// Viewport geometry, scale, revision, generation, or canonical ordering is invalid.
+    InvalidViewport,
     /// Surface render-plan, scene, decision, configuration, or backend identity is stale.
     InvalidSurfacePlan,
     /// Surface placement does not match the accepted render plan.
@@ -94,6 +98,8 @@ impl ProtocolErrorCode {
             Self::MissingMandatoryCapability => "RPE-PROTOCOL-0026",
             Self::InvalidSurfacePlan => "RPE-PROTOCOL-0027",
             Self::InvalidSurfaceRegion => "RPE-PROTOCOL-0028",
+            Self::InvalidEndpointCapabilities => "RPE-PROTOCOL-0029",
+            Self::InvalidViewport => "RPE-PROTOCOL-0030",
         }
     }
 }
@@ -163,11 +169,14 @@ impl ProtocolError {
             | ProtocolErrorCode::IncompatibleSchema
             | ProtocolErrorCode::InvalidEndpointLimits
             | ProtocolErrorCode::UnknownMandatoryCapability
-            | ProtocolErrorCode::MissingMandatoryCapability => (
+            | ProtocolErrorCode::MissingMandatoryCapability
+            | ProtocolErrorCode::InvalidEndpointCapabilities => (
                 ProtocolErrorCategory::Compatibility,
                 ProtocolRecoverability::RejectConnection,
             ),
-            ProtocolErrorCode::UnknownMessage | ProtocolErrorCode::InvalidFlags => (
+            ProtocolErrorCode::UnknownMessage
+            | ProtocolErrorCode::InvalidFlags
+            | ProtocolErrorCode::InvalidViewport => (
                 ProtocolErrorCategory::Message,
                 ProtocolRecoverability::RejectFrame,
             ),

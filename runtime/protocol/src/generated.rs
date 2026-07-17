@@ -5,14 +5,24 @@
 
 pub const PROTOCOL_MAJOR: u16 = 0;
 pub const PROTOCOL_MINOR: u16 = 2;
+pub const PROTOCOL_GENERATOR_VERSION: &str = "0.1.0";
+pub const MIN_COMPATIBLE_MINOR: u16 = 2;
 pub const MAX_MESSAGE_BYTES: u32 = 16777216;
 pub const MAX_TRANSFER_SLOTS: u16 = 64;
-pub const SCHEMA_SHA256: [u8; 32] = [0x89, 0xf3, 0x42, 0xea, 0x68, 0x61, 0x04, 0x0e, 0x18, 0xfc, 0x55, 0x98, 0x43, 0x1e, 0x1b, 0x9e, 0x61, 0x72, 0x35, 0x6a, 0x40, 0xe3, 0x63, 0xe8, 0xb8, 0xfc, 0xe3, 0x52, 0x25, 0x71, 0x40, 0x0c];
-pub const SCHEMA_SHA256_HEX: &str = "89f342ea6861040e18fc5598431e1b9e6172356a40e363e8b8fce3522571400c";
-pub const SCHEMA_HASH: [u8; 16] = [0x89, 0xf3, 0x42, 0xea, 0x68, 0x61, 0x04, 0x0e, 0x18, 0xfc, 0x55, 0x98, 0x43, 0x1e, 0x1b, 0x9e];
+pub const SCHEMA_SHA256: [u8; 32] = [0x7b, 0xaf, 0xe6, 0x55, 0xec, 0x2d, 0xdb, 0x58, 0xfc, 0x8d, 0xf4, 0x18, 0x4d, 0xa6, 0xe7, 0x22, 0xc9, 0x24, 0x30, 0x7b, 0xbf, 0x6e, 0x0a, 0x68, 0xe9, 0x1f, 0x7b, 0x29, 0x2f, 0x70, 0x8e, 0xe5];
+pub const SCHEMA_SHA256_HEX: &str = "7bafe655ec2ddb58fc8df4184da6e722c924307bbf6e0a68e91f7b292f708ee5";
+pub const SCHEMA_HASH: [u8; 16] = [0x7b, 0xaf, 0xe6, 0x55, 0xec, 0x2d, 0xdb, 0x58, 0xfc, 0x8d, 0xf4, 0x18, 0x4d, 0xa6, 0xe7, 0x22];
 pub const SCHEMA_HASH_TRUNCATION: &str = "sha256-first-16-bytes";
 pub const DESKTOP_BYTE_ORDER: &str = "little-endian";
 pub const ENVELOPE_HEADER_BYTES: usize = 20;
+
+pub const VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT: usize = 64;
+pub const CAPABILITY_REQUIREMENT_DEPENDENCIES_MAX_COUNT: usize = 32;
+pub const CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT: usize = 16;
+pub const CAPABILITY_DECISION_MISSING_MAX_COUNT: usize = 16;
+pub const CAPABILITY_DECISION_CONTRIBUTORS_MAX_COUNT: usize = 32;
+pub const PROVIDE_DATA_COMMAND_SEGMENTS_MAX_COUNT: usize = 16;
+pub const NEED_DATA_EVENT_RANGES_MAX_COUNT: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct WorkerId(u64);
@@ -56,11 +66,17 @@ impl CanvasId {
     pub const fn value(self) -> u64 { self.0 }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PlatformHandle(u64);
 impl PlatformHandle {
     pub const fn new(value: u64) -> Self { Self(value) }
     pub const fn value(self) -> u64 { self.0 }
+}
+
+impl core::fmt::Debug for PlatformHandle {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("PlatformHandle([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -321,17 +337,36 @@ pub struct Correlation {
     pub generation: Option<u64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct SourceIdentity {
     pub stable_id: [u8; 32],
     pub revision: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for SourceIdentity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("SourceIdentity");
+        output.field("stable_id", &"[REDACTED]");
+        output.field("revision", &self.revision);
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct SourceDescriptor {
     pub identity: SourceIdentity,
     pub length: Option<u64>,
     pub validator: [u8; 32],
+}
+
+impl core::fmt::Debug for SourceDescriptor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("SourceDescriptor");
+        output.field("identity", &self.identity);
+        output.field("length", &self.length);
+        output.field("validator", &"[REDACTED]");
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -347,7 +382,7 @@ pub struct DataSegment {
     pub byte_length: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PageGeometry {
     pub identity: [u8; 32],
     pub media_box_x_milli_points: i32,
@@ -359,6 +394,23 @@ pub struct PageGeometry {
     pub crop_box_width_milli_points: u32,
     pub crop_box_height_milli_points: u32,
     pub intrinsic_rotation: PageRotation,
+}
+
+impl core::fmt::Debug for PageGeometry {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("PageGeometry");
+        output.field("identity", &"[REDACTED]");
+        output.field("media_box_x_milli_points", &self.media_box_x_milli_points);
+        output.field("media_box_y_milli_points", &self.media_box_y_milli_points);
+        output.field("media_box_width_milli_points", &self.media_box_width_milli_points);
+        output.field("media_box_height_milli_points", &self.media_box_height_milli_points);
+        output.field("crop_box_x_milli_points", &self.crop_box_x_milli_points);
+        output.field("crop_box_y_milli_points", &self.crop_box_y_milli_points);
+        output.field("crop_box_width_milli_points", &self.crop_box_width_milli_points);
+        output.field("crop_box_height_milli_points", &self.crop_box_height_milli_points);
+        output.field("intrinsic_rotation", &self.intrinsic_rotation);
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -403,7 +455,7 @@ pub struct SurfaceRegion {
     pub coordinate_space: SurfaceCoordinateSpace,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct SurfaceMetadata {
     pub id: SurfaceId,
     pub owner: SurfaceOwner,
@@ -425,7 +477,32 @@ pub struct SurfaceMetadata {
     pub backend: NativeBackend,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for SurfaceMetadata {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("SurfaceMetadata");
+        output.field("id", &self.id);
+        output.field("owner", &self.owner);
+        output.field("generation", &self.generation);
+        output.field("region", &self.region);
+        output.field("width", &self.width);
+        output.field("height", &self.height);
+        output.field("stride", &self.stride);
+        output.field("format", &self.format);
+        output.field("alpha", &self.alpha);
+        output.field("byte_offset", &self.byte_offset);
+        output.field("byte_length", &self.byte_length);
+        output.field("render_config", &self.render_config);
+        output.field("renderer_epoch", &self.renderer_epoch);
+        output.field("plan_id", &self.plan_id);
+        output.field("plan_hash", &self.plan_hash);
+        output.field("scene_hash", &"[REDACTED]");
+        output.field("decision_hash", &"[REDACTED]");
+        output.field("backend", &self.backend);
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilityLocation {
     pub page_index: Option<u32>,
     pub object_number: Option<u32>,
@@ -433,6 +510,19 @@ pub struct CapabilityLocation {
     pub source_offset: Option<u64>,
     pub command_index: Option<u32>,
     pub resource_id: Option<u32>,
+}
+
+impl core::fmt::Debug for CapabilityLocation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilityLocation");
+        output.field("page_index", &self.page_index);
+        output.field("object_number", &self.object_number);
+        output.field("object_generation", &self.object_generation);
+        output.field("source_offset", &"[REDACTED]");
+        output.field("command_index", &self.command_index);
+        output.field("resource_id", &self.resource_id);
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -443,7 +533,7 @@ pub struct CapabilityScope {
     pub resource: Option<u32>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilityContributor {
     pub id: u32,
     pub kind: CapabilityContributorKind,
@@ -451,14 +541,35 @@ pub struct CapabilityContributor {
     pub location: Option<CapabilityLocation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for CapabilityContributor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilityContributor");
+        output.field("id", &self.id);
+        output.field("kind", &self.kind);
+        output.field("code", &self.code);
+        output.field("location", &"[REDACTED]");
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilityContext {
     pub code: u32,
     pub value: u64,
     pub location: Option<CapabilityLocation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for CapabilityContext {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilityContext");
+        output.field("code", &self.code);
+        output.field("value", &self.value);
+        output.field("location", &"[REDACTED]");
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilityRequirement {
     pub id: u32,
     pub capability: u16,
@@ -470,7 +581,22 @@ pub struct CapabilityRequirement {
     pub location: Option<CapabilityLocation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for CapabilityRequirement {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilityRequirement");
+        output.field("id", &self.id);
+        output.field("capability", &self.capability);
+        output.field("parameter", &self.parameter);
+        output.field("context", &self.context);
+        output.field("dependencies", &self.dependencies);
+        output.field("scope", &self.scope);
+        output.field("contributor_ids", &self.contributor_ids);
+        output.field("location", &"[REDACTED]");
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilitySubject {
     pub source: SourceIdentity,
     pub document_revision: u64,
@@ -483,7 +609,23 @@ pub struct CapabilitySubject {
     pub scene_hash: SceneHash,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for CapabilitySubject {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilitySubject");
+        output.field("source", &"[REDACTED]");
+        output.field("document_revision", &self.document_revision);
+        output.field("revision_startxref", &self.revision_startxref);
+        output.field("page_index", &self.page_index);
+        output.field("page_object_number", &self.page_object_number);
+        output.field("page_object_generation", &self.page_object_generation);
+        output.field("scene_schema_major", &self.scene_schema_major);
+        output.field("scene_schema_minor", &self.scene_schema_minor);
+        output.field("scene_hash", &"[REDACTED]");
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilityDecision {
     pub decision_schema_version: u16,
     pub status: SupportStatus,
@@ -500,6 +642,28 @@ pub struct CapabilityDecision {
     pub scope: CapabilityScope,
     pub location: Option<CapabilityLocation>,
     pub rejection_code: Option<u32>,
+}
+
+impl core::fmt::Debug for CapabilityDecision {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilityDecision");
+        output.field("decision_schema_version", &self.decision_schema_version);
+        output.field("status", &self.status);
+        output.field("profile", &self.profile);
+        output.field("profile_version", &self.profile_version);
+        output.field("policy_version", &self.policy_version);
+        output.field("subject", &self.subject);
+        output.field("missing", &self.missing);
+        output.field("missing_total", &self.missing_total);
+        output.field("missing_completeness", &self.missing_completeness);
+        output.field("contributors", &self.contributors);
+        output.field("contributors_total", &self.contributors_total);
+        output.field("contributors_completeness", &self.contributors_completeness);
+        output.field("scope", &self.scope);
+        output.field("location", &"[REDACTED]");
+        output.field("rejection_code", &self.rejection_code);
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -522,16 +686,34 @@ pub struct HelloAcceptCommand {
     pub schema_hash: [u8; 16],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct OpenCommand {
     pub source: SourceDescriptor,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl core::fmt::Debug for OpenCommand {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("OpenCommand");
+        output.field("source", &"[REDACTED]");
+        output.finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct ProvideDataCommand {
     pub ticket: DataTicket,
     pub source: SourceIdentity,
     pub segments: Vec<DataSegment>,
+}
+
+impl core::fmt::Debug for ProvideDataCommand {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("ProvideDataCommand");
+        output.field("ticket", &self.ticket);
+        output.field("source", &self.source);
+        output.field("segments", &"[REDACTED]");
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -648,7 +830,7 @@ pub struct ProtocolFaultEvent {
     pub error: EngineError,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum SurfaceTransport {
     OffscreenCanvasCommit {
         canvas: CanvasId,
@@ -668,6 +850,12 @@ pub enum SurfaceTransport {
         region_length: u64,
         memory_epoch: MemoryEpoch,
     },
+}
+
+impl core::fmt::Debug for SurfaceTransport {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("SurfaceTransport([REDACTED])")
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -716,6 +904,31 @@ pub struct EventEnvelope {
     pub event: Event,
 }
 
+pub const MESSAGE_ID_HELLO: u16 = 1;
+pub const MESSAGE_ID_HELLO_ACCEPT: u16 = 2;
+pub const MESSAGE_ID_OPEN: u16 = 3;
+pub const MESSAGE_ID_PROVIDE_DATA: u16 = 4;
+pub const MESSAGE_ID_REGISTER_CANVAS: u16 = 5;
+pub const MESSAGE_ID_RELEASE_CANVAS: u16 = 6;
+pub const MESSAGE_ID_SET_VIEWPORT: u16 = 7;
+pub const MESSAGE_ID_CANCEL: u16 = 8;
+pub const MESSAGE_ID_RELEASE_SURFACE: u16 = 9;
+pub const MESSAGE_ID_CLOSE_SESSION: u16 = 10;
+pub const MESSAGE_ID_SHUTDOWN: u16 = 11;
+pub const MESSAGE_ID_READY: u16 = 101;
+pub const MESSAGE_ID_NEED_DATA: u16 = 102;
+pub const MESSAGE_ID_DOCUMENT_READY: u16 = 103;
+pub const MESSAGE_ID_CANVAS_RELEASED: u16 = 104;
+pub const MESSAGE_ID_CAPABILITY_REPORTED: u16 = 105;
+pub const MESSAGE_ID_SURFACE_READY: u16 = 106;
+pub const MESSAGE_ID_REQUEST_CANCELLED: u16 = 107;
+pub const MESSAGE_ID_REQUEST_FAILED: u16 = 108;
+pub const MESSAGE_ID_SESSION_CLOSED: u16 = 109;
+pub const MESSAGE_ID_WORKER_STOPPED: u16 = 110;
+pub const MESSAGE_ID_WORKER_FAULT: u16 = 111;
+pub const MESSAGE_ID_PROTOCOL_FAULT: u16 = 112;
+pub const MESSAGE_ID_SURFACE_RECLAIMED: u16 = 113;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MessageKind { Command, Event }
 
@@ -758,58 +971,58 @@ pub min_transfer_slots: u16,
 pub max_transfer_slots: u16,
 pub max_payload_bytes: u32,
 pub fields: &'static [FieldDescriptor],
-pub terminal_events: &'static [u16],
+pub outcome_events: &'static [u16],
 }
 
 const HELLO_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "hello", wire_type: "ProtocolHello", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const HELLO_TERMINAL_EVENTS: &[u16] = &[101, 112];
+const HELLO_OUTCOME_EVENTS: &[u16] = &[101, 112];
 const HELLO_ACCEPT_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "negotiated_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "schema_hash", wire_type: "bytes16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const HELLO_ACCEPT_TERMINAL_EVENTS: &[u16] = &[101, 112];
+const HELLO_ACCEPT_OUTCOME_EVENTS: &[u16] = &[101, 112];
 const OPEN_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "source", wire_type: "SourceDescriptor", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
 ];
-const OPEN_TERMINAL_EVENTS: &[u16] = &[103, 108, 107];
+const OPEN_OUTCOME_EVENTS: &[u16] = &[103, 108, 107];
 const PROVIDE_DATA_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "source", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "segments", wire_type: "list<DataSegment,16>", required: true, privacy: FieldPrivacy::Sensitive, max_count: 16 },
 ];
-const PROVIDE_DATA_TERMINAL_EVENTS: &[u16] = &[108];
+const PROVIDE_DATA_OUTCOME_EVENTS: &[u16] = &[108];
 const REGISTER_CANVAS_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "canvas", wire_type: "CanvasId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "transfer_slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "width", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "height", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const REGISTER_CANVAS_TERMINAL_EVENTS: &[u16] = &[104, 112];
+const REGISTER_CANVAS_OUTCOME_EVENTS: &[u16] = &[104, 112];
 const RELEASE_CANVAS_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "canvas", wire_type: "CanvasId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const RELEASE_CANVAS_TERMINAL_EVENTS: &[u16] = &[104, 112];
+const RELEASE_CANVAS_OUTCOME_EVENTS: &[u16] = &[104, 112];
 const SET_VIEWPORT_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "viewport", wire_type: "ViewportRequest", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const SET_VIEWPORT_TERMINAL_EVENTS: &[u16] = &[105, 106, 108];
+const SET_VIEWPORT_OUTCOME_EVENTS: &[u16] = &[105, 106, 108];
 const CANCEL_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "target", wire_type: "RequestId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const CANCEL_TERMINAL_EVENTS: &[u16] = &[107, 108];
+const CANCEL_OUTCOME_EVENTS: &[u16] = &[107, 108];
 const RELEASE_SURFACE_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const RELEASE_SURFACE_TERMINAL_EVENTS: &[u16] = &[112];
+const RELEASE_SURFACE_OUTCOME_EVENTS: &[u16] = &[113, 112];
 const CLOSE_SESSION_FIELDS: &[FieldDescriptor] = &[
 ];
-const CLOSE_SESSION_TERMINAL_EVENTS: &[u16] = &[109];
+const CLOSE_SESSION_OUTCOME_EVENTS: &[u16] = &[109];
 const SHUTDOWN_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "deadline_ms", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const SHUTDOWN_TERMINAL_EVENTS: &[u16] = &[110, 111];
+const SHUTDOWN_OUTCOME_EVENTS: &[u16] = &[110, 111];
 const READY_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "negotiated_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
@@ -863,33 +1076,33 @@ const SURFACE_RECLAIMED_FIELDS: &[FieldDescriptor] = &[
 ];
 
 pub const COMMAND_DESCRIPTORS: &[MessageDescriptor] = &[
-    MessageDescriptor { kind: MessageKind::Command, name: "Hello", id: 1, payload: "HelloCommand", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, fields: HELLO_FIELDS, terminal_events: HELLO_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "HelloAccept", id: 2, payload: "HelloAcceptCommand", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: HELLO_ACCEPT_FIELDS, terminal_events: HELLO_ACCEPT_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "Open", id: 3, payload: "OpenCommand", state: "Ready", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, fields: OPEN_FIELDS, terminal_events: OPEN_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "ProvideData", id: 4, payload: "ProvideDataCommand", state: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 16, max_payload_bytes: 16777216, fields: PROVIDE_DATA_FIELDS, terminal_events: PROVIDE_DATA_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "RegisterCanvas", id: 5, payload: "RegisterCanvasCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 1, max_payload_bytes: 256, fields: REGISTER_CANVAS_FIELDS, terminal_events: REGISTER_CANVAS_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseCanvas", id: 6, payload: "ReleaseCanvasCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: RELEASE_CANVAS_FIELDS, terminal_events: RELEASE_CANVAS_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "SetViewport", id: 7, payload: "SetViewportCommand", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 8192, fields: SET_VIEWPORT_FIELDS, terminal_events: SET_VIEWPORT_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "Cancel", id: 8, payload: "CancelCommand", state: "ActiveRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: CANCEL_FIELDS, terminal_events: CANCEL_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseSurface", id: 9, payload: "ReleaseSurfaceCommand", state: "SurfaceAlive", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: RELEASE_SURFACE_FIELDS, terminal_events: RELEASE_SURFACE_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "CloseSession", id: 10, payload: "CloseSessionCommand", state: "NonClosed", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 64, fields: CLOSE_SESSION_FIELDS, terminal_events: CLOSE_SESSION_TERMINAL_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "Shutdown", id: 11, payload: "ShutdownCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SHUTDOWN_FIELDS, terminal_events: SHUTDOWN_TERMINAL_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "Hello", id: 1, payload: "HelloCommand", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, fields: HELLO_FIELDS, outcome_events: HELLO_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "HelloAccept", id: 2, payload: "HelloAcceptCommand", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: HELLO_ACCEPT_FIELDS, outcome_events: HELLO_ACCEPT_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "Open", id: 3, payload: "OpenCommand", state: "Ready", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, fields: OPEN_FIELDS, outcome_events: OPEN_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "ProvideData", id: 4, payload: "ProvideDataCommand", state: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 16, max_payload_bytes: 16777216, fields: PROVIDE_DATA_FIELDS, outcome_events: PROVIDE_DATA_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "RegisterCanvas", id: 5, payload: "RegisterCanvasCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 1, max_payload_bytes: 256, fields: REGISTER_CANVAS_FIELDS, outcome_events: REGISTER_CANVAS_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseCanvas", id: 6, payload: "ReleaseCanvasCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: RELEASE_CANVAS_FIELDS, outcome_events: RELEASE_CANVAS_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "SetViewport", id: 7, payload: "SetViewportCommand", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 8192, fields: SET_VIEWPORT_FIELDS, outcome_events: SET_VIEWPORT_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "Cancel", id: 8, payload: "CancelCommand", state: "ActiveRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: CANCEL_FIELDS, outcome_events: CANCEL_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseSurface", id: 9, payload: "ReleaseSurfaceCommand", state: "SurfaceAlive", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: RELEASE_SURFACE_FIELDS, outcome_events: RELEASE_SURFACE_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "CloseSession", id: 10, payload: "CloseSessionCommand", state: "NonClosed", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 64, fields: CLOSE_SESSION_FIELDS, outcome_events: CLOSE_SESSION_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "Shutdown", id: 11, payload: "ShutdownCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SHUTDOWN_FIELDS, outcome_events: SHUTDOWN_OUTCOME_EVENTS },
 ];
 
 pub const EVENT_DESCRIPTORS: &[MessageDescriptor] = &[
-    MessageDescriptor { kind: MessageKind::Event, name: "Ready", id: 101, payload: "ReadyEvent", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: READY_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "NeedData", id: 102, payload: "NeedDataEvent", state: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, fields: NEED_DATA_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state: "Opening", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, fields: DOCUMENT_READY_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "CanvasReleased", id: 104, payload: "CanvasReleasedEvent", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: CANVAS_RELEASED_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, fields: CAPABILITY_REPORTED_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, fields: SURFACE_READY_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state: "ActiveRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: REQUEST_CANCELLED_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state: "Any", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: REQUEST_FAILED_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "SessionClosed", id: 109, payload: "SessionClosedEvent", state: "Closing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SESSION_CLOSED_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "WorkerStopped", id: 110, payload: "WorkerStoppedEvent", state: "Draining", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: WORKER_STOPPED_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "WorkerFault", id: 111, payload: "WorkerFaultEvent", state: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: WORKER_FAULT_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "ProtocolFault", id: 112, payload: "ProtocolFaultEvent", state: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: PROTOCOL_FAULT_FIELDS, terminal_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReclaimed", id: 113, payload: "SurfaceReclaimedEvent", state: "Ready", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SURFACE_RECLAIMED_FIELDS, terminal_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "Ready", id: 101, payload: "ReadyEvent", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: READY_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "NeedData", id: 102, payload: "NeedDataEvent", state: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, fields: NEED_DATA_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state: "Opening", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, fields: DOCUMENT_READY_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "CanvasReleased", id: 104, payload: "CanvasReleasedEvent", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: CANVAS_RELEASED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, fields: CAPABILITY_REPORTED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, fields: SURFACE_READY_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state: "ActiveRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: REQUEST_CANCELLED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state: "Any", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: REQUEST_FAILED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SessionClosed", id: 109, payload: "SessionClosedEvent", state: "Closing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SESSION_CLOSED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "WorkerStopped", id: 110, payload: "WorkerStoppedEvent", state: "Draining", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: WORKER_STOPPED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "WorkerFault", id: 111, payload: "WorkerFaultEvent", state: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: WORKER_FAULT_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "ProtocolFault", id: 112, payload: "ProtocolFaultEvent", state: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: PROTOCOL_FAULT_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReclaimed", id: 113, payload: "SurfaceReclaimedEvent", state: "Ready", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SURFACE_RECLAIMED_FIELDS, outcome_events: &[] },
 ];
 
 pub fn descriptor_by_id(id: u16) -> Option<&'static MessageDescriptor> {

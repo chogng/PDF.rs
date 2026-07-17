@@ -200,12 +200,7 @@ fn parse_record(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Record, Schem
             "optional" => Presence::Optional,
             _ => return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0012", "invalid-presence")),
         };
-        let privacy = match parts[4] {
-            "public" => Privacy::Public,
-            "private" => Privacy::Private,
-            "sensitive" => Privacy::Sensitive,
-            _ => return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0013", "invalid-privacy")),
-        };
+        let privacy = parse_privacy(cursor, parts[4])?;
         let ty = parse_type(cursor, parts[2])?;
         if (presence == Presence::Optional) != matches!(ty, Type::Optional(_)) {
             return Err(cursor.error(
@@ -247,9 +242,17 @@ fn parse_union(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Union, SchemaE
         let mut fields = Vec::new();
         if let Some(list) = parts.get(3) {
             for pair in list.split(',') {
-                let (field, ty) = pair.split_once(':').ok_or_else(|| {
+                let mut components = pair.split(':');
+                let field = components.next().unwrap_or_default();
+                let ty = components.next().ok_or_else(|| {
                     cursor.error("RPE-PROTOCOL-SCHEMA-0015", "invalid-union-field")
                 })?;
+                let privacy = components.next().ok_or_else(|| {
+                    cursor.error("RPE-PROTOCOL-SCHEMA-0015", "missing-union-field-privacy")
+                })?;
+                if components.next().is_some() {
+                    return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0015", "invalid-union-field"));
+                }
                 if !valid_field_name(field) {
                     return Err(
                         cursor.error("RPE-PROTOCOL-SCHEMA-0015", "invalid-union-field-name")
@@ -263,7 +266,11 @@ fn parse_union(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Union, SchemaE
                 fields.push(UnionField {
                     name: field.into(),
                     ty: parse_type(cursor, ty)?,
+                    privacy: parse_privacy(cursor, privacy)?,
                 });
+                if fields.len() > MAX_FIELDS {
+                    return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0001", "too-many-union-fields"));
+                }
             }
         }
         variants.push(UnionVariant {
@@ -271,6 +278,9 @@ fn parse_union(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Union, SchemaE
             tag: parse_number(cursor, parts[2])?,
             fields,
         });
+        if variants.len() > MAX_FIELDS {
+            return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0001", "too-many-union-variants"));
+        }
     }
     if variants.is_empty() {
         return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0016", "empty-union"));
@@ -364,12 +374,22 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
         let _ = scalar;
     }
     for enumeration in &protocol.enums {
+        validate_unsigned_repr(enumeration.repr, &enumeration.name)?;
         validate_variants(
             &enumeration
                 .variants
                 .iter()
                 .map(|value| (&value.name, value.tag))
                 .collect::<Vec<_>>(),
+        )?;
+        validate_variant_tags(
+            enumeration.repr,
+            &enumeration
+                .variants
+                .iter()
+                .map(|value| value.tag)
+                .collect::<Vec<_>>(),
+            &enumeration.name,
         )?;
     }
     for record in &protocol.records {
@@ -386,12 +406,22 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
         }
     }
     for union in &protocol.unions {
+        validate_unsigned_repr(union.repr, &union.name)?;
         validate_variants(
             &union
                 .variants
                 .iter()
                 .map(|value| (&value.name, value.tag))
                 .collect::<Vec<_>>(),
+        )?;
+        validate_variant_tags(
+            union.repr,
+            &union
+                .variants
+                .iter()
+                .map(|value| value.tag)
+                .collect::<Vec<_>>(),
+            &union.name,
         )?;
         for variant in &union.variants {
             let mut fields = BTreeSet::new();
@@ -488,6 +518,51 @@ fn validate_variants(variants: &[(&String, u16)]) -> Result<(), SchemaError> {
         }
     }
     Ok(())
+}
+
+fn validate_unsigned_repr(repr: Primitive, name: &str) -> Result<(), SchemaError> {
+    if matches!(
+        repr,
+        Primitive::U8 | Primitive::U16 | Primitive::U32 | Primitive::U64
+    ) {
+        Ok(())
+    } else {
+        Err(SchemaError::new(
+            0,
+            "RPE-PROTOCOL-SCHEMA-0035",
+            format!("invalid-enum-or-union-repr-{name}"),
+        ))
+    }
+}
+
+fn validate_variant_tags(repr: Primitive, tags: &[u16], name: &str) -> Result<(), SchemaError> {
+    let maximum = match repr {
+        Primitive::U8 => u64::from(u8::MAX),
+        Primitive::U16 => u64::from(u16::MAX),
+        Primitive::U32 => u64::from(u32::MAX),
+        Primitive::U64 => u64::MAX,
+        Primitive::I32 | Primitive::Bool | Primitive::Bytes16 | Primitive::Bytes32 => {
+            return validate_unsigned_repr(repr, name);
+        }
+    };
+    if tags.iter().all(|tag| u64::from(*tag) <= maximum) {
+        Ok(())
+    } else {
+        Err(SchemaError::new(
+            0,
+            "RPE-PROTOCOL-SCHEMA-0036",
+            format!("variant-tag-out-of-range-{name}"),
+        ))
+    }
+}
+
+fn parse_privacy(cursor: &Cursor<'_>, value: &str) -> Result<Privacy, SchemaError> {
+    match value {
+        "public" => Ok(Privacy::Public),
+        "private" => Ok(Privacy::Private),
+        "sensitive" => Ok(Privacy::Sensitive),
+        _ => Err(cursor.error("RPE-PROTOCOL-SCHEMA-0013", "invalid-privacy")),
+    }
 }
 
 fn validate_type(ty: &Type, names: &BTreeSet<String>) -> Result<(), SchemaError> {
@@ -697,11 +772,67 @@ mod tests {
 
         let reserved_union_field = MINIMAL.replace(
             "\n\nrecord PingCommand",
-            "\n\nunion Choice u8\nvariant Value 1 kind:u8\nend\n\nrecord PingCommand",
+            "\n\nunion Choice u8\nvariant Value 1 kind:u8:public\nend\n\nrecord PingCommand",
         );
         assert_eq!(
             parse_schema(&reserved_union_field).unwrap_err().code(),
             "RPE-PROTOCOL-SCHEMA-0015"
+        );
+
+        let invalid_repr = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            "\n\nenum Choice bool\nvariant Value 1\nend\n\nrecord PingCommand",
+        );
+        assert_eq!(
+            parse_schema(&invalid_repr).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0035"
+        );
+
+        let overflowing_tag = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            "\n\nenum Choice u8\nvariant Value 256\nend\n\nrecord PingCommand",
+        );
+        assert_eq!(
+            parse_schema(&overflowing_tag).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0036"
+        );
+
+        let missing_union_privacy = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            "\n\nunion Choice u8\nvariant Value 1 value:u8\nend\n\nrecord PingCommand",
+        );
+        assert_eq!(
+            parse_schema(&missing_union_privacy).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0015"
+        );
+    }
+
+    #[test]
+    fn union_variant_and_field_counts_are_independently_bounded() {
+        let variants = (1..=257)
+            .map(|tag| format!("variant Value{tag} {tag}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let too_many_variants = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            &format!("\n\nunion Choice u16\n{variants}\nend\n\nrecord PingCommand"),
+        );
+        assert_eq!(
+            parse_schema(&too_many_variants).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0001"
+        );
+
+        let fields = (0..257)
+            .map(|index| format!("value{index}:u8:public"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let too_many_fields = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            &format!("\n\nunion Choice u8\nvariant Value 1 {fields}\nend\n\nrecord PingCommand"),
+        );
+        assert_eq!(
+            parse_schema(&too_many_fields).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0001"
         );
     }
 }

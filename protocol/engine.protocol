@@ -447,10 +447,10 @@ field error EngineError required public
 end
 
 union SurfaceTransport u8
-variant OffscreenCanvasCommit 1 canvas:CanvasId,region_length:u64
-variant BrowserTransfer 2 slot:u16,transfer_kind:BrowserTransferKind,transfer_length:u64
-variant SharedMemory 3 handle:PlatformHandle,region_length:u64,release_token:u64
-variant LocalMemory 4 region_length:u64,memory_epoch:MemoryEpoch
+variant OffscreenCanvasCommit 1 canvas:CanvasId:public,region_length:u64:public
+variant BrowserTransfer 2 slot:u16:public,transfer_kind:BrowserTransferKind:public,transfer_length:u64:public
+variant SharedMemory 3 handle:PlatformHandle:sensitive,region_length:u64:public,release_token:u64:sensitive
+variant LocalMemory 4 region_length:u64:public,memory_epoch:MemoryEpoch:public
 end
 
 message command Hello 1 HelloCommand Starting Worker no 0 0 0 512 Ready,ProtocolFault
@@ -461,7 +461,7 @@ message command RegisterCanvas 5 RegisterCanvasCommand Ready Worker no 0 1 1 256
 message command ReleaseCanvas 6 ReleaseCanvasCommand Ready Worker yes 0 0 0 128 CanvasReleased,ProtocolFault
 message command SetViewport 7 SetViewportCommand Ready Generation no 0 0 0 8192 CapabilityReported,SurfaceReady,RequestFailed
 message command Cancel 8 CancelCommand ActiveRequest Request yes 0 0 0 128 RequestCancelled,RequestFailed
-message command ReleaseSurface 9 ReleaseSurfaceCommand SurfaceAlive Session yes 0 0 0 128 ProtocolFault
+message command ReleaseSurface 9 ReleaseSurfaceCommand SurfaceAlive Session yes 0 0 0 128 SurfaceReclaimed,ProtocolFault
 message command CloseSession 10 CloseSessionCommand NonClosed Session yes 0 0 0 64 SessionClosed
 message command Shutdown 11 ShutdownCommand Ready Worker yes 0 0 0 128 WorkerStopped,WorkerFault
 message event Ready 101 ReadyEvent Starting Worker terminal 0 0 0 256

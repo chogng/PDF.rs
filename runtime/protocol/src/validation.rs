@@ -2,10 +2,12 @@ use std::fmt;
 
 use crate::{
     BrowserTransferKind, CanvasId, CapabilityDecisionHash, CorrelationRequirement, EndpointRole,
-    FrameMessagePolicy, KNOWN_ENDPOINT_CAPABILITIES, MemoryEpoch, NativeBackend, PlatformHandle,
+    FrameMessagePolicy, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES, MAX_TRANSFER_SLOTS,
+    MESSAGE_ID_SET_VIEWPORT, MIN_COMPATIBLE_MINOR, MemoryEpoch, NativeBackend, PlatformHandle,
     ProtocolError, ProtocolErrorCode, ProtocolHello, ProtocolLimits, RenderConfigHash,
     RenderPlanHash, RenderPlanId, RendererEpoch, SCHEMA_HASH, SceneHash, SessionId,
-    SurfaceMetadata, SurfaceRegion, SurfaceTransport, WorkerId, descriptor_by_id,
+    SetViewportCommand, SurfaceMetadata, SurfaceRegion, SurfaceTransport,
+    VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT, ViewportRequest, WorkerId, descriptor_by_id,
 };
 
 /// Negotiated schema relationship between compatible endpoints.
@@ -375,7 +377,10 @@ impl ProtocolValidator {
         if local.major != peer.major || local.major != crate::PROTOCOL_MAJOR {
             return Err(ProtocolError::for_code(ProtocolErrorCode::UnsupportedMajor));
         }
-        if local.minor != crate::PROTOCOL_MINOR {
+        if local.minor != crate::PROTOCOL_MINOR
+            || peer.minor < MIN_COMPATIBLE_MINOR
+            || peer.minor > crate::PROTOCOL_MINOR
+        {
             return Err(ProtocolError::for_code(ProtocolErrorCode::UnsupportedMinor));
         }
         if !opposite_roles(&local.endpoint_role, &peer.endpoint_role) {
@@ -390,8 +395,12 @@ impl ProtocolValidator {
         }
         if local.max_message_bytes == 0
             || peer.max_message_bytes == 0
+            || local.max_message_bytes > MAX_MESSAGE_BYTES
+            || peer.max_message_bytes > MAX_MESSAGE_BYTES
             || local.max_transfer_slots == 0
             || peer.max_transfer_slots == 0
+            || local.max_transfer_slots > MAX_TRANSFER_SLOTS
+            || peer.max_transfer_slots > MAX_TRANSFER_SLOTS
         {
             return Err(ProtocolError::for_code(
                 ProtocolErrorCode::InvalidEndpointLimits,
@@ -407,6 +416,13 @@ impl ProtocolValidator {
                 ProtocolErrorCode::UnknownMandatoryCapability,
             ));
         }
+        if local_mandatory & !local.capabilities.supported != 0
+            || peer_mandatory & !peer.capabilities.supported != 0
+        {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidEndpointCapabilities,
+            ));
+        }
         if local_mandatory & !peer.capabilities.supported != 0
             || peer_mandatory & !local.capabilities.supported != 0
         {
@@ -415,10 +431,15 @@ impl ProtocolValidator {
             ));
         }
 
-        let minor = local.minor.min(peer.minor);
+        let minor = peer.minor;
         let compatibility = if local.schema_hash == peer.schema_hash {
+            if peer.minor != crate::PROTOCOL_MINOR {
+                return Err(ProtocolError::for_code(
+                    ProtocolErrorCode::IncompatibleSchema,
+                ));
+            }
             HandshakeCompatibility::ExactSchema
-        } else if local.minor == peer.minor {
+        } else if peer.minor == crate::PROTOCOL_MINOR {
             return Err(ProtocolError::for_code(
                 ProtocolErrorCode::IncompatibleSchema,
             ));
@@ -494,6 +515,57 @@ impl ProtocolValidator {
             ));
         }
         Ok(())
+    }
+
+    /// Validates one complete canonical viewport before render planning or allocation.
+    pub fn validate_viewport_request(
+        &self,
+        viewport: &ViewportRequest,
+    ) -> Result<(), ProtocolError> {
+        if viewport.generation == 0
+            || viewport.document_revision == 0
+            || viewport.zoom_numerator == 0
+            || viewport.zoom_denominator == 0
+            || viewport.device_scale_milli == 0
+            || greatest_common_divisor(viewport.zoom_numerator, viewport.zoom_denominator) != 1
+            || viewport.visible_pages.len() > VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT
+        {
+            return Err(ProtocolError::for_code(ProtocolErrorCode::InvalidViewport));
+        }
+        for (index, page) in viewport.visible_pages.iter().enumerate() {
+            if !digest_is_nonzero(&page.geometry.identity)
+                || page.geometry.media_box_width_milli_points == 0
+                || page.geometry.media_box_height_milli_points == 0
+                || page.geometry.crop_box_width_milli_points == 0
+                || page.geometry.crop_box_height_milli_points == 0
+                || page.clip_width_milli_points == 0
+                || page.clip_height_milli_points == 0
+                || viewport.visible_pages[..index].iter().any(|earlier| {
+                    earlier.page_index == page.page_index
+                        || earlier.geometry.identity == page.geometry.identity
+                })
+            {
+                return Err(ProtocolError::for_code(ProtocolErrorCode::InvalidViewport));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validates SetViewport correlation and payload as one indivisible command contract.
+    pub fn validate_set_viewport(
+        &self,
+        correlation: &crate::Correlation,
+        command: &SetViewportCommand,
+        worker: WorkerId,
+        session: SessionId,
+    ) -> Result<(), ProtocolError> {
+        self.validate_correlation(MESSAGE_ID_SET_VIEWPORT, correlation, worker, Some(session))?;
+        if correlation.generation != Some(command.viewport.generation) {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidCorrelation,
+            ));
+        }
+        self.validate_viewport_request(&command.viewport)
     }
 
     /// Validates Surface owner, generation, epoch, layout, format, range, and transfer binding.
@@ -758,4 +830,13 @@ fn validate_surface_range(
 
 fn digest_is_nonzero(digest: &[u8; 32]) -> bool {
     digest.iter().any(|byte| *byte != 0)
+}
+
+fn greatest_common_divisor(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
 }
