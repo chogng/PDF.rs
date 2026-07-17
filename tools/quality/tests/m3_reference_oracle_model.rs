@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_quality::case_contract::validate_case_file;
@@ -14,6 +15,9 @@ const PATH_CLIP_CONTENT: &[u8] = b"q 0 0 50 100 re W n 0 g 0 0 100 100 re f Q \
 const STROKE_CONTENT: &[u8] = b"2 w [4 2] 0 d 5 5 90 90 re S 0.5 g 10 10 80 80 re B*";
 const IMAGE_CONTENT: &[u8] = b"q 100 0 0 100 0 0 cm /Im0 Do Q";
 const FONT_CONTENT: &[u8] = b"BT /F0 1000 Tf 0 0 Td (A) Tj ET";
+const MIXED_CONTENT: &[u8] = b"0.8 g 0 0 100 100 re f \
+                               q 50 0 0 100 0 0 cm /Im0 Do Q \
+                               0 g BT /F0 500 Tf 0 0 Td (A) Tj ET";
 const INVALID_CONTENT: &[u8] = b"q";
 const IMAGE_COMPONENTS: [u8; 6] = [255, 0, 0, 0, 0, 255];
 
@@ -29,6 +33,7 @@ enum Case {
     ValidStroke,
     ValidImage,
     ValidFont,
+    ValidMixed,
     UnsupportedInterpolatedImage,
     InvalidContentState,
     StrictInvalidXref,
@@ -38,11 +43,12 @@ enum Case {
     RasterOutputOneLess,
 }
 
-const CASES: [Case; 11] = [
+const CASES: [Case; 12] = [
     Case::ValidPathClip,
     Case::ValidStroke,
     Case::ValidImage,
     Case::ValidFont,
+    Case::ValidMixed,
     Case::UnsupportedInterpolatedImage,
     Case::InvalidContentState,
     Case::StrictInvalidXref,
@@ -66,6 +72,7 @@ impl Case {
             Self::ValidStroke => "valid-stroke",
             Self::ValidImage => "valid-image",
             Self::ValidFont => "valid-font",
+            Self::ValidMixed => "valid-mixed",
             Self::UnsupportedInterpolatedImage => "producer-unsupported-interpolated-image",
             Self::InvalidContentState => "invalid-content-state",
             Self::StrictInvalidXref => "strict-invalid-xref",
@@ -102,6 +109,13 @@ impl Case {
                 invalid_startxref: false,
                 salt: self.salt(),
             },
+            Self::ValidMixed => FixtureSpec {
+                content: MIXED_CONTENT,
+                image: Some(ImageSpec { interpolate: false }),
+                font: true,
+                invalid_startxref: false,
+                salt: self.salt(),
+            },
             Self::UnsupportedInterpolatedImage => image_spec(true, self.salt()),
             Self::InvalidContentState => FixtureSpec {
                 content: INVALID_CONTENT,
@@ -126,6 +140,7 @@ impl Case {
             Self::ValidStroke => 0xc2,
             Self::ValidImage => 0xc3,
             Self::ValidFont => 0xc4,
+            Self::ValidMixed => 0xc5,
             Self::UnsupportedInterpolatedImage => 0xc6,
             Self::InvalidContentState => 0xc7,
             Self::StrictInvalidXref => 0xc8,
@@ -144,6 +159,7 @@ impl Case {
             | Self::RasterOutputOneLess => (2, 1),
             Self::ValidStroke
             | Self::ValidFont
+            | Self::ValidMixed
             | Self::UnsupportedInterpolatedImage
             | Self::InvalidContentState
             | Self::StrictInvalidXref
@@ -159,6 +175,7 @@ impl Case {
                 Self::ValidStroke => (606, 4096, 4096, 64),
                 Self::ValidImage => (758, 4096, 4096, 2),
                 Self::ValidFont => (1855, 4096, 4096, 64),
+                Self::ValidMixed => (2085, 4096, 4096, 64),
                 Self::UnsupportedInterpolatedImage => (776, 4096, 4096, 64),
                 Self::InvalidContentState => (554, 4096, 4096, 64),
                 Self::StrictInvalidXref => (622, 4096, 4096, 64),
@@ -176,6 +193,7 @@ impl Case {
                 Self::RasterOutputOneLess => 7,
                 Self::ValidStroke
                 | Self::ValidFont
+                | Self::ValidMixed
                 | Self::UnsupportedInterpolatedImage
                 | Self::InvalidContentState
                 | Self::StrictInvalidXref
@@ -185,6 +203,7 @@ impl Case {
             max_path_segments: match self {
                 Self::ValidPathClip
                 | Self::ValidStroke
+                | Self::ValidMixed
                 | Self::StrictInvalidXref
                 | Self::CancelFinalPublication
                 | Self::RasterOutputOneLess => 32,
@@ -343,6 +362,123 @@ fn independent_ready_models_match_committed_pixels_and_hashes_exactly() {
 }
 
 #[test]
+fn reviewed_o3_mixed_is_hash_bound_without_independent_pixel_derivation() {
+    const PIXEL_SHA256: &str =
+        "sha256:f5a08df588fd4fa06d55c02334c53b021ff446c2f4c01a7accc692883e0b89d5";
+    const RAW_RGBA_SHA256: &str =
+        "05c2256f5ef14fc8c0733f273a2827846bf0b854bbaec5027e0278ca7f864a1e";
+    const IMPLEMENTATION_COMMIT: &str = "8c3e28c8ce4cbe5113cc565a36744158e283a7fb";
+    const IMPLEMENTATION_TREE: &str = "724c2a646114a8aff0fabe29f6008a8b73802783";
+    const IDENTITY_REFERENCE: &str = "evidence/reference-identity.json#sha256:a447941c0e9f7e06c2005bc0d3a1742c075a60c41db6b68aac88443df36feff6";
+    const REVIEW_SHA256: &str =
+        "sha256:78014b98b9bfb3b1187d19c5fad73bb94e3ec069e307b147a06f01aedb7d5363";
+    const IDENTITY: &[u8] = b"{\"algorithm\":\"reference-raster-v1\",\"implementation_sha256\":\"sha256:0088e35c0824ab38b7e2ba41ff56c89d9bf246b611e968cee19cc36475327f5b\",\"schema\":1}";
+
+    assert!(
+        !READY_CASES.contains(&Case::ValidMixed),
+        "the reviewed O3 golden must never enter the independent Ready pixel models"
+    );
+    let directory = case_directory(Case::ValidMixed);
+    let manifest = validate_case_file(&directory.join("case.toml"))
+        .unwrap_or_else(|diagnostics| panic!("valid-mixed invalid: {diagnostics:?}"));
+    assert_eq!(manifest.string("oracle", "level"), Some("O1"));
+    assert_eq!(
+        manifest.boolean("oracle", "reference_may_generate"),
+        Some(false)
+    );
+    assert_eq!(manifest.string("pixel_oracle", "level"), Some("O3"));
+    assert_eq!(
+        manifest.boolean("pixel_oracle", "reference_may_generate"),
+        Some(true)
+    );
+    assert_eq!(
+        manifest.string("expected", "pixel_sha256"),
+        Some(PIXEL_SHA256)
+    );
+    assert_eq!(
+        manifest.string("pixel_oracle", "reference_identity"),
+        Some(IDENTITY_REFERENCE)
+    );
+    assert_eq!(
+        manifest.string("pixel_oracle", "review_evidence_sha256"),
+        Some(REVIEW_SHA256)
+    );
+    assert_eq!(
+        manifest.string_array("pixel_oracle", "reviewers"),
+        Some(vec!["spec-conformance", "parser-security"])
+    );
+    assert_eq!(
+        fs::read(directory.join("evidence/reference-identity.json"))
+            .expect("mixed identity is readable"),
+        IDENTITY
+    );
+
+    let root = repository_root();
+    let commit_object = format!("{IMPLEMENTATION_COMMIT}^{{commit}}");
+    let commit_status = Command::new("git")
+        .current_dir(&root)
+        .args(["cat-file", "-e", commit_object.as_str()])
+        .status()
+        .expect("git can verify the frozen Reference commit");
+    assert!(
+        commit_status.success(),
+        "frozen Reference commit must remain reachable"
+    );
+    let tree_object = format!("{IMPLEMENTATION_COMMIT}^{{tree}}");
+    let tree_output = Command::new("git")
+        .current_dir(&root)
+        .args(["rev-parse", tree_object.as_str()])
+        .output()
+        .expect("git can resolve the frozen Reference tree");
+    assert!(tree_output.status.success());
+    assert_eq!(
+        tree_output.stdout,
+        format!("{IMPLEMENTATION_TREE}\n").as_bytes(),
+        "frozen Reference commit resolves to a different repository tree"
+    );
+    let implementation_listing = Command::new("git")
+        .current_dir(&root)
+        .args([
+            "ls-tree",
+            "-r",
+            "--full-tree",
+            IMPLEMENTATION_COMMIT,
+            "--",
+            "core/raster",
+        ])
+        .output()
+        .expect("git can enumerate the frozen core/raster implementation");
+    assert!(implementation_listing.status.success());
+    assert_eq!(
+        hex_digest(
+            &sha256(&implementation_listing.stdout)
+                .expect("bounded core/raster listing fits SHA-256 framing")
+        ),
+        "0088e35c0824ab38b7e2ba41ff56c89d9bf246b611e968cee19cc36475327f5b",
+        "Reference identity must hash the exact git ls-tree stdout bytes"
+    );
+
+    let oracle =
+        fs::read_to_string(directory.join("expected/oracle.md")).expect("mixed oracle is readable");
+    for marker in [
+        "Fill`, `Save`, `DrawImage`, `Restore`, `DrawGlyphRun",
+        RAW_RGBA_SHA256,
+        PIXEL_SHA256
+            .strip_prefix("sha256:")
+            .expect("literal pixel digest is prefixed"),
+        IMPLEMENTATION_COMMIT,
+        IMPLEMENTATION_TREE,
+        "git ls-tree -r --full-tree",
+        "does not derive the final 8 by 8 RGBA bytes",
+    ] {
+        assert!(
+            oracle.contains(marker),
+            "mixed oracle omits required O3 marker {marker}"
+        );
+    }
+}
+
+#[test]
 fn non_ready_contracts_pin_terminal_semantics_flags_and_budgets() {
     const FLAG_KEYS: [&str; 7] = [
         "parse",
@@ -392,7 +528,7 @@ fn non_ready_contracts_pin_terminal_semantics_flags_and_budgets() {
 }
 
 #[test]
-fn phase_a_case_tree_and_model_are_closed_regular_files() {
+fn formal_case_tree_and_model_are_closed_regular_files() {
     let root = case_root();
     let mut actual_slugs = Vec::new();
     for entry in fs::read_dir(&root).expect("M3 case root is readable") {
@@ -430,6 +566,15 @@ fn phase_a_case_tree_and_model_are_closed_regular_files() {
         let mut expected = if READY_CASES.contains(&case) {
             vec![
                 "case.toml".to_owned(),
+                "expected/oracle.md".to_owned(),
+                "expected/pixel.json".to_owned(),
+                "input.pdf".to_owned(),
+            ]
+        } else if case == Case::ValidMixed {
+            vec![
+                "case.toml".to_owned(),
+                "evidence/reference-identity.json".to_owned(),
+                "evidence/review.json".to_owned(),
                 "expected/oracle.md".to_owned(),
                 "expected/pixel.json".to_owned(),
                 "input.pdf".to_owned(),

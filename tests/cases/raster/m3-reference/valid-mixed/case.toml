@@ -1,0 +1,93 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/valid-mixed"
+title = "Reviewed mixed path image and glyph Reference golden"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.4.4", "8.5.3", "8.9.5", "9.4.4", "RPE-ARCH-001/15.3/M3"]
+interpretation = "A gray path fill, saved-state image draw, restored state, and black embedded glyph execute in source order and overlap in one immutable Native Scene."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/valid-mixed/input.pdf"
+sha256 = "sha256:eef8e1c13b0bce6a6bfd4353aa6a30845d20e31825ccd1d07d72eb03f0eaeb4f"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-graphics-v2", "core.basic-image-xobjects", "core.basic-embedded-text", "core.reference-color-compositing", "core.reference-geometry-coverage", "core.reference-raster-v1"]
+requirements = ["m3.content-graphics-v2.v1", "m3.basic-image-xobjects.v1", "m3.basic-embedded-text.v1", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = false
+pixel = true
+diagnostic = false
+capability = false
+error = false
+pixel_artifact = "expected/pixel.json"
+pixel_sha256 = "sha256:f5a08df588fd4fa06d55c02334c53b021ff446c2f4c01a7accc692883e0b89d5"
+
+[oracle]
+level = "O1"
+derivation = "Independent operator and resource review fixes the mixed Fill, Save, DrawImage, Restore, DrawGlyphRun order and source semantics without deriving the final pixel bytes."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[pixel_oracle]
+level = "O3"
+derivation = "expected/oracle.md#sha256:0290824bd3d33f6eb2e12acff062019d670f6b7bc5508e3ad237e4db1f95365f"
+reviewers = ["spec-conformance", "parser-security"]
+reference_may_generate = true
+reference_identity = "evidence/reference-identity.json#sha256:a447941c0e9f7e06c2005bc0d3a1742c075a60c41db6b68aac88443df36feff6"
+review_evidence = "evidence/review.json"
+review_evidence_sha256 = "sha256:78014b98b9bfb3b1187d19c5fad73bb94e3ec069e307b147a06f01aedb7d5363"
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 2085
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 64
+max_raster_output_bytes = 256
+max_path_segments = 32
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 8
+height = 8
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the independently reviewed O3 mixed Reference golden"]
