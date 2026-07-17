@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod data_ticket;
 mod error;
 mod frame;
 #[allow(clippy::deref_addrof, clippy::needless_borrow)]
@@ -15,6 +16,10 @@ mod generated;
 mod limits;
 mod validation;
 
+pub use data_ticket::{
+    DataTicketCommitOutcome, DataTicketLedger, DataTicketOwnerSnapshot, DataTicketTerminalKind,
+    MAX_OUTSTANDING_DATA_TICKETS, PendingDataTicketCompletion,
+};
 pub use error::{ProtocolError, ProtocolErrorCategory, ProtocolErrorCode, ProtocolRecoverability};
 pub use frame::{
     DESKTOP_FRAME_HEADER_BYTES, DesktopFrameDecoder, FrameMessagePolicy, HandshakeFrameDecoder,

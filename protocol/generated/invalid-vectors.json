@@ -2,7 +2,7 @@
   "generator_version": "0.2.0",
   "wire_identity_domain": "PDF.rs/EngineProtocol/WireIdentity/v1",
   "payload_codec_abi_version": 1,
-  "schema_sha256": "ab6712bcca32d227a614b786925e5b1990543695bde0e865513ab95e90779a03",
+  "schema_sha256": "8bcfb8eb41fe9260c292ec1adb5452fe632a42469ec6c461562aba26dd0d8a01",
   "vectors": [
     {"name":"truncated-header","frame_hex":"000002000100000000","transfer_slots":0,"expected_error":"TruncatedHeader"},
     {"name":"payload-length-mismatch","frame_hex":"000002000100000000000000010000000000000000","transfer_slots":0,"expected_error":"FrameLengthMismatch"},

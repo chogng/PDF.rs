@@ -669,18 +669,39 @@ impl ProtocolValidator {
                     && envelope.correlation.session == Some(event.metadata.owner.session)
                     && envelope.correlation.generation == Some(event.metadata.generation)
             }
+            Event::GenerationPlanned(event) => {
+                envelope.correlation.generation == Some(event.manifest.generation)
+            }
             Event::RequestCancelled(event) => envelope.correlation.request == Some(event.target),
             Event::SessionClosed(event) => envelope.correlation.session == Some(event.session),
             Event::WorkerStopped(event) => envelope.correlation.worker == event.worker,
             _ => true,
         };
-        if matches_payload {
-            Ok(())
-        } else {
-            Err(ProtocolError::for_code(
+        if !matches_payload {
+            return Err(ProtocolError::for_code(
                 ProtocolErrorCode::InvalidCorrelation,
-            ))
+            ));
         }
+        let semantic_payload_valid = match &envelope.event {
+            Event::CapabilityReported(event) => {
+                let source = &event.decision.subject.source;
+                source.revision != 0
+                    && digest_is_nonzero(&source.stable_id)
+                    && event.decision.wire_invariants_valid()
+                    && digest_is_nonzero(event.decision_hash.digest())
+            }
+            Event::GenerationPlanned(event) => {
+                event.manifest.wire_invariants_valid()
+                    && digest_is_nonzero(event.plan_hash.digest())
+            }
+            _ => true,
+        };
+        if !semantic_payload_valid {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidPayloadEncoding,
+            ));
+        }
+        Ok(())
     }
 
     /// Validates one ProvideData command against its actual received transfer byte lengths.

@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::io::{Read, Seek, SeekFrom, Write as IoWrite};
 use std::path::{Component, Path, PathBuf};
 
 use crate::codec::{CodecErrorKind, CodecLimits, FixedLeCodec, WireValue};
@@ -86,15 +87,52 @@ fn wire_identity_digest(protocol: &Protocol, canonical_schema: &str) -> [u8; 32]
 }
 
 pub fn write_generated(root: &Path, files: &[GeneratedFile]) -> Result<(), String> {
-    write_generated_transaction(root, files, None)
+    write_generated_transaction(root, files, None, None)
+}
+
+const TRANSACTION_FILE_NAME: &str = ".protocol-codegen.transaction";
+const TRANSACTION_JOURNAL_HEADER: &str = "PDF.rs protocol-codegen transaction v1";
+const MAX_TRANSACTION_JOURNAL_BYTES: u64 = 16 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransactionPhase {
+    Prepared,
+    Committed,
+}
+
+impl TransactionPhase {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Prepared => "P",
+            Self::Committed => "C",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "P" => Ok(Self::Prepared),
+            "C" => Ok(Self::Committed),
+            _ => Err("invalid protocol-codegen transaction phase".into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StagedGeneratedFile {
+    relative_path: PathBuf,
+    target: PathBuf,
+    temporary: PathBuf,
+    backup: PathBuf,
+    had_existing: bool,
 }
 
 fn write_generated_transaction(
     root: &Path,
     files: &[GeneratedFile],
     fail_before_replace: Option<usize>,
+    terminate_after_replace: Option<usize>,
 ) -> Result<(), String> {
-    let _lock = GenerationLock::acquire(root)?;
+    let mut transaction = GenerationTransaction::acquire(root, files)?;
     let mut staged = Vec::with_capacity(files.len());
     for file in files {
         reject_symlink_path(root, &file.relative_path)?;
@@ -108,58 +146,114 @@ fn write_generated_transaction(
         let backup = target.with_extension("protocol-codegen.previous");
         prepare_auxiliary_path(&temporary)?;
         prepare_auxiliary_path(&backup)?;
-        std::fs::write(&temporary, file.contents.as_bytes())
-            .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-        staged.push((target, temporary, backup));
-    }
-
-    let mut replaced = Vec::with_capacity(staged.len());
-    for (index, (target, temporary, backup)) in staged.iter().enumerate() {
-        if fail_before_replace == Some(index) {
-            rollback_generated(&replaced, &staged);
-            return Err(format!("injected replacement failure at index {index}"));
-        }
-        let had_existing = match std::fs::symlink_metadata(target) {
+        let had_existing = match std::fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                rollback_generated(&replaced, &staged);
+                cleanup_staged_files(&staged);
                 return Err(format!(
                     "refusing generated target symlink: {}",
                     target.display()
                 ));
             }
+            Ok(metadata) if metadata.is_file() => true,
             Ok(_) => {
-                if let Err(error) = std::fs::rename(target, backup) {
-                    rollback_generated(&replaced, &staged);
-                    return Err(format!(
-                        "stage existing {} for replacement: {error}",
-                        target.display()
-                    ));
-                }
-                true
+                cleanup_staged_files(&staged);
+                return Err(format!(
+                    "refusing non-file generated target: {}",
+                    target.display()
+                ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => {
-                rollback_generated(&replaced, &staged);
+                cleanup_staged_files(&staged);
                 return Err(format!("inspect {}: {error}", target.display()));
             }
         };
-        if let Err(error) = std::fs::rename(temporary, target) {
-            if had_existing {
-                let _ = std::fs::rename(backup, target);
+        if let Err(error) = write_synced_file(&temporary, file.contents.as_bytes()) {
+            let _ = remove_regular_file_if_present(&temporary);
+            cleanup_staged_files(&staged);
+            return Err(error);
+        }
+        staged.push(StagedGeneratedFile {
+            relative_path: file.relative_path.clone(),
+            target,
+            temporary,
+            backup,
+            had_existing,
+        });
+    }
+    if let Err(error) = transaction.record(TransactionPhase::Prepared, &staged) {
+        cleanup_staged_files(&staged);
+        return match transaction.clear_contents() {
+            Ok(()) => Err(error),
+            Err(clear) => Err(format!("{error}; clear incomplete journal: {clear}")),
+        };
+    }
+
+    for (index, entry) in staged.iter().enumerate() {
+        if fail_before_replace == Some(index) {
+            return rollback_and_clear(
+                &mut transaction,
+                &staged,
+                format!("injected replacement failure at index {index}"),
+            );
+        }
+        if entry.had_existing {
+            if let Err(error) = std::fs::rename(&entry.target, &entry.backup) {
+                return rollback_and_clear(
+                    &mut transaction,
+                    &staged,
+                    format!(
+                        "stage existing {} for replacement: {error}",
+                        entry.target.display()
+                    ),
+                );
             }
-            rollback_generated(&replaced, &staged);
-            return Err(format!("replace {}: {error}", target.display()));
+            if let Err(error) = sync_parent(&entry.target) {
+                return rollback_and_clear(&mut transaction, &staged, error);
+            }
         }
-        replaced.push((target.clone(), backup.clone(), had_existing));
-    }
-    for (_, backup, had_existing) in &replaced {
-        if *had_existing {
-            std::fs::remove_file(backup).map_err(|error| {
-                format!("remove committed backup {}: {error}", backup.display())
-            })?;
+        if let Err(error) = std::fs::rename(&entry.temporary, &entry.target) {
+            return rollback_and_clear(
+                &mut transaction,
+                &staged,
+                format!("replace {}: {error}", entry.target.display()),
+            );
+        }
+        if let Err(error) = sync_parent(&entry.target) {
+            return rollback_and_clear(&mut transaction, &staged, error);
+        }
+        if terminate_after_replace == Some(index) {
+            std::process::exit(86);
         }
     }
-    Ok(())
+
+    for entry in &staged {
+        let file = match std::fs::File::open(&entry.target) {
+            Ok(file) => file,
+            Err(error) => {
+                return rollback_and_clear(
+                    &mut transaction,
+                    &staged,
+                    format!("open committed {}: {error}", entry.target.display()),
+                );
+            }
+        };
+        if let Err(error) = file.sync_all() {
+            return rollback_and_clear(
+                &mut transaction,
+                &staged,
+                format!("sync committed {}: {error}", entry.target.display()),
+            );
+        }
+    }
+    if let Err(error) = transaction.mark_committed() {
+        return rollback_and_clear(&mut transaction, &staged, error);
+    }
+    if terminate_after_replace == Some(staged.len()) {
+        std::process::exit(86);
+    }
+    finish_committed_transaction(&staged)?;
+    transaction.clear_and_remove()
 }
 
 fn prepare_auxiliary_path(path: &Path) -> Result<(), String> {
@@ -168,51 +262,403 @@ fn prepare_auxiliary_path(path: &Path) -> Result<(), String> {
             "refusing generated auxiliary symlink: {}",
             path.display()
         )),
-        Ok(_) => std::fs::remove_file(path)
+        Ok(metadata) if metadata.is_file() => std::fs::remove_file(path)
             .map_err(|error| format!("remove stale auxiliary {}: {error}", path.display())),
+        Ok(_) => Err(format!(
+            "refusing non-file generated auxiliary: {}",
+            path.display()
+        )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("inspect auxiliary {}: {error}", path.display())),
     }
 }
 
-fn rollback_generated(
-    replaced: &[(PathBuf, PathBuf, bool)],
-    staged: &[(PathBuf, PathBuf, PathBuf)],
-) {
-    for (target, backup, had_existing) in replaced.iter().rev() {
-        let _ = std::fs::remove_file(target);
-        if *had_existing {
-            let _ = std::fs::rename(backup, target);
+fn write_synced_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("create staged {}: {error}", path.display()))?;
+    file.write_all(contents)
+        .map_err(|error| format!("write staged {}: {error}", path.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("sync staged {}: {error}", path.display()))?;
+    sync_parent(path)
+}
+
+fn rollback_and_clear(
+    transaction: &mut GenerationTransaction,
+    staged: &[StagedGeneratedFile],
+    original_error: String,
+) -> Result<(), String> {
+    if let Err(rollback) = rollback_prepared_transaction(staged) {
+        return Err(format!(
+            "{original_error}; rollback={rollback}; prepared journal retained"
+        ));
+    }
+    match transaction.clear_contents() {
+        Ok(()) => Err(original_error),
+        Err(clear) => Err(format!(
+            "{original_error}; rollback completed; clear={clear}"
+        )),
+    }
+}
+
+fn rollback_prepared_transaction(staged: &[StagedGeneratedFile]) -> Result<(), String> {
+    for entry in staged.iter().rev() {
+        if entry.had_existing {
+            if path_exists(&entry.backup)? {
+                remove_regular_file_if_present(&entry.target)?;
+                std::fs::rename(&entry.backup, &entry.target).map_err(|error| {
+                    format!(
+                        "restore {} from {}: {error}",
+                        entry.target.display(),
+                        entry.backup.display()
+                    )
+                })?;
+            }
+        } else if !path_exists(&entry.temporary)? {
+            remove_regular_file_if_present(&entry.target)?;
+        }
+        remove_regular_file_if_present(&entry.temporary)?;
+        remove_regular_file_if_present(&entry.backup)?;
+        sync_parent(&entry.target)?;
+    }
+    Ok(())
+}
+
+fn finish_committed_transaction(staged: &[StagedGeneratedFile]) -> Result<(), String> {
+    for entry in staged {
+        remove_regular_file_if_present(&entry.temporary)?;
+        remove_regular_file_if_present(&entry.backup)?;
+        sync_parent(&entry.target)?;
+    }
+    Ok(())
+}
+
+fn cleanup_staged_files(staged: &[StagedGeneratedFile]) {
+    for entry in staged {
+        let _ = remove_regular_file_if_present(&entry.temporary);
+        let _ = remove_regular_file_if_present(&entry.backup);
+    }
+}
+
+fn remove_regular_file_if_present(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "refusing protocol-codegen transaction symlink: {}",
+            path.display()
+        )),
+        Ok(metadata) if metadata.is_file() => std::fs::remove_file(path)
+            .map_err(|error| format!("remove transaction file {}: {error}", path.display())),
+        Ok(_) => Err(format!(
+            "refusing non-file protocol-codegen transaction path: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "inspect transaction path {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn path_exists(path: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "refusing protocol-codegen transaction symlink: {}",
+            path.display()
+        )),
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(format!(
+            "refusing non-file protocol-codegen transaction path: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "inspect transaction path {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn sync_parent(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("transaction path has no parent: {}", path.display()))?;
+    let directory = std::fs::File::open(parent)
+        .map_err(|error| format!("open transaction directory {}: {error}", parent.display()))?;
+    directory
+        .sync_all()
+        .map_err(|error| format!("sync transaction directory {}: {error}", parent.display()))
+}
+
+struct GenerationTransaction {
+    root: PathBuf,
+    path: PathBuf,
+    file: std::fs::File,
+    _root_lock: std::fs::File,
+}
+
+impl GenerationTransaction {
+    fn acquire(root: &Path, expected_files: &[GeneratedFile]) -> Result<Self, String> {
+        let root_lock = std::fs::File::open(root)
+            .map_err(|error| format!("open generator root lock {}: {error}", root.display()))?;
+        root_lock
+            .try_lock()
+            .map_err(|error| format!("acquire generator root lock {}: {error}", root.display()))?;
+        let path = root.join(TRANSACTION_FILE_NAME);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "refusing protocol-codegen transaction symlink: {}",
+                    path.display()
+                ));
+            }
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(format!(
+                    "refusing non-file protocol-codegen transaction path: {}",
+                    path.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "inspect generator transaction {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        let file = options
+            .open(&path)
+            .map_err(|error| format!("open generator transaction {}: {error}", path.display()))?;
+        file.try_lock().map_err(|error| {
+            format!("acquire generator transaction {}: {error}", path.display())
+        })?;
+        sync_parent(&path)?;
+        let mut transaction = Self {
+            root: root.to_path_buf(),
+            path,
+            file,
+            _root_lock: root_lock,
+        };
+        transaction.recover(expected_files)?;
+        Ok(transaction)
+    }
+
+    fn recover(&mut self, expected_files: &[GeneratedFile]) -> Result<(), String> {
+        let journal_bytes = self
+            .file
+            .metadata()
+            .map_err(|error| format!("inspect transaction {}: {error}", self.path.display()))?
+            .len();
+        if journal_bytes > MAX_TRANSACTION_JOURNAL_BYTES {
+            return Err(format!(
+                "protocol-codegen transaction exceeds {MAX_TRANSACTION_JOURNAL_BYTES} bytes"
+            ));
+        }
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| format!("seek transaction {}: {error}", self.path.display()))?;
+        let mut journal = String::new();
+        self.file
+            .read_to_string(&mut journal)
+            .map_err(|error| format!("read transaction {}: {error}", self.path.display()))?;
+        if journal.is_empty() {
+            return Ok(());
+        }
+        let (phase, staged) = parse_transaction_journal(&self.root, &journal, expected_files)?;
+        match phase {
+            TransactionPhase::Prepared => rollback_prepared_transaction(&staged)?,
+            TransactionPhase::Committed => finish_committed_transaction(&staged)?,
+        }
+        self.clear_contents()
+    }
+
+    fn record(
+        &mut self,
+        phase: TransactionPhase,
+        staged: &[StagedGeneratedFile],
+    ) -> Result<(), String> {
+        let journal = transaction_journal(phase, staged)?;
+        let journal_bytes = u64::try_from(journal.len())
+            .map_err(|_| "protocol-codegen transaction length overflow".to_owned())?;
+        if journal_bytes > MAX_TRANSACTION_JOURNAL_BYTES {
+            return Err(format!(
+                "protocol-codegen transaction exceeds {MAX_TRANSACTION_JOURNAL_BYTES} bytes"
+            ));
+        }
+        self.file
+            .set_len(0)
+            .map_err(|error| format!("truncate transaction {}: {error}", self.path.display()))?;
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| format!("seek transaction {}: {error}", self.path.display()))?;
+        self.file
+            .write_all(journal.as_bytes())
+            .map_err(|error| format!("write transaction {}: {error}", self.path.display()))?;
+        self.file
+            .sync_all()
+            .map_err(|error| format!("sync transaction {}: {error}", self.path.display()))?;
+        sync_parent(&self.path)
+    }
+
+    fn mark_committed(&mut self) -> Result<(), String> {
+        let phase_offset = u64::try_from(TRANSACTION_JOURNAL_HEADER.len() + "\nphase=".len())
+            .map_err(|_| "transaction phase offset overflow".to_owned())?;
+        self.file
+            .seek(SeekFrom::Start(phase_offset))
+            .map_err(|error| format!("seek transaction {}: {error}", self.path.display()))?;
+        self.file
+            .write_all(TransactionPhase::Committed.label().as_bytes())
+            .map_err(|error| format!("commit transaction {}: {error}", self.path.display()))?;
+        self.file
+            .sync_all()
+            .map_err(|error| format!("sync transaction {}: {error}", self.path.display()))
+    }
+
+    fn clear_contents(&mut self) -> Result<(), String> {
+        self.file
+            .set_len(0)
+            .map_err(|error| format!("truncate transaction {}: {error}", self.path.display()))?;
+        self.file
+            .sync_all()
+            .map_err(|error| format!("sync transaction {}: {error}", self.path.display()))
+    }
+
+    fn clear_and_remove(mut self) -> Result<(), String> {
+        self.clear_contents()?;
+        remove_regular_file_if_present(&self.path)?;
+        sync_parent(&self.path)
+    }
+}
+
+impl Drop for GenerationTransaction {
+    fn drop(&mut self) {
+        if self
+            .file
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() == 0)
+        {
+            let _ = remove_regular_file_if_present(&self.path);
+            let _ = sync_parent(&self.path);
         }
     }
-    for (_, temporary, backup) in staged {
-        let _ = std::fs::remove_file(temporary);
-        let _ = std::fs::remove_file(backup);
+}
+
+fn transaction_journal(
+    phase: TransactionPhase,
+    staged: &[StagedGeneratedFile],
+) -> Result<String, String> {
+    let mut journal = String::new();
+    writeln!(&mut journal, "{TRANSACTION_JOURNAL_HEADER}").unwrap();
+    writeln!(&mut journal, "phase={}", phase.label()).unwrap();
+    writeln!(&mut journal, "count={}", staged.len()).unwrap();
+    for entry in staged {
+        let path = entry
+            .relative_path
+            .to_str()
+            .ok_or_else(|| "generated transaction path must be UTF-8".to_owned())?;
+        writeln!(
+            &mut journal,
+            "entry={}\t{}",
+            lowercase_hex(path.as_bytes()),
+            u8::from(entry.had_existing)
+        )
+        .unwrap();
     }
+    Ok(journal)
 }
 
-struct GenerationLock {
-    path: PathBuf,
-}
-
-impl GenerationLock {
-    fn acquire(root: &Path) -> Result<Self, String> {
-        let path = root.join(".protocol-codegen.lock");
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        use std::io::Write as _;
-        let mut file = options
-            .open(&path)
-            .map_err(|error| format!("acquire generator lock {}: {error}", path.display()))?;
-        writeln!(file, "pid={}", std::process::id())
-            .map_err(|error| format!("write generator lock {}: {error}", path.display()))?;
-        Ok(Self { path })
+fn parse_transaction_journal(
+    root: &Path,
+    journal: &str,
+    expected_files: &[GeneratedFile],
+) -> Result<(TransactionPhase, Vec<StagedGeneratedFile>), String> {
+    let mut lines = journal.lines();
+    if lines.next() != Some(TRANSACTION_JOURNAL_HEADER) {
+        return Err("invalid protocol-codegen transaction header".into());
     }
+    let phase = lines
+        .next()
+        .and_then(|line| line.strip_prefix("phase="))
+        .ok_or_else(|| "missing protocol-codegen transaction phase".to_owned())
+        .and_then(TransactionPhase::parse)?;
+    let count = lines
+        .next()
+        .and_then(|line| line.strip_prefix("count="))
+        .ok_or_else(|| "missing protocol-codegen transaction count".to_owned())?
+        .parse::<usize>()
+        .map_err(|_| "invalid protocol-codegen transaction count".to_owned())?;
+    if count != expected_files.len() {
+        return Err("protocol-codegen transaction output count changed".into());
+    }
+    let mut staged = Vec::new();
+    staged
+        .try_reserve_exact(count)
+        .map_err(|_| "allocate protocol-codegen transaction entries".to_owned())?;
+    for expected in expected_files {
+        let line = lines
+            .next()
+            .and_then(|line| line.strip_prefix("entry="))
+            .ok_or_else(|| "missing protocol-codegen transaction entry".to_owned())?;
+        let (encoded_path, had_existing) = line
+            .split_once('\t')
+            .ok_or_else(|| "invalid protocol-codegen transaction entry".to_owned())?;
+        let path_bytes = decode_lowercase_hex(encoded_path)?;
+        let path = std::str::from_utf8(&path_bytes)
+            .map_err(|_| "protocol-codegen transaction path is not UTF-8".to_owned())?;
+        let relative_path = PathBuf::from(path);
+        if relative_path != expected.relative_path {
+            return Err("protocol-codegen transaction output path changed".into());
+        }
+        reject_symlink_path(root, &relative_path)?;
+        let had_existing = match had_existing {
+            "0" => false,
+            "1" => true,
+            _ => return Err("invalid protocol-codegen transaction existence marker".into()),
+        };
+        let target = root.join(&relative_path);
+        staged.push(StagedGeneratedFile {
+            relative_path,
+            temporary: target.with_extension("protocol-codegen.new"),
+            backup: target.with_extension("protocol-codegen.previous"),
+            target,
+            had_existing,
+        });
+    }
+    if lines.next().is_some() {
+        return Err("trailing protocol-codegen transaction data".into());
+    }
+    Ok((phase, staged))
 }
 
-impl Drop for GenerationLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+fn decode_lowercase_hex(value: &str) -> Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid lowercase transaction path encoding".into());
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(value.len() / 2)
+        .map_err(|_| "allocate decoded transaction path".to_owned())?;
+    for pair in value.as_bytes().chunks_exact(2) {
+        output.push((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?);
+    }
+    Ok(output)
+}
+
+fn hex_nibble(value: u8) -> Result<u8, String> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        _ => Err("invalid lowercase transaction path nibble".into()),
     }
 }
 
@@ -526,6 +972,7 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
     write_message_enums(&mut out, protocol);
     write_descriptors(&mut out, protocol);
     write_capability_decision_invariants(&mut out);
+    write_render_plan_manifest_invariants(&mut out);
     out.push_str(&generate_rust_payload_codec(protocol));
     finish_generated_text(out)
 }
@@ -1003,6 +1450,11 @@ fn write_capability_decision_invariants(out: &mut String) {
             CollectionCompleteness::Complete => contributors_len == Some(self.contributors_total),\n\
             CollectionCompleteness::Truncated => contributors_len.is_some_and(|len| len < self.contributors_total),\n\
         };\n\
+        let locations_len = u32::from(self.location.is_some());\n\
+        let locations_accounted = match self.locations_completeness {\n\
+            CollectionCompleteness::Complete => locations_len == self.locations_total,\n\
+            CollectionCompleteness::Truncated => locations_len < self.locations_total,\n\
+        };\n\
         let contributor_ids: std::collections::BTreeSet<u32> = self.contributors.iter().map(|value| value.id).collect();\n\
         let requirement_ids: std::collections::BTreeSet<u32> = self.missing.iter().map(|value| value.id).collect();\n\
         let bounded_and_canonical = self.missing.len() <= CAPABILITY_DECISION_MISSING_MAX_COUNT\n\
@@ -1019,15 +1471,89 @@ fn write_capability_decision_invariants(out: &mut String) {
                 && requirement.dependencies.iter().all(|id| *id != requirement.id && requirement_ids.contains(id))\n\
                 && requirement.contributor_ids.iter().all(|id| contributor_ids.contains(id)))\n\
             && self.contributors.iter().all(|contributor| contributor.id != 0);\n\
+        let audited_counts_valid = self.missing_total <= self.evaluated_requirements\n\
+            && self.evaluated_parameters == self.evaluated_requirements\n\
+            && (self.location.is_none() || self.locations_total != 0);\n\
         let status_valid = match self.status {\n\
             SupportStatus::Supported => self.missing_total == 0\n\
                 && self.missing.is_empty()\n\
+                && self.contributors_total == 0\n\
+                && self.contributors.is_empty()\n\
+                && self.locations_total == 0\n\
+                && self.locations_completeness == CollectionCompleteness::Complete\n\
                 && self.location.is_none()\n\
                 && self.rejection_code.is_none(),\n\
-            SupportStatus::Unsupported => self.rejection_code.is_none(),\n\
-            SupportStatus::Rejected => self.rejection_code.is_some(),\n\
+            SupportStatus::Unsupported => self.locations_total == self.missing_total\n\
+                && self.rejection_code.is_none(),\n\
+            SupportStatus::Rejected => self.missing_total == 0\n\
+                && self.contributors_total == 1\n\
+                && self.locations_total == 1\n\
+                && self.rejection_code.is_some(),\n\
         };\n\
-        missing_accounted && contributors_accounted && bounded_and_canonical && status_valid\n\
+        missing_accounted\n\
+            && contributors_accounted\n\
+            && locations_accounted\n\
+            && bounded_and_canonical\n\
+            && audited_counts_valid\n\
+            && status_valid\n\
+    }\n\
+}\n",
+    );
+}
+
+fn write_render_plan_manifest_invariants(out: &mut String) {
+    out.push_str(
+        "impl RenderPlanManifest {\n\
+    /// Checks complete viewport identity, canonical region ordering, and tile-hash accounting.\n\
+    pub fn wire_invariants_valid(&self) -> bool {\n\
+        let clip = &self.viewport_clip;\n\
+        let clip_left = i64::from(clip.x);\n\
+        let clip_top = i64::from(clip.y);\n\
+        let clip_right = clip_left + i64::from(clip.width);\n\
+        let clip_bottom = clip_top + i64::from(clip.height);\n\
+        let regions_valid = !self.regions.is_empty()\n\
+            && self.regions.len() <= RENDER_PLAN_MANIFEST_REGIONS_MAX_COUNT\n\
+            && self.regions.len() == self.tile_content_hashes.len()\n\
+            && self.regions.windows(2).all(|pair| (pair[0].y, pair[0].x) < (pair[1].y, pair[1].x))\n\
+            && self.regions.iter().all(|region| {\n\
+                let left = i64::from(region.x);\n\
+                let top = i64::from(region.y);\n\
+                let right = left + i64::from(region.width);\n\
+                let bottom = top + i64::from(region.height);\n\
+                region.page_index == clip.page_index\n\
+                    && region.coordinate_space == SurfaceCoordinateSpace::DevicePixelsTopLeft\n\
+                    && region.width != 0\n\
+                    && region.height != 0\n\
+                    && left >= clip_left\n\
+                    && top >= clip_top\n\
+                    && right <= clip_right\n\
+                    && bottom <= clip_bottom\n\
+            })\n\
+            && self.tile_content_hashes.iter().all(|hash| hash.digest().iter().any(|byte| *byte != 0));\n\
+        let mut left = self.zoom_numerator;\n\
+        let mut right = self.zoom_denominator;\n\
+        while right != 0 {\n\
+            let remainder = left % right;\n\
+            left = right;\n\
+            right = remainder;\n\
+        }\n\
+        self.plan_schema_version != 0\n\
+            && self.document_revision != 0\n\
+            && self.renderer_epoch.value() != 0\n\
+            && self.plan_id.value() != 0\n\
+            && self.generation == self.plan_id.value()\n\
+            && self.render_config.digest().iter().any(|byte| *byte != 0)\n\
+            && self.scene_hash.digest().iter().any(|byte| *byte != 0)\n\
+            && self.decision_hash.digest().iter().any(|byte| *byte != 0)\n\
+            && self.geometry_hash.digest().iter().any(|byte| *byte != 0)\n\
+            && clip.width != 0\n\
+            && clip.height != 0\n\
+            && clip.coordinate_space == SurfaceCoordinateSpace::DevicePixelsTopLeft\n\
+            && self.zoom_numerator != 0\n\
+            && self.zoom_denominator != 0\n\
+            && left == 1\n\
+            && self.device_scale_milli != 0\n\
+            && regions_valid\n\
     }\n\
 }\n",
     );
@@ -1243,14 +1769,19 @@ fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
         lowercase_hex(&digest[..16])
     )
     .unwrap();
+    let schema_hash_bytes = digest[..16]
+        .iter()
+        .map(|value| format!("0x{value:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     writeln!(
         out,
-        "export const SCHEMA_HASH = Uint8Array.of({}) as Uint8Array;",
-        digest[..16]
-            .iter()
-            .map(|value| format!("0x{value:02x}"))
-            .collect::<Vec<_>>()
-            .join(", ")
+        "const CANONICAL_SCHEMA_HASH = Uint8Array.of({schema_hash_bytes}) as Uint8Array;"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const SCHEMA_HASH = Uint8Array.of({schema_hash_bytes}) as Uint8Array;"
     )
     .unwrap();
     writeln!(
@@ -1557,7 +2088,7 @@ fn write_ts_union_capability_requirements(out: &mut String, protocol: &Protocol)
   readonly variant_name: string;\n\
   readonly capability: bigint;\n\
 }\n\
-export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = [\n",
+export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = Object.freeze([\n",
     );
     for union in &protocol.unions {
         for variant in union
@@ -1568,7 +2099,7 @@ export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = [\n",
             if let Some(capability) = &variant.required_capability {
                 writeln!(
                     out,
-                    "  {{ union_name: \"{}\", variant_name: \"{}\", capability: {} }},",
+                    "  Object.freeze({{ union_name: \"{}\", variant_name: \"{}\", capability: {} }}),",
                     union.name,
                     variant.name,
                     ts_required_capability(Some(capability))
@@ -1577,7 +2108,7 @@ export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = [\n",
             }
         }
     }
-    out.push_str("] as const satisfies readonly UnionVariantCapabilityRequirement[];\n\n");
+    out.push_str("] as const) satisfies readonly UnionVariantCapabilityRequirement[];\n\n");
     if let Some(surface) = protocol
         .unions
         .iter()
@@ -1592,7 +2123,7 @@ export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = [\n",
             .join(", ");
         writeln!(
             out,
-            "export const BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS = [{variants}] as const;\n"
+            "export const BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS = Object.freeze([{variants}] as const);\n"
         )
         .unwrap();
     }
@@ -1636,16 +2167,16 @@ fn write_ts_engine_error_descriptors(out: &mut String, protocol: &Protocol) {
   readonly severity: ErrorSeverity;\n\
   readonly recoverability: ErrorRecoverability;\n\
 }\n\
-export const ENGINE_ERROR_DESCRIPTORS = [\n",
+export const ENGINE_ERROR_DESCRIPTORS = Object.freeze([\n",
     );
     for (code, category, severity, recoverability) in engine_error_policies() {
         writeln!(
             out,
-            "  {{ code: EngineErrorCode.{code}, category: ErrorCategory.{category}, severity: ErrorSeverity.{severity}, recoverability: ErrorRecoverability.{recoverability} }},"
+            "  Object.freeze({{ code: EngineErrorCode.{code}, category: ErrorCategory.{category}, severity: ErrorSeverity.{severity}, recoverability: ErrorRecoverability.{recoverability} }}),"
         )
         .unwrap();
     }
-    out.push_str("] as const satisfies readonly EngineErrorDescriptor[];\n\n");
+    out.push_str("] as const) satisfies readonly EngineErrorDescriptor[];\n\n");
 }
 
 fn write_ts_helpers(out: &mut String) {
@@ -1682,13 +2213,13 @@ const gcdU32 = (left: number, right: number): number => {\n\
 
 fn write_ts_enum(out: &mut String, enumeration: &EnumDef) {
     if enumeration.repr == Primitive::U64 {
-        writeln!(out, "export const {} = {{", enumeration.name).unwrap();
+        writeln!(out, "export const {} = Object.freeze({{", enumeration.name).unwrap();
         for variant in &enumeration.variants {
             writeln!(out, "  {}: {}n,", variant.name, variant.tag).unwrap();
         }
         writeln!(
             out,
-            "}} as const;\nexport type {} = (typeof {})[keyof typeof {}];",
+            "}} as const);\nexport type {} = (typeof {})[keyof typeof {}];",
             enumeration.name, enumeration.name, enumeration.name
         )
         .unwrap();
@@ -1697,7 +2228,7 @@ fn write_ts_enum(out: &mut String, enumeration: &EnumDef) {
         for variant in &enumeration.variants {
             writeln!(out, "  {} = {},", variant.name, variant.tag).unwrap();
         }
-        writeln!(out, "}}").unwrap();
+        writeln!(out, "}}\nObject.freeze({});", enumeration.name).unwrap();
     }
     let values = enumeration
         .variants
@@ -1828,7 +2359,7 @@ export interface MessageDescriptor {\n\
         .join(", ");
     writeln!(
         out,
-        "export const STATE_PRECONDITIONS = [{states}] as const;\n"
+        "export const STATE_PRECONDITIONS = Object.freeze([{states}] as const);\n"
     )
     .unwrap();
     out.push_str(
@@ -1842,13 +2373,13 @@ export interface TypeFieldDescriptor {\n\
   readonly privacy: FieldPrivacy;\n\
   readonly max_count: number;\n\
 }\n\
-export const TYPE_FIELD_DESCRIPTORS = [\n",
+export const TYPE_FIELD_DESCRIPTORS = Object.freeze([\n",
     );
     for record in &protocol.records {
         for field in &record.fields {
             writeln!(
                 out,
-                "  {{ owner: \"{}\", name: \"{}\", wire_type: \"{}\", required: {}, privacy: \"{}\", max_count: {} }},",
+                "  Object.freeze({{ owner: \"{}\", name: \"{}\", wire_type: \"{}\", required: {}, privacy: \"{}\", max_count: {} }}),",
                 record.name,
                 field.name,
                 field.ty.schema_name(),
@@ -1868,7 +2399,7 @@ export const TYPE_FIELD_DESCRIPTORS = [\n",
             for field in &variant.fields {
                 writeln!(
                     out,
-                    "  {{ owner: \"{}\", variant: \"{}\", name: \"{}\", wire_type: \"{}\", required: true, privacy: \"{}\", max_count: {} }},",
+                    "  Object.freeze({{ owner: \"{}\", variant: \"{}\", name: \"{}\", wire_type: \"{}\", required: true, privacy: \"{}\", max_count: {} }}),",
                     union.name,
                     variant.name,
                     field.name,
@@ -1880,7 +2411,7 @@ export const TYPE_FIELD_DESCRIPTORS = [\n",
             }
         }
     }
-    out.push_str("] as const satisfies readonly TypeFieldDescriptor[];\n\n");
+    out.push_str("] as const) satisfies readonly TypeFieldDescriptor[];\n\n");
     for message in &protocol.messages {
         writeln!(
             out,
@@ -1890,7 +2421,7 @@ export const TYPE_FIELD_DESCRIPTORS = [\n",
         )
         .unwrap();
     }
-    out.push_str("\nexport const MESSAGE_DESCRIPTORS = [\n");
+    out.push_str("\nexport const MESSAGE_DESCRIPTORS = Object.freeze([\n");
     for message in &protocol.messages {
         let (worker, session, request, generation) = correlation_shape(&message.correlation);
         let outcomes = message
@@ -1906,7 +2437,7 @@ export const TYPE_FIELD_DESCRIPTORS = [\n",
                     .expect("parser validates outcomes")
                     .id;
                 format!(
-                    "{{ event_id: {id}, disposition: \"{}\" }}",
+                    "Object.freeze({{ event_id: {id}, disposition: \"{}\" }})",
                     outcome.disposition.schema_name()
                 )
             })
@@ -1916,7 +2447,7 @@ export const TYPE_FIELD_DESCRIPTORS = [\n",
         let maximum_encoded_payload_bytes = maximum_message_payload(&codec, message);
         writeln!(
             out,
-            "  {{ kind: \"{}\", name: \"{}\", id: {}, payload: \"{}\", state_precondition: \"{}\", correlation: \"{}\", correlation_shape: {{ worker: \"{}\", session: \"{}\", request: \"{}\", generation: \"{}\" }}, replayable: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, maximum_encoded_payload_bytes: {maximum_encoded_payload_bytes}, required_capability: {required_capability}, outcomes: [{}] }},",
+            "  Object.freeze({{ kind: \"{}\", name: \"{}\", id: {}, payload: \"{}\", state_precondition: \"{}\", correlation: \"{}\", correlation_shape: Object.freeze({{ worker: \"{}\", session: \"{}\", request: \"{}\", generation: \"{}\" }}), replayable: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, maximum_encoded_payload_bytes: {maximum_encoded_payload_bytes}, required_capability: {required_capability}, outcomes: Object.freeze([{}] as const) }}),",
             message.kind.schema_name(),
             message.name,
             message.id,
@@ -1937,7 +2468,7 @@ export const TYPE_FIELD_DESCRIPTORS = [\n",
         .unwrap();
     }
     out.push_str(
-        "] as const satisfies readonly MessageDescriptor[];\n\
+        "] as const) satisfies readonly MessageDescriptor[];\n\
 const MESSAGE_DESCRIPTOR_BY_ID: ReadonlyMap<number, MessageDescriptor> = new Map(MESSAGE_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor] as const));\n\
 export const descriptorById = (id: number): MessageDescriptor | undefined => MESSAGE_DESCRIPTOR_BY_ID.get(id);\n\n",
     );
@@ -2042,7 +2573,7 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   let previousEnd = 0n;\n\
   for (const [index, segment] of command.segments.entries()) {\n\
     if (segment.slot !== index || segment.byte_length > MAX_DATA_SEGMENT_BYTES) return false;\n\
-    if (index !== 0 && segment.range.start <= previousEnd) return false;\n\
+    if (index !== 0 && segment.range.start < previousEnd) return false;\n\
     previousEnd = segment.range.start + segment.range.len;\n\
     aggregate += segment.byte_length;\n\
     if (aggregate > MAX_DATA_TICKET_BYTES) return false;\n\
@@ -2069,7 +2600,7 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   let previousEnd = 0n;\n\
   for (const [index, range] of need.ranges.entries()) {\n\
     if (range.len > MAX_DATA_SEGMENT_BYTES) return false;\n\
-    if (index !== 0 && range.start <= previousEnd) return false;\n\
+    if (index !== 0 && range.start < previousEnd) return false;\n\
     previousEnd = range.start + range.len;\n\
     aggregate += range.len;\n\
     if (aggregate > MAX_DATA_TICKET_BYTES) return false;\n\
@@ -2117,14 +2648,42 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   if (!batch.pages.every((page, index) => page.page_index === batch.start_index + index)) return false;\n",
         );
     }
+    if record.name == "RenderPlanManifest" {
+        out.push_str(
+            "  const manifest = value as unknown as RenderPlanManifest;\n\
+  if (manifest.plan_schema_version === 0 || manifest.document_revision === 0n || manifest.renderer_epoch === 0 || manifest.plan_id === 0n\n\
+    || manifest.generation !== manifest.plan_id || manifest.device_scale_milli === 0) return false;\n\
+  if (!manifest.render_config.some((byte) => byte !== 0) || !manifest.scene_hash.some((byte) => byte !== 0)\n\
+    || !manifest.decision_hash.some((byte) => byte !== 0) || !manifest.geometry_hash.some((byte) => byte !== 0)) return false;\n\
+  if (manifest.viewport_clip.width === 0 || manifest.viewport_clip.height === 0\n\
+    || manifest.viewport_clip.coordinate_space !== SurfaceCoordinateSpace.DevicePixelsTopLeft) return false;\n\
+  if (manifest.zoom_numerator === 0 || manifest.zoom_denominator === 0) return false;\n\
+  let zoomLeft = manifest.zoom_numerator;\n\
+  let zoomRight = manifest.zoom_denominator;\n\
+  while (zoomRight !== 0) {\n\
+    const remainder = zoomLeft % zoomRight;\n\
+    zoomLeft = zoomRight;\n\
+    zoomRight = remainder;\n\
+  }\n\
+  if (zoomLeft !== 1 || manifest.regions.length === 0 || manifest.regions.length !== manifest.tile_content_hashes.length) return false;\n\
+  const clipLeft = manifest.viewport_clip.x;\n\
+  const clipTop = manifest.viewport_clip.y;\n\
+  const clipRight = clipLeft + manifest.viewport_clip.width;\n\
+  const clipBottom = clipTop + manifest.viewport_clip.height;\n\
+  if (!manifest.regions.every((region, index) => region.page_index === manifest.viewport_clip.page_index\n\
+    && region.coordinate_space === SurfaceCoordinateSpace.DevicePixelsTopLeft\n\
+    && region.width !== 0 && region.height !== 0\n\
+    && region.x >= clipLeft && region.y >= clipTop\n\
+    && region.x + region.width <= clipRight && region.y + region.height <= clipBottom\n\
+    && (index === 0 || manifest.regions[index - 1]!.y < region.y\n\
+      || (manifest.regions[index - 1]!.y === region.y && manifest.regions[index - 1]!.x < region.x)))) return false;\n\
+  if (!manifest.tile_content_hashes.every((hash) => hash.some((byte) => byte !== 0))) return false;\n",
+        );
+    }
     if record.name == "GenerationPlannedEvent" {
         out.push_str(
             "  const plan = value as unknown as GenerationPlannedEvent;\n\
-  const manifest = plan.manifest;\n\
-  if (manifest.document_revision === 0n || manifest.renderer_epoch === 0 || manifest.plan_id === 0n || manifest.regions.length === 0) return false;\n\
-  if (!manifest.render_config.some((byte) => byte !== 0) || !plan.plan_hash.some((byte) => byte !== 0) || !manifest.scene_hash.some((byte) => byte !== 0) || !manifest.decision_hash.some((byte) => byte !== 0)) return false;\n\
-  const identities = new Set(manifest.regions.map((region) => `${region.page_index}:${region.x}:${region.y}:${region.width}:${region.height}`));\n\
-  if (identities.size !== manifest.regions.length || manifest.regions.some((region) => region.width === 0 || region.height === 0)) return false;\n",
+  if (!plan.plan_hash.some((byte) => byte !== 0)) return false;\n",
         );
     }
     if record.name == "GenerationCompletedEvent" {
@@ -2232,15 +2791,28 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   if (!decision.contributors.every((contributor, index) => contributor.id !== 0 && (index === 0 || decision.contributors[index - 1]!.id < contributor.id))) return false;\n\
   const requirementIds = new Set(decision.missing.map((requirement) => requirement.id));\n\
   const contributorIds = new Set(decision.contributors.map((contributor) => contributor.id));\n\
+  if (requirementIds.size !== missingCount || contributorIds.size !== contributorCount) return false;\n\
   if (!decision.missing.every((requirement) => requirement.dependencies.length <= CAPABILITY_REQUIREMENT_DEPENDENCIES_MAX_COUNT\n\
     && requirement.contributor_ids.length <= CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT\n\
     && requirement.dependencies.every((id, index) => id !== requirement.id && requirementIds.has(id) && (index === 0 || requirement.dependencies[index - 1]! < id))\n\
     && requirement.contributor_ids.every((id, index) => contributorIds.has(id) && (index === 0 || requirement.contributor_ids[index - 1]! < id)))) return false;\n\
   if (decision.missing_completeness === CollectionCompleteness.Complete ? missingCount !== decision.missing_total : missingCount >= decision.missing_total) return false;\n\
   if (decision.contributors_completeness === CollectionCompleteness.Complete ? contributorCount !== decision.contributors_total : contributorCount >= decision.contributors_total) return false;\n\
-  if (decision.status === SupportStatus.Supported && (decision.missing_total !== 0 || missingCount !== 0 || hasOwn(value, \"location\") || hasOwn(value, \"rejection_code\"))) return false;\n\
-  if (decision.status === SupportStatus.Unsupported && hasOwn(value, \"rejection_code\")) return false;\n\
-  if (decision.status === SupportStatus.Rejected && !hasOwn(value, \"rejection_code\")) return false;\n",
+  const locationCount = hasOwn(value, \"location\") ? 1 : 0;\n\
+  if (decision.locations_completeness === CollectionCompleteness.Complete\n\
+    ? locationCount !== decision.locations_total\n\
+    : locationCount >= decision.locations_total) return false;\n\
+  if (decision.missing_total > decision.evaluated_requirements || decision.evaluated_parameters !== decision.evaluated_requirements) return false;\n\
+  if (hasOwn(value, \"location\") && decision.locations_total === 0) return false;\n\
+  if (decision.status === SupportStatus.Supported && (decision.missing_total !== 0 || missingCount !== 0\n\
+    || decision.contributors_total !== 0 || contributorCount !== 0 || decision.locations_total !== 0\n\
+    || decision.locations_completeness !== CollectionCompleteness.Complete\n\
+    || hasOwn(value, \"location\") || hasOwn(value, \"rejection_code\"))) return false;\n\
+  if (decision.status === SupportStatus.Unsupported\n\
+    && (decision.locations_total !== decision.missing_total || hasOwn(value, \"rejection_code\"))) return false;\n\
+  if (decision.status === SupportStatus.Rejected\n\
+    && (decision.missing_total !== 0 || decision.contributors_total !== 1\n\
+      || decision.locations_total !== 1 || !hasOwn(value, \"rejection_code\"))) return false;\n",
         );
     }
     if record.name == "SurfaceReadyEvent" {
@@ -2361,7 +2933,15 @@ fn write_ts_messages(out: &mut String, protocol: &Protocol) {
     out.push_str(
         "export interface CommandEnvelope { header: EnvelopeHeader; correlation: Correlation; command: Command }\n\
 export interface EventEnvelope { header: EnvelopeHeader; correlation: Correlation; event: Event }\n\n\
-const CONNECTION_CONTEXT_BRAND: unique symbol = Symbol(\"EngineProtocolConnection\");\n\
+declare const CONNECTION_CONTEXT_BRAND: unique symbol;\n\
+const INTRINSIC_REFLECT_APPLY = Reflect.apply;\n\
+const INTRINSIC_WEAK_SET_ADD = WeakSet.prototype.add;\n\
+const INTRINSIC_WEAK_SET_HAS = WeakSet.prototype.has;\n\
+const weakSetAdd = (set: WeakSet<object>, value: object): void => {\n\
+  INTRINSIC_REFLECT_APPLY(INTRINSIC_WEAK_SET_ADD, set, [value]);\n\
+};\n\
+const weakSetHas = (set: WeakSet<object>, value: object): boolean => INTRINSIC_REFLECT_APPLY(INTRINSIC_WEAK_SET_HAS, set, [value]) as boolean;\n\
+const COMPATIBLE_HANDSHAKES = new WeakSet<object>();\n\
 export type ProtocolValidationErrorCode = \"InvalidHandshake\" | \"InvalidEnvelope\" | \"NonMonotonicSequence\";\n\
 export interface ProtocolValidationError { readonly code: ProtocolValidationErrorCode }\n\
 export type ProtocolValidationResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: Readonly<ProtocolValidationError> }>;\n\
@@ -2374,21 +2954,79 @@ export interface CompatibleHandshake {\n\
   readonly max_message_bytes: number;\n\
   readonly max_transfer_slots: number;\n\
 }\n\
+export function isCompatibleHandshake(value: unknown): value is CompatibleHandshake {\n\
+  return typeof value === \"object\" && value !== null && weakSetHas(COMPATIBLE_HANDSHAKES, value);\n\
+}\n\
+const snapshotExactDataRecord = (\n\
+  input: unknown,\n\
+  expectedKeys: readonly string[],\n\
+): Readonly<Record<string, unknown>> | undefined => {\n\
+  if (typeof input !== \"object\" || input === null || Array.isArray(input)) return undefined;\n\
+  try {\n\
+    const prototype = Object.getPrototypeOf(input);\n\
+    if (prototype !== Object.prototype && prototype !== null) return undefined;\n\
+    const descriptors = Object.getOwnPropertyDescriptors(input);\n\
+    const keys = Reflect.ownKeys(descriptors);\n\
+    if (keys.length !== expectedKeys.length\n\
+      || keys.some((key) => typeof key !== \"string\" || !expectedKeys.includes(key))\n\
+      || expectedKeys.some((key) => !keys.includes(key))) return undefined;\n\
+    const snapshot: Record<string, unknown> = {};\n\
+    for (const key of expectedKeys) {\n\
+      const descriptor = descriptors[key];\n\
+      if (descriptor === undefined || !(\"value\" in descriptor) || descriptor.enumerable !== true) return undefined;\n\
+      snapshot[key] = descriptor.value;\n\
+    }\n\
+    return Object.freeze(snapshot);\n\
+  } catch {\n\
+    return undefined;\n\
+  }\n\
+};\n\
+const snapshotProtocolHelloDataOnly = (input: unknown): ProtocolHello | undefined => {\n\
+  const hello = snapshotExactDataRecord(input, [\n\
+    \"major\", \"minor\", \"schema_hash\", \"endpoint_role\", \"capabilities\",\n\
+    \"max_message_bytes\", \"max_transfer_slots\",\n\
+  ]);\n\
+  if (hello === undefined) return undefined;\n\
+  const capabilities = snapshotExactDataRecord(hello.capabilities, [\"supported\", \"mandatory\"]);\n\
+  const schemaHashInput = hello.schema_hash;\n\
+  if (capabilities === undefined || !(schemaHashInput instanceof Uint8Array)) return undefined;\n\
+  try {\n\
+    if (Object.getPrototypeOf(schemaHashInput) !== Uint8Array.prototype) return undefined;\n\
+    if (typeof SharedArrayBuffer !== \"undefined\" && schemaHashInput.buffer instanceof SharedArrayBuffer) return undefined;\n\
+    const schemaHash = Uint8Array.prototype.slice.call(schemaHashInput) as Uint8Array;\n\
+    const snapshot = Object.freeze({\n\
+      major: hello.major,\n\
+      minor: hello.minor,\n\
+      schema_hash: schemaHash,\n\
+      endpoint_role: hello.endpoint_role,\n\
+      capabilities: Object.freeze({\n\
+        supported: capabilities.supported,\n\
+        mandatory: capabilities.mandatory,\n\
+      }),\n\
+      max_message_bytes: hello.max_message_bytes,\n\
+      max_transfer_slots: hello.max_transfer_slots,\n\
+    }) as unknown as ProtocolHello;\n\
+    return validateProtocolHello(snapshot) ? snapshot : undefined;\n\
+  } catch {\n\
+    return undefined;\n\
+  }\n\
+};\n\
 export function negotiateHandshake(localInput: unknown, peerInput: unknown): CompatibleHandshake | undefined {\n\
-  if (!validateProtocolHello(localInput) || !validateProtocolHello(peerInput)) return undefined;\n\
-  const local = snapshotProtocolHello(localInput);\n\
-  const peer = snapshotProtocolHello(peerInput);\n\
+  const local = snapshotProtocolHelloDataOnly(localInput);\n\
+  const peer = snapshotProtocolHelloDataOnly(peerInput);\n\
+  if (local === undefined || peer === undefined) return undefined;\n\
   const opposite = (local.endpoint_role === EndpointRole.Host && peer.endpoint_role === EndpointRole.Engine)\n\
     || (local.endpoint_role === EndpointRole.Engine && peer.endpoint_role === EndpointRole.Host);\n\
-  if (!opposite || local.minor !== peer.minor || !fixedBytesEqual(local.schema_hash, SCHEMA_HASH) || !fixedBytesEqual(peer.schema_hash, SCHEMA_HASH)) return undefined;\n\
+  if (!opposite || local.minor !== peer.minor || !fixedBytesEqual(local.schema_hash, CANONICAL_SCHEMA_HASH) || !fixedBytesEqual(peer.schema_hash, CANONICAL_SCHEMA_HASH)) return undefined;\n\
   if ((local.capabilities.mandatory & ~peer.capabilities.supported) !== 0n || (peer.capabilities.mandatory & ~local.capabilities.supported) !== 0n) return undefined;\n\
-  return Object.freeze({\n\
-    [CONNECTION_CONTEXT_BRAND]: true as const,\n\
+  const connection = Object.freeze({\n\
     minor: local.minor,\n\
     capabilities: local.capabilities.supported & peer.capabilities.supported & KNOWN_ENDPOINT_CAPABILITIES,\n\
     max_message_bytes: Math.min(local.max_message_bytes, peer.max_message_bytes),\n\
     max_transfer_slots: Math.min(local.max_transfer_slots, peer.max_transfer_slots),\n\
-  });\n\
+  }) as CompatibleHandshake;\n\
+  weakSetAdd(COMPATIBLE_HANDSHAKES, connection);\n\
+  return connection;\n\
 }\n\
 export function negotiateHandshakeResult(localInput: unknown, peerInput: unknown): ProtocolValidationResult<CompatibleHandshake> {\n\
   const value = negotiateHandshake(localInput, peerInput);\n\
@@ -2399,25 +3037,44 @@ export function validateHandshakeTranscript(hostHello: Command, engineHello: Eve
   if (hostHello.payload.hello.endpoint_role !== EndpointRole.Host || engineHello.payload.hello.endpoint_role !== EndpointRole.Engine) return undefined;\n\
   const connection = negotiateHandshake(hostHello.payload.hello, engineHello.payload.hello);\n\
   if (connection === undefined || hostAccept.payload.negotiated_minor !== connection.minor || engineReady.payload.negotiated_minor !== connection.minor) return undefined;\n\
-  if (!fixedBytesEqual(hostAccept.payload.schema_hash, SCHEMA_HASH) || !fixedBytesEqual(engineReady.payload.schema_hash, SCHEMA_HASH) || engineReady.payload.worker === 0n || engineReady.payload.execution_capabilities.supported !== engineHello.payload.execution_capabilities.supported) return undefined;\n\
+  if (!fixedBytesEqual(hostAccept.payload.schema_hash, CANONICAL_SCHEMA_HASH) || !fixedBytesEqual(engineReady.payload.schema_hash, CANONICAL_SCHEMA_HASH) || engineReady.payload.worker === 0n || engineReady.payload.execution_capabilities.supported !== engineHello.payload.execution_capabilities.supported) return undefined;\n\
   return connection;\n\
 }\n\
 export interface PendingSequenceCommit { commit(): boolean }\n\
+const AUTHENTIC_SEQUENCE_TRACKERS = new WeakSet<object>();\n\
 export class EnvelopeSequenceTracker {\n\
-  private lastAcceptedValue: bigint | undefined;\n\
-  get lastAccepted(): bigint | undefined { return this.lastAcceptedValue; }\n\
+  #lastAcceptedValue: bigint | undefined;\n\
+  constructor() {\n\
+    if (new.target !== EnvelopeSequenceTracker) throw new TypeError(\"EnvelopeSequenceTracker cannot be subclassed\");\n\
+    weakSetAdd(AUTHENTIC_SEQUENCE_TRACKERS, this);\n\
+    Object.freeze(this);\n\
+  }\n\
+  get lastAccepted(): bigint | undefined { return this.#lastAcceptedValue; }\n\
   pending(candidate: bigint): PendingSequenceCommit | undefined {\n\
-    if (candidate === 0n || (this.lastAcceptedValue !== undefined && candidate <= this.lastAcceptedValue)) return undefined;\n\
+    if (typeof candidate !== \"bigint\" || candidate === 0n || (this.#lastAcceptedValue !== undefined && candidate <= this.#lastAcceptedValue)) return undefined;\n\
     let consumed = false;\n\
     return Object.freeze({ commit: (): boolean => {\n\
       if (consumed) return false;\n\
       consumed = true;\n\
-      if (this.lastAcceptedValue !== undefined && candidate <= this.lastAcceptedValue) return false;\n\
-      this.lastAcceptedValue = candidate;\n\
+      if (this.#lastAcceptedValue !== undefined && candidate <= this.#lastAcceptedValue) return false;\n\
+      this.#lastAcceptedValue = candidate;\n\
       return true;\n\
     }});\n\
   }\n\
 }\n\
+const ORIGINAL_SEQUENCE_PENDING = EnvelopeSequenceTracker.prototype.pending;\n\
+const ORIGINAL_SEQUENCE_LAST_ACCEPTED = Object.getOwnPropertyDescriptor(EnvelopeSequenceTracker.prototype, \"lastAccepted\")?.get;\n\
+if (ORIGINAL_SEQUENCE_LAST_ACCEPTED === undefined) throw new Error(\"missing sequence getter\");\n\
+Object.freeze(EnvelopeSequenceTracker.prototype);\n\
+Object.freeze(EnvelopeSequenceTracker);\n\
+const authenticSequencePending = (sequence: unknown, candidate: bigint): PendingSequenceCommit | undefined => {\n\
+  if (typeof sequence !== \"object\" || sequence === null || !weakSetHas(AUTHENTIC_SEQUENCE_TRACKERS, sequence)) return undefined;\n\
+  return INTRINSIC_REFLECT_APPLY(ORIGINAL_SEQUENCE_PENDING, sequence, [candidate]) as PendingSequenceCommit | undefined;\n\
+};\n\
+const authenticSequenceState = (sequence: unknown): Readonly<{ lastAccepted: bigint | undefined }> | undefined => {\n\
+  if (typeof sequence !== \"object\" || sequence === null || !weakSetHas(AUTHENTIC_SEQUENCE_TRACKERS, sequence)) return undefined;\n\
+  return { lastAccepted: INTRINSIC_REFLECT_APPLY(ORIGINAL_SEQUENCE_LAST_ACCEPTED, sequence, []) as bigint | undefined };\n\
+};\n\
 const correlationRequirementMet = (present: boolean, requirement: CorrelationRequirement): boolean => requirement === \"required\" ? present : requirement === \"optional\" ? true : !present;\n\
 const validateDescriptorCorrelation = (correlation: Correlation, descriptor: MessageDescriptor): boolean => {\n\
   if (correlation.worker === 0n || correlation.session === 0n || correlation.request === 0n || correlation.generation === 0n) return false;\n\
@@ -2460,6 +3117,7 @@ const validatePayloadCorrelation = (correlation: Correlation, message: Command |
     case \"SurfaceReady\": return correlation.worker === message.payload.metadata.owner.worker\n\
       && correlation.session === message.payload.metadata.owner.session\n\
       && correlation.generation === message.payload.metadata.generation;\n\
+    case \"GenerationPlanned\": return correlation.generation === message.payload.manifest.generation;\n\
     case \"RequestCancelled\": return correlation.request === message.payload.target;\n\
     case \"SessionClosed\": return correlation.session === message.payload.session;\n\
     case \"WorkerStopped\": return correlation.worker === message.payload.worker;\n\
@@ -2468,7 +3126,7 @@ const validatePayloadCorrelation = (correlation: Correlation, message: Command |
 };\n\
 const validateEnvelopeDescriptor = (header: EnvelopeHeader, correlation: Correlation, message: Command | Event, kind: MessageKind, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake): boolean => {\n\
   const descriptor = descriptorById(header.message_type);\n\
-  return connection[CONNECTION_CONTEXT_BRAND] === true\n\
+  return isCompatibleHandshake(connection)\n\
     && descriptor !== undefined\n\
     && descriptor.kind === kind\n\
     && descriptor.name === message.type\n\
@@ -2489,31 +3147,33 @@ export function validateEnvelopeHeaderForMinor(value: unknown, negotiatedMinor: 
 export interface PendingCommandEnvelope { readonly envelope: CommandEnvelope; commitSequence(): boolean }\n\
 export interface PendingEventEnvelope { readonly envelope: EventEnvelope; commitSequence(): boolean }\n\
 export function beginValidateCommandEnvelope(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): PendingCommandEnvelope | undefined {\n\
-  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"command\"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return undefined;\n\
+  if (!isCompatibleHandshake(connection) || !isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"command\"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return undefined;\n\
   const input = value as unknown as CommandEnvelope;\n\
   const envelope = Object.freeze({ header: snapshotEnvelopeHeader(input.header), correlation: snapshotCorrelation(input.correlation), command: snapshotCommand(input.command) });\n\
   if (!validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.command, \"command\", transferSlots, actualPayloadBytes, connection)) return undefined;\n\
-  const pending = sequence.pending(envelope.header.sequence);\n\
+  const pending = authenticSequencePending(sequence, envelope.header.sequence);\n\
   return pending === undefined ? undefined : Object.freeze({ envelope, commitSequence: (): boolean => pending.commit() });\n\
 }\n\
 export function beginValidateEventEnvelope(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): PendingEventEnvelope | undefined {\n\
-  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"event\"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return undefined;\n\
+  if (!isCompatibleHandshake(connection) || !isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"event\"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return undefined;\n\
   const input = value as unknown as EventEnvelope;\n\
   const envelope = Object.freeze({ header: snapshotEnvelopeHeader(input.header), correlation: snapshotCorrelation(input.correlation), event: snapshotEvent(input.event) });\n\
   if (!validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.event, \"event\", transferSlots, actualPayloadBytes, connection)) return undefined;\n\
-  const pending = sequence.pending(envelope.header.sequence);\n\
+  const pending = authenticSequencePending(sequence, envelope.header.sequence);\n\
   return pending === undefined ? undefined : Object.freeze({ envelope, commitSequence: (): boolean => pending.commit() });\n\
 }\n\
 export function beginValidateCommandEnvelopeResult(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): ProtocolValidationResult<PendingCommandEnvelope> {\n\
   const pending = beginValidateCommandEnvelope(value, transferSlots, actualPayloadBytes, connection, sequence);\n\
   if (pending !== undefined) return protocolValidationOk(pending);\n\
-  if (isRecord(value) && isRecord(value.header) && typeof value.header.sequence === \"bigint\" && (value.header.sequence === 0n || (sequence.lastAccepted !== undefined && value.header.sequence <= sequence.lastAccepted))) return protocolValidationError(\"NonMonotonicSequence\");\n\
+  const sequenceState = authenticSequenceState(sequence);\n\
+  if (sequenceState !== undefined && isRecord(value) && isRecord(value.header) && typeof value.header.sequence === \"bigint\" && (value.header.sequence === 0n || (sequenceState.lastAccepted !== undefined && value.header.sequence <= sequenceState.lastAccepted))) return protocolValidationError(\"NonMonotonicSequence\");\n\
   return protocolValidationError(\"InvalidEnvelope\");\n\
 }\n\
 export function beginValidateEventEnvelopeResult(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): ProtocolValidationResult<PendingEventEnvelope> {\n\
   const pending = beginValidateEventEnvelope(value, transferSlots, actualPayloadBytes, connection, sequence);\n\
   if (pending !== undefined) return protocolValidationOk(pending);\n\
-  if (isRecord(value) && isRecord(value.header) && typeof value.header.sequence === \"bigint\" && (value.header.sequence === 0n || (sequence.lastAccepted !== undefined && value.header.sequence <= sequence.lastAccepted))) return protocolValidationError(\"NonMonotonicSequence\");\n\
+  const sequenceState = authenticSequenceState(sequence);\n\
+  if (sequenceState !== undefined && isRecord(value) && isRecord(value.header) && typeof value.header.sequence === \"bigint\" && (value.header.sequence === 0n || (sequenceState.lastAccepted !== undefined && value.header.sequence <= sequenceState.lastAccepted))) return protocolValidationError(\"NonMonotonicSequence\");\n\
   return protocolValidationError(\"InvalidEnvelope\");\n\
 }\n",
     );
@@ -3243,6 +3903,13 @@ fn capability_decision_hash_fixture() -> WireValue {
             "contributors_completeness",
             WireValue::Enum("Complete".into()),
         ),
+        ("locations_total", WireValue::U32(0)),
+        ("locations_completeness", WireValue::Enum("Complete".into())),
+        ("evaluated_requirements", WireValue::U32(3)),
+        ("evaluated_dependencies", WireValue::U32(2)),
+        ("evaluated_parameters", WireValue::U32(3)),
+        ("evaluated_commands", WireValue::U32(7)),
+        ("evaluated_resources", WireValue::U32(5)),
         (
             "scope",
             record([
@@ -3283,6 +3950,18 @@ fn capability_decision_hash_fixture_wire_invariants_valid(value: &WireValue) -> 
         record_field(value, "contributors_completeness"),
         Some(WireValue::Enum(completeness)) if completeness == "Complete"
     ) && matches!(
+        record_field(value, "locations_total"),
+        Some(WireValue::U32(0))
+    ) && matches!(
+        record_field(value, "locations_completeness"),
+        Some(WireValue::Enum(completeness)) if completeness == "Complete"
+    ) && matches!(
+        (
+            record_field(value, "evaluated_requirements"),
+            record_field(value, "evaluated_parameters")
+        ),
+        (Some(WireValue::U32(3)), Some(WireValue::U32(3)))
+    ) && matches!(
         record_field(value, "location"),
         Some(WireValue::Optional(None))
     ) && matches!(
@@ -3293,12 +3972,35 @@ fn capability_decision_hash_fixture_wire_invariants_valid(value: &WireValue) -> 
 
 fn render_plan_manifest_hash_fixture(decision_hash: [u8; 32]) -> WireValue {
     record([
+        ("plan_schema_version", WireValue::U16(1)),
         ("document_revision", WireValue::U64(12)),
         ("render_config", WireValue::Bytes32([0x66; 32])),
         ("renderer_epoch", WireValue::U32(4)),
         ("plan_id", WireValue::U64(21)),
+        ("generation", WireValue::U64(21)),
         ("scene_hash", WireValue::Bytes32([0x77; 32])),
         ("decision_hash", WireValue::Bytes32(decision_hash)),
+        ("geometry_hash", WireValue::Bytes32([0x88; 32])),
+        (
+            "viewport_clip",
+            record([
+                ("page_index", WireValue::U32(2)),
+                ("x", WireValue::I32(-10)),
+                ("y", WireValue::I32(20)),
+                ("width", WireValue::U32(640)),
+                ("height", WireValue::U32(480)),
+                (
+                    "coordinate_space",
+                    WireValue::Enum("DevicePixelsTopLeft".into()),
+                ),
+            ]),
+        ),
+        ("zoom_numerator", WireValue::U32(3)),
+        ("zoom_denominator", WireValue::U32(2)),
+        ("device_scale_milli", WireValue::U32(2_000)),
+        ("rotation", WireValue::Enum("Degrees90".into())),
+        ("optional_content", WireValue::U64(5)),
+        ("annotation_revision", WireValue::U64(9)),
         ("backend", WireValue::Enum("ReferenceCpu".into())),
         ("output_profile", WireValue::Enum("Srgb".into())),
         ("quality", WireValue::Enum("Full".into())),
@@ -3316,6 +4018,10 @@ fn render_plan_manifest_hash_fixture(decision_hash: [u8; 32]) -> WireValue {
                 ),
             ])]),
         ),
+        (
+            "tile_content_hashes",
+            WireValue::List(vec![WireValue::Bytes32([0x99; 32])]),
+        ),
     ])
 }
 
@@ -3332,13 +4038,36 @@ fn render_plan_manifest_hash_fixture_wire_invariants_valid(value: &WireValue) ->
         }),
         _ => false,
     };
+    let tile_hashes_valid = matches!(
+        record_field(value, "tile_content_hashes"),
+        Some(WireValue::List(hashes))
+            if hashes.len() == 1
+                && matches!(hashes.first(), Some(WireValue::Bytes32(hash)) if hash.iter().any(|byte| *byte != 0))
+    );
     matches!(
+        record_field(value, "plan_schema_version"),
+        Some(WireValue::U16(version)) if *version != 0
+    ) && matches!(
         record_field(value, "plan_id"),
         Some(WireValue::U64(plan_id)) if *plan_id != 0
+    ) && matches!(
+        (
+            record_field(value, "plan_id"),
+            record_field(value, "generation")
+        ),
+        (Some(WireValue::U64(plan_id)), Some(WireValue::U64(generation)))
+            if plan_id == generation
+    ) && matches!(
+        (
+            record_field(value, "zoom_numerator"),
+            record_field(value, "zoom_denominator")
+        ),
+        (Some(WireValue::U32(3)), Some(WireValue::U32(2)))
     ) && matches!(
         record_field(value, "output_profile"),
         Some(WireValue::Enum(profile)) if profile == "Srgb"
     ) && valid_region
+        && tile_hashes_valid
 }
 
 fn record_field<'a>(value: &'a WireValue, name: &str) -> Option<&'a WireValue> {
@@ -3489,13 +4218,29 @@ fn desktop_header_hex(
 #[cfg(test)]
 mod tests {
     use super::{
-        GeneratedFile, generate_compatibility_vectors, generated_files, write_generated,
+        GeneratedFile, GenerationTransaction, TRANSACTION_FILE_NAME,
+        generate_compatibility_vectors, generated_files, write_generated,
         write_generated_transaction,
     };
     use crate::parser::parse_schema;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     const SCHEMA: &str = include_str!("../../../protocol/engine.protocol");
+    const CRASH_HELPER_ROOT: &str = "PDF_RS_PROTOCOL_CRASH_HELPER_ROOT";
+    const CRASH_HELPER_COMMITTED: &str = "PDF_RS_PROTOCOL_CRASH_HELPER_COMMITTED";
+
+    fn transaction_files() -> Vec<GeneratedFile> {
+        vec![
+            GeneratedFile {
+                relative_path: "generated/one.txt".into(),
+                contents: "new-one\n".into(),
+            },
+            GeneratedFile {
+                relative_path: "generated/two.txt".into(),
+                contents: "new-two\n".into(),
+            },
+        ]
+    }
 
     #[test]
     fn generation_is_byte_deterministic_and_complete() {
@@ -3703,20 +4448,11 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(root.join("generated")).unwrap();
-        let files = vec![
-            GeneratedFile {
-                relative_path: "generated/one.txt".into(),
-                contents: "new-one\n".into(),
-            },
-            GeneratedFile {
-                relative_path: "generated/two.txt".into(),
-                contents: "new-two\n".into(),
-            },
-        ];
+        let files = transaction_files();
         std::fs::write(root.join("generated/one.txt"), b"old-one\n").unwrap();
         std::fs::write(root.join("generated/two.txt"), b"old-two\n").unwrap();
 
-        assert!(write_generated_transaction(&root, &files, Some(1)).is_err());
+        assert!(write_generated_transaction(&root, &files, Some(1), None).is_err());
         assert_eq!(
             std::fs::read(root.join("generated/one.txt")).unwrap(),
             b"old-one\n"
@@ -3725,7 +4461,7 @@ mod tests {
             std::fs::read(root.join("generated/two.txt")).unwrap(),
             b"old-two\n"
         );
-        assert!(!root.join(".protocol-codegen.lock").exists());
+        assert!(!root.join(TRANSACTION_FILE_NAME).exists());
 
         write_generated(&root, &files).unwrap();
         assert_eq!(
@@ -3740,6 +4476,74 @@ mod tests {
     }
 
     #[test]
+    fn generation_rejects_non_file_targets_without_replacing_them() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-non-file-target-{}-{nonce}",
+            std::process::id()
+        ));
+        let target = root.join("generated/value.txt");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("sentinel"), b"keep\n").unwrap();
+        let files = [GeneratedFile {
+            relative_path: "generated/value.txt".into(),
+            contents: "new\n".into(),
+        }];
+
+        let error = write_generated(&root, &files).unwrap_err();
+        assert!(error.contains("non-file generated target"));
+        assert!(target.is_dir());
+        assert_eq!(std::fs::read(target.join("sentinel")).unwrap(), b"keep\n");
+        assert!(!root.join(TRANSACTION_FILE_NAME).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_journal_is_rejected_before_writing_transaction_bytes() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-write-journal-limit-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let relative_path = PathBuf::from(
+            "x".repeat(usize::try_from(super::MAX_TRANSACTION_JOURNAL_BYTES).unwrap()),
+        );
+        let files = [GeneratedFile {
+            relative_path: relative_path.clone(),
+            contents: String::new(),
+        }];
+        let target = root.join(&relative_path);
+        let staged = [super::StagedGeneratedFile {
+            relative_path,
+            temporary: target.with_extension("protocol-codegen.new"),
+            backup: target.with_extension("protocol-codegen.previous"),
+            target,
+            had_existing: false,
+        }];
+        let mut transaction = GenerationTransaction::acquire(&root, &files).unwrap();
+
+        let error = transaction
+            .record(super::TransactionPhase::Prepared, &staged)
+            .unwrap_err();
+        assert!(error.contains("transaction exceeds"));
+        assert_eq!(
+            transaction.file.metadata().unwrap().len(),
+            0,
+            "an oversized journal must never be made recoverable"
+        );
+        drop(transaction);
+        assert!(!root.join(TRANSACTION_FILE_NAME).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn concurrent_generator_lock_fails_closed() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3750,13 +4554,245 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join(".protocol-codegen.lock"), b"held\n").unwrap();
         let files = [GeneratedFile {
             relative_path: "value.txt".into(),
             contents: "value\n".into(),
         }];
+        let transaction = GenerationTransaction::acquire(&root, &files).unwrap();
         assert!(write_generated(&root, &files).is_err());
         assert!(!root.join("value.txt").exists());
+        drop(transaction);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_journal_cannot_name_a_non_output_path() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-journal-path-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("victim.txt"), b"keep\n").unwrap();
+        let journal = format!(
+            "{header}\nphase=P\ncount=1\nentry={path}\t0\n",
+            header = super::TRANSACTION_JOURNAL_HEADER,
+            path = crate::hash::lowercase_hex(b"victim.txt"),
+        );
+        std::fs::write(root.join(TRANSACTION_FILE_NAME), journal).unwrap();
+        let files = [GeneratedFile {
+            relative_path: "value.txt".into(),
+            contents: "value\n".into(),
+        }];
+
+        let error = write_generated(&root, &files).unwrap_err();
+        assert!(error.contains("output path changed"));
+        assert_eq!(std::fs::read(root.join("victim.txt")).unwrap(), b"keep\n");
+        assert!(!root.join("value.txt").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_recovery_restores_a_target_interrupted_between_renames() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-between-renames-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        let files = [GeneratedFile {
+            relative_path: "generated/value.txt".into(),
+            contents: "new\n".into(),
+        }];
+        let target = root.join("generated/value.txt");
+        let temporary = target.with_extension("protocol-codegen.new");
+        let backup = target.with_extension("protocol-codegen.previous");
+        std::fs::write(&target, b"old\n").unwrap();
+        super::write_synced_file(&temporary, b"new\n").unwrap();
+        let staged = [super::StagedGeneratedFile {
+            relative_path: files[0].relative_path.clone(),
+            target: target.clone(),
+            temporary: temporary.clone(),
+            backup: backup.clone(),
+            had_existing: true,
+        }];
+        let mut transaction = GenerationTransaction::acquire(&root, &files).unwrap();
+        transaction
+            .record(super::TransactionPhase::Prepared, &staged)
+            .unwrap();
+        std::fs::rename(&target, &backup).unwrap();
+        super::sync_parent(&target).unwrap();
+        drop(transaction);
+
+        drop(GenerationTransaction::acquire(&root, &files).unwrap());
+        assert_eq!(std::fs::read(&target).unwrap(), b"old\n");
+        assert!(!temporary.exists());
+        assert!(!backup.exists());
+        assert!(!root.join(TRANSACTION_FILE_NAME).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn torn_or_oversized_journal_fails_closed_before_touching_outputs() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-torn-journal-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("value.txt"), b"old\n").unwrap();
+        std::fs::write(
+            root.join(TRANSACTION_FILE_NAME),
+            format!("{}\nphase=P\ncount=", super::TRANSACTION_JOURNAL_HEADER),
+        )
+        .unwrap();
+        let files = [GeneratedFile {
+            relative_path: "value.txt".into(),
+            contents: "new\n".into(),
+        }];
+
+        assert!(write_generated(&root, &files).is_err());
+        assert_eq!(std::fs::read(root.join("value.txt")).unwrap(), b"old\n");
+        assert!(root.join(TRANSACTION_FILE_NAME).exists());
+
+        std::fs::write(
+            root.join(TRANSACTION_FILE_NAME),
+            vec![b'x'; usize::try_from(super::MAX_TRANSACTION_JOURNAL_BYTES).unwrap() + 1],
+        )
+        .unwrap();
+        assert!(write_generated(&root, &files).is_err());
+        assert_eq!(std::fs::read(root.join("value.txt")).unwrap(), b"old\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_process_recovers_the_complete_old_generation() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-crash-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        std::fs::write(root.join("generated/one.txt"), b"old-one\n").unwrap();
+        std::fs::write(root.join("generated/two.txt"), b"old-two\n").unwrap();
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg("generate::tests::transaction_crash_helper")
+            .env(CRASH_HELPER_ROOT, &root)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(86));
+        assert!(
+            !std::fs::read(root.join(TRANSACTION_FILE_NAME))
+                .unwrap()
+                .is_empty()
+        );
+
+        let files = transaction_files();
+        assert!(write_generated_transaction(&root, &files, Some(0), None).is_err());
+        assert_eq!(
+            std::fs::read(root.join("generated/one.txt")).unwrap(),
+            b"old-one\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("generated/two.txt")).unwrap(),
+            b"old-two\n"
+        );
+        assert!(!root.join(TRANSACTION_FILE_NAME).exists());
+
+        write_generated(&root, &files).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("generated/one.txt")).unwrap(),
+            b"new-one\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("generated/two.txt")).unwrap(),
+            b"new-two\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interruption_after_commit_recovers_the_complete_new_generation() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-committed-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        std::fs::write(root.join("generated/one.txt"), b"old-one\n").unwrap();
+        std::fs::write(root.join("generated/two.txt"), b"old-two\n").unwrap();
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg("generate::tests::transaction_crash_helper")
+            .env(CRASH_HELPER_ROOT, &root)
+            .env(CRASH_HELPER_COMMITTED, "1")
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(86));
+        assert!(
+            !std::fs::read(root.join(TRANSACTION_FILE_NAME))
+                .unwrap()
+                .is_empty()
+        );
+
+        let files = transaction_files();
+        drop(GenerationTransaction::acquire(&root, &files).unwrap());
+        assert_eq!(
+            std::fs::read(root.join("generated/one.txt")).unwrap(),
+            b"new-one\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("generated/two.txt")).unwrap(),
+            b"new-two\n"
+        );
+        assert!(!root.join(TRANSACTION_FILE_NAME).exists());
+        assert!(
+            !root
+                .join("generated/one.protocol-codegen.previous")
+                .exists()
+        );
+        assert!(!root.join("generated/two.protocol-codegen.new").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "subprocess-only crash injection helper"]
+    fn transaction_crash_helper() {
+        let Some(root) = std::env::var_os(CRASH_HELPER_ROOT) else {
+            return;
+        };
+        let files = transaction_files();
+        let terminate_after_replace = if std::env::var_os(CRASH_HELPER_COMMITTED).is_some() {
+            files.len()
+        } else {
+            0
+        };
+        write_generated_transaction(
+            Path::new(&root),
+            &files,
+            None,
+            Some(terminate_after_replace),
+        )
+        .expect_err("crash injection must terminate before returning");
     }
 }

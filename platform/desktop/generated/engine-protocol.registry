@@ -4,8 +4,8 @@ generator_version 0.2.0
 wire_identity_domain PDF.rs/EngineProtocol/WireIdentity/v1
 payload_codec_abi_version 1
 compatible_minor_min 2
-schema_sha256 ab6712bcca32d227a614b786925e5b1990543695bde0e865513ab95e90779a03
-wire_schema_hash ab6712bcca32d227a614b786925e5b19
+schema_sha256 8bcfb8eb41fe9260c292ec1adb5452fe632a42469ec6c461562aba26dd0d8a01
+wire_schema_hash 8bcfb8eb41fe9260c292ec1adb5452fe
 schema_hash_truncation sha256-first-16-bytes
 target_projection desktop
 payload_codec fixed_le_v1
@@ -30,6 +30,8 @@ scalar MemoryEpoch u32
 scalar RendererEpoch u32
 scalar RenderConfigHash bytes32
 scalar SceneHash bytes32
+scalar GeometryHash bytes32
+scalar TileContentHash bytes32
 scalar RenderPlanId u64
 scalar RenderPlanHash bytes32
 scalar CapabilityDecisionHash bytes32
@@ -303,6 +305,13 @@ record_field CapabilityDecision missing_completeness CollectionCompleteness requ
 record_field CapabilityDecision contributors list<CapabilityContributor,32> required public 32
 record_field CapabilityDecision contributors_total u32 required public 0
 record_field CapabilityDecision contributors_completeness CollectionCompleteness required public 0
+record_field CapabilityDecision locations_total u32 required public 0
+record_field CapabilityDecision locations_completeness CollectionCompleteness required public 0
+record_field CapabilityDecision evaluated_requirements u32 required public 0
+record_field CapabilityDecision evaluated_dependencies u32 required public 0
+record_field CapabilityDecision evaluated_parameters u32 required public 0
+record_field CapabilityDecision evaluated_commands u32 required public 0
+record_field CapabilityDecision evaluated_resources u32 required public 0
 record_field CapabilityDecision scope CapabilityScope required public 0
 record_field CapabilityDecision location optional<CapabilityLocation> optional private 0
 record_field CapabilityDecision rejection_code optional<u32> optional public 0
@@ -399,16 +408,27 @@ record_field PageMetricsEvent start_index u32 required public 0
 record_field PageMetricsEvent total_pages u32 required public 0
 record_field PageMetricsEvent pages list<PageMetric,64> required public 64
 record RenderPlanManifest
+record_field RenderPlanManifest plan_schema_version u16 required public 0
 record_field RenderPlanManifest document_revision u64 required public 0
 record_field RenderPlanManifest render_config RenderConfigHash required public 0
 record_field RenderPlanManifest renderer_epoch RendererEpoch required public 0
 record_field RenderPlanManifest plan_id RenderPlanId required public 0
+record_field RenderPlanManifest generation u64 required public 0
 record_field RenderPlanManifest scene_hash SceneHash required private 0
 record_field RenderPlanManifest decision_hash CapabilityDecisionHash required private 0
+record_field RenderPlanManifest geometry_hash GeometryHash required public 0
+record_field RenderPlanManifest viewport_clip SurfaceRegion required public 0
+record_field RenderPlanManifest zoom_numerator u32 required public 0
+record_field RenderPlanManifest zoom_denominator u32 required public 0
+record_field RenderPlanManifest device_scale_milli u32 required public 0
+record_field RenderPlanManifest rotation PageRotation required public 0
+record_field RenderPlanManifest optional_content u64 required public 0
+record_field RenderPlanManifest annotation_revision u64 required public 0
 record_field RenderPlanManifest backend NativeBackend required public 0
 record_field RenderPlanManifest output_profile OutputProfile required public 0
 record_field RenderPlanManifest quality QualityPolicy required public 0
 record_field RenderPlanManifest regions list<SurfaceRegion,1024> required public 1024
+record_field RenderPlanManifest tile_content_hashes list<TileContentHash,1024> required public 1024
 record GenerationPlannedEvent
 record_field GenerationPlannedEvent manifest RenderPlanManifest required public 0
 record_field GenerationPlannedEvent plan_hash RenderPlanHash required public 0

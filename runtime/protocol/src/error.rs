@@ -84,7 +84,7 @@ pub enum ProtocolErrorCode {
     InvalidHashBinding,
     /// A FailData payload violates the SourceChanged/observed/retryability matrix.
     InvalidSourceFailure,
-    /// A data ticket is unknown, already terminal, or does not exactly match requested ranges.
+    /// A data ticket or session source binding is unknown, drifted, terminal, or not an exact match.
     InvalidDataTicket,
     /// A Surface release or reclaim carries an absent, stale, or foreign lease token.
     InvalidSurfaceLease,

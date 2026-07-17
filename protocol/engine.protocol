@@ -14,6 +14,8 @@ scalar MemoryEpoch u32
 scalar RendererEpoch u32
 scalar RenderConfigHash bytes32
 scalar SceneHash bytes32
+scalar GeometryHash bytes32
+scalar TileContentHash bytes32
 scalar RenderPlanId u64
 scalar RenderPlanHash bytes32
 scalar CapabilityDecisionHash bytes32
@@ -382,6 +384,13 @@ field missing_completeness CollectionCompleteness required public
 field contributors list<CapabilityContributor,32> required public
 field contributors_total u32 required public
 field contributors_completeness CollectionCompleteness required public
+field locations_total u32 required public
+field locations_completeness CollectionCompleteness required public
+field evaluated_requirements u32 required public
+field evaluated_dependencies u32 required public
+field evaluated_parameters u32 required public
+field evaluated_commands u32 required public
+field evaluated_resources u32 required public
 field scope CapabilityScope required public
 field location optional<CapabilityLocation> optional private
 field rejection_code optional<u32> optional public
@@ -536,16 +545,27 @@ field pages list<PageMetric,64> required public
 end
 
 record RenderPlanManifest
+field plan_schema_version u16 required public
 field document_revision u64 required public
 field render_config RenderConfigHash required public
 field renderer_epoch RendererEpoch required public
 field plan_id RenderPlanId required public
+field generation u64 required public
 field scene_hash SceneHash required private
 field decision_hash CapabilityDecisionHash required private
+field geometry_hash GeometryHash required public
+field viewport_clip SurfaceRegion required public
+field zoom_numerator u32 required public
+field zoom_denominator u32 required public
+field device_scale_milli u32 required public
+field rotation PageRotation required public
+field optional_content u64 required public
+field annotation_revision u64 required public
 field backend NativeBackend required public
 field output_profile OutputProfile required public
 field quality QualityPolicy required public
 field regions list<SurfaceRegion,1024> required public
+field tile_content_hashes list<TileContentHash,1024> required public
 end
 
 record GenerationPlannedEvent

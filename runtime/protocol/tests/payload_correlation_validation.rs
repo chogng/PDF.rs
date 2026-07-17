@@ -1,16 +1,19 @@
 use pdf_rs_protocol::{
-    AlphaMode, CancelCommand, CapabilityDecisionHash, CapabilityProfileId, Command,
-    CommandEnvelope, Correlation, DocumentReadyEvent, ENDPOINT_CAPABILITY_LOCAL_MEMORY,
-    EndpointCapabilities, EndpointRole, EngineExecutionCapabilities, EnvelopeHeader, Event,
-    EventEnvelope, MESSAGE_ID_CANCEL, MESSAGE_ID_DOCUMENT_READY, MESSAGE_ID_OPEN, MESSAGE_ID_READY,
-    MESSAGE_ID_REQUEST_CANCELLED, MESSAGE_ID_SESSION_CLOSED, MESSAGE_ID_SURFACE_READY,
-    MESSAGE_ID_WORKER_STOPPED, MemoryEpoch, NativeBackend, OutputProfile, PROTOCOL_MAJOR,
-    PROTOCOL_MINOR, PixelFormat, ProtocolErrorCode, ProtocolHello, ProtocolLimits,
-    ProtocolValidator, ReadyEvent, RenderConfigHash, RenderPlanHash, RenderPlanId, RendererEpoch,
+    AlphaMode, CancelCommand, CapabilityDecision, CapabilityDecisionHash, CapabilityProfileId,
+    CapabilityReportedEvent, CapabilityScope, CapabilityScopeKind, CapabilitySubject,
+    CollectionCompleteness, Command, CommandEnvelope, Correlation, DocumentReadyEvent,
+    ENDPOINT_CAPABILITY_LOCAL_MEMORY, EndpointCapabilities, EndpointRole,
+    EngineExecutionCapabilities, EnvelopeHeader, Event, EventEnvelope, GenerationPlannedEvent,
+    GeometryHash, MESSAGE_ID_CANCEL, MESSAGE_ID_CAPABILITY_REPORTED, MESSAGE_ID_DOCUMENT_READY,
+    MESSAGE_ID_GENERATION_PLANNED, MESSAGE_ID_OPEN, MESSAGE_ID_READY, MESSAGE_ID_REQUEST_CANCELLED,
+    MESSAGE_ID_SESSION_CLOSED, MESSAGE_ID_SURFACE_READY, MESSAGE_ID_WORKER_STOPPED, MemoryEpoch,
+    NativeBackend, OutputProfile, PROTOCOL_MAJOR, PROTOCOL_MINOR, PageRotation, PixelFormat,
+    ProtocolErrorCode, ProtocolHello, ProtocolLimits, ProtocolValidator, QualityPolicy, ReadyEvent,
+    RenderConfigHash, RenderPlanHash, RenderPlanId, RenderPlanManifest, RendererEpoch,
     RequestCancelledEvent, RequestId, SCHEMA_HASH, SceneHash, SessionClosedEvent, SessionId,
-    SurfaceCoordinateSpace, SurfaceId, SurfaceMetadata, SurfaceOwner, SurfacePlanBinding,
-    SurfaceReadyEvent, SurfaceRegion, SurfaceRenderIdentity, SurfaceTransport,
-    SurfaceValidationContext, WorkerId, WorkerStoppedEvent,
+    SourceIdentity, SupportStatus, SurfaceCoordinateSpace, SurfaceId, SurfaceMetadata,
+    SurfaceOwner, SurfacePlanBinding, SurfaceReadyEvent, SurfaceRegion, SurfaceRenderIdentity,
+    SurfaceTransport, SurfaceValidationContext, TileContentHash, WorkerId, WorkerStoppedEvent,
 };
 
 const WORKER: WorkerId = WorkerId::new(7);
@@ -174,6 +177,82 @@ fn session_closed_and_worker_stopped_payload_ids_match_correlation() {
 }
 
 #[test]
+fn capability_and_generation_events_require_semantic_invariants_before_dispatch() {
+    let capability = EventEnvelope {
+        header: header(MESSAGE_ID_CAPABILITY_REPORTED),
+        correlation: correlation(Some(SESSION), None, Some(GENERATION)),
+        event: Event::CapabilityReported(CapabilityReportedEvent {
+            decision: supported_decision(),
+            decision_hash: CapabilityDecisionHash::new([2; 32]),
+        }),
+    };
+    validator()
+        .validate_event_payload_correlation(&capability, WORKER, Some(SESSION))
+        .unwrap();
+
+    let mut invalid_accounting = capability.clone();
+    let Event::CapabilityReported(event) = &mut invalid_accounting.event else {
+        unreachable!()
+    };
+    event.decision.locations_total = 2;
+    assert_eq!(
+        validator()
+            .validate_event_payload_correlation(&invalid_accounting, WORKER, Some(SESSION))
+            .unwrap_err()
+            .code(),
+        ProtocolErrorCode::InvalidPayloadEncoding
+    );
+
+    let mut zero_decision_hash = capability;
+    let Event::CapabilityReported(event) = &mut zero_decision_hash.event else {
+        unreachable!()
+    };
+    event.decision_hash = CapabilityDecisionHash::new([0; 32]);
+    assert_eq!(
+        validator()
+            .validate_event_payload_correlation(&zero_decision_hash, WORKER, Some(SESSION))
+            .unwrap_err()
+            .code(),
+        ProtocolErrorCode::InvalidPayloadEncoding
+    );
+
+    let generation = EventEnvelope {
+        header: header(MESSAGE_ID_GENERATION_PLANNED),
+        correlation: correlation(Some(SESSION), None, Some(GENERATION)),
+        event: Event::GenerationPlanned(GenerationPlannedEvent {
+            manifest: render_plan_manifest(),
+            plan_hash: RenderPlanHash::new([7; 32]),
+        }),
+    };
+    validator()
+        .validate_event_payload_correlation(&generation, WORKER, Some(SESSION))
+        .unwrap();
+
+    let mut wrong_generation = generation.clone();
+    wrong_generation.correlation.generation = Some(GENERATION + 1);
+    assert_eq!(
+        validator()
+            .validate_event_payload_correlation(&wrong_generation, WORKER, Some(SESSION))
+            .unwrap_err()
+            .code(),
+        ProtocolErrorCode::InvalidCorrelation
+    );
+
+    let mut missing_tile_hash = generation;
+    let Event::GenerationPlanned(event) = &mut missing_tile_hash.event else {
+        unreachable!()
+    };
+    event.manifest.tile_content_hashes.clear();
+    assert_eq!(
+        validator()
+            .validate_event_payload_correlation(&missing_tile_hash, WORKER, Some(SESSION))
+            .unwrap_err()
+            .code(),
+        ProtocolErrorCode::InvalidPayloadEncoding
+    );
+}
+
+#[test]
 fn surface_ready_correlation_and_resource_validation_are_one_operation() {
     let render = render_identity();
     let region = surface_region();
@@ -281,6 +360,85 @@ fn surface_region() -> SurfaceRegion {
         width: 4,
         height: 3,
         coordinate_space: SurfaceCoordinateSpace::DevicePixelsTopLeft,
+    }
+}
+
+fn supported_decision() -> CapabilityDecision {
+    CapabilityDecision {
+        decision_schema_version: 1,
+        status: SupportStatus::Supported,
+        profile: CapabilityProfileId::BaselineNative,
+        profile_version: 1,
+        policy_version: 1,
+        subject: CapabilitySubject {
+            source: SourceIdentity {
+                stable_id: [1; 32],
+                revision: 1,
+            },
+            document_revision: 1,
+            revision_startxref: 1,
+            page_index: 0,
+            page_object_number: 1,
+            page_object_generation: 0,
+            scene_schema_major: 1,
+            scene_schema_minor: 0,
+            scene_hash: SceneHash::new([1; 32]),
+        },
+        missing: Vec::new(),
+        missing_total: 0,
+        missing_completeness: CollectionCompleteness::Complete,
+        contributors: Vec::new(),
+        contributors_total: 0,
+        contributors_completeness: CollectionCompleteness::Complete,
+        locations_total: 0,
+        locations_completeness: CollectionCompleteness::Complete,
+        evaluated_requirements: 0,
+        evaluated_dependencies: 0,
+        evaluated_parameters: 0,
+        evaluated_commands: 1,
+        evaluated_resources: 0,
+        scope: CapabilityScope {
+            kind: CapabilityScopeKind::Page,
+            page: Some(0),
+            command: None,
+            resource: None,
+        },
+        location: None,
+        rejection_code: None,
+    }
+}
+
+fn render_plan_manifest() -> RenderPlanManifest {
+    let region = SurfaceRegion {
+        page_index: 0,
+        x: 0,
+        y: 0,
+        width: 8,
+        height: 8,
+        coordinate_space: SurfaceCoordinateSpace::DevicePixelsTopLeft,
+    };
+    RenderPlanManifest {
+        plan_schema_version: 1,
+        document_revision: 1,
+        render_config: RenderConfigHash::new([1; 32]),
+        renderer_epoch: RendererEpoch::new(1),
+        plan_id: RenderPlanId::new(GENERATION),
+        generation: GENERATION,
+        scene_hash: SceneHash::new([2; 32]),
+        decision_hash: CapabilityDecisionHash::new([3; 32]),
+        geometry_hash: GeometryHash::new([4; 32]),
+        viewport_clip: region.clone(),
+        zoom_numerator: 1,
+        zoom_denominator: 1,
+        device_scale_milli: 1_000,
+        rotation: PageRotation::Degrees0,
+        optional_content: 0,
+        annotation_revision: 0,
+        backend: NativeBackend::ReferenceCpu,
+        output_profile: OutputProfile::Srgb,
+        quality: QualityPolicy::Full,
+        regions: vec![region],
+        tile_content_hashes: vec![TileContentHash::new([5; 32])],
     }
 }
 

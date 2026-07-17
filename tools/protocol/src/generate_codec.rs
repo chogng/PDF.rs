@@ -79,6 +79,7 @@ pub enum PayloadCodecErrorCode {
     UnknownMessage = 7,
     InvalidValue = 8,
     SharedArrayBuffer = 9,
+    Interrupted = 10,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,14 +127,37 @@ impl PayloadCodecLimits {
     }
 }
 
-struct PayloadWriter {
+/// Observer invoked before each bounded fragment is appended by the generated encoder.
+pub trait PayloadCodecObserver {
+    /// Returns `false` to interrupt encoding before the next fragment is appended.
+    fn observe(&mut self) -> bool;
+}
+
+struct PayloadWriter<'observer> {
     bytes: Vec<u8>,
     limits: PayloadCodecLimits,
     remaining_container_items: usize,
+    observer: Option<&'observer mut dyn PayloadCodecObserver>,
 }
 
-impl PayloadWriter {
+impl PayloadWriter<'static> {
     fn new(limits: PayloadCodecLimits) -> Result<Self, PayloadCodecError> {
+        Self::with_observer(limits, None)
+    }
+}
+
+impl<'observer> PayloadWriter<'observer> {
+    fn new_observed(
+        limits: PayloadCodecLimits,
+        observer: &'observer mut dyn PayloadCodecObserver,
+    ) -> Result<Self, PayloadCodecError> {
+        Self::with_observer(limits, Some(observer))
+    }
+
+    fn with_observer(
+        limits: PayloadCodecLimits,
+        observer: Option<&'observer mut dyn PayloadCodecObserver>,
+    ) -> Result<Self, PayloadCodecError> {
         if !limits.valid() {
             return Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0));
         }
@@ -141,6 +165,7 @@ impl PayloadWriter {
             bytes: Vec::new(),
             limits,
             remaining_container_items: limits.max_container_items,
+            observer,
         })
     }
 
@@ -177,6 +202,17 @@ impl PayloadWriter {
             return Err(PayloadCodecError::new(
                 PayloadCodecErrorCode::LimitExceeded,
                 self.offset(),
+            ));
+        }
+        let offset = self.offset();
+        if self
+            .observer
+            .as_deref_mut()
+            .is_some_and(|observer| !observer.observe())
+        {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::Interrupted,
+                offset,
             ));
         }
         self.bytes.extend_from_slice(bytes);
@@ -402,7 +438,7 @@ fn write_rust_scalar_codec(out: &mut String, scalar: &Scalar) {
     let function = snake_case(&scalar.name);
     writeln!(
         out,
-        "fn payload_encode_{function}_into(value: &{}, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;",
+        "fn payload_encode_{function}_into(value: &{}, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;",
         scalar.name
     )
     .unwrap();
@@ -432,7 +468,7 @@ fn write_rust_enum_codec(out: &mut String, enumeration: &EnumDef) {
     let function = snake_case(&enumeration.name);
     writeln!(
         out,
-        "fn payload_encode_{function}_into(value: &{}, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;\n    match value {{",
+        "fn payload_encode_{function}_into(value: &{}, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;\n    match value {{",
         enumeration.name
     )
     .unwrap();
@@ -480,7 +516,7 @@ fn write_rust_record_codec(out: &mut String, protocol: &Protocol, record: &Recor
     };
     writeln!(
         out,
-        "fn payload_encode_{function}_into({value_name}: &{}, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;",
+        "fn payload_encode_{function}_into({value_name}: &{}, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;",
         record.name,
     )
     .unwrap();
@@ -520,7 +556,7 @@ fn write_rust_union_codec(out: &mut String, protocol: &Protocol, union: &Union) 
     let function = snake_case(&union.name);
     writeln!(
         out,
-        "fn payload_encode_{function}_into(value: &{}, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;\n    match value {{",
+        "fn payload_encode_{function}_into(value: &{}, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {{\n    writer.check_depth(depth)?;\n    match value {{",
         union.name
     )
     .unwrap();
@@ -738,13 +774,35 @@ fn write_rust_hash_preimage_helpers(out: &mut String, protocol: &Protocol) {
     preimage.extend_from_slice(&payload_len.to_le_bytes());\n\
     preimage.extend_from_slice(&payload);\n\
     Ok(preimage)\n\
+}\n\n\
+fn payload_codec_hash_preimage_observed(\n\
+    domain: &str,\n\
+    payload: Vec<u8>,\n\
+    observer: &mut dyn PayloadCodecObserver,\n\
+) -> Result<Vec<u8>, PayloadCodecError> {\n\
+    let payload_len = u64::try_from(payload.len())\n\
+        .map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;\n\
+    let capacity = domain.len().checked_add(9)\n\
+        .and_then(|length| length.checked_add(payload.len()))\n\
+        .ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;\n\
+    let mut writer = PayloadWriter::new_observed(\n\
+        PayloadCodecLimits::new(1, capacity, 1),\n\
+        observer,\n\
+    )?;\n\
+    writer.write(domain.as_bytes())?;\n\
+    writer.write(&[0])?;\n\
+    writer.write(&payload_len.to_le_bytes())?;\n\
+    for chunk in payload.chunks(4 * 1024) {\n\
+        writer.write(chunk)?;\n\
+    }\n\
+    Ok(writer.finish())\n\
 }\n\n",
     );
     for (type_name, function, domain) in targets {
         writeln!(
             out,
-            "pub fn {function}_hash_preimage(value: &{type_name}, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {{\n    let payload = encode_{}_payload(value, limits)?;\n    payload_codec_hash_preimage({domain}, payload)\n}}\n",
-            snake_case(type_name)
+            "pub fn {function}_hash_preimage(value: &{type_name}, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {{\n    let payload = encode_{type_function}_payload(value, limits)?;\n    payload_codec_hash_preimage({domain}, payload)\n}}\n\npub fn {function}_hash_preimage_observed(\n    value: &{type_name},\n    limits: PayloadCodecLimits,\n    observer: &mut dyn PayloadCodecObserver,\n) -> Result<Vec<u8>, PayloadCodecError> {{\n    let mut writer = PayloadWriter::new_observed(limits, observer)?;\n    payload_encode_{type_function}_into(value, 0, &mut writer)?;\n    let payload = writer.finish();\n    payload_codec_hash_preimage_observed({domain}, payload, observer)\n}}\n",
+            type_function = snake_case(type_name)
         )
         .unwrap();
     }
@@ -967,7 +1025,8 @@ export type PayloadCodecErrorCode =
   | "UnknownTag"
   | "UnknownMessage"
   | "InvalidValue"
-  | "SharedArrayBuffer";
+  | "SharedArrayBuffer"
+  | "Interrupted";
 
 export interface PayloadCodecError {
   readonly code: PayloadCodecErrorCode;
@@ -2140,7 +2199,10 @@ mod tests {
 
         let rust = generate_rust_payload_codec(&protocol);
         assert!(rust.contains("pub fn capability_decision_hash_preimage"));
+        assert!(rust.contains("pub fn capability_decision_hash_preimage_observed"));
         assert!(rust.contains("pub fn render_plan_manifest_hash_preimage"));
+        assert!(rust.contains("pub trait PayloadCodecObserver"));
+        assert!(rust.contains("PayloadCodecErrorCode::Interrupted"));
         assert!(rust.contains("preimage.extend_from_slice(domain.as_bytes())"));
         assert!(rust.contains("preimage.push(0)"));
         assert!(rust.contains("payload_len.to_le_bytes()"));

@@ -2,16 +2,25 @@ import { readFileSync } from "node:fs";
 
 import {
   AlphaMode,
+  BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS,
   CapabilityScopeKind,
   CollectionCompleteness,
   DataAttachmentRole,
+  DataPriority,
+  ENGINE_ERROR_DESCRIPTORS,
+  EngineErrorCode,
   EndpointRole,
   EnvelopeSequenceTracker,
+  ErrorCategory,
+  ErrorRecoverability,
+  ErrorSeverity,
   KNOWN_ENDPOINT_CAPABILITIES,
   MESSAGE_ID_CLOSE_SESSION,
+  MESSAGE_ID_GENERATION_PLANNED,
   MESSAGE_ID_PROVIDE_DATA,
   MESSAGE_ID_SET_VIEWPORT,
   MESSAGE_ID_SURFACE_READY,
+  MESSAGE_DESCRIPTORS,
   MIN_COMPATIBLE_MINOR,
   NativeBackend,
   OutputProfile,
@@ -25,19 +34,26 @@ import {
   SCHEMA_HASH,
   SCHEMA_HASH_HEX,
   SCHEMA_SHA256_HEX,
+  STATE_PRECONDITIONS,
   SupportStatus,
   SurfaceCoordinateSpace,
+  TYPE_FIELD_DESCRIPTORS,
+  UNION_VARIANT_CAPABILITY_REQUIREMENTS,
   beginValidateCommandEnvelope,
   beginValidateCommandEnvelopeResult,
   beginValidateEventEnvelope,
+  descriptorById,
+  isCompatibleHandshake,
   negotiateHandshake,
   negotiateHandshakeResult,
   validateCapabilityDecision,
   validateCorrelation,
   validateDataSegment,
   validateEndpointCapabilities,
+  validateEngineError,
   validateEnvelopeHeader,
   validateEnvelopeHeaderForMinor,
+  validateNeedDataEvent,
   validateProtocolHello,
   validateProvideDataTransferLengths,
   validateSurfaceReclaimedEvent,
@@ -46,6 +62,17 @@ import {
 
 const expect = (condition: boolean, label: string): void => {
   if (!condition) throw new Error(`generated TypeScript runtime vector failed: ${label}`);
+};
+const expectFrozenWriteRejected = (
+  target: object,
+  key: PropertyKey,
+  replacement: unknown,
+  label: string,
+): void => {
+  const original = Reflect.get(target, key);
+  expect(Object.isFrozen(target), `${label} is frozen`);
+  expect(!Reflect.set(target, key, replacement), `${label} rejects writes`);
+  expect(Object.is(Reflect.get(target, key), original), `${label} retains its canonical value`);
 };
 const bytes32 = (): Uint8Array => {
   const bytes = new Uint8Array(32);
@@ -80,6 +107,165 @@ const connection = negotiateHandshake(
 if (connection === undefined) {
   throw new Error("generated exact handshake must negotiate");
 }
+const originalWeakSetHas = WeakSet.prototype.has;
+expect(
+  Reflect.set(WeakSet.prototype, "has", () => true),
+  "test can simulate WeakSet prototype pollution",
+);
+try {
+  expect(
+    !isCompatibleHandshake({ ...connection }),
+    "captured handshake authenticity does not trust a polluted WeakSet prototype",
+  );
+} finally {
+  expect(
+    Reflect.set(WeakSet.prototype, "has", originalWeakSetHas),
+    "test restores the WeakSet intrinsic",
+  );
+}
+const canonicalSchemaHash = SCHEMA_HASH.slice();
+SCHEMA_HASH.fill(0);
+const mutableExportHandshake = negotiateHandshake(
+  handshakeHello(EndpointRole.Host),
+  handshakeHello(EndpointRole.Engine),
+);
+const privateCanonicalHandshake = negotiateHandshake(
+  {
+    ...handshakeHello(EndpointRole.Host),
+    schema_hash: canonicalSchemaHash,
+  },
+  {
+    ...handshakeHello(EndpointRole.Engine),
+    schema_hash: canonicalSchemaHash,
+  },
+);
+SCHEMA_HASH.set(canonicalSchemaHash);
+expect(
+  mutableExportHandshake === undefined,
+  "mutating the exported schema-hash convenience copy cannot move the trust anchor",
+);
+expect(
+  privateCanonicalHandshake !== undefined,
+  "the private canonical schema hash remains authoritative after export mutation",
+);
+
+const provideDescriptor = descriptorById(MESSAGE_ID_PROVIDE_DATA);
+if (provideDescriptor === undefined || provideDescriptor.outcomes[0] === undefined) {
+  throw new Error("generated ProvideData descriptor must exist");
+}
+expect(
+  provideDescriptor === MESSAGE_DESCRIPTORS.find(
+    (descriptor) => descriptor.id === MESSAGE_ID_PROVIDE_DATA,
+  ),
+  "descriptor lookup uses the exported deeply frozen canonical descriptor",
+);
+expectFrozenWriteRejected(
+  MESSAGE_DESCRIPTORS,
+  "0",
+  provideDescriptor,
+  "message descriptor registry",
+);
+expectFrozenWriteRejected(
+  provideDescriptor,
+  "allowed_flags",
+  0xffff,
+  "message descriptor",
+);
+expectFrozenWriteRejected(
+  provideDescriptor.correlation_shape,
+  "session",
+  "forbidden",
+  "message correlation shape",
+);
+expectFrozenWriteRejected(
+  provideDescriptor.outcomes,
+  "length",
+  0,
+  "message outcome registry",
+);
+expectFrozenWriteRejected(
+  provideDescriptor.outcomes[0],
+  "event_id",
+  0,
+  "message outcome descriptor",
+);
+expect(
+  !validateEnvelopeHeader({
+    ...header(MESSAGE_ID_PROVIDE_DATA),
+    flags: 1,
+  }),
+  "failed descriptor mutation cannot authorize an illegal frame flag",
+);
+
+const invalidDocumentErrorDescriptor = ENGINE_ERROR_DESCRIPTORS[0];
+if (invalidDocumentErrorDescriptor === undefined) {
+  throw new Error("generated EngineError descriptor must exist");
+}
+expectFrozenWriteRejected(
+  ENGINE_ERROR_DESCRIPTORS,
+  "length",
+  0,
+  "EngineError descriptor registry",
+);
+expectFrozenWriteRejected(
+  invalidDocumentErrorDescriptor,
+  "category",
+  ErrorCategory.Source,
+  "EngineError descriptor",
+);
+expectFrozenWriteRejected(
+  EngineErrorCode,
+  "InvalidDocument",
+  EngineErrorCode.SourceChanged,
+  "EngineError enum registry",
+);
+expect(
+  !validateEngineError({
+    code: EngineErrorCode.InvalidDocument,
+    category: ErrorCategory.Source,
+    severity: ErrorSeverity.Fatal,
+    recoverability: ErrorRecoverability.ReopenSession,
+    diagnostic_id: 1n,
+  }),
+  "failed EngineError descriptor mutation cannot authorize a noncanonical policy tuple",
+);
+
+expectFrozenWriteRejected(
+  STATE_PRECONDITIONS,
+  "length",
+  0,
+  "state precondition metadata",
+);
+expectFrozenWriteRejected(
+  TYPE_FIELD_DESCRIPTORS,
+  "length",
+  0,
+  "field descriptor registry",
+);
+expectFrozenWriteRejected(
+  TYPE_FIELD_DESCRIPTORS[0]!,
+  "privacy",
+  "sensitive",
+  "field descriptor metadata",
+);
+expectFrozenWriteRejected(
+  UNION_VARIANT_CAPABILITY_REQUIREMENTS,
+  "length",
+  0,
+  "union capability registry",
+);
+expectFrozenWriteRejected(
+  UNION_VARIANT_CAPABILITY_REQUIREMENTS[0]!,
+  "capability",
+  0n,
+  "union capability metadata",
+);
+expectFrozenWriteRejected(
+  BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS,
+  "length",
+  0,
+  "browser transport metadata",
+);
 expect(
   negotiateHandshakeResult(
     handshakeHello(EndpointRole.Host),
@@ -94,6 +280,43 @@ const invalidHandshake = negotiateHandshakeResult(
 expect(
   !invalidHandshake.ok && invalidHandshake.error.code === "InvalidHandshake",
   "handshake result API is stable and redacted",
+);
+let transferSlotGetterReads = 0;
+const transferSlotGetterPeer = { ...handshakeHello(EndpointRole.Engine) };
+Object.defineProperty(transferSlotGetterPeer, "max_transfer_slots", {
+  enumerable: true,
+  configurable: true,
+  get: () => {
+    transferSlotGetterReads += 1;
+    return transferSlotGetterReads === 1 ? 8 : Number.NaN;
+  },
+});
+expect(
+  negotiateHandshake(
+    handshakeHello(EndpointRole.Host),
+    transferSlotGetterPeer,
+  ) === undefined && transferSlotGetterReads === 0,
+  "handshake rejects a TOCTOU transfer-slot getter without invoking it",
+);
+let capabilityGetterReads = 0;
+const getterCapabilities = { mandatory: 0n };
+Object.defineProperty(getterCapabilities, "supported", {
+  enumerable: true,
+  configurable: true,
+  get: () => {
+    capabilityGetterReads += 1;
+    return knownCapabilities;
+  },
+});
+expect(
+  negotiateHandshake(
+    handshakeHello(EndpointRole.Host),
+    {
+      ...handshakeHello(EndpointRole.Engine),
+      capabilities: getterCapabilities,
+    },
+  ) === undefined && capabilityGetterReads === 0,
+  "handshake rejects nested capability accessors without invoking them",
 );
 
 const declaredPayloadLength = (value: unknown): number | undefined => {
@@ -183,6 +406,41 @@ const pendingClose = beginValidateCommandEnvelopeResult(
 expect(
   pendingClose.ok && pendingClose.value.commitSequence(),
   "envelope result API commits only explicitly",
+);
+expectFrozenWriteRejected(
+  EnvelopeSequenceTracker.prototype,
+  "pending",
+  () => Object.freeze({ commit: () => true }),
+  "sequence tracker prototype",
+);
+expectFrozenWriteRejected(
+  committedCloseSequence,
+  "pending",
+  () => Object.freeze({ commit: () => true }),
+  "sequence tracker instance",
+);
+let subclassTrackerRejected = false;
+try {
+  class SubclassTracker extends EnvelopeSequenceTracker {}
+  new SubclassTracker();
+} catch {
+  subclassTrackerRejected = true;
+}
+expect(subclassTrackerRejected, "sequence tracker rejects subclass construction");
+const forgedTracker = Object.create(EnvelopeSequenceTracker.prototype);
+const forgedTrackerResult = beginValidateCommandEnvelopeResult(
+  {
+    ...close,
+    header: { ...close.header, sequence: 2n },
+  },
+  0,
+  close.header.payload_len,
+  connection,
+  forgedTracker,
+);
+expect(
+  !forgedTrackerResult.ok && forgedTrackerResult.error.code === "InvalidEnvelope",
+  "sequence tracker private authenticity rejects prototype-forged instances",
 );
 const duplicateClose = beginValidateCommandEnvelopeResult(
   close,
@@ -293,6 +551,82 @@ for (const invalidViewport of [
   );
 }
 
+const generationManifest = {
+  plan_schema_version: 1,
+  document_revision: 3n,
+  render_config: bytes32(),
+  renderer_epoch: 1,
+  plan_id: 7n,
+  generation: 7n,
+  scene_hash: bytes32(),
+  decision_hash: bytes32(),
+  geometry_hash: bytes32(),
+  viewport_clip: {
+    page_index: 0,
+    x: 0,
+    y: 0,
+    width: 4,
+    height: 4,
+    coordinate_space: SurfaceCoordinateSpace.DevicePixelsTopLeft,
+  },
+  zoom_numerator: 3,
+  zoom_denominator: 2,
+  device_scale_milli: 2_000,
+  rotation: PageRotation.Degrees0,
+  optional_content: 0n,
+  annotation_revision: 0n,
+  backend: NativeBackend.ReferenceCpu,
+  output_profile: OutputProfile.Srgb,
+  quality: QualityPolicy.Full,
+  regions: [{
+    page_index: 0,
+    x: 0,
+    y: 0,
+    width: 4,
+    height: 4,
+    coordinate_space: SurfaceCoordinateSpace.DevicePixelsTopLeft,
+  }],
+  tile_content_hashes: [bytes32()],
+};
+const generationPlanned = {
+  header: header(MESSAGE_ID_GENERATION_PLANNED),
+  correlation: { worker: 1n, session: 2n, generation: 7n },
+  event: {
+    type: "GenerationPlanned",
+    payload: {
+      manifest: generationManifest,
+      plan_hash: bytes32(),
+    },
+  },
+};
+expect(
+  validateEventEnvelope(generationPlanned),
+  "canonical GenerationPlanned semantic invariants",
+);
+expect(
+  !validateEventEnvelope({
+    ...generationPlanned,
+    correlation: { ...generationPlanned.correlation, generation: 8n },
+  }),
+  "GenerationPlanned manifest generation matches correlation",
+);
+expect(
+  !validateEventEnvelope({
+    ...generationPlanned,
+    event: {
+      ...generationPlanned.event,
+      payload: {
+        ...generationPlanned.event.payload,
+        manifest: {
+          ...generationManifest,
+          tile_content_hashes: [],
+        },
+      },
+    },
+  }),
+  "GenerationPlanned rejects incomplete tile-hash accounting",
+);
+
 const source = {
   stable_id: bytes32(),
   revision: 1n,
@@ -312,6 +646,38 @@ const provide = {
   },
 };
 expect(validateCommandEnvelope(provide, 2), "canonical transfer slot coverage");
+expect(
+  validateCommandEnvelope(
+    {
+      ...provide,
+      command: {
+        ...provide.command,
+        payload: {
+          ...provide.command.payload,
+          segments: [
+            segment(0),
+            { ...segment(1), range: { start: 1n, len: 1n } },
+          ],
+        },
+      },
+    },
+    2,
+  ),
+  "adjacent transfer ranges are canonical and non-overlapping",
+);
+expect(
+  validateNeedDataEvent({
+    ticket: 9n,
+    source,
+    ranges: [
+      { start: 0n, len: 1n },
+      { start: 1n, len: 1n },
+    ],
+    priority: DataPriority.VisiblePage,
+    checkpoint: 1n,
+  }),
+  "adjacent requested ranges are canonical and non-overlapping",
+);
 expect(
   validateProvideDataTransferLengths(provide.command.payload, [1n, 1n]),
   "canonical transfer byte lengths",

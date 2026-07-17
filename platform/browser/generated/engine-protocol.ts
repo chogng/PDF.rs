@@ -12,9 +12,10 @@ export const MAX_DATA_TICKET_BYTES = 16777216n as const;
 export const PAYLOAD_CODEC = "fixed_le_v1" as const;
 export const CAPABILITY_DECISION_HASH_DOMAIN = "PDF.rs/EngineProtocol/CapabilityDecision/fixed_le_v1/v1" as const;
 export const RENDER_PLAN_MANIFEST_HASH_DOMAIN = "PDF.rs/EngineProtocol/RenderPlanManifest/fixed_le_v1/v1" as const;
-export const SCHEMA_SHA256_HEX = "ab6712bcca32d227a614b786925e5b1990543695bde0e865513ab95e90779a03" as const;
-export const SCHEMA_HASH_HEX = "ab6712bcca32d227a614b786925e5b19" as const;
-export const SCHEMA_HASH = Uint8Array.of(0xab, 0x67, 0x12, 0xbc, 0xca, 0x32, 0xd2, 0x27, 0xa6, 0x14, 0xb7, 0x86, 0x92, 0x5e, 0x5b, 0x19) as Uint8Array;
+export const SCHEMA_SHA256_HEX = "8bcfb8eb41fe9260c292ec1adb5452fe632a42469ec6c461562aba26dd0d8a01" as const;
+export const SCHEMA_HASH_HEX = "8bcfb8eb41fe9260c292ec1adb5452fe" as const;
+const CANONICAL_SCHEMA_HASH = Uint8Array.of(0x8b, 0xcf, 0xb8, 0xeb, 0x41, 0xfe, 0x92, 0x60, 0xc2, 0x92, 0xec, 0x1a, 0xdb, 0x54, 0x52, 0xfe) as Uint8Array;
+export const SCHEMA_HASH = Uint8Array.of(0x8b, 0xcf, 0xb8, 0xeb, 0x41, 0xfe, 0x92, 0x60, 0xc2, 0x92, 0xec, 0x1a, 0xdb, 0x54, 0x52, 0xfe) as Uint8Array;
 export const SCHEMA_HASH_TRUNCATION = "sha256-first-16-bytes" as const;
 
 // Validators reject unknown payload keys. Encoders must target the negotiated minor;
@@ -34,6 +35,7 @@ export const READY_EVENT_OUTPUT_PROFILES_MAX_COUNT = 8 as const;
 export const NEED_DATA_EVENT_RANGES_MAX_COUNT = 16 as const;
 export const PAGE_METRICS_EVENT_PAGES_MAX_COUNT = 64 as const;
 export const RENDER_PLAN_MANIFEST_REGIONS_MAX_COUNT = 1024 as const;
+export const RENDER_PLAN_MANIFEST_TILE_CONTENT_HASHES_MAX_COUNT = 1024 as const;
 
 type UnknownRecord = Record<string, unknown>;
 const hasOwn = (value: UnknownRecord, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
@@ -90,6 +92,12 @@ export const validateRenderConfigHash = (value: unknown): value is RenderConfigH
 export type SceneHash = Uint8Array;
 export const validateSceneHash = (value: unknown): value is SceneHash => isFixedBytes(value, 32);
 
+export type GeometryHash = Uint8Array;
+export const validateGeometryHash = (value: unknown): value is GeometryHash => isFixedBytes(value, 32);
+
+export type TileContentHash = Uint8Array;
+export const validateTileContentHash = (value: unknown): value is TileContentHash => isFixedBytes(value, 32);
+
 export type RenderPlanId = bigint;
 export const validateRenderPlanId = (value: unknown): value is RenderPlanId => isU64(value);
 
@@ -106,43 +114,48 @@ export enum EndpointRole {
   Host = 1,
   Engine = 2,
 }
+Object.freeze(EndpointRole);
 export const validateEndpointRole = (value: unknown): value is EndpointRole => [1, 2].includes(value as never);
 
-export const EndpointCapability = {
+export const EndpointCapability = Object.freeze({
   TransferableArrayBuffer: 1n,
   TransferableImageBitmap: 2n,
   SharedArrayBuffer: 4n,
   SharedMemory: 8n,
   LocalMemory: 16n,
-} as const;
+} as const);
 export type EndpointCapability = (typeof EndpointCapability)[keyof typeof EndpointCapability];
 export const validateEndpointCapability = (value: unknown): value is EndpointCapability => [1n, 2n, 4n, 8n, 16n].includes(value as never);
 
-export const EngineExecutionCapability = {
+export const EngineExecutionCapability = Object.freeze({
   OffscreenCanvasStaging: 1n,
-} as const;
+} as const);
 export type EngineExecutionCapability = (typeof EngineExecutionCapability)[keyof typeof EngineExecutionCapability];
 export const validateEngineExecutionCapability = (value: unknown): value is EngineExecutionCapability => [1n].includes(value as never);
 
 export enum CapabilityProfileId {
   BaselineNative = 1,
 }
+Object.freeze(CapabilityProfileId);
 export const validateCapabilityProfileId = (value: unknown): value is CapabilityProfileId => [1].includes(value as never);
 
 export enum OutputProfile {
   Srgb = 1,
 }
+Object.freeze(OutputProfile);
 export const validateOutputProfile = (value: unknown): value is OutputProfile => [1].includes(value as never);
 
 export enum PixelFormat {
   Rgba8 = 1,
 }
+Object.freeze(PixelFormat);
 export const validatePixelFormat = (value: unknown): value is PixelFormat => [1].includes(value as never);
 
 export enum AlphaMode {
   Straight = 1,
   Premultiplied = 2,
 }
+Object.freeze(AlphaMode);
 export const validateAlphaMode = (value: unknown): value is AlphaMode => [1, 2].includes(value as never);
 
 export enum SourceFailureCode {
@@ -154,6 +167,7 @@ export enum SourceFailureCode {
   InvalidRangeResponse = 6,
   TransportFailure = 7,
 }
+Object.freeze(SourceFailureCode);
 export const validateSourceFailureCode = (value: unknown): value is SourceFailureCode => [1, 2, 3, 4, 5, 6, 7].includes(value as never);
 
 export enum GenerationCompletionStatus {
@@ -162,6 +176,7 @@ export enum GenerationCompletionStatus {
   Cancelled = 3,
   Failed = 4,
 }
+Object.freeze(GenerationCompletionStatus);
 export const validateGenerationCompletionStatus = (value: unknown): value is GenerationCompletionStatus => [1, 2, 3, 4].includes(value as never);
 
 export enum OperationAckStatus {
@@ -170,12 +185,14 @@ export enum OperationAckStatus {
   AlreadyTerminal = 3,
   UnknownTarget = 4,
 }
+Object.freeze(OperationAckStatus);
 export const validateOperationAckStatus = (value: unknown): value is OperationAckStatus => [1, 2, 3, 4].includes(value as never);
 
 export enum QualityPolicy {
   Preview = 1,
   Full = 2,
 }
+Object.freeze(QualityPolicy);
 export const validateQualityPolicy = (value: unknown): value is QualityPolicy => [1, 2].includes(value as never);
 
 export enum DataPriority {
@@ -185,11 +202,13 @@ export enum DataPriority {
   FirstViewportResource = 4,
   VisiblePage = 5,
 }
+Object.freeze(DataPriority);
 export const validateDataPriority = (value: unknown): value is DataPriority => [1, 2, 3, 4, 5].includes(value as never);
 
 export enum DataAttachmentRole {
   ImmutableRangeBytes = 1,
 }
+Object.freeze(DataAttachmentRole);
 export const validateDataAttachmentRole = (value: unknown): value is DataAttachmentRole => [1].includes(value as never);
 
 export enum PageRotation {
@@ -198,16 +217,19 @@ export enum PageRotation {
   Degrees180 = 3,
   Degrees270 = 4,
 }
+Object.freeze(PageRotation);
 export const validatePageRotation = (value: unknown): value is PageRotation => [1, 2, 3, 4].includes(value as never);
 
 export enum PageCoordinateSpace {
   PdfPointsBottomLeft = 1,
 }
+Object.freeze(PageCoordinateSpace);
 export const validatePageCoordinateSpace = (value: unknown): value is PageCoordinateSpace => [1].includes(value as never);
 
 export enum SurfaceCoordinateSpace {
   DevicePixelsTopLeft = 1,
 }
+Object.freeze(SurfaceCoordinateSpace);
 export const validateSurfaceCoordinateSpace = (value: unknown): value is SurfaceCoordinateSpace => [1].includes(value as never);
 
 export enum SurfaceReclaimReason {
@@ -217,6 +239,7 @@ export enum SurfaceReclaimReason {
   MemoryPressure = 4,
   RendererRestarted = 5,
 }
+Object.freeze(SurfaceReclaimReason);
 export const validateSurfaceReclaimReason = (value: unknown): value is SurfaceReclaimReason => [1, 2, 3, 4, 5].includes(value as never);
 
 export enum SupportStatus {
@@ -224,18 +247,21 @@ export enum SupportStatus {
   Unsupported = 2,
   Rejected = 3,
 }
+Object.freeze(SupportStatus);
 export const validateSupportStatus = (value: unknown): value is SupportStatus => [1, 2, 3].includes(value as never);
 
 export enum CollectionCompleteness {
   Complete = 1,
   Truncated = 2,
 }
+Object.freeze(CollectionCompleteness);
 export const validateCollectionCompleteness = (value: unknown): value is CollectionCompleteness => [1, 2].includes(value as never);
 
 export enum NativeBackend {
   ReferenceCpu = 1,
   FastCpu = 2,
 }
+Object.freeze(NativeBackend);
 export const validateNativeBackend = (value: unknown): value is NativeBackend => [1, 2].includes(value as never);
 
 export enum CapabilityContributorKind {
@@ -244,6 +270,7 @@ export enum CapabilityContributorKind {
   Policy = 3,
   Runtime = 4,
 }
+Object.freeze(CapabilityContributorKind);
 export const validateCapabilityContributorKind = (value: unknown): value is CapabilityContributorKind => [1, 2, 3, 4].includes(value as never);
 
 export enum CapabilityScopeKind {
@@ -253,6 +280,7 @@ export enum CapabilityScopeKind {
   Command = 4,
   Resource = 5,
 }
+Object.freeze(CapabilityScopeKind);
 export const validateCapabilityScopeKind = (value: unknown): value is CapabilityScopeKind => [1, 2, 3, 4, 5].includes(value as never);
 
 export enum ErrorCategory {
@@ -264,6 +292,7 @@ export enum ErrorCategory {
   Cancelled = 6,
   Internal = 7,
 }
+Object.freeze(ErrorCategory);
 export const validateErrorCategory = (value: unknown): value is ErrorCategory => [1, 2, 3, 4, 5, 6, 7].includes(value as never);
 
 export enum ErrorSeverity {
@@ -271,6 +300,7 @@ export enum ErrorSeverity {
   Recoverable = 2,
   Fatal = 3,
 }
+Object.freeze(ErrorSeverity);
 export const validateErrorSeverity = (value: unknown): value is ErrorSeverity => [1, 2, 3].includes(value as never);
 
 export enum ErrorRecoverability {
@@ -280,6 +310,7 @@ export enum ErrorRecoverability {
   ReopenSession = 4,
   RestartWorker = 5,
 }
+Object.freeze(ErrorRecoverability);
 export const validateErrorRecoverability = (value: unknown): value is ErrorRecoverability => [1, 2, 3, 4, 5].includes(value as never);
 
 export enum EngineErrorCode {
@@ -295,6 +326,7 @@ export enum EngineErrorCode {
   Internal = 10,
   ProtocolViolation = 11,
 }
+Object.freeze(EngineErrorCode);
 export const validateEngineErrorCode = (value: unknown): value is EngineErrorCode => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(value as never);
 
 export const ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER = 1n as const;
@@ -313,19 +345,19 @@ readonly category: ErrorCategory;
 readonly severity: ErrorSeverity;
 readonly recoverability: ErrorRecoverability;
 }
-export const ENGINE_ERROR_DESCRIPTORS = [
-  { code: EngineErrorCode.InvalidDocument, category: ErrorCategory.Document, severity: ErrorSeverity.Fatal, recoverability: ErrorRecoverability.ReopenSession },
-  { code: EngineErrorCode.SourceChanged, category: ErrorCategory.Source, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.ReopenSession },
-  { code: EngineErrorCode.SourceUnavailable, category: ErrorCategory.Source, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryRequest },
-  { code: EngineErrorCode.InvalidPassword, category: ErrorCategory.Document, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryRequest },
-  { code: EngineErrorCode.UnsupportedFeature, category: ErrorCategory.Capability, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryNativeRenderer },
-  { code: EngineErrorCode.ResourceLimit, category: ErrorCategory.Resource, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryNativeRenderer },
-  { code: EngineErrorCode.Cancelled, category: ErrorCategory.Cancelled, severity: ErrorSeverity.Info, recoverability: ErrorRecoverability.None },
-  { code: EngineErrorCode.StaleGeneration, category: ErrorCategory.Cancelled, severity: ErrorSeverity.Info, recoverability: ErrorRecoverability.None },
-  { code: EngineErrorCode.SurfaceImportFailed, category: ErrorCategory.Resource, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryRequest },
-  { code: EngineErrorCode.Internal, category: ErrorCategory.Internal, severity: ErrorSeverity.Fatal, recoverability: ErrorRecoverability.RestartWorker },
-  { code: EngineErrorCode.ProtocolViolation, category: ErrorCategory.Protocol, severity: ErrorSeverity.Fatal, recoverability: ErrorRecoverability.RestartWorker },
-] as const satisfies readonly EngineErrorDescriptor[];
+export const ENGINE_ERROR_DESCRIPTORS = Object.freeze([
+  Object.freeze({ code: EngineErrorCode.InvalidDocument, category: ErrorCategory.Document, severity: ErrorSeverity.Fatal, recoverability: ErrorRecoverability.ReopenSession }),
+  Object.freeze({ code: EngineErrorCode.SourceChanged, category: ErrorCategory.Source, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.ReopenSession }),
+  Object.freeze({ code: EngineErrorCode.SourceUnavailable, category: ErrorCategory.Source, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryRequest }),
+  Object.freeze({ code: EngineErrorCode.InvalidPassword, category: ErrorCategory.Document, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryRequest }),
+  Object.freeze({ code: EngineErrorCode.UnsupportedFeature, category: ErrorCategory.Capability, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryNativeRenderer }),
+  Object.freeze({ code: EngineErrorCode.ResourceLimit, category: ErrorCategory.Resource, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryNativeRenderer }),
+  Object.freeze({ code: EngineErrorCode.Cancelled, category: ErrorCategory.Cancelled, severity: ErrorSeverity.Info, recoverability: ErrorRecoverability.None }),
+  Object.freeze({ code: EngineErrorCode.StaleGeneration, category: ErrorCategory.Cancelled, severity: ErrorSeverity.Info, recoverability: ErrorRecoverability.None }),
+  Object.freeze({ code: EngineErrorCode.SurfaceImportFailed, category: ErrorCategory.Resource, severity: ErrorSeverity.Recoverable, recoverability: ErrorRecoverability.RetryRequest }),
+  Object.freeze({ code: EngineErrorCode.Internal, category: ErrorCategory.Internal, severity: ErrorSeverity.Fatal, recoverability: ErrorRecoverability.RestartWorker }),
+  Object.freeze({ code: EngineErrorCode.ProtocolViolation, category: ErrorCategory.Protocol, severity: ErrorSeverity.Fatal, recoverability: ErrorRecoverability.RestartWorker }),
+] as const) satisfies readonly EngineErrorDescriptor[];
 
 export type MessageKind = "command" | "event";
 export type CorrelationRequirement = "required" | "optional" | "forbidden";
@@ -355,7 +387,7 @@ readonly required_capability: bigint;
 readonly outcomes: readonly OutcomeDescriptor[];
 }
 
-export const STATE_PRECONDITIONS = ["ActiveOrTerminalRequest", "Any", "Closing", "DrainingOrStopped", "NonClosedOrClosed", "Opening", "OpeningOrReady", "Ready", "ReadyOrClosing", "ReadyOrDrainingOrStopped", "Starting", "SurfaceAliveOrReclaimed"] as const;
+export const STATE_PRECONDITIONS = Object.freeze(["ActiveOrTerminalRequest", "Any", "Closing", "DrainingOrStopped", "NonClosedOrClosed", "Opening", "OpeningOrReady", "Ready", "ReadyOrClosing", "ReadyOrDrainingOrStopped", "Starting", "SurfaceAliveOrReclaimed"] as const);
 
 export type FieldPrivacy = "public" | "private" | "sensitive";
 export interface TypeFieldDescriptor {
@@ -367,240 +399,258 @@ readonly required: boolean;
 readonly privacy: FieldPrivacy;
 readonly max_count: number;
 }
-export const TYPE_FIELD_DESCRIPTORS = [
-  { owner: "ProtocolHello", name: "major", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolHello", name: "minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolHello", name: "schema_hash", wire_type: "bytes16", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolHello", name: "endpoint_role", wire_type: "EndpointRole", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolHello", name: "capabilities", wire_type: "EndpointCapabilities", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolHello", name: "max_message_bytes", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolHello", name: "max_transfer_slots", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "EndpointCapabilities", name: "supported", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "EndpointCapabilities", name: "mandatory", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineExecutionCapabilities", name: "supported", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "EnvelopeHeader", name: "major", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "EnvelopeHeader", name: "minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "EnvelopeHeader", name: "message_type", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "EnvelopeHeader", name: "flags", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "EnvelopeHeader", name: "payload_len", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "EnvelopeHeader", name: "sequence", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "Correlation", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 },
-  { owner: "Correlation", name: "session", wire_type: "optional<SessionId>", required: false, privacy: "public", max_count: 0 },
-  { owner: "Correlation", name: "request", wire_type: "optional<RequestId>", required: false, privacy: "public", max_count: 0 },
-  { owner: "Correlation", name: "generation", wire_type: "optional<u64>", required: false, privacy: "public", max_count: 0 },
-  { owner: "SourceIdentity", name: "stable_id", wire_type: "bytes32", required: true, privacy: "private", max_count: 0 },
-  { owner: "SourceIdentity", name: "revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SourceDescriptor", name: "identity", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 },
-  { owner: "SourceDescriptor", name: "length", wire_type: "optional<u64>", required: false, privacy: "public", max_count: 0 },
-  { owner: "SourceDescriptor", name: "validator", wire_type: "bytes32", required: true, privacy: "private", max_count: 0 },
-  { owner: "ByteRange", name: "start", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "ByteRange", name: "len", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "DataSegment", name: "range", wire_type: "ByteRange", required: true, privacy: "public", max_count: 0 },
-  { owner: "DataSegment", name: "slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "DataSegment", name: "byte_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "DataSegment", name: "role", wire_type: "DataAttachmentRole", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "identity", wire_type: "bytes32", required: true, privacy: "private", max_count: 0 },
-  { owner: "PageGeometry", name: "media_box_x_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "media_box_y_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "media_box_width_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "media_box_height_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "crop_box_x_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "crop_box_y_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "crop_box_width_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "crop_box_height_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageGeometry", name: "intrinsic_rotation", wire_type: "PageRotation", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "coordinate_space", wire_type: "PageCoordinateSpace", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "geometry", wire_type: "PageGeometry", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "clip_x_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "clip_y_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "clip_width_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageViewport", name: "clip_height_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "generation", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "annotation_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "zoom_numerator", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "zoom_denominator", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "visible_pages", wire_type: "list<PageViewport,64>", required: true, privacy: "public", max_count: 64 },
-  { owner: "ViewportRequest", name: "quality", wire_type: "QualityPolicy", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "output_profile", wire_type: "OutputProfile", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "device_scale_milli", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "rotation", wire_type: "PageRotation", required: true, privacy: "public", max_count: 0 },
-  { owner: "ViewportRequest", name: "optional_content_id", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceOwner", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceOwner", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceRegion", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceRegion", name: "x", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceRegion", name: "y", wire_type: "i32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceRegion", name: "width", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceRegion", name: "height", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceRegion", name: "coordinate_space", wire_type: "SurfaceCoordinateSpace", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "id", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "owner", wire_type: "SurfaceOwner", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "generation", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "region", wire_type: "SurfaceRegion", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "width", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "height", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "stride", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "format", wire_type: "PixelFormat", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "alpha", wire_type: "AlphaMode", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "byte_offset", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "byte_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "scene_hash", wire_type: "SceneHash", required: true, privacy: "private", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: "private", max_count: 0 },
-  { owner: "SurfaceMetadata", name: "backend", wire_type: "NativeBackend", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityLocation", name: "page_index", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityLocation", name: "object_number", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityLocation", name: "object_generation", wire_type: "optional<u16>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityLocation", name: "source_offset", wire_type: "optional<u64>", required: false, privacy: "private", max_count: 0 },
-  { owner: "CapabilityLocation", name: "command_index", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityLocation", name: "resource_id", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityScope", name: "kind", wire_type: "CapabilityScopeKind", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityScope", name: "page", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityScope", name: "command", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityScope", name: "resource", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CapabilityContributor", name: "id", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityContributor", name: "kind", wire_type: "CapabilityContributorKind", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityContributor", name: "code", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityContributor", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 },
-  { owner: "CapabilityContext", name: "code", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityContext", name: "value", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityContext", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 },
-  { owner: "CapabilityRequirement", name: "id", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityRequirement", name: "capability", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityRequirement", name: "parameter", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityRequirement", name: "context", wire_type: "CapabilityContext", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityRequirement", name: "dependencies", wire_type: "list<u32,32>", required: true, privacy: "public", max_count: 32 },
-  { owner: "CapabilityRequirement", name: "scope", wire_type: "CapabilityScope", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityRequirement", name: "contributor_ids", wire_type: "list<u32,16>", required: true, privacy: "public", max_count: 16 },
-  { owner: "CapabilityRequirement", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 },
-  { owner: "CapabilitySubject", name: "source", wire_type: "SourceIdentity", required: true, privacy: "private", max_count: 0 },
-  { owner: "CapabilitySubject", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "revision_startxref", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "page_object_number", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "page_object_generation", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "scene_schema_major", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "scene_schema_minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilitySubject", name: "scene_hash", wire_type: "SceneHash", required: true, privacy: "private", max_count: 0 },
-  { owner: "CapabilityDecision", name: "decision_schema_version", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "status", wire_type: "SupportStatus", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "profile_version", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "policy_version", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "subject", wire_type: "CapabilitySubject", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "missing", wire_type: "list<CapabilityRequirement,16>", required: true, privacy: "public", max_count: 16 },
-  { owner: "CapabilityDecision", name: "missing_total", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "missing_completeness", wire_type: "CollectionCompleteness", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "contributors", wire_type: "list<CapabilityContributor,32>", required: true, privacy: "public", max_count: 32 },
-  { owner: "CapabilityDecision", name: "contributors_total", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "contributors_completeness", wire_type: "CollectionCompleteness", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "scope", wire_type: "CapabilityScope", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityDecision", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 },
-  { owner: "CapabilityDecision", name: "rejection_code", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 },
-  { owner: "EngineError", name: "code", wire_type: "EngineErrorCode", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineError", name: "category", wire_type: "ErrorCategory", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineError", name: "severity", wire_type: "ErrorSeverity", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineError", name: "recoverability", wire_type: "ErrorRecoverability", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineError", name: "diagnostic_id", wire_type: "DiagnosticId", required: true, privacy: "public", max_count: 0 },
-  { owner: "HelloCommand", name: "hello", wire_type: "ProtocolHello", required: true, privacy: "public", max_count: 0 },
-  { owner: "HelloAcceptCommand", name: "negotiated_minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "HelloAcceptCommand", name: "schema_hash", wire_type: "bytes16", required: true, privacy: "public", max_count: 0 },
-  { owner: "OpenCommand", name: "source", wire_type: "SourceDescriptor", required: true, privacy: "private", max_count: 0 },
-  { owner: "ProvideDataCommand", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProvideDataCommand", name: "source", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProvideDataCommand", name: "segments", wire_type: "list<DataSegment,16>", required: true, privacy: "sensitive", max_count: 16 },
-  { owner: "FailDataCommand", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 },
-  { owner: "FailDataCommand", name: "expected", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 },
-  { owner: "FailDataCommand", name: "observed", wire_type: "optional<SourceIdentity>", required: false, privacy: "private", max_count: 0 },
-  { owner: "FailDataCommand", name: "code", wire_type: "SourceFailureCode", required: true, privacy: "public", max_count: 0 },
-  { owner: "FailDataCommand", name: "retryable", wire_type: "bool", required: true, privacy: "public", max_count: 0 },
-  { owner: "SetViewportCommand", name: "viewport", wire_type: "ViewportRequest", required: true, privacy: "public", max_count: 0 },
-  { owner: "CancelCommand", name: "target", wire_type: "RequestId", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReleaseSurfaceCommand", name: "surface", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReleaseSurfaceCommand", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 },
-  { owner: "ShutdownCommand", name: "deadline_ms", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "GetPageMetricsCommand", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "GetPageMetricsCommand", name: "start_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "GetPageMetricsCommand", name: "max_count", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineHelloEvent", name: "hello", wire_type: "ProtocolHello", required: true, privacy: "public", max_count: 0 },
-  { owner: "EngineHelloEvent", name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReadyEvent", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReadyEvent", name: "negotiated_minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReadyEvent", name: "schema_hash", wire_type: "bytes16", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReadyEvent", name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: "public", max_count: 0 },
-  { owner: "ReadyEvent", name: "capability_profiles", wire_type: "list<CapabilityProfileId,8>", required: true, privacy: "public", max_count: 8 },
-  { owner: "ReadyEvent", name: "output_profiles", wire_type: "list<OutputProfile,8>", required: true, privacy: "public", max_count: 8 },
-  { owner: "NeedDataEvent", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 },
-  { owner: "NeedDataEvent", name: "source", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 },
-  { owner: "NeedDataEvent", name: "ranges", wire_type: "list<ByteRange,16>", required: true, privacy: "public", max_count: 16 },
-  { owner: "NeedDataEvent", name: "priority", wire_type: "DataPriority", required: true, privacy: "public", max_count: 0 },
-  { owner: "NeedDataEvent", name: "checkpoint", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "DocumentReadyEvent", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 },
-  { owner: "DocumentReadyEvent", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "DocumentReadyEvent", name: "page_count", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "DocumentReadyEvent", name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: "public", max_count: 0 },
-  { owner: "DocumentReadyEvent", name: "policy_version", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityReportedEvent", name: "decision", wire_type: "CapabilityDecision", required: true, privacy: "public", max_count: 0 },
-  { owner: "CapabilityReportedEvent", name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: "private", max_count: 0 },
-  { owner: "SurfaceReadyEvent", name: "metadata", wire_type: "SurfaceMetadata", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceReadyEvent", name: "transport", wire_type: "SurfaceTransport", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceReclaimedEvent", name: "surface", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceReclaimedEvent", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 },
-  { owner: "SurfaceReclaimedEvent", name: "reason", wire_type: "SurfaceReclaimReason", required: true, privacy: "public", max_count: 0 },
-  { owner: "RequestCancelledEvent", name: "target", wire_type: "RequestId", required: true, privacy: "public", max_count: 0 },
-  { owner: "RequestFailedEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 },
-  { owner: "SessionClosedEvent", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 },
-  { owner: "WorkerStoppedEvent", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 },
-  { owner: "WorkerFaultEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 },
-  { owner: "ProtocolFaultEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 },
-  { owner: "DataFailedEvent", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 },
-  { owner: "DataFailedEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageMetric", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageMetric", name: "geometry", wire_type: "PageGeometry", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageMetricsEvent", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageMetricsEvent", name: "start_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageMetricsEvent", name: "total_pages", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "PageMetricsEvent", name: "pages", wire_type: "list<PageMetric,64>", required: true, privacy: "public", max_count: 64 },
-  { owner: "RenderPlanManifest", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "scene_hash", wire_type: "SceneHash", required: true, privacy: "private", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: "private", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "backend", wire_type: "NativeBackend", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "output_profile", wire_type: "OutputProfile", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "quality", wire_type: "QualityPolicy", required: true, privacy: "public", max_count: 0 },
-  { owner: "RenderPlanManifest", name: "regions", wire_type: "list<SurfaceRegion,1024>", required: true, privacy: "public", max_count: 1024 },
-  { owner: "GenerationPlannedEvent", name: "manifest", wire_type: "RenderPlanManifest", required: true, privacy: "public", max_count: 0 },
-  { owner: "GenerationPlannedEvent", name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: "public", max_count: 0 },
-  { owner: "GenerationCompletedEvent", name: "status", wire_type: "GenerationCompletionStatus", required: true, privacy: "public", max_count: 0 },
-  { owner: "GenerationCompletedEvent", name: "produced_regions", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "GenerationCompletedEvent", name: "error", wire_type: "optional<EngineError>", required: false, privacy: "public", max_count: 0 },
-  { owner: "CancelAcknowledgedEvent", name: "target", wire_type: "RequestId", required: true, privacy: "public", max_count: 0 },
-  { owner: "CancelAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceReleaseAcknowledgedEvent", name: "surface", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceReleaseAcknowledgedEvent", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 },
-  { owner: "SurfaceReleaseAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 },
-  { owner: "CloseSessionAcknowledgedEvent", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 },
-  { owner: "CloseSessionAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 },
-  { owner: "ShutdownAcknowledgedEvent", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 },
-  { owner: "ShutdownAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserArrayBuffer", name: "slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserArrayBuffer", name: "buffer_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserImageBitmap", name: "slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserImageBitmap", name: "width", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserImageBitmap", name: "height", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "attachment_slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "buffer_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "fence_byte_offset", wire_type: "u64", required: true, privacy: "public", max_count: 0 },
-  { owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "publication_epoch", wire_type: "u32", required: true, privacy: "public", max_count: 0 },
-] as const satisfies readonly TypeFieldDescriptor[];
+export const TYPE_FIELD_DESCRIPTORS = Object.freeze([
+  Object.freeze({ owner: "ProtocolHello", name: "major", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolHello", name: "minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolHello", name: "schema_hash", wire_type: "bytes16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolHello", name: "endpoint_role", wire_type: "EndpointRole", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolHello", name: "capabilities", wire_type: "EndpointCapabilities", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolHello", name: "max_message_bytes", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolHello", name: "max_transfer_slots", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EndpointCapabilities", name: "supported", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EndpointCapabilities", name: "mandatory", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineExecutionCapabilities", name: "supported", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EnvelopeHeader", name: "major", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EnvelopeHeader", name: "minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EnvelopeHeader", name: "message_type", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EnvelopeHeader", name: "flags", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EnvelopeHeader", name: "payload_len", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EnvelopeHeader", name: "sequence", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "Correlation", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "Correlation", name: "session", wire_type: "optional<SessionId>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "Correlation", name: "request", wire_type: "optional<RequestId>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "Correlation", name: "generation", wire_type: "optional<u64>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SourceIdentity", name: "stable_id", wire_type: "bytes32", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "SourceIdentity", name: "revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SourceDescriptor", name: "identity", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SourceDescriptor", name: "length", wire_type: "optional<u64>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SourceDescriptor", name: "validator", wire_type: "bytes32", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "ByteRange", name: "start", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ByteRange", name: "len", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DataSegment", name: "range", wire_type: "ByteRange", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DataSegment", name: "slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DataSegment", name: "byte_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DataSegment", name: "role", wire_type: "DataAttachmentRole", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "identity", wire_type: "bytes32", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "media_box_x_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "media_box_y_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "media_box_width_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "media_box_height_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "crop_box_x_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "crop_box_y_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "crop_box_width_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "crop_box_height_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageGeometry", name: "intrinsic_rotation", wire_type: "PageRotation", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "coordinate_space", wire_type: "PageCoordinateSpace", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "geometry", wire_type: "PageGeometry", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "clip_x_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "clip_y_milli_points", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "clip_width_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageViewport", name: "clip_height_milli_points", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "generation", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "annotation_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "zoom_numerator", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "zoom_denominator", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "visible_pages", wire_type: "list<PageViewport,64>", required: true, privacy: "public", max_count: 64 }),
+  Object.freeze({ owner: "ViewportRequest", name: "quality", wire_type: "QualityPolicy", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "output_profile", wire_type: "OutputProfile", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "device_scale_milli", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "rotation", wire_type: "PageRotation", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ViewportRequest", name: "optional_content_id", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceOwner", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceOwner", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceRegion", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceRegion", name: "x", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceRegion", name: "y", wire_type: "i32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceRegion", name: "width", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceRegion", name: "height", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceRegion", name: "coordinate_space", wire_type: "SurfaceCoordinateSpace", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "id", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "owner", wire_type: "SurfaceOwner", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "generation", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "region", wire_type: "SurfaceRegion", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "width", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "height", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "stride", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "format", wire_type: "PixelFormat", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "alpha", wire_type: "AlphaMode", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "byte_offset", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "byte_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "scene_hash", wire_type: "SceneHash", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceMetadata", name: "backend", wire_type: "NativeBackend", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityLocation", name: "page_index", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityLocation", name: "object_number", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityLocation", name: "object_generation", wire_type: "optional<u16>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityLocation", name: "source_offset", wire_type: "optional<u64>", required: false, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityLocation", name: "command_index", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityLocation", name: "resource_id", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityScope", name: "kind", wire_type: "CapabilityScopeKind", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityScope", name: "page", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityScope", name: "command", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityScope", name: "resource", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContributor", name: "id", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContributor", name: "kind", wire_type: "CapabilityContributorKind", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContributor", name: "code", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContributor", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContext", name: "code", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContext", name: "value", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityContext", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "id", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "capability", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "parameter", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "context", wire_type: "CapabilityContext", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "dependencies", wire_type: "list<u32,32>", required: true, privacy: "public", max_count: 32 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "scope", wire_type: "CapabilityScope", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "contributor_ids", wire_type: "list<u32,16>", required: true, privacy: "public", max_count: 16 }),
+  Object.freeze({ owner: "CapabilityRequirement", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "source", wire_type: "SourceIdentity", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "revision_startxref", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "page_object_number", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "page_object_generation", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "scene_schema_major", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "scene_schema_minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilitySubject", name: "scene_hash", wire_type: "SceneHash", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "decision_schema_version", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "status", wire_type: "SupportStatus", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "profile_version", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "policy_version", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "subject", wire_type: "CapabilitySubject", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "missing", wire_type: "list<CapabilityRequirement,16>", required: true, privacy: "public", max_count: 16 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "missing_total", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "missing_completeness", wire_type: "CollectionCompleteness", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "contributors", wire_type: "list<CapabilityContributor,32>", required: true, privacy: "public", max_count: 32 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "contributors_total", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "contributors_completeness", wire_type: "CollectionCompleteness", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "locations_total", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "locations_completeness", wire_type: "CollectionCompleteness", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "evaluated_requirements", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "evaluated_dependencies", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "evaluated_parameters", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "evaluated_commands", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "evaluated_resources", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "scope", wire_type: "CapabilityScope", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityDecision", name: "rejection_code", wire_type: "optional<u32>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineError", name: "code", wire_type: "EngineErrorCode", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineError", name: "category", wire_type: "ErrorCategory", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineError", name: "severity", wire_type: "ErrorSeverity", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineError", name: "recoverability", wire_type: "ErrorRecoverability", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineError", name: "diagnostic_id", wire_type: "DiagnosticId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "HelloCommand", name: "hello", wire_type: "ProtocolHello", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "HelloAcceptCommand", name: "negotiated_minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "HelloAcceptCommand", name: "schema_hash", wire_type: "bytes16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "OpenCommand", name: "source", wire_type: "SourceDescriptor", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "ProvideDataCommand", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProvideDataCommand", name: "source", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProvideDataCommand", name: "segments", wire_type: "list<DataSegment,16>", required: true, privacy: "sensitive", max_count: 16 }),
+  Object.freeze({ owner: "FailDataCommand", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "FailDataCommand", name: "expected", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "FailDataCommand", name: "observed", wire_type: "optional<SourceIdentity>", required: false, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "FailDataCommand", name: "code", wire_type: "SourceFailureCode", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "FailDataCommand", name: "retryable", wire_type: "bool", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SetViewportCommand", name: "viewport", wire_type: "ViewportRequest", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CancelCommand", name: "target", wire_type: "RequestId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReleaseSurfaceCommand", name: "surface", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReleaseSurfaceCommand", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 }),
+  Object.freeze({ owner: "ShutdownCommand", name: "deadline_ms", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GetPageMetricsCommand", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GetPageMetricsCommand", name: "start_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GetPageMetricsCommand", name: "max_count", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineHelloEvent", name: "hello", wire_type: "ProtocolHello", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "EngineHelloEvent", name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReadyEvent", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReadyEvent", name: "negotiated_minor", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReadyEvent", name: "schema_hash", wire_type: "bytes16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReadyEvent", name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ReadyEvent", name: "capability_profiles", wire_type: "list<CapabilityProfileId,8>", required: true, privacy: "public", max_count: 8 }),
+  Object.freeze({ owner: "ReadyEvent", name: "output_profiles", wire_type: "list<OutputProfile,8>", required: true, privacy: "public", max_count: 8 }),
+  Object.freeze({ owner: "NeedDataEvent", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "NeedDataEvent", name: "source", wire_type: "SourceIdentity", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "NeedDataEvent", name: "ranges", wire_type: "list<ByteRange,16>", required: true, privacy: "public", max_count: 16 }),
+  Object.freeze({ owner: "NeedDataEvent", name: "priority", wire_type: "DataPriority", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "NeedDataEvent", name: "checkpoint", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DocumentReadyEvent", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DocumentReadyEvent", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DocumentReadyEvent", name: "page_count", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DocumentReadyEvent", name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DocumentReadyEvent", name: "policy_version", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityReportedEvent", name: "decision", wire_type: "CapabilityDecision", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CapabilityReportedEvent", name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReadyEvent", name: "metadata", wire_type: "SurfaceMetadata", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReadyEvent", name: "transport", wire_type: "SurfaceTransport", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReclaimedEvent", name: "surface", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReclaimedEvent", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReclaimedEvent", name: "reason", wire_type: "SurfaceReclaimReason", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RequestCancelledEvent", name: "target", wire_type: "RequestId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RequestFailedEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SessionClosedEvent", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "WorkerStoppedEvent", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "WorkerFaultEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ProtocolFaultEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DataFailedEvent", name: "ticket", wire_type: "DataTicket", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "DataFailedEvent", name: "error", wire_type: "EngineError", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageMetric", name: "page_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageMetric", name: "geometry", wire_type: "PageGeometry", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageMetricsEvent", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageMetricsEvent", name: "start_index", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageMetricsEvent", name: "total_pages", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "PageMetricsEvent", name: "pages", wire_type: "list<PageMetric,64>", required: true, privacy: "public", max_count: 64 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "plan_schema_version", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "document_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "generation", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "scene_hash", wire_type: "SceneHash", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: "private", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "geometry_hash", wire_type: "GeometryHash", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "viewport_clip", wire_type: "SurfaceRegion", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "zoom_numerator", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "zoom_denominator", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "device_scale_milli", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "rotation", wire_type: "PageRotation", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "optional_content", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "annotation_revision", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "backend", wire_type: "NativeBackend", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "output_profile", wire_type: "OutputProfile", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "quality", wire_type: "QualityPolicy", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "regions", wire_type: "list<SurfaceRegion,1024>", required: true, privacy: "public", max_count: 1024 }),
+  Object.freeze({ owner: "RenderPlanManifest", name: "tile_content_hashes", wire_type: "list<TileContentHash,1024>", required: true, privacy: "public", max_count: 1024 }),
+  Object.freeze({ owner: "GenerationPlannedEvent", name: "manifest", wire_type: "RenderPlanManifest", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GenerationPlannedEvent", name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GenerationCompletedEvent", name: "status", wire_type: "GenerationCompletionStatus", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GenerationCompletedEvent", name: "produced_regions", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "GenerationCompletedEvent", name: "error", wire_type: "optional<EngineError>", required: false, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CancelAcknowledgedEvent", name: "target", wire_type: "RequestId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CancelAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReleaseAcknowledgedEvent", name: "surface", wire_type: "SurfaceId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReleaseAcknowledgedEvent", name: "lease_token", wire_type: "u64", required: true, privacy: "sensitive", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceReleaseAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CloseSessionAcknowledgedEvent", name: "session", wire_type: "SessionId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "CloseSessionAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ShutdownAcknowledgedEvent", name: "worker", wire_type: "WorkerId", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "ShutdownAcknowledgedEvent", name: "status", wire_type: "OperationAckStatus", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserArrayBuffer", name: "slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserArrayBuffer", name: "buffer_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserImageBitmap", name: "slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserImageBitmap", name: "width", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserImageBitmap", name: "height", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "attachment_slot", wire_type: "u16", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "buffer_length", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "fence_byte_offset", wire_type: "u64", required: true, privacy: "public", max_count: 0 }),
+  Object.freeze({ owner: "SurfaceTransport", variant: "BrowserSharedArrayBuffer", name: "publication_epoch", wire_type: "u32", required: true, privacy: "public", max_count: 0 }),
+] as const) satisfies readonly TypeFieldDescriptor[];
 
 export const MESSAGE_ID_HELLO = 1 as const;
 export const MESSAGE_ID_HELLO_ACCEPT = 2 as const;
@@ -635,40 +685,40 @@ export const MESSAGE_ID_SURFACE_RELEASE_ACKNOWLEDGED = 123 as const;
 export const MESSAGE_ID_CLOSE_SESSION_ACKNOWLEDGED = 124 as const;
 export const MESSAGE_ID_SHUTDOWN_ACKNOWLEDGED = 125 as const;
 
-export const MESSAGE_DESCRIPTORS = [
-  { kind: "command", name: "Hello", id: 1, payload: "HelloCommand", state_precondition: "Starting", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 54, required_capability: 0n, outcomes: [{ event_id: 114, disposition: "terminal" }, { event_id: 112, disposition: "terminal" }] },
-  { kind: "command", name: "HelloAccept", id: 2, payload: "HelloAcceptCommand", state_precondition: "Starting", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 29, required_capability: 0n, outcomes: [{ event_id: 101, disposition: "terminal" }, { event_id: 112, disposition: "terminal" }] },
-  { kind: "command", name: "Open", id: 3, payload: "OpenCommand", state_precondition: "Ready", correlation: "OpenRequest", correlation_shape: { worker: "required", session: "forbidden", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, maximum_encoded_payload_bytes: 100, required_capability: 0n, outcomes: [{ event_id: 102, disposition: "stream" }, { event_id: 103, disposition: "terminal" }, { event_id: 108, disposition: "terminal" }, { event_id: 107, disposition: "terminal" }] },
-  { kind: "command", name: "ProvideData", id: 4, payload: "ProvideDataCommand", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 16, max_payload_bytes: 512, maximum_encoded_payload_bytes: 503, required_capability: 0n, outcomes: [{ event_id: 115, disposition: "terminal" }] },
-  { kind: "command", name: "SetViewport", id: 7, payload: "SetViewportCommand", state_precondition: "Ready", correlation: "Generation", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "required" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 8192, maximum_encoded_payload_bytes: 5583, required_capability: 0n, outcomes: [{ event_id: 117, disposition: "stream" }, { event_id: 105, disposition: "stream" }, { event_id: 106, disposition: "stream" }, { event_id: 118, disposition: "terminal" }] },
-  { kind: "command", name: "Cancel", id: 8, payload: "CancelCommand", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: { worker: "required", session: "optional", request: "required", generation: "forbidden" }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0n, outcomes: [{ event_id: 121, disposition: "terminal" }, { event_id: 107, disposition: "stream" }] },
-  { kind: "command", name: "ReleaseSurface", id: 9, payload: "ReleaseSurfaceCommand", state_precondition: "SurfaceAliveOrReclaimed", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0n, outcomes: [{ event_id: 123, disposition: "terminal" }, { event_id: 113, disposition: "stream" }] },
-  { kind: "command", name: "CloseSession", id: 10, payload: "CloseSessionCommand", state_precondition: "NonClosedOrClosed", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 64, maximum_encoded_payload_bytes: 19, required_capability: 0n, outcomes: [{ event_id: 124, disposition: "terminal" }, { event_id: 113, disposition: "stream" }, { event_id: 109, disposition: "stream" }] },
-  { kind: "command", name: "Shutdown", id: 11, payload: "ShutdownCommand", state_precondition: "ReadyOrDrainingOrStopped", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 15, required_capability: 0n, outcomes: [{ event_id: 125, disposition: "terminal" }, { event_id: 110, disposition: "stream" }, { event_id: 111, disposition: "stream" }] },
-  { kind: "command", name: "FailData", id: 12, payload: "FailDataCommand", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 110, required_capability: 0n, outcomes: [{ event_id: 115, disposition: "terminal" }] },
-  { kind: "command", name: "GetPageMetrics", id: 13, payload: "GetPageMetricsCommand", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: { worker: "required", session: "required", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 41, required_capability: 0n, outcomes: [{ event_id: 116, disposition: "terminal" }, { event_id: 108, disposition: "terminal" }, { event_id: 107, disposition: "terminal" }] },
-  { kind: "event", name: "Ready", id: 101, payload: "ReadyEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 101, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "NeedData", id: 102, payload: "NeedDataEvent", state_precondition: "OpeningOrReady", correlation: "SessionRequest", correlation_shape: { worker: "required", session: "required", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 344, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state_precondition: "Opening", correlation: "SessionRequest", correlation_shape: { worker: "required", session: "required", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 55, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "required" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 6520, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "required" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 282, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: { worker: "required", session: "optional", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state_precondition: "Any", correlation: "Request", correlation_shape: { worker: "required", session: "optional", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "SessionClosed", id: 109, payload: "SessionClosedEvent", state_precondition: "Closing", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 27, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "WorkerStopped", id: 110, payload: "WorkerStoppedEvent", state_precondition: "DrainingOrStopped", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 19, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "WorkerFault", id: 111, payload: "WorkerFaultEvent", state_precondition: "Any", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 26, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "ProtocolFault", id: 112, payload: "ProtocolFaultEvent", state_precondition: "Any", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 26, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "SurfaceReclaimed", id: 113, payload: "SurfaceReclaimedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "EngineHello", id: 114, payload: "EngineHelloEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 62, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "DataFailed", id: 115, payload: "DataFailedEvent", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "PageMetrics", id: 116, payload: "PageMetricsEvent", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: { worker: "required", session: "required", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 16384, maximum_encoded_payload_bytes: 4463, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "GenerationPlanned", id: 117, payload: "GenerationPlannedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "required" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 21687, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "GenerationCompleted", id: 118, payload: "GenerationCompletedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "required" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 48, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "CancelAcknowledged", id: 121, payload: "CancelAcknowledgedEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: { worker: "required", session: "optional", request: "required", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "SurfaceReleaseAcknowledged", id: 123, payload: "SurfaceReleaseAcknowledgedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "CloseSessionAcknowledged", id: 124, payload: "CloseSessionAcknowledgedEvent", state_precondition: "Closing", correlation: "Session", correlation_shape: { worker: "required", session: "required", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 28, required_capability: 0n, outcomes: [] },
-  { kind: "event", name: "ShutdownAcknowledged", id: 125, payload: "ShutdownAcknowledgedEvent", state_precondition: "DrainingOrStopped", correlation: "Worker", correlation_shape: { worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 20, required_capability: 0n, outcomes: [] },
-] as const satisfies readonly MessageDescriptor[];
+export const MESSAGE_DESCRIPTORS = Object.freeze([
+  Object.freeze({ kind: "command", name: "Hello", id: 1, payload: "HelloCommand", state_precondition: "Starting", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 54, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 114, disposition: "terminal" }), Object.freeze({ event_id: 112, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "command", name: "HelloAccept", id: 2, payload: "HelloAcceptCommand", state_precondition: "Starting", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 29, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 101, disposition: "terminal" }), Object.freeze({ event_id: 112, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "command", name: "Open", id: 3, payload: "OpenCommand", state_precondition: "Ready", correlation: "OpenRequest", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, maximum_encoded_payload_bytes: 100, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 102, disposition: "stream" }), Object.freeze({ event_id: 103, disposition: "terminal" }), Object.freeze({ event_id: 108, disposition: "terminal" }), Object.freeze({ event_id: 107, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "command", name: "ProvideData", id: 4, payload: "ProvideDataCommand", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 16, max_payload_bytes: 512, maximum_encoded_payload_bytes: 503, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 115, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "command", name: "SetViewport", id: 7, payload: "SetViewportCommand", state_precondition: "Ready", correlation: "Generation", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "required" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 8192, maximum_encoded_payload_bytes: 5583, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 117, disposition: "stream" }), Object.freeze({ event_id: 105, disposition: "stream" }), Object.freeze({ event_id: 106, disposition: "stream" }), Object.freeze({ event_id: 118, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "command", name: "Cancel", id: 8, payload: "CancelCommand", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: Object.freeze({ worker: "required", session: "optional", request: "required", generation: "forbidden" }), replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 121, disposition: "terminal" }), Object.freeze({ event_id: 107, disposition: "stream" })] as const) }),
+  Object.freeze({ kind: "command", name: "ReleaseSurface", id: 9, payload: "ReleaseSurfaceCommand", state_precondition: "SurfaceAliveOrReclaimed", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 123, disposition: "terminal" }), Object.freeze({ event_id: 113, disposition: "stream" })] as const) }),
+  Object.freeze({ kind: "command", name: "CloseSession", id: 10, payload: "CloseSessionCommand", state_precondition: "NonClosedOrClosed", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 64, maximum_encoded_payload_bytes: 19, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 124, disposition: "terminal" }), Object.freeze({ event_id: 113, disposition: "stream" }), Object.freeze({ event_id: 109, disposition: "stream" })] as const) }),
+  Object.freeze({ kind: "command", name: "Shutdown", id: 11, payload: "ShutdownCommand", state_precondition: "ReadyOrDrainingOrStopped", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 15, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 125, disposition: "terminal" }), Object.freeze({ event_id: 110, disposition: "stream" }), Object.freeze({ event_id: 111, disposition: "stream" })] as const) }),
+  Object.freeze({ kind: "command", name: "FailData", id: 12, payload: "FailDataCommand", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 110, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 115, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "command", name: "GetPageMetrics", id: 13, payload: "GetPageMetricsCommand", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 41, required_capability: 0n, outcomes: Object.freeze([Object.freeze({ event_id: 116, disposition: "terminal" }), Object.freeze({ event_id: 108, disposition: "terminal" }), Object.freeze({ event_id: 107, disposition: "terminal" })] as const) }),
+  Object.freeze({ kind: "event", name: "Ready", id: 101, payload: "ReadyEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 101, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "NeedData", id: 102, payload: "NeedDataEvent", state_precondition: "OpeningOrReady", correlation: "SessionRequest", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 344, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state_precondition: "Opening", correlation: "SessionRequest", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 55, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "required" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 6545, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "required" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 282, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: Object.freeze({ worker: "required", session: "optional", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state_precondition: "Any", correlation: "Request", correlation_shape: Object.freeze({ worker: "required", session: "optional", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "SessionClosed", id: 109, payload: "SessionClosedEvent", state_precondition: "Closing", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 27, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "WorkerStopped", id: 110, payload: "WorkerStoppedEvent", state_precondition: "DrainingOrStopped", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 19, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "WorkerFault", id: 111, payload: "WorkerFaultEvent", state_precondition: "Any", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 26, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "ProtocolFault", id: 112, payload: "ProtocolFaultEvent", state_precondition: "Any", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 26, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "SurfaceReclaimed", id: 113, payload: "SurfaceReclaimedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "EngineHello", id: 114, payload: "EngineHelloEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 62, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "DataFailed", id: 115, payload: "DataFailedEvent", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "PageMetrics", id: 116, payload: "PageMetricsEvent", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 16384, maximum_encoded_payload_bytes: 4463, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "GenerationPlanned", id: 117, payload: "GenerationPlannedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "required" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 54551, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "GenerationCompleted", id: 118, payload: "GenerationCompletedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "required" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 48, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "CancelAcknowledged", id: 121, payload: "CancelAcknowledgedEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: Object.freeze({ worker: "required", session: "optional", request: "required", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "SurfaceReleaseAcknowledged", id: 123, payload: "SurfaceReleaseAcknowledgedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "CloseSessionAcknowledged", id: 124, payload: "CloseSessionAcknowledgedEvent", state_precondition: "Closing", correlation: "Session", correlation_shape: Object.freeze({ worker: "required", session: "required", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 28, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+  Object.freeze({ kind: "event", name: "ShutdownAcknowledged", id: 125, payload: "ShutdownAcknowledgedEvent", state_precondition: "DrainingOrStopped", correlation: "Worker", correlation_shape: Object.freeze({ worker: "required", session: "forbidden", request: "forbidden", generation: "forbidden" }), replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 20, required_capability: 0n, outcomes: Object.freeze([] as const) }),
+] as const) satisfies readonly MessageDescriptor[];
 const MESSAGE_DESCRIPTOR_BY_ID: ReadonlyMap<number, MessageDescriptor> = new Map(MESSAGE_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor] as const));
 export const descriptorById = (id: number): MessageDescriptor | undefined => MESSAGE_DESCRIPTOR_BY_ID.get(id);
 
@@ -1127,13 +1177,20 @@ export interface CapabilityDecision {
   contributors: CapabilityContributor[];
   contributors_total: number;
   contributors_completeness: CollectionCompleteness;
+  locations_total: number;
+  locations_completeness: CollectionCompleteness;
+  evaluated_requirements: number;
+  evaluated_dependencies: number;
+  evaluated_parameters: number;
+  evaluated_commands: number;
+  evaluated_resources: number;
   scope: CapabilityScope;
   location?: CapabilityLocation;
   rejection_code?: number;
 }
 
 export function validateCapabilityDecision(value: unknown): value is CapabilityDecision {
-  if (!isRecord(value) || !exactKeys(value, ["decision_schema_version", "status", "profile", "profile_version", "policy_version", "subject", "missing", "missing_total", "missing_completeness", "contributors", "contributors_total", "contributors_completeness", "scope"], ["location", "rejection_code"])) return false;
+  if (!isRecord(value) || !exactKeys(value, ["decision_schema_version", "status", "profile", "profile_version", "policy_version", "subject", "missing", "missing_total", "missing_completeness", "contributors", "contributors_total", "contributors_completeness", "locations_total", "locations_completeness", "evaluated_requirements", "evaluated_dependencies", "evaluated_parameters", "evaluated_commands", "evaluated_resources", "scope"], ["location", "rejection_code"])) return false;
   if (!(isU16(value.decision_schema_version))) return false;
   if (!(validateSupportStatus(value.status))) return false;
   if (!(validateCapabilityProfileId(value.profile))) return false;
@@ -1146,6 +1203,13 @@ export function validateCapabilityDecision(value: unknown): value is CapabilityD
   if (!(Array.isArray(value.contributors) && value.contributors.length <= 32 && value.contributors.every((entry) => validateCapabilityContributor(entry)))) return false;
   if (!(isU32(value.contributors_total))) return false;
   if (!(validateCollectionCompleteness(value.contributors_completeness))) return false;
+  if (!(isU32(value.locations_total))) return false;
+  if (!(validateCollectionCompleteness(value.locations_completeness))) return false;
+  if (!(isU32(value.evaluated_requirements))) return false;
+  if (!(isU32(value.evaluated_dependencies))) return false;
+  if (!(isU32(value.evaluated_parameters))) return false;
+  if (!(isU32(value.evaluated_commands))) return false;
+  if (!(isU32(value.evaluated_resources))) return false;
   if (!(validateCapabilityScope(value.scope))) return false;
   if (hasOwn(value, "location") && !(validateCapabilityLocation(value.location))) return false;
   if (hasOwn(value, "rejection_code") && !(isU32(value.rejection_code))) return false;
@@ -1157,15 +1221,28 @@ if (!decision.missing.every((requirement, index) => requirement.id !== 0 && (ind
 if (!decision.contributors.every((contributor, index) => contributor.id !== 0 && (index === 0 || decision.contributors[index - 1]!.id < contributor.id))) return false;
 const requirementIds = new Set(decision.missing.map((requirement) => requirement.id));
 const contributorIds = new Set(decision.contributors.map((contributor) => contributor.id));
+if (requirementIds.size !== missingCount || contributorIds.size !== contributorCount) return false;
 if (!decision.missing.every((requirement) => requirement.dependencies.length <= CAPABILITY_REQUIREMENT_DEPENDENCIES_MAX_COUNT
 && requirement.contributor_ids.length <= CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT
 && requirement.dependencies.every((id, index) => id !== requirement.id && requirementIds.has(id) && (index === 0 || requirement.dependencies[index - 1]! < id))
 && requirement.contributor_ids.every((id, index) => contributorIds.has(id) && (index === 0 || requirement.contributor_ids[index - 1]! < id)))) return false;
 if (decision.missing_completeness === CollectionCompleteness.Complete ? missingCount !== decision.missing_total : missingCount >= decision.missing_total) return false;
 if (decision.contributors_completeness === CollectionCompleteness.Complete ? contributorCount !== decision.contributors_total : contributorCount >= decision.contributors_total) return false;
-if (decision.status === SupportStatus.Supported && (decision.missing_total !== 0 || missingCount !== 0 || hasOwn(value, "location") || hasOwn(value, "rejection_code"))) return false;
-if (decision.status === SupportStatus.Unsupported && hasOwn(value, "rejection_code")) return false;
-if (decision.status === SupportStatus.Rejected && !hasOwn(value, "rejection_code")) return false;
+const locationCount = hasOwn(value, "location") ? 1 : 0;
+if (decision.locations_completeness === CollectionCompleteness.Complete
+? locationCount !== decision.locations_total
+: locationCount >= decision.locations_total) return false;
+if (decision.missing_total > decision.evaluated_requirements || decision.evaluated_parameters !== decision.evaluated_requirements) return false;
+if (hasOwn(value, "location") && decision.locations_total === 0) return false;
+if (decision.status === SupportStatus.Supported && (decision.missing_total !== 0 || missingCount !== 0
+|| decision.contributors_total !== 0 || contributorCount !== 0 || decision.locations_total !== 0
+|| decision.locations_completeness !== CollectionCompleteness.Complete
+|| hasOwn(value, "location") || hasOwn(value, "rejection_code"))) return false;
+if (decision.status === SupportStatus.Unsupported
+&& (decision.locations_total !== decision.missing_total || hasOwn(value, "rejection_code"))) return false;
+if (decision.status === SupportStatus.Rejected
+&& (decision.missing_total !== 0 || decision.contributors_total !== 1
+|| decision.locations_total !== 1 || !hasOwn(value, "rejection_code"))) return false;
   return true;
 }
 
@@ -1239,7 +1316,7 @@ let aggregate = 0n;
 let previousEnd = 0n;
 for (const [index, segment] of command.segments.entries()) {
 if (segment.slot !== index || segment.byte_length > MAX_DATA_SEGMENT_BYTES) return false;
-if (index !== 0 && segment.range.start <= previousEnd) return false;
+if (index !== 0 && segment.range.start < previousEnd) return false;
 previousEnd = segment.range.start + segment.range.len;
 aggregate += segment.byte_length;
 if (aggregate > MAX_DATA_TICKET_BYTES) return false;
@@ -1399,7 +1476,7 @@ let aggregate = 0n;
 let previousEnd = 0n;
 for (const [index, range] of need.ranges.entries()) {
 if (range.len > MAX_DATA_SEGMENT_BYTES) return false;
-if (index !== 0 && range.start <= previousEnd) return false;
+if (index !== 0 && range.start < previousEnd) return false;
 previousEnd = range.start + range.len;
 aggregate += range.len;
 if (aggregate > MAX_DATA_TICKET_BYTES) return false;
@@ -1604,30 +1681,80 @@ if (!batch.pages.every((page, index) => page.page_index === batch.start_index + 
 }
 
 export interface RenderPlanManifest {
+  plan_schema_version: number;
   document_revision: bigint;
   render_config: RenderConfigHash;
   renderer_epoch: RendererEpoch;
   plan_id: RenderPlanId;
+  generation: bigint;
   scene_hash: SceneHash;
   decision_hash: CapabilityDecisionHash;
+  geometry_hash: GeometryHash;
+  viewport_clip: SurfaceRegion;
+  zoom_numerator: number;
+  zoom_denominator: number;
+  device_scale_milli: number;
+  rotation: PageRotation;
+  optional_content: bigint;
+  annotation_revision: bigint;
   backend: NativeBackend;
   output_profile: OutputProfile;
   quality: QualityPolicy;
   regions: SurfaceRegion[];
+  tile_content_hashes: TileContentHash[];
 }
 
 export function validateRenderPlanManifest(value: unknown): value is RenderPlanManifest {
-  if (!isRecord(value) || !exactKeys(value, ["document_revision", "render_config", "renderer_epoch", "plan_id", "scene_hash", "decision_hash", "backend", "output_profile", "quality", "regions"], [])) return false;
+  if (!isRecord(value) || !exactKeys(value, ["plan_schema_version", "document_revision", "render_config", "renderer_epoch", "plan_id", "generation", "scene_hash", "decision_hash", "geometry_hash", "viewport_clip", "zoom_numerator", "zoom_denominator", "device_scale_milli", "rotation", "optional_content", "annotation_revision", "backend", "output_profile", "quality", "regions", "tile_content_hashes"], [])) return false;
+  if (!(isU16(value.plan_schema_version))) return false;
   if (!(isU64(value.document_revision))) return false;
   if (!(validateRenderConfigHash(value.render_config))) return false;
   if (!(validateRendererEpoch(value.renderer_epoch))) return false;
   if (!(validateRenderPlanId(value.plan_id))) return false;
+  if (!(isU64(value.generation))) return false;
   if (!(validateSceneHash(value.scene_hash))) return false;
   if (!(validateCapabilityDecisionHash(value.decision_hash))) return false;
+  if (!(validateGeometryHash(value.geometry_hash))) return false;
+  if (!(validateSurfaceRegion(value.viewport_clip))) return false;
+  if (!(isU32(value.zoom_numerator))) return false;
+  if (!(isU32(value.zoom_denominator))) return false;
+  if (!(isU32(value.device_scale_milli))) return false;
+  if (!(validatePageRotation(value.rotation))) return false;
+  if (!(isU64(value.optional_content))) return false;
+  if (!(isU64(value.annotation_revision))) return false;
   if (!(validateNativeBackend(value.backend))) return false;
   if (!(validateOutputProfile(value.output_profile))) return false;
   if (!(validateQualityPolicy(value.quality))) return false;
   if (!(Array.isArray(value.regions) && value.regions.length <= 1024 && value.regions.every((entry) => validateSurfaceRegion(entry)))) return false;
+  if (!(Array.isArray(value.tile_content_hashes) && value.tile_content_hashes.length <= 1024 && value.tile_content_hashes.every((entry) => validateTileContentHash(entry)))) return false;
+  const manifest = value as unknown as RenderPlanManifest;
+if (manifest.plan_schema_version === 0 || manifest.document_revision === 0n || manifest.renderer_epoch === 0 || manifest.plan_id === 0n
+|| manifest.generation !== manifest.plan_id || manifest.device_scale_milli === 0) return false;
+if (!manifest.render_config.some((byte) => byte !== 0) || !manifest.scene_hash.some((byte) => byte !== 0)
+|| !manifest.decision_hash.some((byte) => byte !== 0) || !manifest.geometry_hash.some((byte) => byte !== 0)) return false;
+if (manifest.viewport_clip.width === 0 || manifest.viewport_clip.height === 0
+|| manifest.viewport_clip.coordinate_space !== SurfaceCoordinateSpace.DevicePixelsTopLeft) return false;
+if (manifest.zoom_numerator === 0 || manifest.zoom_denominator === 0) return false;
+let zoomLeft = manifest.zoom_numerator;
+let zoomRight = manifest.zoom_denominator;
+while (zoomRight !== 0) {
+const remainder = zoomLeft % zoomRight;
+zoomLeft = zoomRight;
+zoomRight = remainder;
+}
+if (zoomLeft !== 1 || manifest.regions.length === 0 || manifest.regions.length !== manifest.tile_content_hashes.length) return false;
+const clipLeft = manifest.viewport_clip.x;
+const clipTop = manifest.viewport_clip.y;
+const clipRight = clipLeft + manifest.viewport_clip.width;
+const clipBottom = clipTop + manifest.viewport_clip.height;
+if (!manifest.regions.every((region, index) => region.page_index === manifest.viewport_clip.page_index
+&& region.coordinate_space === SurfaceCoordinateSpace.DevicePixelsTopLeft
+&& region.width !== 0 && region.height !== 0
+&& region.x >= clipLeft && region.y >= clipTop
+&& region.x + region.width <= clipRight && region.y + region.height <= clipBottom
+&& (index === 0 || manifest.regions[index - 1]!.y < region.y
+|| (manifest.regions[index - 1]!.y === region.y && manifest.regions[index - 1]!.x < region.x)))) return false;
+if (!manifest.tile_content_hashes.every((hash) => hash.some((byte) => byte !== 0))) return false;
   return true;
 }
 
@@ -1641,11 +1768,7 @@ export function validateGenerationPlannedEvent(value: unknown): value is Generat
   if (!(validateRenderPlanManifest(value.manifest))) return false;
   if (!(validateRenderPlanHash(value.plan_hash))) return false;
   const plan = value as unknown as GenerationPlannedEvent;
-const manifest = plan.manifest;
-if (manifest.document_revision === 0n || manifest.renderer_epoch === 0 || manifest.plan_id === 0n || manifest.regions.length === 0) return false;
-if (!manifest.render_config.some((byte) => byte !== 0) || !plan.plan_hash.some((byte) => byte !== 0) || !manifest.scene_hash.some((byte) => byte !== 0) || !manifest.decision_hash.some((byte) => byte !== 0)) return false;
-const identities = new Set(manifest.regions.map((region) => `${region.page_index}:${region.x}:${region.y}:${region.width}:${region.height}`));
-if (identities.size !== manifest.regions.length || manifest.regions.some((region) => region.width === 0 || region.height === 0)) return false;
+if (!plan.plan_hash.some((byte) => byte !== 0)) return false;
   return true;
 }
 
@@ -1738,13 +1861,13 @@ readonly union_name: string;
 readonly variant_name: string;
 readonly capability: bigint;
 }
-export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = [
-  { union_name: "SurfaceTransport", variant_name: "BrowserArrayBuffer", capability: ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER },
-  { union_name: "SurfaceTransport", variant_name: "BrowserImageBitmap", capability: ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP },
-  { union_name: "SurfaceTransport", variant_name: "BrowserSharedArrayBuffer", capability: ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER },
-] as const satisfies readonly UnionVariantCapabilityRequirement[];
+export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = Object.freeze([
+  Object.freeze({ union_name: "SurfaceTransport", variant_name: "BrowserArrayBuffer", capability: ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER }),
+  Object.freeze({ union_name: "SurfaceTransport", variant_name: "BrowserImageBitmap", capability: ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP }),
+  Object.freeze({ union_name: "SurfaceTransport", variant_name: "BrowserSharedArrayBuffer", capability: ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER }),
+] as const) satisfies readonly UnionVariantCapabilityRequirement[];
 
-export const BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS = ["BrowserArrayBuffer", "BrowserImageBitmap", "BrowserSharedArrayBuffer"] as const;
+export const BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS = Object.freeze(["BrowserArrayBuffer", "BrowserImageBitmap", "BrowserSharedArrayBuffer"] as const);
 
 export function surfaceTransportRequiredCapability(value: SurfaceTransport): bigint {
   switch (value.kind) {
@@ -2218,6 +2341,13 @@ export function redactCapabilityDecision(value: CapabilityDecision): Readonly<Re
     contributors: value.contributors.map((entry) => redactCapabilityContributor(entry)),
     contributors_total: value.contributors_total,
     contributors_completeness: value.contributors_completeness,
+    locations_total: value.locations_total,
+    locations_completeness: value.locations_completeness,
+    evaluated_requirements: value.evaluated_requirements,
+    evaluated_dependencies: value.evaluated_dependencies,
+    evaluated_parameters: value.evaluated_parameters,
+    evaluated_commands: value.evaluated_commands,
+    evaluated_resources: value.evaluated_resources,
     scope: redactCapabilityScope(value.scope),
     location: "[REDACTED]",
     rejection_code: value.rejection_code === undefined ? undefined : value.rejection_code,
@@ -2238,6 +2368,13 @@ export function snapshotCapabilityDecision(value: CapabilityDecision): Capabilit
     contributors: Object.freeze(value.contributors.map((entry) => snapshotCapabilityContributor(entry))) as unknown as CapabilityContributor[],
     contributors_total: value.contributors_total,
     contributors_completeness: value.contributors_completeness,
+    locations_total: value.locations_total,
+    locations_completeness: value.locations_completeness,
+    evaluated_requirements: value.evaluated_requirements,
+    evaluated_dependencies: value.evaluated_dependencies,
+    evaluated_parameters: value.evaluated_parameters,
+    evaluated_commands: value.evaluated_commands,
+    evaluated_resources: value.evaluated_resources,
     scope: snapshotCapabilityScope(value.scope),
     ...(value.location === undefined ? {} : { location: value.location === undefined ? undefined : snapshotCapabilityLocation(value.location) }),
     ...(value.rejection_code === undefined ? {} : { rejection_code: value.rejection_code === undefined ? undefined : value.rejection_code }),
@@ -2654,31 +2791,53 @@ export function snapshotPageMetricsEvent(value: PageMetricsEvent): PageMetricsEv
 
 export function redactRenderPlanManifest(value: RenderPlanManifest): Readonly<Record<string, unknown>> {
   return {
+    plan_schema_version: value.plan_schema_version,
     document_revision: value.document_revision,
     render_config: value.render_config,
     renderer_epoch: value.renderer_epoch,
     plan_id: value.plan_id,
+    generation: value.generation,
     scene_hash: "[REDACTED]",
     decision_hash: "[REDACTED]",
+    geometry_hash: value.geometry_hash,
+    viewport_clip: redactSurfaceRegion(value.viewport_clip),
+    zoom_numerator: value.zoom_numerator,
+    zoom_denominator: value.zoom_denominator,
+    device_scale_milli: value.device_scale_milli,
+    rotation: value.rotation,
+    optional_content: value.optional_content,
+    annotation_revision: value.annotation_revision,
     backend: value.backend,
     output_profile: value.output_profile,
     quality: value.quality,
     regions: value.regions.map((entry) => redactSurfaceRegion(entry)),
+    tile_content_hashes: value.tile_content_hashes.map((entry) => entry),
   };
 }
 
 export function snapshotRenderPlanManifest(value: RenderPlanManifest): RenderPlanManifest {
   return Object.freeze({
+    plan_schema_version: value.plan_schema_version,
     document_revision: value.document_revision,
     render_config: new Uint8Array(value.render_config),
     renderer_epoch: value.renderer_epoch,
     plan_id: value.plan_id,
+    generation: value.generation,
     scene_hash: new Uint8Array(value.scene_hash),
     decision_hash: new Uint8Array(value.decision_hash),
+    geometry_hash: new Uint8Array(value.geometry_hash),
+    viewport_clip: snapshotSurfaceRegion(value.viewport_clip),
+    zoom_numerator: value.zoom_numerator,
+    zoom_denominator: value.zoom_denominator,
+    device_scale_milli: value.device_scale_milli,
+    rotation: value.rotation,
+    optional_content: value.optional_content,
+    annotation_revision: value.annotation_revision,
     backend: value.backend,
     output_profile: value.output_profile,
     quality: value.quality,
     regions: Object.freeze(value.regions.map((entry) => snapshotSurfaceRegion(entry))) as unknown as SurfaceRegion[],
+    tile_content_hashes: Object.freeze(value.tile_content_hashes.map((entry) => new Uint8Array(entry))) as unknown as TileContentHash[],
   }) as RenderPlanManifest;
 }
 
@@ -2987,7 +3146,15 @@ export function redactEvent(value: Event): Readonly<Record<string, unknown>> {
 export interface CommandEnvelope { header: EnvelopeHeader; correlation: Correlation; command: Command }
 export interface EventEnvelope { header: EnvelopeHeader; correlation: Correlation; event: Event }
 
-const CONNECTION_CONTEXT_BRAND: unique symbol = Symbol("EngineProtocolConnection");
+declare const CONNECTION_CONTEXT_BRAND: unique symbol;
+const INTRINSIC_REFLECT_APPLY = Reflect.apply;
+const INTRINSIC_WEAK_SET_ADD = WeakSet.prototype.add;
+const INTRINSIC_WEAK_SET_HAS = WeakSet.prototype.has;
+const weakSetAdd = (set: WeakSet<object>, value: object): void => {
+INTRINSIC_REFLECT_APPLY(INTRINSIC_WEAK_SET_ADD, set, [value]);
+};
+const weakSetHas = (set: WeakSet<object>, value: object): boolean => INTRINSIC_REFLECT_APPLY(INTRINSIC_WEAK_SET_HAS, set, [value]) as boolean;
+const COMPATIBLE_HANDSHAKES = new WeakSet<object>();
 export type ProtocolValidationErrorCode = "InvalidHandshake" | "InvalidEnvelope" | "NonMonotonicSequence";
 export interface ProtocolValidationError { readonly code: ProtocolValidationErrorCode }
 export type ProtocolValidationResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: Readonly<ProtocolValidationError> }>;
@@ -3000,21 +3167,79 @@ readonly capabilities: bigint;
 readonly max_message_bytes: number;
 readonly max_transfer_slots: number;
 }
+export function isCompatibleHandshake(value: unknown): value is CompatibleHandshake {
+return typeof value === "object" && value !== null && weakSetHas(COMPATIBLE_HANDSHAKES, value);
+}
+const snapshotExactDataRecord = (
+input: unknown,
+expectedKeys: readonly string[],
+): Readonly<Record<string, unknown>> | undefined => {
+if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined;
+try {
+const prototype = Object.getPrototypeOf(input);
+if (prototype !== Object.prototype && prototype !== null) return undefined;
+const descriptors = Object.getOwnPropertyDescriptors(input);
+const keys = Reflect.ownKeys(descriptors);
+if (keys.length !== expectedKeys.length
+|| keys.some((key) => typeof key !== "string" || !expectedKeys.includes(key))
+|| expectedKeys.some((key) => !keys.includes(key))) return undefined;
+const snapshot: Record<string, unknown> = {};
+for (const key of expectedKeys) {
+const descriptor = descriptors[key];
+if (descriptor === undefined || !("value" in descriptor) || descriptor.enumerable !== true) return undefined;
+snapshot[key] = descriptor.value;
+}
+return Object.freeze(snapshot);
+} catch {
+return undefined;
+}
+};
+const snapshotProtocolHelloDataOnly = (input: unknown): ProtocolHello | undefined => {
+const hello = snapshotExactDataRecord(input, [
+"major", "minor", "schema_hash", "endpoint_role", "capabilities",
+"max_message_bytes", "max_transfer_slots",
+]);
+if (hello === undefined) return undefined;
+const capabilities = snapshotExactDataRecord(hello.capabilities, ["supported", "mandatory"]);
+const schemaHashInput = hello.schema_hash;
+if (capabilities === undefined || !(schemaHashInput instanceof Uint8Array)) return undefined;
+try {
+if (Object.getPrototypeOf(schemaHashInput) !== Uint8Array.prototype) return undefined;
+if (typeof SharedArrayBuffer !== "undefined" && schemaHashInput.buffer instanceof SharedArrayBuffer) return undefined;
+const schemaHash = Uint8Array.prototype.slice.call(schemaHashInput) as Uint8Array;
+const snapshot = Object.freeze({
+major: hello.major,
+minor: hello.minor,
+schema_hash: schemaHash,
+endpoint_role: hello.endpoint_role,
+capabilities: Object.freeze({
+supported: capabilities.supported,
+mandatory: capabilities.mandatory,
+}),
+max_message_bytes: hello.max_message_bytes,
+max_transfer_slots: hello.max_transfer_slots,
+}) as unknown as ProtocolHello;
+return validateProtocolHello(snapshot) ? snapshot : undefined;
+} catch {
+return undefined;
+}
+};
 export function negotiateHandshake(localInput: unknown, peerInput: unknown): CompatibleHandshake | undefined {
-if (!validateProtocolHello(localInput) || !validateProtocolHello(peerInput)) return undefined;
-const local = snapshotProtocolHello(localInput);
-const peer = snapshotProtocolHello(peerInput);
+const local = snapshotProtocolHelloDataOnly(localInput);
+const peer = snapshotProtocolHelloDataOnly(peerInput);
+if (local === undefined || peer === undefined) return undefined;
 const opposite = (local.endpoint_role === EndpointRole.Host && peer.endpoint_role === EndpointRole.Engine)
 || (local.endpoint_role === EndpointRole.Engine && peer.endpoint_role === EndpointRole.Host);
-if (!opposite || local.minor !== peer.minor || !fixedBytesEqual(local.schema_hash, SCHEMA_HASH) || !fixedBytesEqual(peer.schema_hash, SCHEMA_HASH)) return undefined;
+if (!opposite || local.minor !== peer.minor || !fixedBytesEqual(local.schema_hash, CANONICAL_SCHEMA_HASH) || !fixedBytesEqual(peer.schema_hash, CANONICAL_SCHEMA_HASH)) return undefined;
 if ((local.capabilities.mandatory & ~peer.capabilities.supported) !== 0n || (peer.capabilities.mandatory & ~local.capabilities.supported) !== 0n) return undefined;
-return Object.freeze({
-[CONNECTION_CONTEXT_BRAND]: true as const,
+const connection = Object.freeze({
 minor: local.minor,
 capabilities: local.capabilities.supported & peer.capabilities.supported & KNOWN_ENDPOINT_CAPABILITIES,
 max_message_bytes: Math.min(local.max_message_bytes, peer.max_message_bytes),
 max_transfer_slots: Math.min(local.max_transfer_slots, peer.max_transfer_slots),
-});
+}) as CompatibleHandshake;
+weakSetAdd(COMPATIBLE_HANDSHAKES, connection);
+return connection;
 }
 export function negotiateHandshakeResult(localInput: unknown, peerInput: unknown): ProtocolValidationResult<CompatibleHandshake> {
 const value = negotiateHandshake(localInput, peerInput);
@@ -3025,25 +3250,44 @@ if (hostHello.type !== "Hello" || engineHello.type !== "EngineHello" || hostAcce
 if (hostHello.payload.hello.endpoint_role !== EndpointRole.Host || engineHello.payload.hello.endpoint_role !== EndpointRole.Engine) return undefined;
 const connection = negotiateHandshake(hostHello.payload.hello, engineHello.payload.hello);
 if (connection === undefined || hostAccept.payload.negotiated_minor !== connection.minor || engineReady.payload.negotiated_minor !== connection.minor) return undefined;
-if (!fixedBytesEqual(hostAccept.payload.schema_hash, SCHEMA_HASH) || !fixedBytesEqual(engineReady.payload.schema_hash, SCHEMA_HASH) || engineReady.payload.worker === 0n || engineReady.payload.execution_capabilities.supported !== engineHello.payload.execution_capabilities.supported) return undefined;
+if (!fixedBytesEqual(hostAccept.payload.schema_hash, CANONICAL_SCHEMA_HASH) || !fixedBytesEqual(engineReady.payload.schema_hash, CANONICAL_SCHEMA_HASH) || engineReady.payload.worker === 0n || engineReady.payload.execution_capabilities.supported !== engineHello.payload.execution_capabilities.supported) return undefined;
 return connection;
 }
 export interface PendingSequenceCommit { commit(): boolean }
+const AUTHENTIC_SEQUENCE_TRACKERS = new WeakSet<object>();
 export class EnvelopeSequenceTracker {
-private lastAcceptedValue: bigint | undefined;
-get lastAccepted(): bigint | undefined { return this.lastAcceptedValue; }
+#lastAcceptedValue: bigint | undefined;
+constructor() {
+if (new.target !== EnvelopeSequenceTracker) throw new TypeError("EnvelopeSequenceTracker cannot be subclassed");
+weakSetAdd(AUTHENTIC_SEQUENCE_TRACKERS, this);
+Object.freeze(this);
+}
+get lastAccepted(): bigint | undefined { return this.#lastAcceptedValue; }
 pending(candidate: bigint): PendingSequenceCommit | undefined {
-if (candidate === 0n || (this.lastAcceptedValue !== undefined && candidate <= this.lastAcceptedValue)) return undefined;
+if (typeof candidate !== "bigint" || candidate === 0n || (this.#lastAcceptedValue !== undefined && candidate <= this.#lastAcceptedValue)) return undefined;
 let consumed = false;
 return Object.freeze({ commit: (): boolean => {
 if (consumed) return false;
 consumed = true;
-if (this.lastAcceptedValue !== undefined && candidate <= this.lastAcceptedValue) return false;
-this.lastAcceptedValue = candidate;
+if (this.#lastAcceptedValue !== undefined && candidate <= this.#lastAcceptedValue) return false;
+this.#lastAcceptedValue = candidate;
 return true;
 }});
 }
 }
+const ORIGINAL_SEQUENCE_PENDING = EnvelopeSequenceTracker.prototype.pending;
+const ORIGINAL_SEQUENCE_LAST_ACCEPTED = Object.getOwnPropertyDescriptor(EnvelopeSequenceTracker.prototype, "lastAccepted")?.get;
+if (ORIGINAL_SEQUENCE_LAST_ACCEPTED === undefined) throw new Error("missing sequence getter");
+Object.freeze(EnvelopeSequenceTracker.prototype);
+Object.freeze(EnvelopeSequenceTracker);
+const authenticSequencePending = (sequence: unknown, candidate: bigint): PendingSequenceCommit | undefined => {
+if (typeof sequence !== "object" || sequence === null || !weakSetHas(AUTHENTIC_SEQUENCE_TRACKERS, sequence)) return undefined;
+return INTRINSIC_REFLECT_APPLY(ORIGINAL_SEQUENCE_PENDING, sequence, [candidate]) as PendingSequenceCommit | undefined;
+};
+const authenticSequenceState = (sequence: unknown): Readonly<{ lastAccepted: bigint | undefined }> | undefined => {
+if (typeof sequence !== "object" || sequence === null || !weakSetHas(AUTHENTIC_SEQUENCE_TRACKERS, sequence)) return undefined;
+return { lastAccepted: INTRINSIC_REFLECT_APPLY(ORIGINAL_SEQUENCE_LAST_ACCEPTED, sequence, []) as bigint | undefined };
+};
 const correlationRequirementMet = (present: boolean, requirement: CorrelationRequirement): boolean => requirement === "required" ? present : requirement === "optional" ? true : !present;
 const validateDescriptorCorrelation = (correlation: Correlation, descriptor: MessageDescriptor): boolean => {
 if (correlation.worker === 0n || correlation.session === 0n || correlation.request === 0n || correlation.generation === 0n) return false;
@@ -3086,6 +3330,7 @@ case "DocumentReady": return correlation.session === undefined || correlation.se
 case "SurfaceReady": return correlation.worker === message.payload.metadata.owner.worker
 && correlation.session === message.payload.metadata.owner.session
 && correlation.generation === message.payload.metadata.generation;
+case "GenerationPlanned": return correlation.generation === message.payload.manifest.generation;
 case "RequestCancelled": return correlation.request === message.payload.target;
 case "SessionClosed": return correlation.session === message.payload.session;
 case "WorkerStopped": return correlation.worker === message.payload.worker;
@@ -3094,7 +3339,7 @@ default: return true;
 };
 const validateEnvelopeDescriptor = (header: EnvelopeHeader, correlation: Correlation, message: Command | Event, kind: MessageKind, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake): boolean => {
 const descriptor = descriptorById(header.message_type);
-return connection[CONNECTION_CONTEXT_BRAND] === true
+return isCompatibleHandshake(connection)
 && descriptor !== undefined
 && descriptor.kind === kind
 && descriptor.name === message.type
@@ -3115,31 +3360,33 @@ return Number.isInteger(negotiatedMinor)
 export interface PendingCommandEnvelope { readonly envelope: CommandEnvelope; commitSequence(): boolean }
 export interface PendingEventEnvelope { readonly envelope: EventEnvelope; commitSequence(): boolean }
 export function beginValidateCommandEnvelope(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): PendingCommandEnvelope | undefined {
-if (!isRecord(value) || !exactKeys(value, ["header", "correlation", "command"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return undefined;
+if (!isCompatibleHandshake(connection) || !isRecord(value) || !exactKeys(value, ["header", "correlation", "command"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return undefined;
 const input = value as unknown as CommandEnvelope;
 const envelope = Object.freeze({ header: snapshotEnvelopeHeader(input.header), correlation: snapshotCorrelation(input.correlation), command: snapshotCommand(input.command) });
 if (!validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.command, "command", transferSlots, actualPayloadBytes, connection)) return undefined;
-const pending = sequence.pending(envelope.header.sequence);
+const pending = authenticSequencePending(sequence, envelope.header.sequence);
 return pending === undefined ? undefined : Object.freeze({ envelope, commitSequence: (): boolean => pending.commit() });
 }
 export function beginValidateEventEnvelope(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): PendingEventEnvelope | undefined {
-if (!isRecord(value) || !exactKeys(value, ["header", "correlation", "event"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return undefined;
+if (!isCompatibleHandshake(connection) || !isRecord(value) || !exactKeys(value, ["header", "correlation", "event"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return undefined;
 const input = value as unknown as EventEnvelope;
 const envelope = Object.freeze({ header: snapshotEnvelopeHeader(input.header), correlation: snapshotCorrelation(input.correlation), event: snapshotEvent(input.event) });
 if (!validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.event, "event", transferSlots, actualPayloadBytes, connection)) return undefined;
-const pending = sequence.pending(envelope.header.sequence);
+const pending = authenticSequencePending(sequence, envelope.header.sequence);
 return pending === undefined ? undefined : Object.freeze({ envelope, commitSequence: (): boolean => pending.commit() });
 }
 export function beginValidateCommandEnvelopeResult(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): ProtocolValidationResult<PendingCommandEnvelope> {
 const pending = beginValidateCommandEnvelope(value, transferSlots, actualPayloadBytes, connection, sequence);
 if (pending !== undefined) return protocolValidationOk(pending);
-if (isRecord(value) && isRecord(value.header) && typeof value.header.sequence === "bigint" && (value.header.sequence === 0n || (sequence.lastAccepted !== undefined && value.header.sequence <= sequence.lastAccepted))) return protocolValidationError("NonMonotonicSequence");
+const sequenceState = authenticSequenceState(sequence);
+if (sequenceState !== undefined && isRecord(value) && isRecord(value.header) && typeof value.header.sequence === "bigint" && (value.header.sequence === 0n || (sequenceState.lastAccepted !== undefined && value.header.sequence <= sequenceState.lastAccepted))) return protocolValidationError("NonMonotonicSequence");
 return protocolValidationError("InvalidEnvelope");
 }
 export function beginValidateEventEnvelopeResult(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): ProtocolValidationResult<PendingEventEnvelope> {
 const pending = beginValidateEventEnvelope(value, transferSlots, actualPayloadBytes, connection, sequence);
 if (pending !== undefined) return protocolValidationOk(pending);
-if (isRecord(value) && isRecord(value.header) && typeof value.header.sequence === "bigint" && (value.header.sequence === 0n || (sequence.lastAccepted !== undefined && value.header.sequence <= sequence.lastAccepted))) return protocolValidationError("NonMonotonicSequence");
+const sequenceState = authenticSequenceState(sequence);
+if (sequenceState !== undefined && isRecord(value) && isRecord(value.header) && typeof value.header.sequence === "bigint" && (value.header.sequence === 0n || (sequenceState.lastAccepted !== undefined && value.header.sequence <= sequenceState.lastAccepted))) return protocolValidationError("NonMonotonicSequence");
 return protocolValidationError("InvalidEnvelope");
 }
 
@@ -3157,7 +3404,8 @@ export type PayloadCodecErrorCode =
   | "UnknownTag"
   | "UnknownMessage"
   | "InvalidValue"
-  | "SharedArrayBuffer";
+  | "SharedArrayBuffer"
+  | "Interrupted";
 
 export interface PayloadCodecError {
   readonly code: PayloadCodecErrorCode;
@@ -3731,6 +3979,42 @@ export function encodeSceneHashPayload(value: SceneHash, limits: Readonly<Payloa
 
 export function decodeSceneHashPayload(input: Uint8Array, limits: Readonly<PayloadCodecLimits> = DEFAULT_PAYLOAD_CODEC_LIMITS): PayloadCodecResult<SceneHash> {
   return payloadCodecDecodeRoot(input, limits, payloadDecodeSceneHashFrom);
+}
+
+function payloadEncodeGeometryHashInto(value: GeometryHash, depth: number, writer: PayloadWriter): void {
+  writer.checkDepth(depth);
+  writer.writeFixed(value, 32);
+}
+
+function payloadDecodeGeometryHashFrom(depth: number, reader: PayloadReader): GeometryHash {
+  reader.checkDepth(depth);
+  return reader.readFixed(32) as GeometryHash;
+}
+
+export function encodeGeometryHashPayload(value: GeometryHash, limits: Readonly<PayloadCodecLimits> = DEFAULT_PAYLOAD_CODEC_LIMITS): PayloadCodecResult<Uint8Array> {
+  return payloadCodecEncodeRoot(value, limits, payloadEncodeGeometryHashInto);
+}
+
+export function decodeGeometryHashPayload(input: Uint8Array, limits: Readonly<PayloadCodecLimits> = DEFAULT_PAYLOAD_CODEC_LIMITS): PayloadCodecResult<GeometryHash> {
+  return payloadCodecDecodeRoot(input, limits, payloadDecodeGeometryHashFrom);
+}
+
+function payloadEncodeTileContentHashInto(value: TileContentHash, depth: number, writer: PayloadWriter): void {
+  writer.checkDepth(depth);
+  writer.writeFixed(value, 32);
+}
+
+function payloadDecodeTileContentHashFrom(depth: number, reader: PayloadReader): TileContentHash {
+  reader.checkDepth(depth);
+  return reader.readFixed(32) as TileContentHash;
+}
+
+export function encodeTileContentHashPayload(value: TileContentHash, limits: Readonly<PayloadCodecLimits> = DEFAULT_PAYLOAD_CODEC_LIMITS): PayloadCodecResult<Uint8Array> {
+  return payloadCodecEncodeRoot(value, limits, payloadEncodeTileContentHashInto);
+}
+
+export function decodeTileContentHashPayload(input: Uint8Array, limits: Readonly<PayloadCodecLimits> = DEFAULT_PAYLOAD_CODEC_LIMITS): PayloadCodecResult<TileContentHash> {
+  return payloadCodecDecodeRoot(input, limits, payloadDecodeTileContentHashFrom);
 }
 
 function payloadEncodeRenderPlanIdInto(value: RenderPlanId, depth: number, writer: PayloadWriter): void {
@@ -5522,6 +5806,13 @@ function payloadEncodeCapabilityDecisionInto(value: CapabilityDecision, depth: n
   }
   writer.writeU32(value.contributors_total);
   payloadEncodeCollectionCompletenessInto(value.contributors_completeness, depth + 1, writer);
+  writer.writeU32(value.locations_total);
+  payloadEncodeCollectionCompletenessInto(value.locations_completeness, depth + 1, writer);
+  writer.writeU32(value.evaluated_requirements);
+  writer.writeU32(value.evaluated_dependencies);
+  writer.writeU32(value.evaluated_parameters);
+  writer.writeU32(value.evaluated_commands);
+  writer.writeU32(value.evaluated_resources);
   payloadEncodeCapabilityScopeInto(value.scope, depth + 1, writer);
   {
     const payloadOptional = value.location;
@@ -5557,6 +5848,13 @@ function payloadDecodeCapabilityDecisionFrom(depth: number, reader: PayloadReade
   const payload_contributors = (() => { const payloadCount = reader.readCount(32, 10); const payloadValues = []; for (let index = 0; index < payloadCount; index += 1) payloadValues.push(payloadDecodeCapabilityContributorFrom(depth + 1 + 1, reader)); return Object.freeze(payloadValues) as unknown as CapabilityContributor[]; })();
   const payload_contributors_total = reader.readU32();
   const payload_contributors_completeness = payloadDecodeCollectionCompletenessFrom(depth + 1, reader);
+  const payload_locations_total = reader.readU32();
+  const payload_locations_completeness = payloadDecodeCollectionCompletenessFrom(depth + 1, reader);
+  const payload_evaluated_requirements = reader.readU32();
+  const payload_evaluated_dependencies = reader.readU32();
+  const payload_evaluated_parameters = reader.readU32();
+  const payload_evaluated_commands = reader.readU32();
+  const payload_evaluated_resources = reader.readU32();
   const payload_scope = payloadDecodeCapabilityScopeFrom(depth + 1, reader);
   const payload_location = reader.readOptional() ? payloadDecodeCapabilityLocationFrom(depth + 1 + 1, reader) : undefined;
   const payload_rejection_code = reader.readOptional() ? reader.readU32() : undefined;
@@ -5573,6 +5871,13 @@ function payloadDecodeCapabilityDecisionFrom(depth: number, reader: PayloadReade
     contributors: payload_contributors,
     contributors_total: payload_contributors_total,
     contributors_completeness: payload_contributors_completeness,
+    locations_total: payload_locations_total,
+    locations_completeness: payload_locations_completeness,
+    evaluated_requirements: payload_evaluated_requirements,
+    evaluated_dependencies: payload_evaluated_dependencies,
+    evaluated_parameters: payload_evaluated_parameters,
+    evaluated_commands: payload_evaluated_commands,
+    evaluated_resources: payload_evaluated_resources,
     scope: payload_scope,
     ...(payload_location === undefined ? {} : { location: payload_location }),
     ...(payload_rejection_code === undefined ? {} : { rejection_code: payload_rejection_code }),
@@ -6329,12 +6634,22 @@ export function decodePageMetricsEventPayload(input: Uint8Array, limits: Readonl
 
 function payloadEncodeRenderPlanManifestInto(value: RenderPlanManifest, depth: number, writer: PayloadWriter): void {
   writer.checkDepth(depth);
+  writer.writeU16(value.plan_schema_version);
   writer.writeU64(value.document_revision);
   payloadEncodeRenderConfigHashInto(value.render_config, depth + 1, writer);
   payloadEncodeRendererEpochInto(value.renderer_epoch, depth + 1, writer);
   payloadEncodeRenderPlanIdInto(value.plan_id, depth + 1, writer);
+  writer.writeU64(value.generation);
   payloadEncodeSceneHashInto(value.scene_hash, depth + 1, writer);
   payloadEncodeCapabilityDecisionHashInto(value.decision_hash, depth + 1, writer);
+  payloadEncodeGeometryHashInto(value.geometry_hash, depth + 1, writer);
+  payloadEncodeSurfaceRegionInto(value.viewport_clip, depth + 1, writer);
+  writer.writeU32(value.zoom_numerator);
+  writer.writeU32(value.zoom_denominator);
+  writer.writeU32(value.device_scale_milli);
+  payloadEncodePageRotationInto(value.rotation, depth + 1, writer);
+  writer.writeU64(value.optional_content);
+  writer.writeU64(value.annotation_revision);
   payloadEncodeNativeBackendInto(value.backend, depth + 1, writer);
   payloadEncodeOutputProfileInto(value.output_profile, depth + 1, writer);
   payloadEncodeQualityPolicyInto(value.quality, depth + 1, writer);
@@ -6346,31 +6661,61 @@ function payloadEncodeRenderPlanManifestInto(value: RenderPlanManifest, depth: n
       payloadEncodeSurfaceRegionInto(payloadItem, depth + 1 + 1, writer);
     }
   }
+  {
+    const payloadList = value.tile_content_hashes;
+    if (!Array.isArray(payloadList)) payloadCodecFail("InvalidValue", writer.offset);
+    writer.writeCount(payloadList.length, 1024);
+    for (const payloadItem of payloadList) {
+      payloadEncodeTileContentHashInto(payloadItem, depth + 1 + 1, writer);
+    }
+  }
 }
 
 function payloadDecodeRenderPlanManifestFrom(depth: number, reader: PayloadReader): RenderPlanManifest {
   reader.checkDepth(depth);
+  const payload_plan_schema_version = reader.readU16();
   const payload_document_revision = reader.readU64();
   const payload_render_config = payloadDecodeRenderConfigHashFrom(depth + 1, reader);
   const payload_renderer_epoch = payloadDecodeRendererEpochFrom(depth + 1, reader);
   const payload_plan_id = payloadDecodeRenderPlanIdFrom(depth + 1, reader);
+  const payload_generation = reader.readU64();
   const payload_scene_hash = payloadDecodeSceneHashFrom(depth + 1, reader);
   const payload_decision_hash = payloadDecodeCapabilityDecisionHashFrom(depth + 1, reader);
+  const payload_geometry_hash = payloadDecodeGeometryHashFrom(depth + 1, reader);
+  const payload_viewport_clip = payloadDecodeSurfaceRegionFrom(depth + 1, reader);
+  const payload_zoom_numerator = reader.readU32();
+  const payload_zoom_denominator = reader.readU32();
+  const payload_device_scale_milli = reader.readU32();
+  const payload_rotation = payloadDecodePageRotationFrom(depth + 1, reader);
+  const payload_optional_content = reader.readU64();
+  const payload_annotation_revision = reader.readU64();
   const payload_backend = payloadDecodeNativeBackendFrom(depth + 1, reader);
   const payload_output_profile = payloadDecodeOutputProfileFrom(depth + 1, reader);
   const payload_quality = payloadDecodeQualityPolicyFrom(depth + 1, reader);
   const payload_regions = (() => { const payloadCount = reader.readCount(1024, 21); const payloadValues = []; for (let index = 0; index < payloadCount; index += 1) payloadValues.push(payloadDecodeSurfaceRegionFrom(depth + 1 + 1, reader)); return Object.freeze(payloadValues) as unknown as SurfaceRegion[]; })();
+  const payload_tile_content_hashes = (() => { const payloadCount = reader.readCount(1024, 32); const payloadValues = []; for (let index = 0; index < payloadCount; index += 1) payloadValues.push(payloadDecodeTileContentHashFrom(depth + 1 + 1, reader)); return Object.freeze(payloadValues) as unknown as TileContentHash[]; })();
   return Object.freeze({
+    plan_schema_version: payload_plan_schema_version,
     document_revision: payload_document_revision,
     render_config: payload_render_config,
     renderer_epoch: payload_renderer_epoch,
     plan_id: payload_plan_id,
+    generation: payload_generation,
     scene_hash: payload_scene_hash,
     decision_hash: payload_decision_hash,
+    geometry_hash: payload_geometry_hash,
+    viewport_clip: payload_viewport_clip,
+    zoom_numerator: payload_zoom_numerator,
+    zoom_denominator: payload_zoom_denominator,
+    device_scale_milli: payload_device_scale_milli,
+    rotation: payload_rotation,
+    optional_content: payload_optional_content,
+    annotation_revision: payload_annotation_revision,
     backend: payload_backend,
     output_profile: payload_output_profile,
     quality: payload_quality,
     regions: payload_regions,
+    tile_content_hashes: payload_tile_content_hashes,
   }) as RenderPlanManifest;
 }
 

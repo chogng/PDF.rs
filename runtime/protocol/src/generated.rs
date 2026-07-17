@@ -16,9 +16,9 @@ pub const MAX_DATA_TICKET_BYTES: u64 = 16777216;
 pub const PAYLOAD_CODEC: &str = "fixed_le_v1";
 pub const CAPABILITY_DECISION_HASH_DOMAIN: &str = "PDF.rs/EngineProtocol/CapabilityDecision/fixed_le_v1/v1";
 pub const RENDER_PLAN_MANIFEST_HASH_DOMAIN: &str = "PDF.rs/EngineProtocol/RenderPlanManifest/fixed_le_v1/v1";
-pub const SCHEMA_SHA256: [u8; 32] = [0xab, 0x67, 0x12, 0xbc, 0xca, 0x32, 0xd2, 0x27, 0xa6, 0x14, 0xb7, 0x86, 0x92, 0x5e, 0x5b, 0x19, 0x90, 0x54, 0x36, 0x95, 0xbd, 0xe0, 0xe8, 0x65, 0x51, 0x3a, 0xb9, 0x5e, 0x90, 0x77, 0x9a, 0x03];
-pub const SCHEMA_SHA256_HEX: &str = "ab6712bcca32d227a614b786925e5b1990543695bde0e865513ab95e90779a03";
-pub const SCHEMA_HASH: [u8; 16] = [0xab, 0x67, 0x12, 0xbc, 0xca, 0x32, 0xd2, 0x27, 0xa6, 0x14, 0xb7, 0x86, 0x92, 0x5e, 0x5b, 0x19];
+pub const SCHEMA_SHA256: [u8; 32] = [0x8b, 0xcf, 0xb8, 0xeb, 0x41, 0xfe, 0x92, 0x60, 0xc2, 0x92, 0xec, 0x1a, 0xdb, 0x54, 0x52, 0xfe, 0x63, 0x2a, 0x42, 0x46, 0x9e, 0xc6, 0xc4, 0x61, 0x56, 0x2a, 0xba, 0x26, 0xdd, 0x0d, 0x8a, 0x01];
+pub const SCHEMA_SHA256_HEX: &str = "8bcfb8eb41fe9260c292ec1adb5452fe632a42469ec6c461562aba26dd0d8a01";
+pub const SCHEMA_HASH: [u8; 16] = [0x8b, 0xcf, 0xb8, 0xeb, 0x41, 0xfe, 0x92, 0x60, 0xc2, 0x92, 0xec, 0x1a, 0xdb, 0x54, 0x52, 0xfe];
 pub const SCHEMA_HASH_TRUNCATION: &str = "sha256-first-16-bytes";
 pub const DESKTOP_BYTE_ORDER: &str = "little-endian";
 pub const ENVELOPE_HEADER_BYTES: usize = 20;
@@ -34,6 +34,7 @@ pub const READY_EVENT_OUTPUT_PROFILES_MAX_COUNT: usize = 8;
 pub const NEED_DATA_EVENT_RANGES_MAX_COUNT: usize = 16;
 pub const PAGE_METRICS_EVENT_PAGES_MAX_COUNT: usize = 64;
 pub const RENDER_PLAN_MANIFEST_REGIONS_MAX_COUNT: usize = 1024;
+pub const RENDER_PLAN_MANIFEST_TILE_CONTENT_HASHES_MAX_COUNT: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct WorkerId(u64);
@@ -104,6 +105,22 @@ impl core::fmt::Debug for SceneHash {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("SceneHash([REDACTED])")
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GeometryHash([u8; 32]);
+impl GeometryHash {
+    pub const fn new(value: [u8; 32]) -> Self { Self(value) }
+    pub const fn digest(&self) -> &[u8; 32] { &self.0 }
+    pub const fn into_digest(self) -> [u8; 32] { self.0 }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TileContentHash([u8; 32]);
+impl TileContentHash {
+    pub const fn new(value: [u8; 32]) -> Self { Self(value) }
+    pub const fn digest(&self) -> &[u8; 32] { &self.0 }
+    pub const fn into_digest(self) -> [u8; 32] { self.0 }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -716,6 +733,13 @@ pub struct CapabilityDecision {
     pub contributors: Vec<CapabilityContributor>,
     pub contributors_total: u32,
     pub contributors_completeness: CollectionCompleteness,
+    pub locations_total: u32,
+    pub locations_completeness: CollectionCompleteness,
+    pub evaluated_requirements: u32,
+    pub evaluated_dependencies: u32,
+    pub evaluated_parameters: u32,
+    pub evaluated_commands: u32,
+    pub evaluated_resources: u32,
     pub scope: CapabilityScope,
     pub location: Option<CapabilityLocation>,
     pub rejection_code: Option<u32>,
@@ -736,6 +760,13 @@ impl core::fmt::Debug for CapabilityDecision {
         output.field("contributors", &self.contributors);
         output.field("contributors_total", &self.contributors_total);
         output.field("contributors_completeness", &self.contributors_completeness);
+        output.field("locations_total", &self.locations_total);
+        output.field("locations_completeness", &self.locations_completeness);
+        output.field("evaluated_requirements", &self.evaluated_requirements);
+        output.field("evaluated_dependencies", &self.evaluated_dependencies);
+        output.field("evaluated_parameters", &self.evaluated_parameters);
+        output.field("evaluated_commands", &self.evaluated_commands);
+        output.field("evaluated_resources", &self.evaluated_resources);
         output.field("scope", &self.scope);
         output.field("location", &"[REDACTED]");
         output.field("rejection_code", &self.rejection_code);
@@ -979,31 +1010,53 @@ pub struct PageMetricsEvent {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct RenderPlanManifest {
+    pub plan_schema_version: u16,
     pub document_revision: u64,
     pub render_config: RenderConfigHash,
     pub renderer_epoch: RendererEpoch,
     pub plan_id: RenderPlanId,
+    pub generation: u64,
     pub scene_hash: SceneHash,
     pub decision_hash: CapabilityDecisionHash,
+    pub geometry_hash: GeometryHash,
+    pub viewport_clip: SurfaceRegion,
+    pub zoom_numerator: u32,
+    pub zoom_denominator: u32,
+    pub device_scale_milli: u32,
+    pub rotation: PageRotation,
+    pub optional_content: u64,
+    pub annotation_revision: u64,
     pub backend: NativeBackend,
     pub output_profile: OutputProfile,
     pub quality: QualityPolicy,
     pub regions: Vec<SurfaceRegion>,
+    pub tile_content_hashes: Vec<TileContentHash>,
 }
 
 impl core::fmt::Debug for RenderPlanManifest {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut output = formatter.debug_struct("RenderPlanManifest");
+        output.field("plan_schema_version", &self.plan_schema_version);
         output.field("document_revision", &self.document_revision);
         output.field("render_config", &self.render_config);
         output.field("renderer_epoch", &self.renderer_epoch);
         output.field("plan_id", &self.plan_id);
+        output.field("generation", &self.generation);
         output.field("scene_hash", &"[REDACTED]");
         output.field("decision_hash", &"[REDACTED]");
+        output.field("geometry_hash", &self.geometry_hash);
+        output.field("viewport_clip", &self.viewport_clip);
+        output.field("zoom_numerator", &self.zoom_numerator);
+        output.field("zoom_denominator", &self.zoom_denominator);
+        output.field("device_scale_milli", &self.device_scale_milli);
+        output.field("rotation", &self.rotation);
+        output.field("optional_content", &self.optional_content);
+        output.field("annotation_revision", &self.annotation_revision);
         output.field("backend", &self.backend);
         output.field("output_profile", &self.output_profile);
         output.field("quality", &self.quality);
         output.field("regions", &self.regions);
+        output.field("tile_content_hashes", &self.tile_content_hashes);
         output.finish()
     }
 }
@@ -1428,6 +1481,13 @@ pub const TYPE_FIELD_DESCRIPTORS: &[TypeFieldDescriptor] = &[
     TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "contributors", wire_type: "list<CapabilityContributor,32>", required: true, privacy: FieldPrivacy::Public, max_count: 32 },
     TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "contributors_total", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "contributors_completeness", wire_type: "CollectionCompleteness", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "locations_total", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "locations_completeness", wire_type: "CollectionCompleteness", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "evaluated_requirements", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "evaluated_dependencies", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "evaluated_parameters", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "evaluated_commands", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "evaluated_resources", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "scope", wire_type: "CapabilityScope", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
     TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "rejection_code", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
@@ -1495,16 +1555,27 @@ pub const TYPE_FIELD_DESCRIPTORS: &[TypeFieldDescriptor] = &[
     TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "start_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "total_pages", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "pages", wire_type: "list<PageMetric,64>", required: true, privacy: FieldPrivacy::Public, max_count: 64 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "plan_schema_version", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "generation", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "scene_hash", wire_type: "SceneHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "geometry_hash", wire_type: "GeometryHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "viewport_clip", wire_type: "SurfaceRegion", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "zoom_numerator", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "zoom_denominator", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "device_scale_milli", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "rotation", wire_type: "PageRotation", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "optional_content", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "annotation_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "backend", wire_type: "NativeBackend", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "output_profile", wire_type: "OutputProfile", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "quality", wire_type: "QualityPolicy", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "regions", wire_type: "list<SurfaceRegion,1024>", required: true, privacy: FieldPrivacy::Public, max_count: 1024 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "tile_content_hashes", wire_type: "list<TileContentHash,1024>", required: true, privacy: FieldPrivacy::Public, max_count: 1024 },
     TypeFieldDescriptor { owner: "GenerationPlannedEvent", variant: None, name: "manifest", wire_type: "RenderPlanManifest", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "GenerationPlannedEvent", variant: None, name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     TypeFieldDescriptor { owner: "GenerationCompletedEvent", variant: None, name: "status", wire_type: "GenerationCompletionStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
@@ -1699,7 +1770,7 @@ pub const EVENT_DESCRIPTORS: &[MessageDescriptor] = &[
     MessageDescriptor { kind: MessageKind::Event, name: "Ready", id: 101, payload: "ReadyEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 101, required_capability: 0, fields: READY_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "NeedData", id: 102, payload: "NeedDataEvent", state_precondition: "OpeningOrReady", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 344, required_capability: 0, fields: NEED_DATA_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state_precondition: "Opening", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 55, required_capability: 0, fields: DOCUMENT_READY_FIELDS, outcomes: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 6520, required_capability: 0, fields: CAPABILITY_REPORTED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 6545, required_capability: 0, fields: CAPABILITY_REPORTED_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 282, required_capability: 0, fields: SURFACE_READY_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0, fields: REQUEST_CANCELLED_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state_precondition: "Any", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0, fields: REQUEST_FAILED_FIELDS, outcomes: &[] },
@@ -1711,7 +1782,7 @@ pub const EVENT_DESCRIPTORS: &[MessageDescriptor] = &[
     MessageDescriptor { kind: MessageKind::Event, name: "EngineHello", id: 114, payload: "EngineHelloEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 62, required_capability: 0, fields: ENGINE_HELLO_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "DataFailed", id: 115, payload: "DataFailedEvent", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0, fields: DATA_FAILED_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "PageMetrics", id: 116, payload: "PageMetricsEvent", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 16384, maximum_encoded_payload_bytes: 4463, required_capability: 0, fields: PAGE_METRICS_FIELDS, outcomes: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "GenerationPlanned", id: 117, payload: "GenerationPlannedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 21687, required_capability: 0, fields: GENERATION_PLANNED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "GenerationPlanned", id: 117, payload: "GenerationPlannedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 54551, required_capability: 0, fields: GENERATION_PLANNED_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "GenerationCompleted", id: 118, payload: "GenerationCompletedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 48, required_capability: 0, fields: GENERATION_COMPLETED_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "CancelAcknowledged", id: 121, payload: "CancelAcknowledgedEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0, fields: CANCEL_ACKNOWLEDGED_FIELDS, outcomes: &[] },
     MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReleaseAcknowledged", id: 123, payload: "SurfaceReleaseAcknowledgedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0, fields: SURFACE_RELEASE_ACKNOWLEDGED_FIELDS, outcomes: &[] },
@@ -1736,6 +1807,11 @@ let contributors_accounted = match self.contributors_completeness {
 CollectionCompleteness::Complete => contributors_len == Some(self.contributors_total),
 CollectionCompleteness::Truncated => contributors_len.is_some_and(|len| len < self.contributors_total),
 };
+let locations_len = u32::from(self.location.is_some());
+let locations_accounted = match self.locations_completeness {
+CollectionCompleteness::Complete => locations_len == self.locations_total,
+CollectionCompleteness::Truncated => locations_len < self.locations_total,
+};
 let contributor_ids: std::collections::BTreeSet<u32> = self.contributors.iter().map(|value| value.id).collect();
 let requirement_ids: std::collections::BTreeSet<u32> = self.missing.iter().map(|value| value.id).collect();
 let bounded_and_canonical = self.missing.len() <= CAPABILITY_DECISION_MISSING_MAX_COUNT
@@ -1752,15 +1828,84 @@ let bounded_and_canonical = self.missing.len() <= CAPABILITY_DECISION_MISSING_MA
 && requirement.dependencies.iter().all(|id| *id != requirement.id && requirement_ids.contains(id))
 && requirement.contributor_ids.iter().all(|id| contributor_ids.contains(id)))
 && self.contributors.iter().all(|contributor| contributor.id != 0);
+let audited_counts_valid = self.missing_total <= self.evaluated_requirements
+&& self.evaluated_parameters == self.evaluated_requirements
+&& (self.location.is_none() || self.locations_total != 0);
 let status_valid = match self.status {
 SupportStatus::Supported => self.missing_total == 0
 && self.missing.is_empty()
+&& self.contributors_total == 0
+&& self.contributors.is_empty()
+&& self.locations_total == 0
+&& self.locations_completeness == CollectionCompleteness::Complete
 && self.location.is_none()
 && self.rejection_code.is_none(),
-SupportStatus::Unsupported => self.rejection_code.is_none(),
-SupportStatus::Rejected => self.rejection_code.is_some(),
+SupportStatus::Unsupported => self.locations_total == self.missing_total
+&& self.rejection_code.is_none(),
+SupportStatus::Rejected => self.missing_total == 0
+&& self.contributors_total == 1
+&& self.locations_total == 1
+&& self.rejection_code.is_some(),
 };
-missing_accounted && contributors_accounted && bounded_and_canonical && status_valid
+missing_accounted
+&& contributors_accounted
+&& locations_accounted
+&& bounded_and_canonical
+&& audited_counts_valid
+&& status_valid
+}
+}
+impl RenderPlanManifest {
+/// Checks complete viewport identity, canonical region ordering, and tile-hash accounting.
+pub fn wire_invariants_valid(&self) -> bool {
+let clip = &self.viewport_clip;
+let clip_left = i64::from(clip.x);
+let clip_top = i64::from(clip.y);
+let clip_right = clip_left + i64::from(clip.width);
+let clip_bottom = clip_top + i64::from(clip.height);
+let regions_valid = !self.regions.is_empty()
+&& self.regions.len() <= RENDER_PLAN_MANIFEST_REGIONS_MAX_COUNT
+&& self.regions.len() == self.tile_content_hashes.len()
+&& self.regions.windows(2).all(|pair| (pair[0].y, pair[0].x) < (pair[1].y, pair[1].x))
+&& self.regions.iter().all(|region| {
+let left = i64::from(region.x);
+let top = i64::from(region.y);
+let right = left + i64::from(region.width);
+let bottom = top + i64::from(region.height);
+region.page_index == clip.page_index
+&& region.coordinate_space == SurfaceCoordinateSpace::DevicePixelsTopLeft
+&& region.width != 0
+&& region.height != 0
+&& left >= clip_left
+&& top >= clip_top
+&& right <= clip_right
+&& bottom <= clip_bottom
+})
+&& self.tile_content_hashes.iter().all(|hash| hash.digest().iter().any(|byte| *byte != 0));
+let mut left = self.zoom_numerator;
+let mut right = self.zoom_denominator;
+while right != 0 {
+let remainder = left % right;
+left = right;
+right = remainder;
+}
+self.plan_schema_version != 0
+&& self.document_revision != 0
+&& self.renderer_epoch.value() != 0
+&& self.plan_id.value() != 0
+&& self.generation == self.plan_id.value()
+&& self.render_config.digest().iter().any(|byte| *byte != 0)
+&& self.scene_hash.digest().iter().any(|byte| *byte != 0)
+&& self.decision_hash.digest().iter().any(|byte| *byte != 0)
+&& self.geometry_hash.digest().iter().any(|byte| *byte != 0)
+&& clip.width != 0
+&& clip.height != 0
+&& clip.coordinate_space == SurfaceCoordinateSpace::DevicePixelsTopLeft
+&& self.zoom_numerator != 0
+&& self.zoom_denominator != 0
+&& left == 1
+&& self.device_scale_milli != 0
+&& regions_valid
 }
 }
 
@@ -1780,6 +1925,7 @@ pub enum PayloadCodecErrorCode {
     UnknownMessage = 7,
     InvalidValue = 8,
     SharedArrayBuffer = 9,
+    Interrupted = 10,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1827,14 +1973,37 @@ impl PayloadCodecLimits {
     }
 }
 
-struct PayloadWriter {
+/// Observer invoked before each bounded fragment is appended by the generated encoder.
+pub trait PayloadCodecObserver {
+    /// Returns `false` to interrupt encoding before the next fragment is appended.
+    fn observe(&mut self) -> bool;
+}
+
+struct PayloadWriter<'observer> {
     bytes: Vec<u8>,
     limits: PayloadCodecLimits,
     remaining_container_items: usize,
+    observer: Option<&'observer mut dyn PayloadCodecObserver>,
 }
 
-impl PayloadWriter {
+impl PayloadWriter<'static> {
     fn new(limits: PayloadCodecLimits) -> Result<Self, PayloadCodecError> {
+        Self::with_observer(limits, None)
+    }
+}
+
+impl<'observer> PayloadWriter<'observer> {
+    fn new_observed(
+        limits: PayloadCodecLimits,
+        observer: &'observer mut dyn PayloadCodecObserver,
+    ) -> Result<Self, PayloadCodecError> {
+        Self::with_observer(limits, Some(observer))
+    }
+
+    fn with_observer(
+        limits: PayloadCodecLimits,
+        observer: Option<&'observer mut dyn PayloadCodecObserver>,
+    ) -> Result<Self, PayloadCodecError> {
         if !limits.valid() {
             return Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0));
         }
@@ -1842,6 +2011,7 @@ impl PayloadWriter {
             bytes: Vec::new(),
             limits,
             remaining_container_items: limits.max_container_items,
+            observer,
         })
     }
 
@@ -1878,6 +2048,17 @@ impl PayloadWriter {
             return Err(PayloadCodecError::new(
                 PayloadCodecErrorCode::LimitExceeded,
                 self.offset(),
+            ));
+        }
+        let offset = self.offset();
+        if self
+            .observer
+            .as_deref_mut()
+            .is_some_and(|observer| !observer.observe())
+        {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::Interrupted,
+                offset,
             ));
         }
         self.bytes.extend_from_slice(bytes);
@@ -2080,7 +2261,7 @@ impl<'a> PayloadReader<'a> {
 }
 const _: () = { assert!(MAX_MESSAGE_BYTES == 16777216); };
 
-fn payload_encode_worker_id_into(value: &WorkerId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_worker_id_into(value: &WorkerId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2105,7 +2286,7 @@ pub fn decode_worker_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Res
     Ok(value)
 }
 
-fn payload_encode_session_id_into(value: &SessionId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_session_id_into(value: &SessionId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2130,7 +2311,7 @@ pub fn decode_session_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Re
     Ok(value)
 }
 
-fn payload_encode_request_id_into(value: &RequestId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_request_id_into(value: &RequestId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2155,7 +2336,7 @@ pub fn decode_request_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Re
     Ok(value)
 }
 
-fn payload_encode_data_ticket_into(value: &DataTicket, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_data_ticket_into(value: &DataTicket, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2180,7 +2361,7 @@ pub fn decode_data_ticket_payload(input: &[u8], limits: PayloadCodecLimits) -> R
     Ok(value)
 }
 
-fn payload_encode_surface_id_into(value: &SurfaceId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_id_into(value: &SurfaceId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2205,7 +2386,7 @@ pub fn decode_surface_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Re
     Ok(value)
 }
 
-fn payload_encode_memory_epoch_into(value: &MemoryEpoch, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_memory_epoch_into(value: &MemoryEpoch, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2230,7 +2411,7 @@ pub fn decode_memory_epoch_payload(input: &[u8], limits: PayloadCodecLimits) -> 
     Ok(value)
 }
 
-fn payload_encode_renderer_epoch_into(value: &RendererEpoch, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_renderer_epoch_into(value: &RendererEpoch, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2255,7 +2436,7 @@ pub fn decode_renderer_epoch_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_render_config_hash_into(value: &RenderConfigHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_render_config_hash_into(value: &RenderConfigHash, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(value.digest())?;
     Ok(())
@@ -2279,7 +2460,7 @@ pub fn decode_render_config_hash_payload(input: &[u8], limits: PayloadCodecLimit
     Ok(value)
 }
 
-fn payload_encode_scene_hash_into(value: &SceneHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_scene_hash_into(value: &SceneHash, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(value.digest())?;
     Ok(())
@@ -2303,7 +2484,55 @@ pub fn decode_scene_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Re
     Ok(value)
 }
 
-fn payload_encode_render_plan_id_into(value: &RenderPlanId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_geometry_hash_into(value: &GeometryHash, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(value.digest())?;
+    Ok(())
+}
+
+fn payload_decode_geometry_hash_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<GeometryHash, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(GeometryHash::new(reader.read_fixed_32()?))
+}
+
+pub fn encode_geometry_hash_payload(value: &GeometryHash, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_geometry_hash_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_geometry_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<GeometryHash, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_geometry_hash_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_tile_content_hash_into(value: &TileContentHash, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(value.digest())?;
+    Ok(())
+}
+
+fn payload_decode_tile_content_hash_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<TileContentHash, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(TileContentHash::new(reader.read_fixed_32()?))
+}
+
+pub fn encode_tile_content_hash_payload(value: &TileContentHash, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_tile_content_hash_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_tile_content_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<TileContentHash, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_tile_content_hash_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_render_plan_id_into(value: &RenderPlanId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2328,7 +2557,7 @@ pub fn decode_render_plan_id_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_render_plan_hash_into(value: &RenderPlanHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_render_plan_hash_into(value: &RenderPlanHash, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(value.digest())?;
     Ok(())
@@ -2352,7 +2581,7 @@ pub fn decode_render_plan_hash_payload(input: &[u8], limits: PayloadCodecLimits)
     Ok(value)
 }
 
-fn payload_encode_capability_decision_hash_into(value: &CapabilityDecisionHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_decision_hash_into(value: &CapabilityDecisionHash, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(value.digest())?;
     Ok(())
@@ -2376,7 +2605,7 @@ pub fn decode_capability_decision_hash_payload(input: &[u8], limits: PayloadCode
     Ok(value)
 }
 
-fn payload_encode_diagnostic_id_into(value: &DiagnosticId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_diagnostic_id_into(value: &DiagnosticId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     let primitive = value.value();
     writer.write(&(*(&primitive)).to_le_bytes())?;
@@ -2401,7 +2630,7 @@ pub fn decode_diagnostic_id_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_endpoint_role_into(value: &EndpointRole, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_endpoint_role_into(value: &EndpointRole, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         EndpointRole::Host => writer.write(&[1]),
@@ -2433,7 +2662,7 @@ pub fn decode_endpoint_role_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_endpoint_capability_into(value: &EndpointCapability, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_endpoint_capability_into(value: &EndpointCapability, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         EndpointCapability::TransferableArrayBuffer => writer.write(&(1_u64).to_le_bytes()),
@@ -2471,7 +2700,7 @@ pub fn decode_endpoint_capability_payload(input: &[u8], limits: PayloadCodecLimi
     Ok(value)
 }
 
-fn payload_encode_engine_execution_capability_into(value: &EngineExecutionCapability, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_engine_execution_capability_into(value: &EngineExecutionCapability, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         EngineExecutionCapability::OffscreenCanvasStaging => writer.write(&(1_u64).to_le_bytes()),
@@ -2501,7 +2730,7 @@ pub fn decode_engine_execution_capability_payload(input: &[u8], limits: PayloadC
     Ok(value)
 }
 
-fn payload_encode_capability_profile_id_into(value: &CapabilityProfileId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_profile_id_into(value: &CapabilityProfileId, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         CapabilityProfileId::BaselineNative => writer.write(&(1_u32).to_le_bytes()),
@@ -2531,7 +2760,7 @@ pub fn decode_capability_profile_id_payload(input: &[u8], limits: PayloadCodecLi
     Ok(value)
 }
 
-fn payload_encode_output_profile_into(value: &OutputProfile, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_output_profile_into(value: &OutputProfile, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         OutputProfile::Srgb => writer.write(&(1_u16).to_le_bytes()),
@@ -2561,7 +2790,7 @@ pub fn decode_output_profile_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_pixel_format_into(value: &PixelFormat, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_pixel_format_into(value: &PixelFormat, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         PixelFormat::Rgba8 => writer.write(&[1]),
@@ -2591,7 +2820,7 @@ pub fn decode_pixel_format_payload(input: &[u8], limits: PayloadCodecLimits) -> 
     Ok(value)
 }
 
-fn payload_encode_alpha_mode_into(value: &AlphaMode, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_alpha_mode_into(value: &AlphaMode, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         AlphaMode::Straight => writer.write(&[1]),
@@ -2623,7 +2852,7 @@ pub fn decode_alpha_mode_payload(input: &[u8], limits: PayloadCodecLimits) -> Re
     Ok(value)
 }
 
-fn payload_encode_source_failure_code_into(value: &SourceFailureCode, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_source_failure_code_into(value: &SourceFailureCode, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         SourceFailureCode::SourceChanged => writer.write(&[1]),
@@ -2665,7 +2894,7 @@ pub fn decode_source_failure_code_payload(input: &[u8], limits: PayloadCodecLimi
     Ok(value)
 }
 
-fn payload_encode_generation_completion_status_into(value: &GenerationCompletionStatus, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_generation_completion_status_into(value: &GenerationCompletionStatus, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         GenerationCompletionStatus::Completed => writer.write(&[1]),
@@ -2701,7 +2930,7 @@ pub fn decode_generation_completion_status_payload(input: &[u8], limits: Payload
     Ok(value)
 }
 
-fn payload_encode_operation_ack_status_into(value: &OperationAckStatus, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_operation_ack_status_into(value: &OperationAckStatus, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         OperationAckStatus::Applied => writer.write(&[1]),
@@ -2737,7 +2966,7 @@ pub fn decode_operation_ack_status_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_quality_policy_into(value: &QualityPolicy, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_quality_policy_into(value: &QualityPolicy, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         QualityPolicy::Preview => writer.write(&[1]),
@@ -2769,7 +2998,7 @@ pub fn decode_quality_policy_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_data_priority_into(value: &DataPriority, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_data_priority_into(value: &DataPriority, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         DataPriority::BackgroundPrefetch => writer.write(&[1]),
@@ -2807,7 +3036,7 @@ pub fn decode_data_priority_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_data_attachment_role_into(value: &DataAttachmentRole, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_data_attachment_role_into(value: &DataAttachmentRole, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         DataAttachmentRole::ImmutableRangeBytes => writer.write(&[1]),
@@ -2837,7 +3066,7 @@ pub fn decode_data_attachment_role_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_page_rotation_into(value: &PageRotation, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_page_rotation_into(value: &PageRotation, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         PageRotation::Degrees0 => writer.write(&[1]),
@@ -2873,7 +3102,7 @@ pub fn decode_page_rotation_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_page_coordinate_space_into(value: &PageCoordinateSpace, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_page_coordinate_space_into(value: &PageCoordinateSpace, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         PageCoordinateSpace::PdfPointsBottomLeft => writer.write(&[1]),
@@ -2903,7 +3132,7 @@ pub fn decode_page_coordinate_space_payload(input: &[u8], limits: PayloadCodecLi
     Ok(value)
 }
 
-fn payload_encode_surface_coordinate_space_into(value: &SurfaceCoordinateSpace, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_coordinate_space_into(value: &SurfaceCoordinateSpace, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         SurfaceCoordinateSpace::DevicePixelsTopLeft => writer.write(&[1]),
@@ -2933,7 +3162,7 @@ pub fn decode_surface_coordinate_space_payload(input: &[u8], limits: PayloadCode
     Ok(value)
 }
 
-fn payload_encode_surface_reclaim_reason_into(value: &SurfaceReclaimReason, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_reclaim_reason_into(value: &SurfaceReclaimReason, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         SurfaceReclaimReason::ReleasedByHost => writer.write(&[1]),
@@ -2971,7 +3200,7 @@ pub fn decode_surface_reclaim_reason_payload(input: &[u8], limits: PayloadCodecL
     Ok(value)
 }
 
-fn payload_encode_support_status_into(value: &SupportStatus, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_support_status_into(value: &SupportStatus, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         SupportStatus::Supported => writer.write(&[1]),
@@ -3005,7 +3234,7 @@ pub fn decode_support_status_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_collection_completeness_into(value: &CollectionCompleteness, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_collection_completeness_into(value: &CollectionCompleteness, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         CollectionCompleteness::Complete => writer.write(&[1]),
@@ -3037,7 +3266,7 @@ pub fn decode_collection_completeness_payload(input: &[u8], limits: PayloadCodec
     Ok(value)
 }
 
-fn payload_encode_native_backend_into(value: &NativeBackend, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_native_backend_into(value: &NativeBackend, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         NativeBackend::ReferenceCpu => writer.write(&[1]),
@@ -3069,7 +3298,7 @@ pub fn decode_native_backend_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_capability_contributor_kind_into(value: &CapabilityContributorKind, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_contributor_kind_into(value: &CapabilityContributorKind, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         CapabilityContributorKind::Scene => writer.write(&[1]),
@@ -3105,7 +3334,7 @@ pub fn decode_capability_contributor_kind_payload(input: &[u8], limits: PayloadC
     Ok(value)
 }
 
-fn payload_encode_capability_scope_kind_into(value: &CapabilityScopeKind, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_scope_kind_into(value: &CapabilityScopeKind, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         CapabilityScopeKind::Worker => writer.write(&[1]),
@@ -3143,7 +3372,7 @@ pub fn decode_capability_scope_kind_payload(input: &[u8], limits: PayloadCodecLi
     Ok(value)
 }
 
-fn payload_encode_error_category_into(value: &ErrorCategory, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_error_category_into(value: &ErrorCategory, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         ErrorCategory::Protocol => writer.write(&[1]),
@@ -3185,7 +3414,7 @@ pub fn decode_error_category_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_error_severity_into(value: &ErrorSeverity, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_error_severity_into(value: &ErrorSeverity, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         ErrorSeverity::Info => writer.write(&[1]),
@@ -3219,7 +3448,7 @@ pub fn decode_error_severity_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_error_recoverability_into(value: &ErrorRecoverability, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_error_recoverability_into(value: &ErrorRecoverability, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         ErrorRecoverability::None => writer.write(&[1]),
@@ -3257,7 +3486,7 @@ pub fn decode_error_recoverability_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_engine_error_code_into(value: &EngineErrorCode, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_engine_error_code_into(value: &EngineErrorCode, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         EngineErrorCode::InvalidDocument => writer.write(&(1_u32).to_le_bytes()),
@@ -3307,7 +3536,7 @@ pub fn decode_engine_error_code_payload(input: &[u8], limits: PayloadCodecLimits
     Ok(value)
 }
 
-fn payload_encode_protocol_hello_into(value: &ProtocolHello, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_protocol_hello_into(value: &ProtocolHello, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.major)).to_le_bytes())?;
     writer.write(&(*(&value.minor)).to_le_bytes())?;
@@ -3345,7 +3574,7 @@ pub fn decode_protocol_hello_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_endpoint_capabilities_into(value: &EndpointCapabilities, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_endpoint_capabilities_into(value: &EndpointCapabilities, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.supported)).to_le_bytes())?;
     writer.write(&(*(&value.mandatory)).to_le_bytes())?;
@@ -3373,7 +3602,7 @@ pub fn decode_endpoint_capabilities_payload(input: &[u8], limits: PayloadCodecLi
     Ok(value)
 }
 
-fn payload_encode_engine_execution_capabilities_into(value: &EngineExecutionCapabilities, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_engine_execution_capabilities_into(value: &EngineExecutionCapabilities, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.supported)).to_le_bytes())?;
     Ok(())
@@ -3399,7 +3628,7 @@ pub fn decode_engine_execution_capabilities_payload(input: &[u8], limits: Payloa
     Ok(value)
 }
 
-fn payload_encode_envelope_header_into(value: &EnvelopeHeader, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_envelope_header_into(value: &EnvelopeHeader, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.major)).to_le_bytes())?;
     writer.write(&(*(&value.minor)).to_le_bytes())?;
@@ -3435,7 +3664,7 @@ pub fn decode_envelope_header_payload(input: &[u8], limits: PayloadCodecLimits) 
     Ok(value)
 }
 
-fn payload_encode_correlation_into(value: &Correlation, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_correlation_into(value: &Correlation, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
     match &value.session {
@@ -3485,7 +3714,7 @@ pub fn decode_correlation_payload(input: &[u8], limits: PayloadCodecLimits) -> R
     Ok(value)
 }
 
-fn payload_encode_source_identity_into(value: &SourceIdentity, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_source_identity_into(value: &SourceIdentity, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&value.stable_id)?;
     writer.write(&(*(&value.revision)).to_le_bytes())?;
@@ -3513,7 +3742,7 @@ pub fn decode_source_identity_payload(input: &[u8], limits: PayloadCodecLimits) 
     Ok(value)
 }
 
-fn payload_encode_source_descriptor_into(value: &SourceDescriptor, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_source_descriptor_into(value: &SourceDescriptor, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_source_identity_into(&value.identity, depth + 1, writer)?;
     match &value.length {
@@ -3549,7 +3778,7 @@ pub fn decode_source_descriptor_payload(input: &[u8], limits: PayloadCodecLimits
     Ok(value)
 }
 
-fn payload_encode_byte_range_into(value: &ByteRange, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_byte_range_into(value: &ByteRange, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.start)).to_le_bytes())?;
     writer.write(&(*(&value.len)).to_le_bytes())?;
@@ -3577,7 +3806,7 @@ pub fn decode_byte_range_payload(input: &[u8], limits: PayloadCodecLimits) -> Re
     Ok(value)
 }
 
-fn payload_encode_data_segment_into(value: &DataSegment, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_data_segment_into(value: &DataSegment, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_byte_range_into(&value.range, depth + 1, writer)?;
     writer.write(&(*(&value.slot)).to_le_bytes())?;
@@ -3609,7 +3838,7 @@ pub fn decode_data_segment_payload(input: &[u8], limits: PayloadCodecLimits) -> 
     Ok(value)
 }
 
-fn payload_encode_page_geometry_into(value: &PageGeometry, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_page_geometry_into(value: &PageGeometry, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&value.identity)?;
     writer.write(&(*(&value.media_box_x_milli_points)).to_le_bytes())?;
@@ -3653,7 +3882,7 @@ pub fn decode_page_geometry_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_page_viewport_into(value: &PageViewport, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_page_viewport_into(value: &PageViewport, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.page_index)).to_le_bytes())?;
     payload_encode_page_coordinate_space_into(&value.coordinate_space, depth + 1, writer)?;
@@ -3691,7 +3920,7 @@ pub fn decode_page_viewport_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_viewport_request_into(value: &ViewportRequest, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_viewport_request_into(value: &ViewportRequest, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.generation)).to_le_bytes())?;
     writer.write(&(*(&value.document_revision)).to_le_bytes())?;
@@ -3742,7 +3971,7 @@ pub fn decode_viewport_request_payload(input: &[u8], limits: PayloadCodecLimits)
     Ok(value)
 }
 
-fn payload_encode_surface_owner_into(value: &SurfaceOwner, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_owner_into(value: &SurfaceOwner, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
     payload_encode_session_id_into(&value.session, depth + 1, writer)?;
@@ -3770,7 +3999,7 @@ pub fn decode_surface_owner_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_surface_region_into(value: &SurfaceRegion, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_region_into(value: &SurfaceRegion, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.page_index)).to_le_bytes())?;
     writer.write(&(*(&value.x)).to_le_bytes())?;
@@ -3806,7 +4035,7 @@ pub fn decode_surface_region_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_surface_metadata_into(value: &SurfaceMetadata, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_metadata_into(value: &SurfaceMetadata, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_surface_id_into(&value.id, depth + 1, writer)?;
     writer.write(&(*(&value.lease_token)).to_le_bytes())?;
@@ -3868,7 +4097,7 @@ pub fn decode_surface_metadata_payload(input: &[u8], limits: PayloadCodecLimits)
     Ok(value)
 }
 
-fn payload_encode_capability_location_into(value: &CapabilityLocation, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_location_into(value: &CapabilityLocation, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match &value.page_index {
         Some(payload_value) => {
@@ -3940,7 +4169,7 @@ pub fn decode_capability_location_payload(input: &[u8], limits: PayloadCodecLimi
     Ok(value)
 }
 
-fn payload_encode_capability_scope_into(value: &CapabilityScope, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_scope_into(value: &CapabilityScope, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_capability_scope_kind_into(&value.kind, depth + 1, writer)?;
     match &value.page {
@@ -3990,7 +4219,7 @@ pub fn decode_capability_scope_payload(input: &[u8], limits: PayloadCodecLimits)
     Ok(value)
 }
 
-fn payload_encode_capability_contributor_into(value: &CapabilityContributor, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_contributor_into(value: &CapabilityContributor, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.id)).to_le_bytes())?;
     payload_encode_capability_contributor_kind_into(&value.kind, depth + 1, writer)?;
@@ -4028,7 +4257,7 @@ pub fn decode_capability_contributor_payload(input: &[u8], limits: PayloadCodecL
     Ok(value)
 }
 
-fn payload_encode_capability_context_into(value: &CapabilityContext, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_context_into(value: &CapabilityContext, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.code)).to_le_bytes())?;
     writer.write(&(*(&value.value)).to_le_bytes())?;
@@ -4064,7 +4293,7 @@ pub fn decode_capability_context_payload(input: &[u8], limits: PayloadCodecLimit
     Ok(value)
 }
 
-fn payload_encode_capability_requirement_into(value: &CapabilityRequirement, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_requirement_into(value: &CapabilityRequirement, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.id)).to_le_bytes())?;
     writer.write(&(*(&value.capability)).to_le_bytes())?;
@@ -4120,7 +4349,7 @@ pub fn decode_capability_requirement_payload(input: &[u8], limits: PayloadCodecL
     Ok(value)
 }
 
-fn payload_encode_capability_subject_into(value: &CapabilitySubject, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_subject_into(value: &CapabilitySubject, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_source_identity_into(&value.source, depth + 1, writer)?;
     writer.write(&(*(&value.document_revision)).to_le_bytes())?;
@@ -4162,7 +4391,7 @@ pub fn decode_capability_subject_payload(input: &[u8], limits: PayloadCodecLimit
     Ok(value)
 }
 
-fn payload_encode_capability_decision_into(value: &CapabilityDecision, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_decision_into(value: &CapabilityDecision, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.decision_schema_version)).to_le_bytes())?;
     payload_encode_support_status_into(&value.status, depth + 1, writer)?;
@@ -4186,6 +4415,13 @@ fn payload_encode_capability_decision_into(value: &CapabilityDecision, depth: us
     }
     writer.write(&(*(&value.contributors_total)).to_le_bytes())?;
     payload_encode_collection_completeness_into(&value.contributors_completeness, depth + 1, writer)?;
+    writer.write(&(*(&value.locations_total)).to_le_bytes())?;
+    payload_encode_collection_completeness_into(&value.locations_completeness, depth + 1, writer)?;
+    writer.write(&(*(&value.evaluated_requirements)).to_le_bytes())?;
+    writer.write(&(*(&value.evaluated_dependencies)).to_le_bytes())?;
+    writer.write(&(*(&value.evaluated_parameters)).to_le_bytes())?;
+    writer.write(&(*(&value.evaluated_commands)).to_le_bytes())?;
+    writer.write(&(*(&value.evaluated_resources)).to_le_bytes())?;
     payload_encode_capability_scope_into(&value.scope, depth + 1, writer)?;
     match &value.location {
         Some(payload_value) => {
@@ -4219,6 +4455,13 @@ fn payload_decode_capability_decision_from(depth: usize, reader: &mut PayloadRea
         contributors: { let payload_count = reader.read_count(32, 10)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_capability_contributor_from(depth + 1 + 1, reader)?); } payload_values },
         contributors_total: reader.read_u32()?,
         contributors_completeness: payload_decode_collection_completeness_from(depth + 1, reader)?,
+        locations_total: reader.read_u32()?,
+        locations_completeness: payload_decode_collection_completeness_from(depth + 1, reader)?,
+        evaluated_requirements: reader.read_u32()?,
+        evaluated_dependencies: reader.read_u32()?,
+        evaluated_parameters: reader.read_u32()?,
+        evaluated_commands: reader.read_u32()?,
+        evaluated_resources: reader.read_u32()?,
         scope: payload_decode_capability_scope_from(depth + 1, reader)?,
         location: if reader.read_optional()? { Some(payload_decode_capability_location_from(depth + 1 + 1, reader)?) } else { None },
         rejection_code: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
@@ -4238,7 +4481,7 @@ pub fn decode_capability_decision_payload(input: &[u8], limits: PayloadCodecLimi
     Ok(value)
 }
 
-fn payload_encode_engine_error_into(value: &EngineError, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_engine_error_into(value: &EngineError, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_engine_error_code_into(&value.code, depth + 1, writer)?;
     payload_encode_error_category_into(&value.category, depth + 1, writer)?;
@@ -4272,7 +4515,7 @@ pub fn decode_engine_error_payload(input: &[u8], limits: PayloadCodecLimits) -> 
     Ok(value)
 }
 
-fn payload_encode_hello_command_into(value: &HelloCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_hello_command_into(value: &HelloCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_protocol_hello_into(&value.hello, depth + 1, writer)?;
     Ok(())
@@ -4298,7 +4541,7 @@ pub fn decode_hello_command_payload(input: &[u8], limits: PayloadCodecLimits) ->
     Ok(value)
 }
 
-fn payload_encode_hello_accept_command_into(value: &HelloAcceptCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_hello_accept_command_into(value: &HelloAcceptCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.negotiated_minor)).to_le_bytes())?;
     writer.write(&value.schema_hash)?;
@@ -4326,7 +4569,7 @@ pub fn decode_hello_accept_command_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_open_command_into(value: &OpenCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_open_command_into(value: &OpenCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_source_descriptor_into(&value.source, depth + 1, writer)?;
     Ok(())
@@ -4352,7 +4595,7 @@ pub fn decode_open_command_payload(input: &[u8], limits: PayloadCodecLimits) -> 
     Ok(value)
 }
 
-fn payload_encode_provide_data_command_into(value: &ProvideDataCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_provide_data_command_into(value: &ProvideDataCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
     payload_encode_source_identity_into(&value.source, depth + 1, writer)?;
@@ -4387,7 +4630,7 @@ pub fn decode_provide_data_command_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_fail_data_command_into(value: &FailDataCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_fail_data_command_into(value: &FailDataCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
     payload_encode_source_identity_into(&value.expected, depth + 1, writer)?;
@@ -4427,7 +4670,7 @@ pub fn decode_fail_data_command_payload(input: &[u8], limits: PayloadCodecLimits
     Ok(value)
 }
 
-fn payload_encode_set_viewport_command_into(value: &SetViewportCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_set_viewport_command_into(value: &SetViewportCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_viewport_request_into(&value.viewport, depth + 1, writer)?;
     Ok(())
@@ -4453,7 +4696,7 @@ pub fn decode_set_viewport_command_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_cancel_command_into(value: &CancelCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_cancel_command_into(value: &CancelCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_request_id_into(&value.target, depth + 1, writer)?;
     Ok(())
@@ -4479,7 +4722,7 @@ pub fn decode_cancel_command_payload(input: &[u8], limits: PayloadCodecLimits) -
     Ok(value)
 }
 
-fn payload_encode_release_surface_command_into(value: &ReleaseSurfaceCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_release_surface_command_into(value: &ReleaseSurfaceCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_surface_id_into(&value.surface, depth + 1, writer)?;
     writer.write(&(*(&value.lease_token)).to_le_bytes())?;
@@ -4507,7 +4750,7 @@ pub fn decode_release_surface_command_payload(input: &[u8], limits: PayloadCodec
     Ok(value)
 }
 
-fn payload_encode_close_session_command_into(_value: &CloseSessionCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_close_session_command_into(_value: &CloseSessionCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     Ok(())
 }
@@ -4531,7 +4774,7 @@ pub fn decode_close_session_command_payload(input: &[u8], limits: PayloadCodecLi
     Ok(value)
 }
 
-fn payload_encode_shutdown_command_into(value: &ShutdownCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_shutdown_command_into(value: &ShutdownCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.deadline_ms)).to_le_bytes())?;
     Ok(())
@@ -4557,7 +4800,7 @@ pub fn decode_shutdown_command_payload(input: &[u8], limits: PayloadCodecLimits)
     Ok(value)
 }
 
-fn payload_encode_get_page_metrics_command_into(value: &GetPageMetricsCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_get_page_metrics_command_into(value: &GetPageMetricsCommand, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.document_revision)).to_le_bytes())?;
     writer.write(&(*(&value.start_index)).to_le_bytes())?;
@@ -4587,7 +4830,7 @@ pub fn decode_get_page_metrics_command_payload(input: &[u8], limits: PayloadCode
     Ok(value)
 }
 
-fn payload_encode_engine_hello_event_into(value: &EngineHelloEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_engine_hello_event_into(value: &EngineHelloEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_protocol_hello_into(&value.hello, depth + 1, writer)?;
     payload_encode_engine_execution_capabilities_into(&value.execution_capabilities, depth + 1, writer)?;
@@ -4615,7 +4858,7 @@ pub fn decode_engine_hello_event_payload(input: &[u8], limits: PayloadCodecLimit
     Ok(value)
 }
 
-fn payload_encode_ready_event_into(value: &ReadyEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_ready_event_into(value: &ReadyEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
     writer.write(&(*(&value.negotiated_minor)).to_le_bytes())?;
@@ -4661,7 +4904,7 @@ pub fn decode_ready_event_payload(input: &[u8], limits: PayloadCodecLimits) -> R
     Ok(value)
 }
 
-fn payload_encode_need_data_event_into(value: &NeedDataEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_need_data_event_into(value: &NeedDataEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
     payload_encode_source_identity_into(&value.source, depth + 1, writer)?;
@@ -4700,7 +4943,7 @@ pub fn decode_need_data_event_payload(input: &[u8], limits: PayloadCodecLimits) 
     Ok(value)
 }
 
-fn payload_encode_document_ready_event_into(value: &DocumentReadyEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_document_ready_event_into(value: &DocumentReadyEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_session_id_into(&value.session, depth + 1, writer)?;
     writer.write(&(*(&value.document_revision)).to_le_bytes())?;
@@ -4734,7 +4977,7 @@ pub fn decode_document_ready_event_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_capability_reported_event_into(value: &CapabilityReportedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_capability_reported_event_into(value: &CapabilityReportedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_capability_decision_into(&value.decision, depth + 1, writer)?;
     payload_encode_capability_decision_hash_into(&value.decision_hash, depth + 1, writer)?;
@@ -4762,7 +5005,7 @@ pub fn decode_capability_reported_event_payload(input: &[u8], limits: PayloadCod
     Ok(value)
 }
 
-fn payload_encode_surface_ready_event_into(value: &SurfaceReadyEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_ready_event_into(value: &SurfaceReadyEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_surface_metadata_into(&value.metadata, depth + 1, writer)?;
     payload_encode_surface_transport_into(&value.transport, depth + 1, writer)?;
@@ -4790,7 +5033,7 @@ pub fn decode_surface_ready_event_payload(input: &[u8], limits: PayloadCodecLimi
     Ok(value)
 }
 
-fn payload_encode_surface_reclaimed_event_into(value: &SurfaceReclaimedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_reclaimed_event_into(value: &SurfaceReclaimedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_surface_id_into(&value.surface, depth + 1, writer)?;
     writer.write(&(*(&value.lease_token)).to_le_bytes())?;
@@ -4820,7 +5063,7 @@ pub fn decode_surface_reclaimed_event_payload(input: &[u8], limits: PayloadCodec
     Ok(value)
 }
 
-fn payload_encode_request_cancelled_event_into(value: &RequestCancelledEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_request_cancelled_event_into(value: &RequestCancelledEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_request_id_into(&value.target, depth + 1, writer)?;
     Ok(())
@@ -4846,7 +5089,7 @@ pub fn decode_request_cancelled_event_payload(input: &[u8], limits: PayloadCodec
     Ok(value)
 }
 
-fn payload_encode_request_failed_event_into(value: &RequestFailedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_request_failed_event_into(value: &RequestFailedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
     Ok(())
@@ -4872,7 +5115,7 @@ pub fn decode_request_failed_event_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_session_closed_event_into(value: &SessionClosedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_session_closed_event_into(value: &SessionClosedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_session_id_into(&value.session, depth + 1, writer)?;
     Ok(())
@@ -4898,7 +5141,7 @@ pub fn decode_session_closed_event_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_worker_stopped_event_into(value: &WorkerStoppedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_worker_stopped_event_into(value: &WorkerStoppedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
     Ok(())
@@ -4924,7 +5167,7 @@ pub fn decode_worker_stopped_event_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_worker_fault_event_into(value: &WorkerFaultEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_worker_fault_event_into(value: &WorkerFaultEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
     Ok(())
@@ -4950,7 +5193,7 @@ pub fn decode_worker_fault_event_payload(input: &[u8], limits: PayloadCodecLimit
     Ok(value)
 }
 
-fn payload_encode_protocol_fault_event_into(value: &ProtocolFaultEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_protocol_fault_event_into(value: &ProtocolFaultEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
     Ok(())
@@ -4976,7 +5219,7 @@ pub fn decode_protocol_fault_event_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_data_failed_event_into(value: &DataFailedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_data_failed_event_into(value: &DataFailedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
     payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
@@ -5004,7 +5247,7 @@ pub fn decode_data_failed_event_payload(input: &[u8], limits: PayloadCodecLimits
     Ok(value)
 }
 
-fn payload_encode_page_metric_into(value: &PageMetric, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_page_metric_into(value: &PageMetric, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.page_index)).to_le_bytes())?;
     payload_encode_page_geometry_into(&value.geometry, depth + 1, writer)?;
@@ -5032,7 +5275,7 @@ pub fn decode_page_metric_payload(input: &[u8], limits: PayloadCodecLimits) -> R
     Ok(value)
 }
 
-fn payload_encode_page_metrics_event_into(value: &PageMetricsEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_page_metrics_event_into(value: &PageMetricsEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     writer.write(&(*(&value.document_revision)).to_le_bytes())?;
     writer.write(&(*(&value.start_index)).to_le_bytes())?;
@@ -5069,14 +5312,24 @@ pub fn decode_page_metrics_event_payload(input: &[u8], limits: PayloadCodecLimit
     Ok(value)
 }
 
-fn payload_encode_render_plan_manifest_into(value: &RenderPlanManifest, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_render_plan_manifest_into(value: &RenderPlanManifest, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
+    writer.write(&(*(&value.plan_schema_version)).to_le_bytes())?;
     writer.write(&(*(&value.document_revision)).to_le_bytes())?;
     payload_encode_render_config_hash_into(&value.render_config, depth + 1, writer)?;
     payload_encode_renderer_epoch_into(&value.renderer_epoch, depth + 1, writer)?;
     payload_encode_render_plan_id_into(&value.plan_id, depth + 1, writer)?;
+    writer.write(&(*(&value.generation)).to_le_bytes())?;
     payload_encode_scene_hash_into(&value.scene_hash, depth + 1, writer)?;
     payload_encode_capability_decision_hash_into(&value.decision_hash, depth + 1, writer)?;
+    payload_encode_geometry_hash_into(&value.geometry_hash, depth + 1, writer)?;
+    payload_encode_surface_region_into(&value.viewport_clip, depth + 1, writer)?;
+    writer.write(&(*(&value.zoom_numerator)).to_le_bytes())?;
+    writer.write(&(*(&value.zoom_denominator)).to_le_bytes())?;
+    writer.write(&(*(&value.device_scale_milli)).to_le_bytes())?;
+    payload_encode_page_rotation_into(&value.rotation, depth + 1, writer)?;
+    writer.write(&(*(&value.optional_content)).to_le_bytes())?;
+    writer.write(&(*(&value.annotation_revision)).to_le_bytes())?;
     payload_encode_native_backend_into(&value.backend, depth + 1, writer)?;
     payload_encode_output_profile_into(&value.output_profile, depth + 1, writer)?;
     payload_encode_quality_policy_into(&value.quality, depth + 1, writer)?;
@@ -5086,22 +5339,39 @@ fn payload_encode_render_plan_manifest_into(value: &RenderPlanManifest, depth: u
             payload_encode_surface_region_into(payload_item, depth + 1 + 1, writer)?;
         }
     }
+    {
+        writer.write_count((&value.tile_content_hashes).len(), 1024)?;
+        for payload_item in &value.tile_content_hashes {
+            payload_encode_tile_content_hash_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
     Ok(())
 }
 
 fn payload_decode_render_plan_manifest_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RenderPlanManifest, PayloadCodecError> {
     reader.check_depth(depth)?;
     Ok(RenderPlanManifest {
+        plan_schema_version: reader.read_u16()?,
         document_revision: reader.read_u64()?,
         render_config: payload_decode_render_config_hash_from(depth + 1, reader)?,
         renderer_epoch: payload_decode_renderer_epoch_from(depth + 1, reader)?,
         plan_id: payload_decode_render_plan_id_from(depth + 1, reader)?,
+        generation: reader.read_u64()?,
         scene_hash: payload_decode_scene_hash_from(depth + 1, reader)?,
         decision_hash: payload_decode_capability_decision_hash_from(depth + 1, reader)?,
+        geometry_hash: payload_decode_geometry_hash_from(depth + 1, reader)?,
+        viewport_clip: payload_decode_surface_region_from(depth + 1, reader)?,
+        zoom_numerator: reader.read_u32()?,
+        zoom_denominator: reader.read_u32()?,
+        device_scale_milli: reader.read_u32()?,
+        rotation: payload_decode_page_rotation_from(depth + 1, reader)?,
+        optional_content: reader.read_u64()?,
+        annotation_revision: reader.read_u64()?,
         backend: payload_decode_native_backend_from(depth + 1, reader)?,
         output_profile: payload_decode_output_profile_from(depth + 1, reader)?,
         quality: payload_decode_quality_policy_from(depth + 1, reader)?,
         regions: { let payload_count = reader.read_count(1024, 21)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_surface_region_from(depth + 1 + 1, reader)?); } payload_values },
+        tile_content_hashes: { let payload_count = reader.read_count(1024, 32)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_tile_content_hash_from(depth + 1 + 1, reader)?); } payload_values },
     })
 }
 
@@ -5118,7 +5388,7 @@ pub fn decode_render_plan_manifest_payload(input: &[u8], limits: PayloadCodecLim
     Ok(value)
 }
 
-fn payload_encode_generation_planned_event_into(value: &GenerationPlannedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_generation_planned_event_into(value: &GenerationPlannedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_render_plan_manifest_into(&value.manifest, depth + 1, writer)?;
     payload_encode_render_plan_hash_into(&value.plan_hash, depth + 1, writer)?;
@@ -5146,7 +5416,7 @@ pub fn decode_generation_planned_event_payload(input: &[u8], limits: PayloadCode
     Ok(value)
 }
 
-fn payload_encode_generation_completed_event_into(value: &GenerationCompletedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_generation_completed_event_into(value: &GenerationCompletedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_generation_completion_status_into(&value.status, depth + 1, writer)?;
     writer.write(&(*(&value.produced_regions)).to_le_bytes())?;
@@ -5182,7 +5452,7 @@ pub fn decode_generation_completed_event_payload(input: &[u8], limits: PayloadCo
     Ok(value)
 }
 
-fn payload_encode_cancel_acknowledged_event_into(value: &CancelAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_cancel_acknowledged_event_into(value: &CancelAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_request_id_into(&value.target, depth + 1, writer)?;
     payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
@@ -5210,7 +5480,7 @@ pub fn decode_cancel_acknowledged_event_payload(input: &[u8], limits: PayloadCod
     Ok(value)
 }
 
-fn payload_encode_surface_release_acknowledged_event_into(value: &SurfaceReleaseAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_release_acknowledged_event_into(value: &SurfaceReleaseAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_surface_id_into(&value.surface, depth + 1, writer)?;
     writer.write(&(*(&value.lease_token)).to_le_bytes())?;
@@ -5240,7 +5510,7 @@ pub fn decode_surface_release_acknowledged_event_payload(input: &[u8], limits: P
     Ok(value)
 }
 
-fn payload_encode_close_session_acknowledged_event_into(value: &CloseSessionAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_close_session_acknowledged_event_into(value: &CloseSessionAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_session_id_into(&value.session, depth + 1, writer)?;
     payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
@@ -5268,7 +5538,7 @@ pub fn decode_close_session_acknowledged_event_payload(input: &[u8], limits: Pay
     Ok(value)
 }
 
-fn payload_encode_shutdown_acknowledged_event_into(value: &ShutdownAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_shutdown_acknowledged_event_into(value: &ShutdownAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
     payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
@@ -5296,7 +5566,7 @@ pub fn decode_shutdown_acknowledged_event_payload(input: &[u8], limits: PayloadC
     Ok(value)
 }
 
-fn payload_encode_surface_transport_into(value: &SurfaceTransport, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+fn payload_encode_surface_transport_into(value: &SurfaceTransport, depth: usize, writer: &mut PayloadWriter<'_>) -> Result<(), PayloadCodecError> {
     writer.check_depth(depth)?;
     match value {
         SurfaceTransport::BrowserArrayBuffer { slot, buffer_length } => {
@@ -5592,12 +5862,57 @@ preimage.extend_from_slice(&payload);
 Ok(preimage)
 }
 
+fn payload_codec_hash_preimage_observed(
+domain: &str,
+payload: Vec<u8>,
+observer: &mut dyn PayloadCodecObserver,
+) -> Result<Vec<u8>, PayloadCodecError> {
+let payload_len = u64::try_from(payload.len())
+.map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+let capacity = domain.len().checked_add(9)
+.and_then(|length| length.checked_add(payload.len()))
+.ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+let mut writer = PayloadWriter::new_observed(
+PayloadCodecLimits::new(1, capacity, 1),
+observer,
+)?;
+writer.write(domain.as_bytes())?;
+writer.write(&[0])?;
+writer.write(&payload_len.to_le_bytes())?;
+for chunk in payload.chunks(4 * 1024) {
+writer.write(chunk)?;
+}
+Ok(writer.finish())
+}
+
 pub fn capability_decision_hash_preimage(value: &CapabilityDecision, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
     let payload = encode_capability_decision_payload(value, limits)?;
     payload_codec_hash_preimage(CAPABILITY_DECISION_HASH_DOMAIN, payload)
 }
 
+pub fn capability_decision_hash_preimage_observed(
+    value: &CapabilityDecision,
+    limits: PayloadCodecLimits,
+    observer: &mut dyn PayloadCodecObserver,
+) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new_observed(limits, observer)?;
+    payload_encode_capability_decision_into(value, 0, &mut writer)?;
+    let payload = writer.finish();
+    payload_codec_hash_preimage_observed(CAPABILITY_DECISION_HASH_DOMAIN, payload, observer)
+}
+
 pub fn render_plan_manifest_hash_preimage(value: &RenderPlanManifest, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
     let payload = encode_render_plan_manifest_payload(value, limits)?;
     payload_codec_hash_preimage(RENDER_PLAN_MANIFEST_HASH_DOMAIN, payload)
+}
+
+pub fn render_plan_manifest_hash_preimage_observed(
+    value: &RenderPlanManifest,
+    limits: PayloadCodecLimits,
+    observer: &mut dyn PayloadCodecObserver,
+) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new_observed(limits, observer)?;
+    payload_encode_render_plan_manifest_into(value, 0, &mut writer)?;
+    let payload = writer.finish();
+    payload_codec_hash_preimage_observed(RENDER_PLAN_MANIFEST_HASH_DOMAIN, payload, observer)
 }
