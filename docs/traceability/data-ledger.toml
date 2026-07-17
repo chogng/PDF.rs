@@ -1,5 +1,5 @@
 schema = 1
-version = "0.11.0"
+version = "0.12.0"
 status = "active"
 
 [[data]]
@@ -614,3 +614,71 @@ validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturi
 owner = "quality-corpus"
 update_policy = "rerun registered tests and fuzz replay, remeasure raw Native samples where applicable, then update subjects, artifact graph, profile references, and ledger hashes together"
 delete_policy = "retain while the corresponding M1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m3.reference-raster-v1.independent-review"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m3/reference-raster-v1/independent-review.toml"
+acquired_at = 2026-07-16
+version = "m3-maturity-evidence-schema-1"
+source_hash = "sha256:bcff66531d26b276b5995019a86383daa4328f15837fbf9e8c809c39117e2ff7"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun the registered M3 Reference gate and independent oracle model, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the m3.reference-raster-v1.v1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m3.reference-raster-v1.o0"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m3/reference-raster-v1/o0.toml"
+acquired_at = 2026-07-16
+version = "m3-maturity-evidence-schema-1"
+source_hash = "sha256:9fb8aa1ddb0ae3ed9d1b0c359dfb7ad3575e02f024afe739e5b0e109c82bf6c7"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun the registered M3 Reference gate and independent oracle model, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the m3.reference-raster-v1.v1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m3.reference-raster-v1.o1"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m3/reference-raster-v1/o1.toml"
+acquired_at = 2026-07-16
+version = "m3-maturity-evidence-schema-1"
+source_hash = "sha256:5fb3d1eac07ed9b4bd43eb8bf899f8b782f08ca2a0d517a37d55ebfa96191cde"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun the registered M3 Reference gate and independent oracle model, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the m3.reference-raster-v1.v1 capability profile is promoted"
+
+[[data]]
+id = "evidence.m3.reference-raster-v1.reference"
+kind = "project-authored-maturity-evidence"
+source = "docs/traceability/evidence/m3/reference-raster-v1/reference.toml"
+acquired_at = 2026-07-16
+version = "m3-maturity-evidence-schema-1"
+source_hash = "sha256:507d945a16f048830a4551b4f985c50b89acea99b24f0b1746dc943ceac92ad9"
+license_expression = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistribution = "repository project-authored metadata and source references only; no external-engine output or externally sourced artifact"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "cargo run --quiet --package pdf-rs-quality -- validate-m1-maturity docs/traceability/capability-profiles.toml"
+owner = "quality-corpus"
+update_policy = "rerun the registered M3 Reference gate and independent oracle model, then update subjects, artifact graph, profile references, and ledger hashes together"
+delete_policy = "retain while the m3.reference-raster-v1.v1 capability profile is promoted"

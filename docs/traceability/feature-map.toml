@@ -1,5 +1,5 @@
 schema = 1
-version = "0.77.0"
+version = "0.78.0"
 status = "active"
 
 [[feature]]
@@ -209,11 +209,11 @@ introduced_in = "0.1.0"
 [[feature]]
 id = "core.reference-raster-v1"
 owner = "graphics-color"
-state = "PLANNED"
+state = "REFERENCE"
 profile = "m3.reference-raster-v1.v1"
 clauses = ["ISO-32000-1:2008/8.4.2", "ISO-32000-1:2008/8.4.3", "ISO-32000-1:2008/8.5", "ISO-32000-1:2008/8.6", "ISO-32000-1:2008/8.9", "ISO-32000-1:2008/9.3", "ISO-32000-1:2008/9.4", "ISO-32000-1:2008/9.6.4", "ISO-32000-1:2008/11.3.2-11.3.4", "RPE-ARCH-001/5.8-5.9", "RPE-ARCH-001/6.1-6.2", "RPE-ARCH-001/6.4-6.7", "RPE-ARCH-001/8.1-8.3", "RPE-ARCH-001/15.3/M3"]
 modules = ["core/font", "core/document", "core/content", "core/scene", "core/raster", "tools/quality"]
-tests = ["core/font::truetype", "core/document::page_content", "core/document::image_xobject", "core/document::font_resource", "core/content::vm_graphics", "core/scene::scene_v2", "core/raster::reference_foundation", "core/raster::reference_geometry_kernel", "core/raster::reference_color", "core/raster::reference_image", "core/raster::reference_glyph", "tools/quality::m3_reference_gate", "tools/quality::m3_reference_raster_trace"]
+tests = ["core/font::truetype", "core/document::page_content", "core/document::image_xobject", "core/document::font_resource", "core/content::vm_graphics", "core/scene::scene_v2", "core/raster::reference_foundation", "core/raster::reference_geometry_kernel", "core/raster::reference_color", "core/raster::reference_image", "core/raster::reference_glyph", "core/raster::reference_integrated_renderer", "tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model", "tools/quality::m3_reference_raster_trace", "tools/quality::m3_exit"]
 fuzz_targets = []
 benchmarks = []
 introduced_in = "0.1.0"

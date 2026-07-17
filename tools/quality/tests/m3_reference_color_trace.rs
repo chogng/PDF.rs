@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.77.0";
+const TRACE_VERSION: &str = "0.78.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "127ee3cac4ab5595abbecd6438e6e309a58b23cb";
 const IMPLEMENTATION_TREE: &str = "c5e3ba0d5cd5e5de7b30845bb177e196ec8655b7";
@@ -259,9 +259,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
     let capability_profiles = read_text(&root, "docs/traceability/capability-profiles.toml");
 
     let plan_root = RootToml::parse(&plan_text).expect("M3 plan root is strict TOML");
-    plan_root
-        .expect_string("status", "in_progress")
-        .expect("M3 remains in progress after M3-07");
+    assert_m3_plan_phase(&root, &plan_root);
     let item = table_record(&plan_text, "work_item", "M3-07");
     item.expect_string("title", "Base color and alpha compositing")
         .expect("M3-07 title is exact");
@@ -300,9 +298,11 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
     integrated
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-10 completion is exact");
-    table_record(&plan_text, "work_item", "M3-11")
-        .expect_string("status", "planned")
-        .expect("M3-11 remains planned");
+    let exit = table_record(&plan_text, "work_item", "M3-11");
+    exit.expect_string("status", "complete")
+        .expect("M3-11 is complete in Candidate H");
+    exit.expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-11 completion date is exact");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature map root is strict TOML");
     feature_root
@@ -414,7 +414,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "m3.reference-color-compositing.v1",
                 "transparent-black canonicalization",
-                "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
+                "M3-10 accepts one bounded strict-to-ReferenceRenderJob path",
             ][..],
         ),
         (
@@ -422,8 +422,9 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "M3-07 closes project-owned",
                 "M3-08 closes",
-                "M3-10 now closes",
-                "M3-11 still owns",
+                "M3-10 closes",
+                "M3-11 later closes",
+                "final independent SHIP review",
             ][..],
         ),
     ] {
@@ -573,6 +574,25 @@ fn repository_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("quality crate has a repository root")
         .to_path_buf()
+}
+
+fn assert_m3_plan_phase(root: &Path, plan: &RootToml) {
+    if root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file()
+    {
+        plan.expect_string("status", "complete")
+            .expect("M3 is complete after final independent review");
+        plan.expect_bare("completed_at", COMPLETED_AT)
+            .expect("completed M3 has the exact completion date");
+    } else {
+        plan.expect_string("status", "in_progress")
+            .expect("Candidate H keeps M3 in progress before final independent review");
+        assert!(
+            plan.bare("completed_at").is_err(),
+            "Candidate H must not predeclare milestone completion"
+        );
+    }
 }
 
 fn read_text(root: &Path, relative: &str) -> String {

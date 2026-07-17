@@ -6,7 +6,7 @@ use pdf_rs_digest::sha256;
 
 const REPORT_ID: &str = "pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1";
 const REPORT_HASH: &str = "bdd25b8d8843e62b500987a87080f0956ac8fe6ee7cdc351b6dc1689acd06e31";
-const DATA_LEDGER_VERSION: &str = "0.11.0";
+const DATA_LEDGER_VERSION: &str = "0.12.0";
 const REPORT: &[u8] = include_bytes!(
     "../pdfium/evidence/pdfium-c040cf96-macos-arm64-o4-page-count-boundary-performance-probe-v1.toml"
 );

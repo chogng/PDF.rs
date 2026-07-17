@@ -162,8 +162,8 @@ fn m2_scene_profiles_remain_planned_after_the_bounded_normative_gate_closes() {
     let plan =
         fs::read_to_string(repository_root.join("plan/m2.toml")).expect("M2 plan is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.77.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.77.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.78.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.78.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -279,7 +279,10 @@ fn m2_scene_profiles_remain_planned_after_the_bounded_normative_gate_closes() {
             .contains("Unsupported and failed interpretations never own a partial Scene")
     );
     assert!(scene_requirement.contains("M2-07 now closes the bounded M2 exit gate"));
-    assert!(scene_requirement.contains("M2 and M3 feature records remain PLANNED"));
+    assert!(
+        scene_requirement.contains("All other M2 and M3 component feature records remain PLANNED")
+    );
+    assert!(scene_requirement.contains("core.reference-raster-v1` to REFERENCE"));
 
     let milestone = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/15.3/M2")
         .expect("M2 requirement must be registered");

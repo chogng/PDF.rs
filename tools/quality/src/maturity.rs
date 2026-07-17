@@ -3665,9 +3665,9 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/traceability/capability-profiles.toml");
         let report = validate_maturity_file(&path).unwrap();
-        assert_eq!(report.profiles, 4);
+        assert_eq!(report.profiles, 5);
         assert_eq!(report.planned, 0);
-        assert_eq!(report.reference, 2);
+        assert_eq!(report.reference, 3);
         assert_eq!(report.differential, 2);
     }
 

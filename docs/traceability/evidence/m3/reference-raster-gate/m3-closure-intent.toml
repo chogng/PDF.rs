@@ -1,0 +1,30 @@
+schema = 1
+type = "milestone-closure-intent"
+id = "evidence.m3.reference-raster-gate.m3-closure-intent"
+milestone = "M3"
+milestone_status = "complete"
+work_item_status = "complete"
+completed_at = 2026-07-16
+completed_work_items = [
+  "M3-01",
+  "M3-02",
+  "M3-03",
+  "M3-04",
+  "M3-05",
+  "M3-06",
+  "M3-07",
+  "M3-08",
+  "M3-09",
+  "M3-10",
+  "M3-11",
+]
+reviewed_by_roles = ["quality-corpus", "spec-conformance"]
+feature = "core.reference-raster-v1"
+feature_state = "REFERENCE"
+spec_requirement = "RPE-ARCH-001/15.3/M3"
+spec_status = "covered"
+required_evidence = [
+  "docs/traceability/evidence/m3/reference-raster-gate/normative-replay.toml",
+  "docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml",
+  "tools/quality::m3_exit",
+]

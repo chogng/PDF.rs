@@ -54,16 +54,16 @@ independent reviewer roles, and canonical hash-bound review evidence. The case v
 every linked component without symlinks, preflights bytes from case budgets, verifies raw hashes,
 strictly decodes canonical pixels, checks render dimensions, and performs no expected-file writes.
 
-The M3-10 integrated Reference gate closes only the reviewed implementation slice registered as
-the still-`PLANNED` `m3.reference-raster-v1.v1` profile. It drives strict proof-bound open, owned
+The M3-10 integrated Reference gate closes the reviewed implementation slice registered as
+the `m3.reference-raster-v1.v1` profile. It drives strict proof-bound open, owned
 Page acquisition, immutable source-ordered path/image/glyph Scene publication, and one bounded
 `ReferenceRenderJob` across twelve Ready and non-publication cases. CI repeats the gate in two
 fresh debug and two fresh release processes and performs three recursive normalized-artifact
 comparisons. The independent review binds implementation commit
 `a917aee672ce6be294e479956d5be87c835d0507` and tree
 `e3f9a6f98e61afc9034df02b24fd2f3c293a97a8` with parser-security and spec-conformance SHIP,
-P0/P1/P2 zero. M3-11 still owns formal O0/O1/O3 case authority, any profile promotion, and the
-milestone exit; M3-10 is not a REFERENCE maturity promotion.
+P0/P1/P2 zero. M3-11 separately owns formal O0/O1/O3 case authority, profile promotion, and the
+milestone exit; M3-10 alone is not a REFERENCE maturity promotion.
 
 The M3-11 Reference pipeline gate takes its only case registry from the twelve sorted,
 symlink-free manifests and committed inputs under `tests/cases/raster/m3-reference`. Its fixture
@@ -75,7 +75,10 @@ bound to the reviewed `core/raster` implementation identity and hash-bound
 `spec-conformance`/`parser-security` review. Normalized schema-2 gate artifacts record the manifest
 hash, case and pixel oracle levels, expected pixel hash, and exact pass verdict. Non-Ready cases
 retain no pixel artifact, and CI runs the independent oracle model before two debug and two release
-gate replays with three recursive artifact comparisons.
+gate replays with three recursive artifact comparisons. The repository-only M3 exit then recomputes
+the complete 25-file artifact topology and hash from a fresh replay, verifies the four maturity
+artifacts and their subject graph, preserves the immutable M1 and complete M2 gates, and requires a
+commit/tree/hash-bound two-role SHIP review before M3 can be marked complete.
 
 # Semantic owner
 

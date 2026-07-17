@@ -6,7 +6,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.77.0";
+const TRACE_VERSION: &str = "0.78.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "b2a0b88ce3c0f4d186f450a793909d1f72a75230";
 const IMPLEMENTATION_TREE: &str = "b22d0ae88ced2194d884ec781b30f0c5ff367747";
@@ -339,9 +339,7 @@ fn m3_content_graphics_plan_and_trace_registration_are_exact() {
     plan_root
         .expect_string("milestone", "M3")
         .expect("M3 plan milestone is exact");
-    plan_root
-        .expect_string("status", "in_progress")
-        .expect("M3 remains in progress after M3-04");
+    assert_m3_plan_phase(&root, &plan_root);
     plan_root
         .expect_bare("started_at", COMPLETED_AT)
         .expect("M3 start date is exact");
@@ -800,6 +798,34 @@ struct RequirementExpectation<'a> {
 
 fn assert_requirement(document: &str, expected: RequirementExpectation<'_>) {
     let requirement = table_record(document, "requirement", expected.id);
+    let mut expected_tests = expected.tests.to_vec();
+    if expected.features.contains(&"core.reference-raster-v1") {
+        let integrated_position = expected_tests
+            .iter()
+            .position(|test| *test == "core/raster::repository_policy")
+            .or_else(|| {
+                expected_tests
+                    .iter()
+                    .position(|test| test.starts_with("tools/quality::"))
+            })
+            .unwrap_or(expected_tests.len());
+        expected_tests.insert(
+            integrated_position,
+            "core/raster::reference_integrated_renderer",
+        );
+        let oracle_position = expected_tests
+            .iter()
+            .position(|test| *test == "tools/quality::m3_reference_gate")
+            .expect("selected requirements retain the M3 reference gate")
+            + 1;
+        expected_tests.insert(oracle_position, "tools/quality::m3_reference_oracle_model");
+        let exit_position = expected_tests
+            .iter()
+            .position(|test| *test == "tools/quality::m3_reference_raster_trace")
+            .expect("selected requirements retain the M3 raster trace")
+            + 1;
+        expected_tests.insert(exit_position, "tools/quality::m3_exit");
+    }
     requirement
         .expect_string("snapshot_hash", expected.snapshot)
         .unwrap_or_else(|error| panic!("{} snapshot: {error}", expected.id));
@@ -810,7 +836,7 @@ fn assert_requirement(document: &str, expected: RequirementExpectation<'_>) {
         .expect_array("implementation", expected.implementation)
         .unwrap_or_else(|error| panic!("{} implementation: {error}", expected.id));
     requirement
-        .expect_array("tests", expected.tests)
+        .expect_array("tests", &expected_tests)
         .unwrap_or_else(|error| panic!("{} tests: {error}", expected.id));
     requirement
         .expect_string("status", "partial")
@@ -852,6 +878,25 @@ fn repository_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("quality crate is nested below the repository root")
         .to_path_buf()
+}
+
+fn assert_m3_plan_phase(root: &Path, plan: &RootToml) {
+    if root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file()
+    {
+        plan.expect_string("status", "complete")
+            .expect("M3 is complete after final independent review");
+        plan.expect_bare("completed_at", COMPLETED_AT)
+            .expect("completed M3 has the exact completion date");
+    } else {
+        plan.expect_string("status", "in_progress")
+            .expect("Candidate H keeps M3 in progress before final independent review");
+        assert!(
+            plan.bare("completed_at").is_err(),
+            "Candidate H must not predeclare milestone completion"
+        );
+    }
 }
 
 fn read_text(root: &Path, relative: &str) -> String {

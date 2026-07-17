@@ -1,0 +1,12 @@
+schema = 1
+type = "maturity-subject-report"
+id = "subject.m3.reference-raster-v1.independent-review"
+evidence_kind = "independent-review-report"
+feature = "core.reference-raster-v1"
+target = "core/raster::ReferenceRenderJob"
+executed_tests = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+fuzz_targets = []
+benchmarks = []
+reviewers = ["spec-conformance", "parser-security"]
+independent = true
+verdict = "pass"

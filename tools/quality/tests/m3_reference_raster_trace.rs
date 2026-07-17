@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.77.0";
+const TRACE_VERSION: &str = "0.78.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "a917aee672ce6be294e479956d5be87c835d0507";
 const IMPLEMENTATION_TREE: &str = "e3f9a6f98e61afc9034df02b24fd2f3c293a97a8";
@@ -237,10 +237,8 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
     let spec_text = read_text(&root, "docs/traceability/spec-map.toml");
     let profiles = read_text(&root, "docs/traceability/capability-profiles.toml");
 
-    RootToml::parse(&plan_text)
-        .expect("M3 plan TOML")
-        .expect_string("status", "in_progress")
-        .expect("M3 remains in progress");
+    let plan_root = RootToml::parse(&plan_text).expect("M3 plan TOML");
+    assert_m3_plan_phase(&root, &plan_root);
     let integrated = table_record(&plan_text, "work_item", "M3-10");
     integrated
         .expect_string("title", "Integrated reference-raster-v1 renderer")
@@ -254,9 +252,11 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
     integrated
         .expect_array("depends_on", &["M3-02", "M3-06", "M3-07", "M3-08", "M3-09"])
         .expect("dependencies");
-    table_record(&plan_text, "work_item", "M3-11")
-        .expect_string("status", "planned")
-        .expect("M3-11 remains planned");
+    let exit = table_record(&plan_text, "work_item", "M3-11");
+    exit.expect_string("status", "complete")
+        .expect("M3-11 is complete in Candidate H");
+    exit.expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-11 completion date is exact");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature map TOML");
     feature_root
@@ -266,7 +266,9 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
     feature
         .expect_string("owner", "graphics-color")
         .expect("owner");
-    feature.expect_string("state", "PLANNED").expect("state");
+    feature
+        .expect_string("state", "REFERENCE")
+        .expect("selected integrated feature is REFERENCE");
     feature
         .expect_string("profile", "m3.reference-raster-v1.v1")
         .expect("profile");
@@ -296,8 +298,11 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
         "core/raster::reference_color",
         "core/raster::reference_image",
         "core/raster::reference_glyph",
+        "core/raster::reference_integrated_renderer",
         "tools/quality::m3_reference_gate",
+        "tools/quality::m3_reference_oracle_model",
         "tools/quality::m3_reference_raster_trace",
+        "tools/quality::m3_exit",
     ] {
         assert!(
             feature
@@ -309,8 +314,8 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
         );
     }
     assert!(
-        !profiles.contains("m3.reference-raster-v1.v1"),
-        "M3-10 must not create or promote a capability-profile record"
+        profiles.contains("m3.reference-raster-v1.v1"),
+        "M3-10 did not promote the profile, but M3-11 must register the selected REFERENCE profile"
     );
 
     RootToml::parse(&spec_text)
@@ -341,8 +346,11 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
             "{id} is missing the integrated feature"
         );
         for test in [
+            "core/raster::reference_integrated_renderer",
             "tools/quality::m3_reference_gate",
+            "tools/quality::m3_reference_oracle_model",
             "tools/quality::m3_reference_raster_trace",
+            "tools/quality::m3_exit",
         ] {
             assert!(
                 requirement
@@ -360,24 +368,30 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
             "RPE-ARCH-001/6.4-6.7",
             &[
                 "M3-10 separately accepts",
-                "M3-11 still owns formal O0/O1/O3",
+                "M3-11 later closes registered O0/O1/O3 pixel authority",
+                "All other M2 and M3 component feature records remain PLANNED",
+                "final independent SHIP review",
             ][..],
         ),
         (
             "RPE-ARCH-001/8.1-8.3",
             &[
-                "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
-                "M3-11 retains formal O0/O1/O3 pixels",
-                "All seven linked feature records remain PLANNED",
+                "M3-10 accepts one bounded strict-to-ReferenceRenderJob path",
+                "M3-10 itself did not promote it",
+                "M3-11 later closes registered O0/O1/O3 pixel authority",
+                "six other linked component feature records remain PLANNED",
+                "final independent SHIP review",
             ][..],
         ),
         (
             "RPE-ARCH-001/15.3/M3",
             &[
-                "M3-10 now closes",
-                "all ten completed work items",
-                "M3-11 still owns registered formal O0/O1/O3 pixels",
-                "not formal final case authority",
+                "M3-10 closes",
+                "first ten completed work items",
+                "M3-10 itself did not promote the profile",
+                "M3-11 later closes registered formal O0/O1/O3 pixel authority",
+                "All eleven work items are complete",
+                "final independent SHIP review",
             ][..],
         ),
     ] {
@@ -457,6 +471,25 @@ fn repository_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("repository root")
         .to_path_buf()
+}
+
+fn assert_m3_plan_phase(root: &Path, plan: &RootToml) {
+    if root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file()
+    {
+        plan.expect_string("status", "complete")
+            .expect("M3 is complete after final independent review");
+        plan.expect_bare("completed_at", COMPLETED_AT)
+            .expect("completed M3 has the exact completion date");
+    } else {
+        plan.expect_string("status", "in_progress")
+            .expect("Candidate H keeps M3 in progress before final independent review");
+        assert!(
+            plan.bare("completed_at").is_err(),
+            "Candidate H must not predeclare milestone completion"
+        );
+    }
 }
 
 fn read_text(root: &Path, relative: &str) -> String {

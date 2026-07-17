@@ -120,6 +120,7 @@ cargo test --locked --package pdf-rs-quality --test m3_reference_raster_trace
 
 cargo run --quiet --package pdf-rs-quality -- \
     validate-m1-maturity docs/traceability/capability-profiles.toml
+PDF_RS_M3_REFERENCE_EXIT_INPUT="$m3_reference_gate_root/debug-1" cargo test --locked --package pdf-rs-quality --test m3_exit
 cargo run --quiet --package pdf-rs-quality -- check-product-purity .
 
 product_build_root="$(mktemp -d "${TMPDIR:-/tmp}/pdf-rs-product-build.XXXXXX")"

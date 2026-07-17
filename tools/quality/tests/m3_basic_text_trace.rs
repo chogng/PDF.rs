@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.77.0";
+const TRACE_VERSION: &str = "0.78.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "e54b16e609e8fe3b47bc4a3617cf65da54d168dc";
 const IMPLEMENTATION_TREE: &str = "d80008e164bcd2c951d2a093e8c6e098f0009f5d";
@@ -346,10 +346,8 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
     let spec_text = read_text(&root, "docs/traceability/spec-map.toml");
     let capability_profiles = read_text(&root, "docs/traceability/capability-profiles.toml");
 
-    RootToml::parse(&plan_text)
-        .expect("M3 plan TOML")
-        .expect_string("status", "in_progress")
-        .expect("M3 remains in progress");
+    let plan_root = RootToml::parse(&plan_text).expect("M3 plan TOML");
+    assert_m3_plan_phase(&root, &plan_root);
     let item = table_record(&plan_text, "work_item", "M3-09");
     item.expect_string("title", "Basic embedded text and glyph coverage")
         .expect("title");
@@ -372,9 +370,11 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
     integrated
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-10 completion");
-    table_record(&plan_text, "work_item", "M3-11")
-        .expect_string("status", "planned")
-        .expect("M3-11 remains planned");
+    let exit = table_record(&plan_text, "work_item", "M3-11");
+    exit.expect_string("status", "complete")
+        .expect("M3-11 is complete in Candidate H");
+    exit.expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-11 completion date is exact");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature TOML");
     feature_root
@@ -499,7 +499,7 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
             &[
                 "reference-image-v1",
                 "reference-glyph-v1",
-                "All seven linked feature records remain PLANNED",
+                "six other linked component feature records remain PLANNED",
             ][..],
         ),
         (
@@ -507,9 +507,10 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
             ARCH_SNAPSHOT,
             &[
                 "M3-09 closes",
-                "all ten completed work items",
-                "M3-10 now closes",
-                "M3-11 still owns",
+                "first ten completed work items",
+                "M3-10 closes",
+                "M3-11 later closes",
+                "All eleven work items are complete",
             ][..],
         ),
     ] {
@@ -527,10 +528,7 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
         ),
         (
             "ISO-32000-1:2008/8.4.3",
-            &[
-                "M3-08 and M3-09 carry",
-                "M3-10 now accepts those transforms",
-            ][..],
+            &["M3-08 and M3-09 carry", "M3-10 accepts those transforms"][..],
         ),
         (
             "RPE-ARCH-001/6.4-6.7",
@@ -539,7 +537,7 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
         (
             "RPE-ARCH-001/8.1-8.3",
             &[
-                "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
+                "M3-10 accepts one bounded strict-to-ReferenceRenderJob path",
                 "Advanced fonts and text",
             ][..],
         ),
@@ -672,6 +670,25 @@ fn repository_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("repository root")
         .to_path_buf()
+}
+
+fn assert_m3_plan_phase(root: &Path, plan: &RootToml) {
+    if root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file()
+    {
+        plan.expect_string("status", "complete")
+            .expect("M3 is complete after final independent review");
+        plan.expect_bare("completed_at", COMPLETED_AT)
+            .expect("completed M3 has the exact completion date");
+    } else {
+        plan.expect_string("status", "in_progress")
+            .expect("Candidate H keeps M3 in progress before final independent review");
+        assert!(
+            plan.bare("completed_at").is_err(),
+            "Candidate H must not predeclare milestone completion"
+        );
+    }
 }
 
 fn read_text(root: &Path, relative: &str) -> String {

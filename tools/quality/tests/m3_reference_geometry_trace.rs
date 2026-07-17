@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.77.0";
+const TRACE_VERSION: &str = "0.78.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "213652f80d9d8c6749102f0aa7d6d53163e5ac3c";
 const IMPLEMENTATION_TREE: &str = "de487ccfee70952024ea15b16e5c497794ec3269";
@@ -88,9 +88,7 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
     let spec_text = read_text(&root, "docs/traceability/spec-map.toml");
 
     let plan_root = RootToml::parse(&plan_text).expect("M3 plan root is strict TOML");
-    plan_root
-        .expect_string("status", "in_progress")
-        .expect("M3 remains in progress after M3-06");
+    assert_m3_plan_phase(&root, &plan_root);
     for (id, title, dependency) in [
         (
             "M3-05",
@@ -134,9 +132,11 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
     integrated
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-10 completion is exact");
-    table_record(&plan_text, "work_item", "M3-11")
-        .expect_string("status", "planned")
-        .expect("M3-11 remains planned");
+    let exit = table_record(&plan_text, "work_item", "M3-11");
+    exit.expect_string("status", "complete")
+        .expect("M3-11 is complete in Candidate H");
+    exit.expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-11 completion date is exact");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature map root is strict TOML");
     feature_root
@@ -485,6 +485,25 @@ fn repository_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("quality crate has a repository root")
         .to_path_buf()
+}
+
+fn assert_m3_plan_phase(root: &Path, plan: &RootToml) {
+    if root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file()
+    {
+        plan.expect_string("status", "complete")
+            .expect("M3 is complete after final independent review");
+        plan.expect_bare("completed_at", COMPLETED_AT)
+            .expect("completed M3 has the exact completion date");
+    } else {
+        plan.expect_string("status", "in_progress")
+            .expect("Candidate H keeps M3 in progress before final independent review");
+        assert!(
+            plan.bare("completed_at").is_err(),
+            "Candidate H must not predeclare milestone completion"
+        );
+    }
 }
 
 fn read_text(root: &Path, relative: &str) -> String {

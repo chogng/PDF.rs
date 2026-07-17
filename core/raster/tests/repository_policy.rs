@@ -324,8 +324,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.77.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.77.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.78.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.78.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -436,7 +436,9 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "M3-08 and M3-09 add proof-bound basic image and glyph Scene resources",
         "core.reference-raster-v1",
         "M3-10 separately accepts",
-        "M3-11 still owns formal O0/O1/O3",
+        "M3-11 later closes registered O0/O1/O3 pixel authority",
+        "All other M2 and M3 component feature records remain PLANNED",
+        "final independent SHIP review",
         "status = \"partial\"",
     ] {
         assert!(
@@ -453,10 +455,11 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "sRGB-reference-v1",
         "reference-color-v1",
         "structured unsupported color, blend, soft-mask, and group requirements",
-        "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
-        "preceding work items still register no final case authority",
-        "M3-11 retains formal O0/O1/O3 pixels",
-        "All seven linked feature records remain PLANNED",
+        "M3-10 accepts one bounded strict-to-ReferenceRenderJob path",
+        "M3-10 itself did not promote it",
+        "M3-11 later closes registered O0/O1/O3 pixel authority",
+        "six other linked component feature records remain PLANNED",
+        "final independent SHIP review",
         "status = \"partial\"",
     ] {
         assert!(
@@ -477,9 +480,12 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "M3-07 closes project-owned DeviceGray/RGB/CMYK conversion",
         "M3-08 closes the commit-pinned basic unmasked Image XObject slice",
         "M3-09 closes the commit-pinned bounded embedded simple TrueType slice",
-        "M3-10 now closes the separately reviewed integrated",
-        "Independent review evidence for all ten completed work items reports SHIP",
-        "M3-11 still owns registered formal O0/O1/O3 pixels",
+        "M3-10 closes the separately reviewed integrated",
+        "Independent review evidence for the first ten completed work items reports SHIP",
+        "M3-10 itself did not promote the profile",
+        "M3-11 later closes registered formal O0/O1/O3 pixel authority",
+        "All eleven work items are complete",
+        "final independent SHIP review",
         "tools/quality::m3_raster_oracle_contract",
         "tools/quality::m3_content_graphics_trace",
         "tools/quality::m3_reference_color_trace",
@@ -488,8 +494,6 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "tools/quality::m3_reference_gate",
         "tools/quality::m3_reference_raster_trace",
         "tools/quality::purity",
-        "claims bounded integrated ReferenceRenderJob acceptance",
-        "not formal final case authority",
         "status = \"partial\"",
     ] {
         assert!(
@@ -540,7 +544,19 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         .split("[[work_item]]")
         .next()
         .expect("M3 plan has a milestone header");
-    assert!(m3_header.contains("status = \"in_progress\""));
+    let final_review = repository_root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file();
+    if final_review {
+        assert!(m3_header.contains("status = \"complete\""));
+        assert!(m3_header.contains("completed_at = 2026-07-16"));
+    } else {
+        assert!(m3_header.contains("status = \"in_progress\""));
+        assert!(
+            !m3_header.contains("completed_at"),
+            "Candidate H must not predeclare milestone completion"
+        );
+    }
     assert!(m3_header.contains("started_at = 2026-07-16"));
     let m3_01 = record_with_id(&plan, "work_item", "M3-01").expect("M3-01 must exist");
     assert!(m3_01.contains("status = \"complete\""));
@@ -565,10 +581,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     assert!(m3_10.contains("status = \"complete\""));
     assert!(m3_10.contains("completed_at = 2026-07-16"));
     let m3_11 = record_with_id(&plan, "work_item", "M3-11").expect("M3-11 work item must exist");
-    assert!(
-        m3_11.contains("status = \"planned\""),
-        "M3-11 must remain planned"
-    );
+    assert!(m3_11.contains("status = \"complete\""));
+    assert!(m3_11.contains("completed_at = 2026-07-16"));
     assert!(
         !capability_profiles.contains("m3.content-graphics-v2.v1"),
         "M3-04 must not create a maturity profile"
@@ -584,6 +598,10 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     assert!(
         !capability_profiles.contains("m3.reference-color-compositing.v1"),
         "M3-07 must not create a maturity profile"
+    );
+    assert!(
+        capability_profiles.contains("m3.reference-raster-v1.v1"),
+        "M3-11 must register the selected REFERENCE profile"
     );
 
     for required in [
