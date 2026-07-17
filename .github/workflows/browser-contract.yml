@@ -1,0 +1,31 @@
+name: Browser contract
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  browser-contract:
+    name: Browser TypeScript and Wasm baseline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up pinned Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: platform/browser/package-lock.json
+      - name: Set up pinned Rust and browser Wasm target
+        run: rustup toolchain install 1.93.0 --profile minimal --target wasm32-unknown-unknown
+      - name: Run browser contract baseline
+        working-directory: platform/browser
+        run: |
+          npm ci
+          npm run check
