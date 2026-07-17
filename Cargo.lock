@@ -109,6 +109,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "pdf-rs-protocol-codegen"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-quality"
 version = "0.1.0"
 dependencies = [

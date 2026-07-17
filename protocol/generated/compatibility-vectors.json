@@ -1,0 +1,12 @@
+{
+  "schema_sha256": "89f342ea6861040e18fc5598431e1b9e6172356a40e363e8b8fce3522571400c",
+  "wire_schema_hash": "89f342ea6861040e18fc5598431e1b9e",
+  "truncation_policy": "sha256-first-16-bytes",
+  "vectors": [
+    {"name":"exact-schema","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"same_hash":true,"peer_supported":"0x3f","peer_mandatory":"0x00","expected":"ExactSchema"},
+    {"name":"compatible-older-minor","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":1,"same_hash":false,"peer_supported":"0x3f","peer_mandatory":"0x00","expected":"CompatibleMinor"},
+    {"name":"unknown-optional-capability","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"same_hash":true,"peer_supported":"0x800000000000003f","peer_mandatory":"0x00","expected":"ExactSchema"},
+    {"name":"unknown-mandatory-capability","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"same_hash":true,"peer_supported":"0x3f","peer_mandatory":"0x8000000000000000","expected_error":"UnknownMandatoryCapability"},
+    {"name":"major-mismatch","local_major":0,"local_minor":2,"peer_major":1,"peer_minor":2,"same_hash":true,"peer_supported":"0x3f","peer_mandatory":"0x00","expected_error":"UnsupportedMajor"}
+  ]
+}

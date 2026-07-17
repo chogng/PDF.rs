@@ -1,0 +1,16 @@
+[package]
+name = "pdf-rs-protocol-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[lib]
+name = "pdf_rs_protocol_codegen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdf-rs-protocol-codegen"
+path = "src/main.rs"

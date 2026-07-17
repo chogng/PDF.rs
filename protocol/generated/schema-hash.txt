@@ -1,0 +1,6 @@
+algorithm sha256
+canonical_source protocol/engine.protocol
+full_sha256 89f342ea6861040e18fc5598431e1b9e6172356a40e363e8b8fce3522571400c
+wire_hash 89f342ea6861040e18fc5598431e1b9e
+wire_hash_bytes 16
+truncation_policy sha256-first-16-bytes

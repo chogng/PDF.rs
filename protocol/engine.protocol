@@ -1,0 +1,479 @@
+protocol EngineProtocol 0 2
+limit max_message_bytes 16777216
+limit max_transfer_slots 64
+
+scalar WorkerId u64
+scalar SessionId u64
+scalar RequestId u64
+scalar DataTicket u64
+scalar SurfaceId u64
+scalar CanvasId u64
+scalar PlatformHandle u64
+scalar MemoryEpoch u32
+scalar RendererEpoch u32
+scalar RenderConfigHash bytes32
+scalar SceneHash bytes32
+scalar RenderPlanId u64
+scalar RenderPlanHash bytes32
+scalar CapabilityDecisionHash bytes32
+scalar CapabilityProfileId u32
+scalar DiagnosticId u64
+
+enum EndpointRole u8
+variant Host 1
+variant Engine 2
+end
+
+enum EndpointCapability u64
+variant OffscreenCanvas 1
+variant TransferableArrayBuffer 2
+variant TransferableImageBitmap 4
+variant SharedArrayBuffer 8
+variant SharedMemory 16
+variant LocalMemory 32
+end
+
+enum PixelFormat u8
+variant Rgba8 1
+end
+
+enum AlphaMode u8
+variant Straight 1
+variant Premultiplied 2
+end
+
+enum BrowserTransferKind u8
+variant ArrayBuffer 1
+variant ImageBitmap 2
+end
+
+enum QualityPolicy u8
+variant Preview 1
+variant Full 2
+end
+
+enum PageRotation u8
+variant Degrees0 1
+variant Degrees90 2
+variant Degrees180 3
+variant Degrees270 4
+end
+
+enum PageCoordinateSpace u8
+variant PdfPointsBottomLeft 1
+end
+
+enum SurfaceCoordinateSpace u8
+variant DevicePixelsTopLeft 1
+end
+
+enum SurfaceReclaimReason u8
+variant ReleasedByHost 1
+variant GenerationReplaced 2
+variant SessionClosed 3
+variant MemoryPressure 4
+variant RendererRestarted 5
+end
+
+enum SupportStatus u8
+variant Supported 1
+variant Unsupported 2
+variant Rejected 3
+end
+
+enum CollectionCompleteness u8
+variant Complete 1
+variant Truncated 2
+end
+
+enum NativeBackend u8
+variant ReferenceCpu 1
+variant FastCpu 2
+end
+
+enum CapabilityContributorKind u8
+variant Scene 1
+variant Renderer 2
+variant Policy 3
+variant Runtime 4
+end
+
+enum CapabilityScopeKind u8
+variant Worker 1
+variant Session 2
+variant Page 3
+variant Command 4
+variant Resource 5
+end
+
+enum ErrorCategory u8
+variant Protocol 1
+variant Source 2
+variant Document 3
+variant Capability 4
+variant Resource 5
+variant Cancelled 6
+variant Internal 7
+end
+
+enum ErrorSeverity u8
+variant Info 1
+variant Recoverable 2
+variant Fatal 3
+end
+
+enum ErrorRecoverability u8
+variant None 1
+variant RetryRequest 2
+variant RetryNativeRenderer 3
+variant ReopenSession 4
+variant RestartWorker 5
+end
+
+record ProtocolHello
+field major u16 required public
+field minor u16 required public
+field schema_hash bytes16 required public
+field endpoint_role EndpointRole required public
+field capabilities EndpointCapabilities required public
+field max_message_bytes u32 required public
+field max_transfer_slots u16 required public
+end
+
+record EndpointCapabilities
+field supported u64 required public
+field mandatory u64 required public
+end
+
+record EnvelopeHeader
+field major u16 required public
+field minor u16 required public
+field message_type u16 required public
+field flags u16 required public
+field payload_len u32 required public
+field sequence u64 required public
+end
+
+record Correlation
+field worker WorkerId required public
+field session optional<SessionId> optional public
+field request optional<RequestId> optional public
+field generation optional<u64> optional public
+end
+
+record SourceIdentity
+field stable_id bytes32 required private
+field revision u64 required public
+end
+
+record SourceDescriptor
+field identity SourceIdentity required public
+field length optional<u64> optional public
+field validator bytes32 required private
+end
+
+record ByteRange
+field start u64 required public
+field len u64 required public
+end
+
+record DataSegment
+field range ByteRange required public
+field slot u16 required public
+field byte_length u64 required public
+end
+
+record PageGeometry
+field identity bytes32 required private
+field media_box_x_milli_points i32 required public
+field media_box_y_milli_points i32 required public
+field media_box_width_milli_points u32 required public
+field media_box_height_milli_points u32 required public
+field crop_box_x_milli_points i32 required public
+field crop_box_y_milli_points i32 required public
+field crop_box_width_milli_points u32 required public
+field crop_box_height_milli_points u32 required public
+field intrinsic_rotation PageRotation required public
+end
+
+record PageViewport
+field page_index u32 required public
+field coordinate_space PageCoordinateSpace required public
+field geometry PageGeometry required public
+field clip_x_milli_points i32 required public
+field clip_y_milli_points i32 required public
+field clip_width_milli_points u32 required public
+field clip_height_milli_points u32 required public
+end
+
+record ViewportRequest
+field generation u64 required public
+field document_revision u64 required public
+field annotation_revision u64 required public
+field zoom_numerator u32 required public
+field zoom_denominator u32 required public
+field visible_pages list<PageViewport,64> required public
+field quality QualityPolicy required public
+field output_profile u32 required public
+field device_scale_milli u32 required public
+field rotation PageRotation required public
+field optional_content_id u64 required public
+end
+
+record SurfaceOwner
+field worker WorkerId required public
+field session SessionId required public
+end
+
+record SurfaceRegion
+field page_index u32 required public
+field x i32 required public
+field y i32 required public
+field width u32 required public
+field height u32 required public
+field coordinate_space SurfaceCoordinateSpace required public
+end
+
+record SurfaceMetadata
+field id SurfaceId required public
+field owner SurfaceOwner required public
+field generation u64 required public
+field region SurfaceRegion required public
+field width u32 required public
+field height u32 required public
+field stride u32 required public
+field format PixelFormat required public
+field alpha AlphaMode required public
+field byte_offset u64 required public
+field byte_length u64 required public
+field render_config RenderConfigHash required public
+field renderer_epoch RendererEpoch required public
+field plan_id RenderPlanId required public
+field plan_hash RenderPlanHash required public
+field scene_hash SceneHash required private
+field decision_hash CapabilityDecisionHash required private
+field backend NativeBackend required public
+end
+
+record CapabilityLocation
+field page_index optional<u32> optional public
+field object_number optional<u32> optional public
+field object_generation optional<u16> optional public
+field source_offset optional<u64> optional private
+field command_index optional<u32> optional public
+field resource_id optional<u32> optional public
+end
+
+record CapabilityScope
+field kind CapabilityScopeKind required public
+field page optional<u32> optional public
+field command optional<u32> optional public
+field resource optional<u32> optional public
+end
+
+record CapabilityContributor
+field id u32 required public
+field kind CapabilityContributorKind required public
+field code u32 required public
+field location optional<CapabilityLocation> optional private
+end
+
+record CapabilityContext
+field code u32 required public
+field value u64 required public
+field location optional<CapabilityLocation> optional private
+end
+
+record CapabilityRequirement
+field id u32 required public
+field capability u16 required public
+field parameter u64 required public
+field context CapabilityContext required public
+field dependencies list<u32,32> required public
+field scope CapabilityScope required public
+field contributor_ids list<u32,16> required public
+field location optional<CapabilityLocation> optional private
+end
+
+record CapabilitySubject
+field source SourceIdentity required private
+field document_revision u64 required public
+field revision_startxref u64 required public
+field page_index u32 required public
+field page_object_number u32 required public
+field page_object_generation u16 required public
+field scene_schema_major u16 required public
+field scene_schema_minor u16 required public
+field scene_hash SceneHash required private
+end
+
+record CapabilityDecision
+field decision_schema_version u16 required public
+field status SupportStatus required public
+field profile CapabilityProfileId required public
+field profile_version u32 required public
+field policy_version u32 required public
+field subject CapabilitySubject required public
+field missing list<CapabilityRequirement,16> required public
+field missing_total u32 required public
+field missing_completeness CollectionCompleteness required public
+field contributors list<CapabilityContributor,32> required public
+field contributors_total u32 required public
+field contributors_completeness CollectionCompleteness required public
+field scope CapabilityScope required public
+field location optional<CapabilityLocation> optional private
+field rejection_code optional<u32> optional public
+end
+
+record EngineError
+field code u32 required public
+field category ErrorCategory required public
+field severity ErrorSeverity required public
+field recoverability ErrorRecoverability required public
+field diagnostic_id DiagnosticId required public
+end
+
+record HelloCommand
+field hello ProtocolHello required public
+end
+
+record HelloAcceptCommand
+field negotiated_minor u16 required public
+field schema_hash bytes16 required public
+end
+
+record OpenCommand
+field source SourceDescriptor required private
+end
+
+record ProvideDataCommand
+field ticket DataTicket required public
+field source SourceIdentity required public
+field segments list<DataSegment,16> required sensitive
+end
+
+record RegisterCanvasCommand
+field canvas CanvasId required public
+field transfer_slot u16 required public
+field width u32 required public
+field height u32 required public
+end
+
+record ReleaseCanvasCommand
+field canvas CanvasId required public
+end
+
+record SetViewportCommand
+field viewport ViewportRequest required public
+end
+
+record CancelCommand
+field target RequestId required public
+end
+
+record ReleaseSurfaceCommand
+field surface SurfaceId required public
+end
+
+record CloseSessionCommand
+end
+
+record ShutdownCommand
+field deadline_ms u32 required public
+end
+
+record ReadyEvent
+field worker WorkerId required public
+field negotiated_minor u16 required public
+field schema_hash bytes16 required public
+end
+
+record NeedDataEvent
+field ticket DataTicket required public
+field source SourceIdentity required public
+field ranges list<ByteRange,16> required public
+field priority u8 required public
+field checkpoint u64 required public
+end
+
+record DocumentReadyEvent
+field session SessionId required public
+field document_revision u64 required public
+field page_count optional<u32> optional public
+field profile CapabilityProfileId required public
+field policy_version u32 required public
+end
+
+record CanvasReleasedEvent
+field canvas CanvasId required public
+end
+
+record CapabilityReportedEvent
+field decision CapabilityDecision required public
+end
+
+record SurfaceReadyEvent
+field metadata SurfaceMetadata required public
+field transport SurfaceTransport required public
+end
+
+record SurfaceReclaimedEvent
+field surface SurfaceId required public
+field reason SurfaceReclaimReason required public
+end
+
+record RequestCancelledEvent
+field target RequestId required public
+end
+
+record RequestFailedEvent
+field error EngineError required public
+end
+
+record SessionClosedEvent
+field session SessionId required public
+end
+
+record WorkerStoppedEvent
+field worker WorkerId required public
+end
+
+record WorkerFaultEvent
+field error EngineError required public
+end
+
+record ProtocolFaultEvent
+field error EngineError required public
+end
+
+union SurfaceTransport u8
+variant OffscreenCanvasCommit 1 canvas:CanvasId,region_length:u64
+variant BrowserTransfer 2 slot:u16,transfer_kind:BrowserTransferKind,transfer_length:u64
+variant SharedMemory 3 handle:PlatformHandle,region_length:u64,release_token:u64
+variant LocalMemory 4 region_length:u64,memory_epoch:MemoryEpoch
+end
+
+message command Hello 1 HelloCommand Starting Worker no 0 0 0 512 Ready,ProtocolFault
+message command HelloAccept 2 HelloAcceptCommand Starting Worker no 0 0 0 256 Ready,ProtocolFault
+message command Open 3 OpenCommand Ready Request no 0 0 0 4096 DocumentReady,RequestFailed,RequestCancelled
+message command ProvideData 4 ProvideDataCommand OpeningOrReady Session no 0 1 16 16777216 RequestFailed
+message command RegisterCanvas 5 RegisterCanvasCommand Ready Worker no 0 1 1 256 CanvasReleased,ProtocolFault
+message command ReleaseCanvas 6 ReleaseCanvasCommand Ready Worker yes 0 0 0 128 CanvasReleased,ProtocolFault
+message command SetViewport 7 SetViewportCommand Ready Generation no 0 0 0 8192 CapabilityReported,SurfaceReady,RequestFailed
+message command Cancel 8 CancelCommand ActiveRequest Request yes 0 0 0 128 RequestCancelled,RequestFailed
+message command ReleaseSurface 9 ReleaseSurfaceCommand SurfaceAlive Session yes 0 0 0 128 ProtocolFault
+message command CloseSession 10 CloseSessionCommand NonClosed Session yes 0 0 0 64 SessionClosed
+message command Shutdown 11 ShutdownCommand Ready Worker yes 0 0 0 128 WorkerStopped,WorkerFault
+message event Ready 101 ReadyEvent Starting Worker terminal 0 0 0 256
+message event NeedData 102 NeedDataEvent OpeningOrReady Session stream 0 0 0 2048
+message event DocumentReady 103 DocumentReadyEvent Opening Request terminal 0 0 0 512
+message event CanvasReleased 104 CanvasReleasedEvent Ready Worker stream 0 0 0 128
+message event CapabilityReported 105 CapabilityReportedEvent Ready Generation stream 0 0 0 4096
+message event SurfaceReady 106 SurfaceReadyEvent Ready Generation stream 0 0 1 2048
+message event RequestCancelled 107 RequestCancelledEvent ActiveRequest Request terminal 0 0 0 128
+message event RequestFailed 108 RequestFailedEvent Any Request terminal 0 0 0 256
+message event SessionClosed 109 SessionClosedEvent Closing Session terminal 0 0 0 128
+message event WorkerStopped 110 WorkerStoppedEvent Draining Worker terminal 0 0 0 128
+message event WorkerFault 111 WorkerFaultEvent Any Worker terminal 0 0 0 256
+message event ProtocolFault 112 ProtocolFaultEvent Any Worker terminal 0 0 0 256
+message event SurfaceReclaimed 113 SurfaceReclaimedEvent Ready Session stream 0 0 0 128

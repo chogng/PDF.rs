@@ -19,7 +19,7 @@ struct ProductPackage {
     crate_name: &'static str,
 }
 
-const PRODUCT_PACKAGE_COUNT: usize = 12;
+const PRODUCT_PACKAGE_COUNT: usize = 13;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -75,6 +75,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "runtime/cache/Cargo.toml",
         package_name: "pdf-rs-cache",
         crate_name: "pdf_rs_cache",
+    },
+    ProductPackage {
+        manifest: "runtime/protocol/Cargo.toml",
+        package_name: "pdf-rs-protocol",
+        crate_name: "pdf_rs_protocol",
     },
     ProductPackage {
         manifest: "runtime/session/Cargo.toml",
@@ -1080,6 +1085,11 @@ mod tests {
             package_name: "pdf-rs-font",
             crate_name: "pdf_rs_font",
         }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "runtime/protocol/Cargo.toml",
+            package_name: "pdf-rs-protocol",
+            crate_name: "pdf_rs_protocol",
+        }));
         let root = temp_dir("isolated");
         write_product_manifests(&root);
         write_manifest(
@@ -1266,6 +1276,40 @@ mod tests {
                     .iter()
                     .any(|value| value.code == "RPE-PURITY-0109" && value.token == token),
                 "missing expected raster closure violation {token:?}: {violations:?}"
+            );
+        }
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_release_closure_missing_protocol_outputs() {
+        let root = temp_dir("missing-protocol-build-repository");
+        let proof_root = temp_dir("missing-protocol-build-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-protocol").unwrap();
+        write_valid_build_inventory(&target);
+        fs::remove_file(target.join(format!("release/deps/pdf_rs_protocol-{HASH}.d"))).unwrap();
+        fs::remove_file(target.join(format!("release/deps/libpdf_rs_protocol-{HASH}.rlib")))
+            .unwrap();
+        fs::remove_file(target.join(format!("release/deps/libpdf_rs_protocol-{HASH}.rmeta")))
+            .unwrap();
+        fs::remove_dir_all(target.join(format!("release/.fingerprint/pdf-rs-protocol-{HASH}")))
+            .unwrap();
+
+        let violations = check_product_build_closure(&root, &target, "proof-protocol").unwrap_err();
+        for token in [
+            "missing-depfile=pdf_rs_protocol",
+            "missing-rust-artifact=pdf_rs_protocol",
+            "missing-fingerprint=pdf-rs-protocol",
+        ] {
+            assert!(
+                violations
+                    .iter()
+                    .any(|value| value.code == "RPE-PURITY-0109" && value.token == token),
+                "missing expected protocol closure violation {token:?}: {violations:?}"
             );
         }
 

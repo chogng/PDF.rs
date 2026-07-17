@@ -26,6 +26,7 @@ cargo run --quiet --package pdf-rs-quality -- "$lane"
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo run --quiet --package pdf-rs-protocol-codegen -- --check .
 cargo run --quiet --package pdf-rs-generate -- \
     tests/cases/infrastructure/synthetic-failure-bundle-001/source.dsl \
     tests/cases/infrastructure/synthetic-failure-bundle-001/input.pdf
@@ -148,6 +149,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-raster \
     --package pdf-rs-scene \
     --package pdf-rs-cache \
+    --package pdf-rs-protocol \
     --package pdf-rs-session
 cargo run --quiet --package pdf-rs-quality -- \
     check-product-build-closure . "$product_target" "$product_proof_id"
