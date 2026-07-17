@@ -1,0 +1,81 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/image-decoded-one-less"
+title = "One-less decoded-image budget prevents Scene publication"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "RPE-ARCH-001"
+version = "1"
+clauses = ["15.3/M3", "RPE-STD-003/9"]
+interpretation = "The literal RGB image needs six decoded component bytes while the case-owned decoded-byte budget is five; stage content-image returns RPE-CONTENT-VM-0012 with limit 5, consumed 0, attempted 6."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/image-decoded-one-less/input.pdf"
+sha256 = "sha256:6c5ec504a8533abe8440f03e9ae3b72a141bc4aaed349491a21843fbfb5ed2c9"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.basic-image-xobjects", "core.reference-raster-v1"]
+requirements = ["m3.basic-image-xobjects.v1", "m3.reference-raster-v1.v1", "RPE-STD-003/9"]
+
+[validity]
+class = "valid"
+strict_expected = "RPE-CONTENT-VM-0012"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+
+[oracle]
+level = "O1"
+derivation = "Independent terminal contract: outcome=resource-limited; stage=content-image; diagnostic=RPE-CONTENT-VM-0012; limit-kind=content-image-decoded-bytes; limit=5; consumed=0; attempted=6; parse=true; scene=false; pixel=false; capability=false; error=true."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 758
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 5
+max_image_pixels = 64
+max_raster_output_bytes = 256
+max_path_segments = 16
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 8
+height = 8
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the exact one-less decoded-image byte boundary"]

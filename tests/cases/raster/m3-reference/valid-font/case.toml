@@ -1,0 +1,90 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/valid-font"
+title = "Embedded triangle glyph produces exact diagonal coverage"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["9.2.4", "9.4.4", "9.6.3", "RPE-ARCH-001/15.3/M3"]
+interpretation = "The embedded project-owned TrueType program maps A to one 100-unit right triangle; size 1000 on a 100-unit page reduces coverage to an exact diagonal sample predicate."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/valid-font/input.pdf"
+sha256 = "sha256:f53bb34652433a666807c5abad7a4503f5212c2969229d231c107dcabc7e9734"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.basic-embedded-text", "core.reference-geometry-coverage", "core.reference-raster-v1"]
+requirements = ["m3.basic-embedded-text.v1", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = false
+pixel = true
+diagnostic = false
+capability = false
+error = false
+pixel_artifact = "expected/pixel.json"
+pixel_sha256 = "sha256:f4538de0d40a7c628ab5440b84ec94e70cf1778916dc77640592e60e5666568d"
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic evaluation of the embedded triangle outline, text transform, 64-sample coverage predicate, and opaque black-over-white averaging."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[pixel_oracle]
+level = "O1"
+derivation = "expected/oracle.md#sha256:db19815ba252897dc062a37aa1e87c4e5ef9724734a84c829ab320c87c893ae3"
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 1855
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 64
+max_raster_output_bytes = 256
+max_path_segments = 16
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 8
+height = 8
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the independent O1 embedded-font Reference case"]

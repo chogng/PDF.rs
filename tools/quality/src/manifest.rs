@@ -106,7 +106,12 @@ const OPTIONAL_SECTION_FIELDS: &[(&str, &[&str])] = &[
     ),
     (
         "budget",
-        &["max_pages", "max_outline_items", "max_range_resident_bytes"],
+        &[
+            "max_pages",
+            "max_outline_items",
+            "max_range_resident_bytes",
+            "max_raster_output_bytes",
+        ],
     ),
 ];
 
@@ -492,7 +497,12 @@ fn validate_value_shapes(
         }
     }
 
-    for key in ["max_pages", "max_outline_items", "max_range_resident_bytes"] {
+    for key in [
+        "max_pages",
+        "max_outline_items",
+        "max_range_resident_bytes",
+        "max_raster_output_bytes",
+    ] {
         if let Some(value) = optional_value(sections, "budget", key)
             && parse_canonical_positive_integer(value).is_none()
         {
@@ -1438,6 +1448,33 @@ entries = ["2026-07-13: introduced"]
                     .iter()
                     .any(|error| error.code == "RPE-MANIFEST-0014")
             );
+        }
+    }
+
+    #[test]
+    fn accepts_optional_raster_output_budget_and_rejects_noncanonical_values() {
+        assert!(validate_manifest(&VALID).is_ok());
+
+        let exact = VALID.replace(
+            "max_stream_output_bytes = 1048576",
+            "max_stream_output_bytes = 1048576\nmax_raster_output_bytes = 4",
+        );
+        let manifest = validate_manifest(&exact).expect("positive Raster output budget is valid");
+        assert_eq!(
+            manifest.positive_u64("budget", "max_raster_output_bytes"),
+            Some(4)
+        );
+
+        for invalid in ["0", "04", "many"] {
+            let input = VALID.replace(
+                "max_stream_output_bytes = 1048576",
+                &format!("max_stream_output_bytes = 1048576\nmax_raster_output_bytes = {invalid}"),
+            );
+            assert!(validate_manifest(&input).unwrap_err().iter().any(|error| {
+                error.code == "RPE-MANIFEST-0014"
+                    && error.section.as_deref() == Some("budget")
+                    && error.key.as_deref() == Some("max_raster_output_bytes")
+            }));
         }
     }
 

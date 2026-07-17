@@ -1,0 +1,81 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/strict-invalid-xref"
+title = "Invalid startxref prevents strict authority"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["7.5.4", "7.5.5", "RPE-ARCH-001/15.3/M3"]
+interpretation = "The advertised startxref is exactly one byte after the real traditional xref token; stage strict-open returns RPE-XREF-0011 before parse authority, Scene, or pixels."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/strict-invalid-xref/input.pdf"
+sha256 = "sha256:24a5e428e5c344d3d5aeabba0d7e512b795e5a57994af1d7612c3e636edb1287"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.strict-base-open", "core.reference-raster-v1"]
+requirements = ["RPE-ARCH-001/5.3", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "invalid"
+strict_expected = "RPE-XREF-0011"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = false
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+
+[oracle]
+level = "O0"
+derivation = "Independent terminal contract: outcome=failed; stage=strict-open; diagnostic=RPE-XREF-0011; parse=false; scene=false; pixel=false; capability=false; error=true."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 622
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 64
+max_raster_output_bytes = 256
+max_path_segments = 32
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 8
+height = 8
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the strict xref acquisition boundary"]

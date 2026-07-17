@@ -1,0 +1,81 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/invalid-content-state"
+title = "Unbalanced graphics state prevents Scene publication"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.4.2", "RPE-ARCH-001/15.3/M3"]
+interpretation = "The one-byte content program contains q without a matching Q; stage content-vm returns RPE-CONTENT-VM-0007 with no partial Scene or pixels."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/invalid-content-state/input.pdf"
+sha256 = "sha256:041a5a4fa23622787514500598c015d260b7946f5f06454088edf3f16845ff8a"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-graphics-v2", "core.reference-raster-v1"]
+requirements = ["m3.content-graphics-v2.v1", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "invalid"
+strict_expected = "RPE-CONTENT-VM-0007"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = false
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+
+[oracle]
+level = "O0"
+derivation = "Independent terminal contract: outcome=failed; stage=content-vm; diagnostic=RPE-CONTENT-VM-0007; parse=true; scene=false; pixel=false; capability=false; error=true."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 554
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 64
+max_raster_output_bytes = 256
+max_path_segments = 16
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 8
+height = 8
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the invalid Content graphics-state boundary"]

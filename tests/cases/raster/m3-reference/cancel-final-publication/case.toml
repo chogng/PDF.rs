@@ -1,0 +1,81 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/cancel-final-publication"
+title = "Final cancellation suppresses complete candidate pixels"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "RPE-ARCH-001"
+version = "1"
+clauses = ["15.3/M3", "RPE-STD-004/7"]
+interpretation = "The path-and-clip Scene is complete, but the harness cancels at the final Reference publication check; stage reference-publication returns RPE-RASTER-0004 and retains no pixel buffer."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/cancel-final-publication/input.pdf"
+sha256 = "sha256:f919455e7b2aae5e64ff46da7ac5e4c28ebe0c0eb08c46d3aab4b005cab7449a"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.reference-raster-v1"]
+requirements = ["m3.reference-raster-v1.v1", "RPE-STD-004/7"]
+
+[validity]
+class = "valid"
+strict_expected = "RPE-RASTER-0004"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = false
+pixel = false
+diagnostic = true
+capability = false
+error = true
+
+[oracle]
+level = "O1"
+derivation = "Independent terminal contract: outcome=cancelled; stage=reference-publication; diagnostic=RPE-RASTER-0004; parse=true; scene=true; pixel=false; capability=false; error=true."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 622
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 2
+max_raster_output_bytes = 8
+max_path_segments = 32
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 2
+height = 1
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the final Reference publication cancellation boundary"]

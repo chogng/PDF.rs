@@ -285,6 +285,29 @@ fn linked_pixel_contract_rejects_hash_encoding_dimensions_budget_and_symlinks() 
         b"{\"height\":1,\"rgba_hex\":\"000000ff\",\"schema\":1,\"width\":1}",
     );
     assert_code(&manifest, "RPE-CASE-0005");
+    fixture.write(
+        "expected/pixel.json",
+        b"{\"height\":1,\"rgba_hex\":\"ffffffff\",\"schema\":1,\"width\":1}",
+    );
+
+    fixture.write(
+        "case.toml",
+        original_manifest.replace(
+            "max_stream_output_bytes = 4096",
+            "max_stream_output_bytes = 4096\nmax_raster_output_bytes = 3",
+        ),
+    );
+    assert_code(&manifest, "RPE-CASE-0008");
+
+    fixture.write(
+        "case.toml",
+        original_manifest.replace(
+            "max_stream_output_bytes = 4096",
+            "max_stream_output_bytes = 4096\nmax_raster_output_bytes = 4",
+        ),
+    );
+    validate_case_file(&manifest).expect("exact Raster output-byte budget is valid");
+    fixture.write("case.toml", &original_manifest);
 
     #[cfg(unix)]
     {

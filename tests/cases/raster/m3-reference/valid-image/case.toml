@@ -1,0 +1,90 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/valid-image"
+title = "Literal two-texel image produces exact red and blue pixels"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.9.5", "8.9.7", "RPE-ARCH-001/15.3/M3"]
+interpretation = "A non-interpolated 2 by 1 eight-bit DeviceRGB image maps exactly to the page and selects its literal red and blue texels by nearest-neighbor sampling."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/valid-image/input.pdf"
+sha256 = "sha256:6c5ec504a8533abe8440f03e9ae3b72a141bc4aaed349491a21843fbfb5ed2c9"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.basic-image-xobjects", "core.reference-color-compositing", "core.reference-raster-v1"]
+requirements = ["m3.basic-image-xobjects.v1", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = false
+pixel = true
+diagnostic = false
+capability = false
+error = false
+pixel_artifact = "expected/pixel.json"
+pixel_sha256 = "sha256:914296c2871b75a87aabca6e8987fb7c96b79099e72929cfe9fcae6dcd7ca52f"
+
+[oracle]
+level = "O1"
+derivation = "Finite evaluation of the literal six component bytes and inverse image-to-page mapping at two output-pixel centers."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[pixel_oracle]
+level = "O1"
+derivation = "expected/oracle.md#sha256:0516d9e5116251e8763bfdd749c61625b454dda547f5cf1c9c1e7c9ae886293c"
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 758
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 2
+max_raster_output_bytes = 8
+max_path_segments = 16
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 2
+height = 1
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the independent O1 basic-image Reference case"]

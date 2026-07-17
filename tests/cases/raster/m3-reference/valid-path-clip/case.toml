@@ -1,0 +1,90 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/valid-path-clip"
+title = "Analytic clipped path produces exact black and red pixels"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.4.2", "8.4.4", "8.5.3", "8.6.4", "RPE-ARCH-001/15.3/M3"]
+interpretation = "A saved left-half clip applies only to the black fill before Q; the restored state then admits the independent right-half red fill."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/valid-path-clip/input.pdf"
+sha256 = "sha256:f919455e7b2aae5e64ff46da7ac5e4c28ebe0c0eb08c46d3aab4b005cab7449a"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-graphics-v2", "core.reference-stroke-clip", "core.reference-raster-v1"]
+requirements = ["m3.content-graphics-v2.v1", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = false
+pixel = true
+diagnostic = false
+capability = false
+error = false
+pixel_artifact = "expected/pixel.json"
+pixel_sha256 = "sha256:7166ca83da7f93b135337a9b9daa8327d54941a5afb995e0dcdebb02c6b11980"
+
+[oracle]
+level = "O0"
+derivation = "Direct operator, graphics-state, rectangle, clip, and device-color evaluation."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[pixel_oracle]
+level = "O0"
+derivation = "expected/oracle.md#sha256:c45b8f93440e755a32bad07a2a70bb2fcab09271c61356fe14faa3936c627bd2"
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 622
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 2
+max_raster_output_bytes = 8
+max_path_segments = 32
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 2
+height = 1
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the independent O0 path-and-clip Reference case"]

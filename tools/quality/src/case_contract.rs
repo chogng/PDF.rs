@@ -248,6 +248,17 @@ fn validate_pixel_artifact(
             case_directory.join(relative_path),
         ));
     }
+    if let Some(max_raster_output_bytes) =
+        manifest.positive_u64("budget", "max_raster_output_bytes")
+        && u64::try_from(artifact.rgba().len()).is_ok_and(|bytes| bytes > max_raster_output_bytes)
+    {
+        diagnostics.push(CaseContractDiagnostic::linked(
+            "RPE-CASE-0008",
+            "budget",
+            "max_raster_output_bytes",
+            case_directory.join(relative_path),
+        ));
+    }
 }
 
 fn validate_derivation(

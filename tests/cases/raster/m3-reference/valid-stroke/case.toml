@@ -1,0 +1,90 @@
+schema = 1
+
+[identity]
+id = "raster/m3-reference/valid-stroke"
+title = "Analytic dashed rectangles produce exact coverage pixels"
+owner = "quality-corpus"
+status = "active"
+introduced_in = "0.1.0"
+
+[specification]
+document = "ISO-32000-1:2008"
+version = "1"
+clauses = ["8.4.3", "8.4.4", "8.5.3", "RPE-ARCH-001/15.3/M3"]
+interpretation = "Two closed rectangles retain line width two, butt caps, miter joins, dash array [4 2], and phase zero; B* fills gray before applying the unchanged black stroking color."
+
+[provenance]
+kind = "self-authored-generated"
+source = "tests/cases/raster/m3-reference/valid-stroke/input.pdf"
+sha256 = "sha256:e90c2b9bc41cda011a741eea0181217ed35c6e6f4a27df73513b73439963bc70"
+license = "LicenseRef-PDF.rs-SelfAuthored-Test"
+redistributable = true
+access = "repository"
+
+[features]
+ids = ["core.content-graphics-v2", "core.reference-stroke-clip", "core.reference-color-compositing", "core.reference-raster-v1"]
+requirements = ["m3.content-graphics-v2.v1", "m3.reference-raster-v1.v1"]
+
+[validity]
+class = "valid"
+strict_expected = "success"
+recovery_expected = "not-applicable"
+
+[expected]
+parse = true
+scene = true
+text = false
+pixel = true
+diagnostic = false
+capability = false
+error = false
+pixel_artifact = "expected/pixel.json"
+pixel_sha256 = "sha256:b72ec0a65ec2fe476a85d8fe5888385a66d6b75218095803bef0d1d6e016cc7c"
+
+[oracle]
+level = "O1"
+derivation = "Finite analytic 64-sample evaluation of dashed axis-aligned stroke rectangles, miter joins, gray fill, and source-order Q16 coverage averaging."
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[pixel_oracle]
+level = "O1"
+derivation = "expected/oracle.md#sha256:83c3ca06b8961845207152b428839c437ef6f06be1cd476fa75a8b826fe65c6a"
+reviewers = ["spec-conformance"]
+reference_may_generate = false
+last_reviewed = "2026-07-16"
+
+[budget]
+max_input_bytes = 606
+max_objects = 11
+max_resolve_depth = 16
+max_stream_output_bytes = 4096
+max_total_decode_bytes = 4096
+max_image_pixels = 64
+max_raster_output_bytes = 256
+max_path_segments = 32
+max_scene_commands = 16
+max_group_depth = 8
+operator_fuel = 4096
+decode_fuel = 4096
+watchdog_ms = 500
+
+[render]
+width = 8
+height = 8
+dpr_milli = 1000
+color_profile = "srgb-reference-v1"
+alpha = "straight"
+antialias = "reference-v1"
+renderer_epoch = "reference-raster-v1"
+
+[tolerance]
+mode = "exact"
+
+[runners]
+native = ["tools/quality::m3_reference_gate", "tools/quality::m3_reference_oracle_model"]
+external_observation = []
+
+[history]
+entries = ["2026-07-16: activated as the independent O1 dashed-stroke Reference case"]
