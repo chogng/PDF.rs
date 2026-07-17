@@ -192,6 +192,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-surface"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-policy",
+ "pdf-rs-protocol",
+]
+
+[[package]]
 name = "pdf-rs-syntax"
 version = "0.1.0"
 dependencies = [

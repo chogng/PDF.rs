@@ -1,0 +1,10 @@
+[package]
+name = "pdf-rs-surface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-policy = { path = "../policy" }
+pdf-rs-protocol = { path = "../protocol" }

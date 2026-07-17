@@ -8,6 +8,7 @@ members = [
     "runtime/protocol",
     "runtime/scheduler",
     "runtime/session",
+    "runtime/surface",
     "tools/*",
 ]
 
