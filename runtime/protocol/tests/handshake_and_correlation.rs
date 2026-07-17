@@ -1,7 +1,7 @@
 use pdf_rs_protocol::{
     COMMAND_DESCRIPTORS, Correlation, DESKTOP_BYTE_ORDER, DESKTOP_FRAME_HEADER_BYTES,
-    DesktopFrameDecoder, ENVELOPE_HEADER_BYTES, EVENT_DESCRIPTORS, EndpointCapabilities,
-    EndpointRole, HandshakeCompatibility, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES,
+    ENVELOPE_HEADER_BYTES, EVENT_DESCRIPTORS, EndpointCapabilities, EndpointRole,
+    HandshakeCompatibility, HandshakeFrameDecoder, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES,
     MAX_TRANSFER_SLOTS, MIN_COMPATIBLE_MINOR, PROTOCOL_MAJOR, PROTOCOL_MINOR, ProtocolErrorCode,
     ProtocolHello, ProtocolLimits, ProtocolValidator, RequestId, SCHEMA_HASH, SequenceTracker,
     SessionId, WorkerId,
@@ -58,8 +58,13 @@ fn frame_policy_and_fixed_header_are_derived_from_the_generated_registry() {
         assert_eq!(policy.message_type(), descriptor.id);
         assert_eq!(policy.allowed_flags(), descriptor.allowed_flags);
         assert_eq!(policy.max_payload_bytes(), descriptor.max_payload_bytes);
+        assert_eq!(
+            policy.maximum_encoded_payload_bytes(),
+            descriptor.maximum_encoded_payload_bytes
+        );
         assert_eq!(policy.min_transfer_slots(), descriptor.min_transfer_slots);
         assert_eq!(policy.max_transfer_slots(), descriptor.max_transfer_slots);
+        assert_eq!(policy.required_capability(), descriptor.required_capability);
     }
     assert_eq!(
         validator.frame_policy(u16::MAX).unwrap_err().code(),
@@ -69,14 +74,11 @@ fn frame_policy_and_fixed_header_are_derived_from_the_generated_registry() {
     let hello = message_id("Hello");
     let frame = empty_frame(hello, 1);
     let mut sequence = SequenceTracker::new();
-    let accepted = DesktopFrameDecoder::current(limits)
-        .decode(
-            &frame,
-            0,
-            validator.frame_policy(hello).unwrap(),
-            &mut sequence,
-        )
+    let pending = HandshakeFrameDecoder::new(limits)
+        .prepare(&frame, 0, &sequence)
         .unwrap();
+    assert_eq!(sequence.last_accepted(), None);
+    let accepted = pending.commit(&mut sequence).unwrap();
     assert!(accepted.payload().is_empty());
 }
 

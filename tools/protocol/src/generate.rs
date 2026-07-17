@@ -1,11 +1,19 @@
 use std::fmt::Write;
 use std::path::{Component, Path, PathBuf};
 
+use crate::codec::{CodecErrorKind, CodecLimits, FixedLeCodec, WireValue};
+use crate::generate_codec::{generate_rust_payload_codec, generate_typescript_payload_codec};
 use crate::hash::{lowercase_hex, sha256};
 use crate::model::{EnumDef, MessageKind, Presence, Primitive, Privacy, Protocol, Type};
 
 pub const SCHEMA_HASH_TRUNCATION: &str = "sha256-first-16-bytes";
-pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const GENERATOR_VERSION: &str = "0.2.0";
+pub const WIRE_IDENTITY_DOMAIN: &str = "PDF.rs/EngineProtocol/WireIdentity/v1";
+pub const PAYLOAD_CODEC_ABI_VERSION: u16 = 1;
+pub const CAPABILITY_DECISION_HASH_DOMAIN: &str =
+    "PDF.rs/EngineProtocol/CapabilityDecision/fixed_le_v1/v1";
+pub const RENDER_PLAN_MANIFEST_HASH_DOMAIN: &str =
+    "PDF.rs/EngineProtocol/RenderPlanManifest/fixed_le_v1/v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedFile {
@@ -14,7 +22,8 @@ pub struct GeneratedFile {
 }
 
 pub fn generated_files(protocol: &Protocol, canonical_schema: &str) -> Vec<GeneratedFile> {
-    let digest = sha256(canonical_schema.as_bytes());
+    let canonical_digest = sha256(canonical_schema.as_bytes());
+    let digest = wire_identity_digest(protocol, canonical_schema);
     vec![
         file(
             "runtime/protocol/src/generated.rs",
@@ -30,7 +39,7 @@ pub fn generated_files(protocol: &Protocol, canonical_schema: &str) -> Vec<Gener
         ),
         file(
             "protocol/generated/schema-hash.txt",
-            generate_hash_registry(&digest),
+            generate_hash_registry(&digest, &canonical_digest),
         ),
         file(
             "protocol/generated/compatibility-vectors.json",
@@ -39,6 +48,10 @@ pub fn generated_files(protocol: &Protocol, canonical_schema: &str) -> Vec<Gener
         file(
             "protocol/generated/invalid-vectors.json",
             generate_invalid_vectors(protocol, &digest),
+        ),
+        file(
+            "protocol/generated/payload-codec-vectors.json",
+            generate_payload_codec_vectors(protocol, &digest),
         ),
     ]
 }
@@ -50,7 +63,39 @@ fn file(path: &str, contents: String) -> GeneratedFile {
     }
 }
 
+fn wire_identity_digest(protocol: &Protocol, canonical_schema: &str) -> [u8; 32] {
+    let mut preimage = Vec::with_capacity(
+        WIRE_IDENTITY_DOMAIN.len() + protocol.payload_codec.len() + canonical_schema.len() + 24,
+    );
+    preimage.extend_from_slice(WIRE_IDENTITY_DOMAIN.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(&PAYLOAD_CODEC_ABI_VERSION.to_le_bytes());
+    preimage.extend_from_slice(
+        &u32::try_from(protocol.payload_codec.len())
+            .expect("validated codec name length fits u32")
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(protocol.payload_codec.as_bytes());
+    preimage.extend_from_slice(
+        &u64::try_from(canonical_schema.len())
+            .expect("bounded canonical schema length fits u64")
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(canonical_schema.as_bytes());
+    sha256(&preimage)
+}
+
 pub fn write_generated(root: &Path, files: &[GeneratedFile]) -> Result<(), String> {
+    write_generated_transaction(root, files, None)
+}
+
+fn write_generated_transaction(
+    root: &Path,
+    files: &[GeneratedFile],
+    fail_before_replace: Option<usize>,
+) -> Result<(), String> {
+    let _lock = GenerationLock::acquire(root)?;
+    let mut staged = Vec::with_capacity(files.len());
     for file in files {
         reject_symlink_path(root, &file.relative_path)?;
         let target = root.join(&file.relative_path);
@@ -59,21 +104,116 @@ pub fn write_generated(root: &Path, files: &[GeneratedFile]) -> Result<(), Strin
                 .map_err(|error| format!("create {}: {error}", parent.display()))?;
         }
         reject_symlink_path(root, &file.relative_path)?;
-        let temporary = target.with_extension("protocol-codegen.tmp");
-        if std::fs::symlink_metadata(&temporary)
-            .is_ok_and(|metadata| metadata.file_type().is_symlink())
-        {
-            return Err(format!(
-                "refusing generated temporary symlink: {}",
-                temporary.display()
-            ));
-        }
+        let temporary = target.with_extension("protocol-codegen.new");
+        let backup = target.with_extension("protocol-codegen.previous");
+        prepare_auxiliary_path(&temporary)?;
+        prepare_auxiliary_path(&backup)?;
         std::fs::write(&temporary, file.contents.as_bytes())
             .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-        std::fs::rename(&temporary, &target)
-            .map_err(|error| format!("replace {}: {error}", target.display()))?;
+        staged.push((target, temporary, backup));
+    }
+
+    let mut replaced = Vec::with_capacity(staged.len());
+    for (index, (target, temporary, backup)) in staged.iter().enumerate() {
+        if fail_before_replace == Some(index) {
+            rollback_generated(&replaced, &staged);
+            return Err(format!("injected replacement failure at index {index}"));
+        }
+        let had_existing = match std::fs::symlink_metadata(target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                rollback_generated(&replaced, &staged);
+                return Err(format!(
+                    "refusing generated target symlink: {}",
+                    target.display()
+                ));
+            }
+            Ok(_) => {
+                if let Err(error) = std::fs::rename(target, backup) {
+                    rollback_generated(&replaced, &staged);
+                    return Err(format!(
+                        "stage existing {} for replacement: {error}",
+                        target.display()
+                    ));
+                }
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                rollback_generated(&replaced, &staged);
+                return Err(format!("inspect {}: {error}", target.display()));
+            }
+        };
+        if let Err(error) = std::fs::rename(temporary, target) {
+            if had_existing {
+                let _ = std::fs::rename(backup, target);
+            }
+            rollback_generated(&replaced, &staged);
+            return Err(format!("replace {}: {error}", target.display()));
+        }
+        replaced.push((target.clone(), backup.clone(), had_existing));
+    }
+    for (_, backup, had_existing) in &replaced {
+        if *had_existing {
+            std::fs::remove_file(backup).map_err(|error| {
+                format!("remove committed backup {}: {error}", backup.display())
+            })?;
+        }
     }
     Ok(())
+}
+
+fn prepare_auxiliary_path(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "refusing generated auxiliary symlink: {}",
+            path.display()
+        )),
+        Ok(_) => std::fs::remove_file(path)
+            .map_err(|error| format!("remove stale auxiliary {}: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("inspect auxiliary {}: {error}", path.display())),
+    }
+}
+
+fn rollback_generated(
+    replaced: &[(PathBuf, PathBuf, bool)],
+    staged: &[(PathBuf, PathBuf, PathBuf)],
+) {
+    for (target, backup, had_existing) in replaced.iter().rev() {
+        let _ = std::fs::remove_file(target);
+        if *had_existing {
+            let _ = std::fs::rename(backup, target);
+        }
+    }
+    for (_, temporary, backup) in staged {
+        let _ = std::fs::remove_file(temporary);
+        let _ = std::fs::remove_file(backup);
+    }
+}
+
+struct GenerationLock {
+    path: PathBuf,
+}
+
+impl GenerationLock {
+    fn acquire(root: &Path) -> Result<Self, String> {
+        let path = root.join(".protocol-codegen.lock");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        use std::io::Write as _;
+        let mut file = options
+            .open(&path)
+            .map_err(|error| format!("acquire generator lock {}: {error}", path.display()))?;
+        writeln!(file, "pid={}", std::process::id())
+            .map_err(|error| format!("write generator lock {}: {error}", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for GenerationLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 pub fn check_generated(root: &Path, files: &[GeneratedFile]) -> Result<(), Vec<PathBuf>> {
@@ -153,6 +293,16 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
     .unwrap();
     writeln!(
         out,
+        "pub const WIRE_IDENTITY_DOMAIN: &str = \"{WIRE_IDENTITY_DOMAIN}\";"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const PAYLOAD_CODEC_ABI_VERSION: u16 = {PAYLOAD_CODEC_ABI_VERSION};"
+    )
+    .unwrap();
+    writeln!(
+        out,
         "pub const MIN_COMPATIBLE_MINOR: u16 = {};",
         protocol.minor
     )
@@ -167,6 +317,34 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
         out,
         "pub const MAX_TRANSFER_SLOTS: u16 = {};",
         protocol.max_transfer_slots
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const MAX_DATA_SEGMENT_BYTES: u64 = {};",
+        protocol.max_data_segment_bytes
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const MAX_DATA_TICKET_BYTES: u64 = {};",
+        protocol.max_data_ticket_bytes
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const PAYLOAD_CODEC: &str = \"{}\";",
+        protocol.payload_codec
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const CAPABILITY_DECISION_HASH_DOMAIN: &str = \"{CAPABILITY_DECISION_HASH_DOMAIN}\";"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const RENDER_PLAN_MANIFEST_HASH_DOMAIN: &str = \"{RENDER_PLAN_MANIFEST_HASH_DOMAIN}\";"
     )
     .unwrap();
     writeln!(
@@ -216,7 +394,11 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
 
     for scalar in &protocol.scalars {
         let rust = rust_primitive(scalar.primitive);
-        if scalar.name == "PlatformHandle" {
+        let redact_debug = matches!(
+            scalar.name.as_str(),
+            "PlatformHandle" | "SceneHash" | "CapabilityDecisionHash"
+        );
+        if redact_debug {
             writeln!(
                 out,
                 "#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]\npub struct {}({rust});",
@@ -246,10 +428,11 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
             )
             .unwrap();
         }
-        if scalar.name == "PlatformHandle" {
+        if redact_debug {
             writeln!(
                 out,
-                "impl core::fmt::Debug for PlatformHandle {{\n    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n        formatter.write_str(\"PlatformHandle([REDACTED])\")\n    }}\n}}\n"
+                "impl core::fmt::Debug for {} {{\n    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n        formatter.write_str(\"{}([REDACTED])\")\n    }}\n}}\n",
+                scalar.name, scalar.name
             )
             .unwrap();
         }
@@ -259,6 +442,7 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
         write_rust_enum(&mut out, enumeration);
     }
     write_endpoint_capability_constants(&mut out, protocol);
+    write_engine_execution_capability_constants(&mut out, protocol);
 
     for record in &protocol.records {
         let has_redacted_field = record
@@ -302,6 +486,7 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
             writeln!(out, "        output.finish()\n    }}\n}}\n").unwrap();
         }
     }
+    write_rust_engine_error_descriptors(&mut out, protocol);
 
     for union in &protocol.unions {
         let has_redacted_field = union
@@ -337,10 +522,132 @@ fn generate_rust(protocol: &Protocol, digest: &[u8; 32]) -> String {
         }
     }
 
+    write_rust_union_capability_requirements(&mut out, protocol);
     write_message_enums(&mut out, protocol);
     write_descriptors(&mut out, protocol);
     write_capability_decision_invariants(&mut out);
-    out
+    out.push_str(&generate_rust_payload_codec(protocol));
+    finish_generated_text(out)
+}
+
+fn engine_error_policies() -> &'static [(&'static str, &'static str, &'static str, &'static str)] {
+    &[
+        ("InvalidDocument", "Document", "Fatal", "ReopenSession"),
+        ("SourceChanged", "Source", "Recoverable", "ReopenSession"),
+        ("SourceUnavailable", "Source", "Recoverable", "RetryRequest"),
+        ("InvalidPassword", "Document", "Recoverable", "RetryRequest"),
+        (
+            "UnsupportedFeature",
+            "Capability",
+            "Recoverable",
+            "RetryNativeRenderer",
+        ),
+        (
+            "ResourceLimit",
+            "Resource",
+            "Recoverable",
+            "RetryNativeRenderer",
+        ),
+        ("Cancelled", "Cancelled", "Info", "None"),
+        ("StaleGeneration", "Cancelled", "Info", "None"),
+        (
+            "SurfaceImportFailed",
+            "Resource",
+            "Recoverable",
+            "RetryRequest",
+        ),
+        ("Internal", "Internal", "Fatal", "RestartWorker"),
+        ("ProtocolViolation", "Protocol", "Fatal", "RestartWorker"),
+    ]
+}
+
+fn write_rust_engine_error_descriptors(out: &mut String, protocol: &Protocol) {
+    if !protocol
+        .records
+        .iter()
+        .any(|record| record.name == "EngineError")
+    {
+        return;
+    }
+    out.push_str(
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+pub struct EngineErrorDescriptor {\n\
+    pub code: EngineErrorCode,\n\
+    pub category: ErrorCategory,\n\
+    pub severity: ErrorSeverity,\n\
+    pub recoverability: ErrorRecoverability,\n\
+}\n\n\
+pub const ENGINE_ERROR_DESCRIPTORS: &[EngineErrorDescriptor] = &[\n",
+    );
+    for (code, category, severity, recoverability) in engine_error_policies() {
+        writeln!(
+            out,
+            "    EngineErrorDescriptor {{ code: EngineErrorCode::{code}, category: ErrorCategory::{category}, severity: ErrorSeverity::{severity}, recoverability: ErrorRecoverability::{recoverability} }},"
+        )
+        .unwrap();
+    }
+    out.push_str(
+        "];\n\n\
+impl EngineError {\n\
+    pub fn wire_invariants_valid(&self) -> bool {\n\
+        self.diagnostic_id.value() != 0\n\
+            && ENGINE_ERROR_DESCRIPTORS.iter().any(|descriptor| descriptor.code == self.code\n\
+                && descriptor.category == self.category\n\
+                && descriptor.severity == self.severity\n\
+                && descriptor.recoverability == self.recoverability)\n\
+    }\n\
+}\n\n",
+    );
+}
+
+fn write_rust_union_capability_requirements(out: &mut String, protocol: &Protocol) {
+    out.push_str(
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+pub struct UnionVariantCapabilityRequirement {\n\
+    pub union_name: &'static str,\n\
+    pub variant_name: &'static str,\n\
+    pub capability: u64,\n\
+}\n\n\
+pub const UNION_VARIANT_CAPABILITY_REQUIREMENTS: &[UnionVariantCapabilityRequirement] = &[\n",
+    );
+    for union in &protocol.unions {
+        for variant in &union.variants {
+            if let Some(capability) = &variant.required_capability {
+                writeln!(
+                    out,
+                    "    UnionVariantCapabilityRequirement {{ union_name: \"{}\", variant_name: \"{}\", capability: {} }},",
+                    union.name,
+                    variant.name,
+                    rust_required_capability(Some(capability))
+                )
+                .unwrap();
+            }
+        }
+    }
+    out.push_str("];\n\n");
+    for union in &protocol.unions {
+        writeln!(
+            out,
+            "pub const fn {}_required_capability(value: &{}) -> u64 {{\n    match value {{",
+            snake_case(&union.name),
+            union.name
+        )
+        .unwrap();
+        for variant in &union.variants {
+            let pattern = if variant.fields.is_empty() {
+                format!("{}::{}", union.name, variant.name)
+            } else {
+                format!("{}::{} {{ .. }}", union.name, variant.name)
+            };
+            writeln!(
+                out,
+                "        {pattern} => {},",
+                rust_required_capability(variant.required_capability.as_deref())
+            )
+            .unwrap();
+        }
+        out.push_str("    }\n}\n\n");
+    }
 }
 
 fn write_rust_enum(out: &mut String, enumeration: &EnumDef) {
@@ -385,9 +692,35 @@ fn write_endpoint_capability_constants(out: &mut String, protocol: &Protocol) {
         expression.join(" | ")
     )
     .unwrap();
+    out.push('\n');
+}
+
+fn write_engine_execution_capability_constants(out: &mut String, protocol: &Protocol) {
+    let Some(capabilities) = protocol
+        .enums
+        .iter()
+        .find(|value| value.name == "EngineExecutionCapability")
+    else {
+        return;
+    };
+    let mut expression = Vec::new();
+    for variant in &capabilities.variants {
+        let constant = format!(
+            "ENGINE_EXECUTION_CAPABILITY_{}",
+            screaming_snake_case(&variant.name)
+        );
+        writeln!(
+            out,
+            "pub const {constant}: u64 = EngineExecutionCapability::{} as u64;",
+            variant.name
+        )
+        .unwrap();
+        expression.push(constant);
+    }
     writeln!(
         out,
-        "pub const ENGINE_SUPPORTED_ENDPOINT_CAPABILITIES: u64 = KNOWN_ENDPOINT_CAPABILITIES;\n"
+        "pub const KNOWN_ENGINE_EXECUTION_CAPABILITIES: u64 = {};\n",
+        expression.join(" | ")
     )
     .unwrap();
 }
@@ -421,6 +754,15 @@ fn write_message_enums(out: &mut String, protocol: &Protocol) {
 }
 
 fn write_descriptors(out: &mut String, protocol: &Protocol) {
+    let codec = FixedLeCodec::new(
+        protocol,
+        CodecLimits::new(
+            64,
+            protocol.max_message_bytes as usize,
+            protocol.max_message_bytes as usize,
+        ),
+    )
+    .expect("parser validates fixed_le_v1 schema");
     for message in &protocol.messages {
         writeln!(
             out,
@@ -446,7 +788,24 @@ pub struct CorrelationShape {\n\
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
 pub enum FieldPrivacy { Public, Private, Sensitive }\n\n\
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+pub enum OutcomeDisposition { Stream, Terminal }\n\n\
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+pub struct OutcomeDescriptor {\n\
+    pub event_id: u16,\n\
+    pub disposition: OutcomeDisposition,\n\
+}\n\n\
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
 pub struct FieldDescriptor {\n\
+    pub name: &'static str,\n\
+    pub wire_type: &'static str,\n\
+    pub required: bool,\n\
+    pub privacy: FieldPrivacy,\n\
+    pub max_count: u32,\n\
+}\n\n\
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+pub struct TypeFieldDescriptor {\n\
+    pub owner: &'static str,\n\
+    pub variant: Option<&'static str>,\n\
     pub name: &'static str,\n\
     pub wire_type: &'static str,\n\
     pub required: bool,\n\
@@ -459,19 +818,68 @@ pub struct MessageDescriptor {\n\
     pub name: &'static str,\n\
     pub id: u16,\n\
     pub payload: &'static str,\n\
-    pub state: &'static str,\n\
+    pub state_precondition: &'static str,\n\
     pub correlation: &'static str,\n\
     pub correlation_shape: CorrelationShape,\n\
     pub replayable: bool,\n\
-    pub terminal: bool,\n\
     pub allowed_flags: u16,\n\
     pub min_transfer_slots: u16,\n\
     pub max_transfer_slots: u16,\n\
     pub max_payload_bytes: u32,\n\
+    pub maximum_encoded_payload_bytes: u32,\n\
+    pub required_capability: u64,\n\
     pub fields: &'static [FieldDescriptor],\n\
-    pub outcome_events: &'static [u16],\n\
+    pub outcomes: &'static [OutcomeDescriptor],\n\
 }\n\n",
     );
+    let states = protocol
+        .messages
+        .iter()
+        .map(|message| format!("\"{}\"", message.state))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        out,
+        "pub const STATE_PRECONDITIONS: &[&str] = &[{states}];\n"
+    )
+    .unwrap();
+
+    out.push_str("pub const TYPE_FIELD_DESCRIPTORS: &[TypeFieldDescriptor] = &[\n");
+    for record in &protocol.records {
+        for field in &record.fields {
+            writeln!(
+                out,
+                "    TypeFieldDescriptor {{ owner: \"{}\", variant: None, name: \"{}\", wire_type: \"{}\", required: {}, privacy: FieldPrivacy::{}, max_count: {} }},",
+                record.name,
+                field.name,
+                field.ty.schema_name(),
+                field.presence == Presence::Required,
+                rust_privacy(field.privacy),
+                type_limit(&field.ty)
+            )
+            .unwrap();
+        }
+    }
+    for union in &protocol.unions {
+        for variant in &union.variants {
+            for field in &variant.fields {
+                writeln!(
+                    out,
+                    "    TypeFieldDescriptor {{ owner: \"{}\", variant: Some(\"{}\"), name: \"{}\", wire_type: \"{}\", required: true, privacy: FieldPrivacy::{}, max_count: {} }},",
+                    union.name,
+                    variant.name,
+                    field.name,
+                    field.ty.schema_name(),
+                    rust_privacy(field.privacy),
+                    type_limit(&field.ty)
+                )
+                .unwrap();
+            }
+        }
+    }
+    out.push_str("];\n\n");
 
     for message in &protocol.messages {
         let record = protocol
@@ -499,26 +907,33 @@ pub struct MessageDescriptor {\n\
         }
         writeln!(out, "];").unwrap();
         if message.kind == MessageKind::Command {
-            let ids = message
+            let outcomes = message
                 .outcomes
                 .iter()
                 .map(|outcome| {
-                    protocol
+                    let id = protocol
                         .messages
                         .iter()
                         .find(|candidate| {
-                            candidate.kind == MessageKind::Event && candidate.name == *outcome
+                            candidate.kind == MessageKind::Event
+                                && candidate.name == outcome.name
                         })
                         .expect("parser validates outcomes")
-                        .id
-                        .to_string()
+                        .id;
+                    format!(
+                        "OutcomeDescriptor {{ event_id: {id}, disposition: OutcomeDisposition::{} }}",
+                        match outcome.disposition {
+                            crate::model::OutcomeDisposition::Stream => "Stream",
+                            crate::model::OutcomeDisposition::Terminal => "Terminal",
+                        }
+                    )
                 })
                 .collect::<Vec<_>>();
             writeln!(
                 out,
-                "const {}_OUTCOME_EVENTS: &[u16] = &[{}];",
+                "const {}_OUTCOMES: &[OutcomeDescriptor] = &[{}];",
                 screaming_snake_case(&message.name),
-                ids.join(", ")
+                outcomes.join(", ")
             )
             .unwrap();
         }
@@ -536,15 +951,20 @@ pub struct MessageDescriptor {\n\
             .filter(|message| message.kind == kind)
         {
             let prefix = screaming_snake_case(&message.name);
-            let outcome_events = if kind == MessageKind::Command {
-                format!("{prefix}_OUTCOME_EVENTS")
+            let outcomes = if kind == MessageKind::Command {
+                format!("{prefix}_OUTCOMES")
             } else {
                 "&[]".into()
             };
             let (worker, session, request, generation) = correlation_shape(&message.correlation);
+            let required_capability =
+                rust_required_capability(message.required_capability.as_deref());
+            let maximum_encoded_payload_bytes: u32 = maximum_message_payload(&codec, message)
+                .try_into()
+                .expect("payload maximum fits u32");
             writeln!(
                 out,
-                "    MessageDescriptor {{ kind: MessageKind::{}, name: \"{}\", id: {}, payload: \"{}\", state: \"{}\", correlation: \"{}\", correlation_shape: CorrelationShape {{ worker: CorrelationRequirement::{worker}, session: CorrelationRequirement::{session}, request: CorrelationRequirement::{request}, generation: CorrelationRequirement::{generation} }}, replayable: {}, terminal: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, fields: {prefix}_FIELDS, outcome_events: {outcome_events} }},",
+                "    MessageDescriptor {{ kind: MessageKind::{}, name: \"{}\", id: {}, payload: \"{}\", state_precondition: \"{}\", correlation: \"{}\", correlation_shape: CorrelationShape {{ worker: CorrelationRequirement::{worker}, session: CorrelationRequirement::{session}, request: CorrelationRequirement::{request}, generation: CorrelationRequirement::{generation} }}, replayable: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, maximum_encoded_payload_bytes: {maximum_encoded_payload_bytes}, required_capability: {required_capability}, fields: {prefix}_FIELDS, outcomes: {outcomes} }},",
                 if kind == MessageKind::Command { "Command" } else { "Event" },
                 message.name,
                 message.id,
@@ -552,7 +972,6 @@ pub struct MessageDescriptor {\n\
                 message.state,
                 message.correlation,
                 message.disposition == "yes",
-                message.disposition == "terminal",
                 message.allowed_flags,
                 message.min_transfer_slots,
                 message.max_transfer_slots,
@@ -584,6 +1003,22 @@ fn write_capability_decision_invariants(out: &mut String) {
             CollectionCompleteness::Complete => contributors_len == Some(self.contributors_total),\n\
             CollectionCompleteness::Truncated => contributors_len.is_some_and(|len| len < self.contributors_total),\n\
         };\n\
+        let contributor_ids: std::collections::BTreeSet<u32> = self.contributors.iter().map(|value| value.id).collect();\n\
+        let requirement_ids: std::collections::BTreeSet<u32> = self.missing.iter().map(|value| value.id).collect();\n\
+        let bounded_and_canonical = self.missing.len() <= CAPABILITY_DECISION_MISSING_MAX_COUNT\n\
+            && self.contributors.len() <= CAPABILITY_DECISION_CONTRIBUTORS_MAX_COUNT\n\
+            && self.missing.windows(2).all(|pair| pair[0].id < pair[1].id)\n\
+            && self.contributors.windows(2).all(|pair| pair[0].id < pair[1].id)\n\
+            && requirement_ids.len() == self.missing.len()\n\
+            && contributor_ids.len() == self.contributors.len()\n\
+            && self.missing.iter().all(|requirement| requirement.id != 0\n\
+                && requirement.dependencies.len() <= CAPABILITY_REQUIREMENT_DEPENDENCIES_MAX_COUNT\n\
+                && requirement.contributor_ids.len() <= CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT\n\
+                && requirement.dependencies.windows(2).all(|pair| pair[0] < pair[1])\n\
+                && requirement.contributor_ids.windows(2).all(|pair| pair[0] < pair[1])\n\
+                && requirement.dependencies.iter().all(|id| *id != requirement.id && requirement_ids.contains(id))\n\
+                && requirement.contributor_ids.iter().all(|id| contributor_ids.contains(id)))\n\
+            && self.contributors.iter().all(|contributor| contributor.id != 0);\n\
         let status_valid = match self.status {\n\
             SupportStatus::Supported => self.missing_total == 0\n\
                 && self.missing.is_empty()\n\
@@ -592,7 +1027,7 @@ fn write_capability_decision_invariants(out: &mut String) {
             SupportStatus::Unsupported => self.rejection_code.is_none(),\n\
             SupportStatus::Rejected => self.rejection_code.is_some(),\n\
         };\n\
-        missing_accounted && contributors_accounted && status_valid\n\
+        missing_accounted && contributors_accounted && bounded_and_canonical && status_valid\n\
     }\n\
 }\n",
     );
@@ -629,6 +1064,28 @@ fn rust_privacy(value: Privacy) -> &'static str {
     }
 }
 
+fn ts_privacy(value: Privacy) -> &'static str {
+    match value {
+        Privacy::Public => "public",
+        Privacy::Private => "private",
+        Privacy::Sensitive => "sensitive",
+    }
+}
+
+fn rust_required_capability(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "0".into(),
+        |capability| format!("ENDPOINT_CAPABILITY_{}", screaming_snake_case(capability)),
+    )
+}
+
+fn ts_required_capability(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "0n".into(),
+        |capability| format!("ENDPOINT_CAPABILITY_{}", screaming_snake_case(capability)),
+    )
+}
+
 fn type_limit(value: &Type) -> u32 {
     match value {
         Type::List(_, limit) | Type::Bytes(limit) => *limit,
@@ -642,6 +1099,8 @@ fn correlation_shape(value: &str) -> (&'static str, &'static str, &'static str, 
         "Worker" => ("Required", "Forbidden", "Forbidden", "Forbidden"),
         "Session" => ("Required", "Required", "Forbidden", "Forbidden"),
         "Request" => ("Required", "Optional", "Required", "Forbidden"),
+        "OpenRequest" => ("Required", "Forbidden", "Required", "Forbidden"),
+        "SessionRequest" => ("Required", "Required", "Required", "Forbidden"),
         "Generation" => ("Required", "Required", "Forbidden", "Required"),
         other => panic!("unknown validated correlation shape {other}"),
     }
@@ -664,6 +1123,32 @@ fn screaming_snake_case(value: &str) -> String {
         output.push((byte as char).to_ascii_uppercase());
     }
     output
+}
+
+fn snake_case(value: &str) -> String {
+    screaming_snake_case(value).to_ascii_lowercase()
+}
+
+fn lower_camel_case(value: &str) -> String {
+    let mut bytes = value.as_bytes().to_vec();
+    if let Some(first) = bytes.first_mut() {
+        first.make_ascii_lowercase();
+    }
+    String::from_utf8(bytes).expect("validated schema names are ASCII")
+}
+
+fn browser_union_variant(variant: &crate::model::UnionVariant) -> bool {
+    !matches!(
+        variant.required_capability.as_deref(),
+        Some("SharedMemory" | "LocalMemory")
+    )
+}
+
+fn desktop_union_variant(variant: &crate::model::UnionVariant) -> bool {
+    matches!(
+        variant.required_capability.as_deref(),
+        Some("SharedMemory" | "LocalMemory")
+    )
 }
 
 fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
@@ -692,6 +1177,16 @@ fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
     .unwrap();
     writeln!(
         out,
+        "export const WIRE_IDENTITY_DOMAIN = \"{WIRE_IDENTITY_DOMAIN}\" as const;"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const PAYLOAD_CODEC_ABI_VERSION = {PAYLOAD_CODEC_ABI_VERSION} as const;"
+    )
+    .unwrap();
+    writeln!(
+        out,
         "export const MIN_COMPATIBLE_MINOR = {} as const;",
         protocol.minor
     )
@@ -710,6 +1205,34 @@ fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
     .unwrap();
     writeln!(
         out,
+        "export const MAX_DATA_SEGMENT_BYTES = {}n as const;",
+        protocol.max_data_segment_bytes
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const MAX_DATA_TICKET_BYTES = {}n as const;",
+        protocol.max_data_ticket_bytes
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const PAYLOAD_CODEC = \"{}\" as const;",
+        protocol.payload_codec
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const CAPABILITY_DECISION_HASH_DOMAIN = \"{CAPABILITY_DECISION_HASH_DOMAIN}\" as const;"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "export const RENDER_PLAN_MANIFEST_HASH_DOMAIN = \"{RENDER_PLAN_MANIFEST_HASH_DOMAIN}\" as const;"
+    )
+    .unwrap();
+    writeln!(
+        out,
         "export const SCHEMA_SHA256_HEX = \"{}\" as const;",
         lowercase_hex(digest)
     )
@@ -722,6 +1245,16 @@ fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
     .unwrap();
     writeln!(
         out,
+        "export const SCHEMA_HASH = Uint8Array.of({}) as Uint8Array;",
+        digest[..16]
+            .iter()
+            .map(|value| format!("0x{value:02x}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .unwrap();
+    writeln!(
+        out,
         "export const SCHEMA_HASH_TRUNCATION = \"{SCHEMA_HASH_TRUNCATION}\" as const;\n"
     )
     .unwrap();
@@ -730,6 +1263,22 @@ fn generate_typescript(protocol: &Protocol, digest: &[u8; 32]) -> String {
 // compatibility is never implemented by silently accepting an unversioned extension field.\n\
 export const UNKNOWN_PAYLOAD_FIELD_POLICY = \"reject\" as const;\n\n",
     );
+    out.push_str("export const TARGET_PROTOCOL_PROJECTION = \"browser\" as const;\n\n");
+    for record in &protocol.records {
+        for field in &record.fields {
+            if let Type::List(_, limit) | Type::Bytes(limit) = &field.ty {
+                writeln!(
+                    out,
+                    "export const {}_{}_MAX_COUNT = {} as const;",
+                    screaming_snake_case(&record.name),
+                    screaming_snake_case(&field.name),
+                    limit
+                )
+                .unwrap();
+            }
+        }
+    }
+    out.push('\n');
     write_ts_helpers(&mut out);
 
     for scalar in &protocol.scalars {
@@ -748,13 +1297,19 @@ export const UNKNOWN_PAYLOAD_FIELD_POLICY = \"reject\" as const;\n\n",
         write_ts_enum(&mut out, enumeration);
     }
     write_ts_endpoint_capabilities(&mut out, protocol);
+    write_ts_engine_execution_capabilities(&mut out, protocol);
+    write_ts_engine_error_descriptors(&mut out, protocol);
     write_ts_descriptors(&mut out, protocol);
     for record in &protocol.records {
         write_ts_record(&mut out, record);
     }
     for union in &protocol.unions {
         writeln!(out, "export type {} =", union.name).unwrap();
-        for variant in &union.variants {
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
             write!(out, "  | {{ kind: \"{}\"", variant.name).unwrap();
             for field in &variant.fields {
                 write!(out, "; {}: {}", field.name, ts_type(&field.ty)).unwrap();
@@ -774,7 +1329,11 @@ export const UNKNOWN_PAYLOAD_FIELD_POLICY = \"reject\" as const;\n\n",
         )
         .unwrap();
         writeln!(out, "  switch (value.kind) {{").unwrap();
-        for variant in &union.variants {
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
             let required = std::iter::once("kind")
                 .chain(variant.fields.iter().map(|field| field.name.as_str()))
                 .map(|name| format!("\"{name}\""))
@@ -798,8 +1357,295 @@ export const UNKNOWN_PAYLOAD_FIELD_POLICY = \"reject\" as const;\n\n",
         }
         writeln!(out, "    default: return false;\n  }}\n}}\n").unwrap();
     }
+    write_ts_union_capability_requirements(&mut out, protocol);
+    write_ts_redaction_and_snapshots(&mut out, protocol);
     write_ts_messages(&mut out, protocol);
-    out
+    out.push_str(&generate_typescript_payload_codec(protocol));
+    finish_generated_text(out)
+}
+
+fn finish_generated_text(mut output: String) -> String {
+    while output.ends_with("\n\n") {
+        output.pop();
+    }
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output
+}
+
+fn write_ts_redaction_and_snapshots(out: &mut String, protocol: &Protocol) {
+    for record in &protocol.records {
+        let redact_value_name = if record
+            .fields
+            .iter()
+            .any(|field| field.privacy == Privacy::Public)
+        {
+            "value"
+        } else {
+            "_value"
+        };
+        let snapshot_value_name = if record.fields.is_empty() {
+            "_value"
+        } else {
+            "value"
+        };
+        writeln!(
+            out,
+            "export function redact{}({redact_value_name}: {}): Readonly<Record<string, unknown>> {{\n  return {{",
+            record.name, record.name
+        )
+        .unwrap();
+        for field in &record.fields {
+            let expression = if field.privacy == Privacy::Public {
+                ts_redaction_expression(protocol, &field.ty, &format!("value.{}", field.name))
+            } else {
+                "\"[REDACTED]\"".into()
+            };
+            writeln!(out, "    {}: {},", field.name, expression).unwrap();
+        }
+        out.push_str("  };\n}\n\n");
+
+        writeln!(
+            out,
+            "export function snapshot{}({snapshot_value_name}: {}): {} {{\n  return Object.freeze({{",
+            record.name, record.name, record.name
+        )
+        .unwrap();
+        for field in &record.fields {
+            let expression =
+                ts_snapshot_expression(protocol, &field.ty, &format!("value.{}", field.name));
+            if field.presence == Presence::Optional {
+                writeln!(
+                    out,
+                    "    ...(value.{} === undefined ? {{}} : {{ {}: {} }}),",
+                    field.name, field.name, expression
+                )
+                .unwrap();
+            } else {
+                writeln!(out, "    {}: {},", field.name, expression).unwrap();
+            }
+        }
+        writeln!(out, "  }}) as {};\n}}\n", record.name).unwrap();
+    }
+
+    for union in &protocol.unions {
+        writeln!(
+            out,
+            "export function redact{}(value: {}): Readonly<Record<string, unknown>> {{\n  switch (value.kind) {{",
+            union.name, union.name
+        )
+        .unwrap();
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
+            writeln!(out, "    case \"{}\": return {{", variant.name).unwrap();
+            writeln!(out, "      kind: \"{}\",", variant.name).unwrap();
+            for field in &variant.fields {
+                let expression = if field.privacy == Privacy::Public {
+                    ts_redaction_expression(protocol, &field.ty, &format!("value.{}", field.name))
+                } else {
+                    "\"[REDACTED]\"".into()
+                };
+                writeln!(out, "      {}: {},", field.name, expression).unwrap();
+            }
+            out.push_str("    };\n");
+        }
+        out.push_str("  }\n}\n\n");
+
+        writeln!(
+            out,
+            "export function snapshot{}(value: {}): {} {{\n  switch (value.kind) {{",
+            union.name, union.name, union.name
+        )
+        .unwrap();
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
+            writeln!(
+                out,
+                "    case \"{}\": return Object.freeze({{",
+                variant.name
+            )
+            .unwrap();
+            writeln!(out, "      kind: \"{}\",", variant.name).unwrap();
+            for field in &variant.fields {
+                writeln!(
+                    out,
+                    "      {}: {},",
+                    field.name,
+                    ts_snapshot_expression(protocol, &field.ty, &format!("value.{}", field.name))
+                )
+                .unwrap();
+            }
+            writeln!(out, "    }}) as {};", union.name).unwrap();
+        }
+        out.push_str("  }\n}\n\n");
+    }
+}
+
+fn ts_redaction_expression(protocol: &Protocol, ty: &Type, expression: &str) -> String {
+    match ty {
+        Type::Primitive(Primitive::Bytes16 | Primitive::Bytes32) | Type::Bytes(_) => {
+            format!("`[BYTES:${{{expression}.byteLength}}]`")
+        }
+        Type::Primitive(_) => expression.into(),
+        Type::Named(name) if matches!(name.as_str(), "SceneHash" | "CapabilityDecisionHash") => {
+            "\"[REDACTED]\"".into()
+        }
+        Type::Named(name)
+            if protocol.records.iter().any(|record| record.name == *name)
+                || protocol.unions.iter().any(|union| union.name == *name) =>
+        {
+            format!("redact{name}({expression})")
+        }
+        Type::Named(_) => expression.into(),
+        Type::Optional(inner) => format!(
+            "{expression} === undefined ? undefined : {}",
+            ts_redaction_expression(protocol, inner, expression)
+        ),
+        Type::List(inner, _) => format!(
+            "{expression}.map((entry) => {})",
+            ts_redaction_expression(protocol, inner, "entry")
+        ),
+    }
+}
+
+fn ts_snapshot_expression(protocol: &Protocol, ty: &Type, expression: &str) -> String {
+    match ty {
+        Type::Primitive(Primitive::Bytes16 | Primitive::Bytes32) | Type::Bytes(_) => {
+            format!("new Uint8Array({expression})")
+        }
+        Type::Primitive(_) => expression.into(),
+        Type::Named(name)
+            if protocol.records.iter().any(|record| record.name == *name)
+                || protocol.unions.iter().any(|union| union.name == *name) =>
+        {
+            format!("snapshot{name}({expression})")
+        }
+        Type::Named(name) => {
+            let copies_bytes = protocol.scalars.iter().any(|scalar| {
+                scalar.name == *name
+                    && matches!(scalar.primitive, Primitive::Bytes16 | Primitive::Bytes32)
+            });
+            if copies_bytes {
+                format!("new Uint8Array({expression})")
+            } else {
+                expression.into()
+            }
+        }
+        Type::Optional(inner) => format!(
+            "{expression} === undefined ? undefined : {}",
+            ts_snapshot_expression(protocol, inner, expression)
+        ),
+        Type::List(inner, _) => format!(
+            "Object.freeze({expression}.map((entry) => {})) as unknown as {}",
+            ts_snapshot_expression(protocol, inner, "entry"),
+            ts_type(ty)
+        ),
+    }
+}
+
+fn write_ts_union_capability_requirements(out: &mut String, protocol: &Protocol) {
+    out.push_str(
+        "export interface UnionVariantCapabilityRequirement {\n\
+  readonly union_name: string;\n\
+  readonly variant_name: string;\n\
+  readonly capability: bigint;\n\
+}\n\
+export const UNION_VARIANT_CAPABILITY_REQUIREMENTS = [\n",
+    );
+    for union in &protocol.unions {
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
+            if let Some(capability) = &variant.required_capability {
+                writeln!(
+                    out,
+                    "  {{ union_name: \"{}\", variant_name: \"{}\", capability: {} }},",
+                    union.name,
+                    variant.name,
+                    ts_required_capability(Some(capability))
+                )
+                .unwrap();
+            }
+        }
+    }
+    out.push_str("] as const satisfies readonly UnionVariantCapabilityRequirement[];\n\n");
+    if let Some(surface) = protocol
+        .unions
+        .iter()
+        .find(|union| union.name == "SurfaceTransport")
+    {
+        let variants = surface
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+            .map(|variant| format!("\"{}\"", variant.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            out,
+            "export const BROWSER_ALLOWED_SURFACE_TRANSPORT_KINDS = [{variants}] as const;\n"
+        )
+        .unwrap();
+    }
+    for union in &protocol.unions {
+        writeln!(
+            out,
+            "export function {}RequiredCapability(value: {}): bigint {{\n  switch (value.kind) {{",
+            lower_camel_case(&union.name),
+            union.name
+        )
+        .unwrap();
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
+            writeln!(
+                out,
+                "    case \"{}\": return {};",
+                variant.name,
+                ts_required_capability(variant.required_capability.as_deref())
+            )
+            .unwrap();
+        }
+        out.push_str("  }\n}\n\n");
+    }
+}
+
+fn write_ts_engine_error_descriptors(out: &mut String, protocol: &Protocol) {
+    if !protocol
+        .records
+        .iter()
+        .any(|record| record.name == "EngineError")
+    {
+        return;
+    }
+    out.push_str(
+        "export interface EngineErrorDescriptor {\n\
+  readonly code: EngineErrorCode;\n\
+  readonly category: ErrorCategory;\n\
+  readonly severity: ErrorSeverity;\n\
+  readonly recoverability: ErrorRecoverability;\n\
+}\n\
+export const ENGINE_ERROR_DESCRIPTORS = [\n",
+    );
+    for (code, category, severity, recoverability) in engine_error_policies() {
+        writeln!(
+            out,
+            "  {{ code: EngineErrorCode.{code}, category: ErrorCategory.{category}, severity: ErrorSeverity.{severity}, recoverability: ErrorRecoverability.{recoverability} }},"
+        )
+        .unwrap();
+    }
+    out.push_str("] as const satisfies readonly EngineErrorDescriptor[];\n\n");
 }
 
 fn write_ts_helpers(out: &mut String) {
@@ -817,7 +1663,10 @@ const isU32 = (value: unknown): value is number => Number.isInteger(value) && Nu
 const isI32 = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= -0x80000000 && Number(value) <= 0x7fffffff;\n\
 const MAX_U64 = 0xffffffffffffffffn;\n\
 const isU64 = (value: unknown): value is bigint => typeof value === \"bigint\" && value >= 0n && value <= 0xffffffffffffffffn;\n\
-const isFixedBytes = (value: unknown, length: number): value is Uint8Array => value instanceof Uint8Array && value.byteLength === length;\n\
+const isFixedBytes = (value: unknown, length: number): value is Uint8Array => value instanceof Uint8Array\n\
+  && value.byteLength === length\n\
+  && !(typeof SharedArrayBuffer !== \"undefined\" && value.buffer instanceof SharedArrayBuffer);\n\
+const fixedBytesEqual = (left: Uint8Array, right: Uint8Array): boolean => left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);\n\
 const gcdU32 = (left: number, right: number): number => {\n\
   let a = left;\n\
   let b = right;\n\
@@ -895,15 +1744,56 @@ fn write_ts_endpoint_capabilities(out: &mut String, protocol: &Protocol) {
         .join(" | ");
     writeln!(
         out,
-        "export const KNOWN_ENDPOINT_CAPABILITIES = {expression};\nexport const ENGINE_SUPPORTED_ENDPOINT_CAPABILITIES = KNOWN_ENDPOINT_CAPABILITIES;\n"
+        "export const KNOWN_ENDPOINT_CAPABILITIES = {expression};\n"
+    )
+    .unwrap();
+}
+
+fn write_ts_engine_execution_capabilities(out: &mut String, protocol: &Protocol) {
+    let Some(definition) = protocol
+        .enums
+        .iter()
+        .find(|value| value.name == "EngineExecutionCapability")
+    else {
+        return;
+    };
+    for variant in &definition.variants {
+        writeln!(
+            out,
+            "export const ENGINE_EXECUTION_CAPABILITY_{} = {}n as const;",
+            screaming_snake_case(&variant.name),
+            variant.tag
+        )
+        .unwrap();
+    }
+    let expression = definition
+        .variants
+        .iter()
+        .map(|variant| format!("{}n", variant.tag))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    writeln!(
+        out,
+        "export const KNOWN_ENGINE_EXECUTION_CAPABILITIES = {expression};\n"
     )
     .unwrap();
 }
 
 fn write_ts_descriptors(out: &mut String, protocol: &Protocol) {
+    let codec = FixedLeCodec::new(
+        protocol,
+        CodecLimits::new(
+            64,
+            protocol.max_message_bytes as usize,
+            protocol.max_message_bytes as usize,
+        ),
+    )
+    .expect("parser validates fixed_le_v1 schema");
     out.push_str(
         "export type MessageKind = \"command\" | \"event\";\n\
 export type CorrelationRequirement = \"required\" | \"optional\" | \"forbidden\";\n\
+export type OutcomeDisposition = \"stream\" | \"terminal\";\n\
+export interface OutcomeDescriptor { readonly event_id: number; readonly disposition: OutcomeDisposition }\n\
 export interface CorrelationShape {\n\
   readonly worker: CorrelationRequirement;\n\
   readonly session: CorrelationRequirement;\n\
@@ -915,18 +1805,82 @@ export interface MessageDescriptor {\n\
   readonly name: string;\n\
   readonly id: number;\n\
   readonly payload: string;\n\
-  readonly state: string;\n\
+  readonly state_precondition: string;\n\
   readonly correlation: string;\n\
   readonly correlation_shape: CorrelationShape;\n\
   readonly replayable: boolean;\n\
-  readonly terminal: boolean;\n\
   readonly allowed_flags: number;\n\
   readonly min_transfer_slots: number;\n\
   readonly max_transfer_slots: number;\n\
   readonly max_payload_bytes: number;\n\
-  readonly outcome_events: readonly number[];\n\
+  readonly maximum_encoded_payload_bytes: number;\n\
+  readonly required_capability: bigint;\n\
+  readonly outcomes: readonly OutcomeDescriptor[];\n\
 }\n\n",
     );
+    let states = protocol
+        .messages
+        .iter()
+        .map(|message| format!("\"{}\"", message.state))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        out,
+        "export const STATE_PRECONDITIONS = [{states}] as const;\n"
+    )
+    .unwrap();
+    out.push_str(
+        "export type FieldPrivacy = \"public\" | \"private\" | \"sensitive\";\n\
+export interface TypeFieldDescriptor {\n\
+  readonly owner: string;\n\
+  readonly variant?: string;\n\
+  readonly name: string;\n\
+  readonly wire_type: string;\n\
+  readonly required: boolean;\n\
+  readonly privacy: FieldPrivacy;\n\
+  readonly max_count: number;\n\
+}\n\
+export const TYPE_FIELD_DESCRIPTORS = [\n",
+    );
+    for record in &protocol.records {
+        for field in &record.fields {
+            writeln!(
+                out,
+                "  {{ owner: \"{}\", name: \"{}\", wire_type: \"{}\", required: {}, privacy: \"{}\", max_count: {} }},",
+                record.name,
+                field.name,
+                field.ty.schema_name(),
+                field.presence == Presence::Required,
+                ts_privacy(field.privacy),
+                type_limit(&field.ty)
+            )
+            .unwrap();
+        }
+    }
+    for union in &protocol.unions {
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| browser_union_variant(variant))
+        {
+            for field in &variant.fields {
+                writeln!(
+                    out,
+                    "  {{ owner: \"{}\", variant: \"{}\", name: \"{}\", wire_type: \"{}\", required: true, privacy: \"{}\", max_count: {} }},",
+                    union.name,
+                    variant.name,
+                    field.name,
+                    field.ty.schema_name(),
+                    ts_privacy(field.privacy),
+                    type_limit(&field.ty)
+                )
+                .unwrap();
+            }
+        }
+    }
+    out.push_str("] as const satisfies readonly TypeFieldDescriptor[];\n\n");
     for message in &protocol.messages {
         writeln!(
             out,
@@ -943,21 +1897,26 @@ export interface MessageDescriptor {\n\
             .outcomes
             .iter()
             .map(|outcome| {
-                protocol
+                let id = protocol
                     .messages
                     .iter()
                     .find(|candidate| {
-                        candidate.kind == MessageKind::Event && candidate.name == *outcome
+                        candidate.kind == MessageKind::Event && candidate.name == outcome.name
                     })
                     .expect("parser validates outcomes")
-                    .id
-                    .to_string()
+                    .id;
+                format!(
+                    "{{ event_id: {id}, disposition: \"{}\" }}",
+                    outcome.disposition.schema_name()
+                )
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let required_capability = ts_required_capability(message.required_capability.as_deref());
+        let maximum_encoded_payload_bytes = maximum_message_payload(&codec, message);
         writeln!(
             out,
-            "  {{ kind: \"{}\", name: \"{}\", id: {}, payload: \"{}\", state: \"{}\", correlation: \"{}\", correlation_shape: {{ worker: \"{}\", session: \"{}\", request: \"{}\", generation: \"{}\" }}, replayable: {}, terminal: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, outcome_events: [{}] }},",
+            "  {{ kind: \"{}\", name: \"{}\", id: {}, payload: \"{}\", state_precondition: \"{}\", correlation: \"{}\", correlation_shape: {{ worker: \"{}\", session: \"{}\", request: \"{}\", generation: \"{}\" }}, replayable: {}, allowed_flags: {}, min_transfer_slots: {}, max_transfer_slots: {}, max_payload_bytes: {}, maximum_encoded_payload_bytes: {maximum_encoded_payload_bytes}, required_capability: {required_capability}, outcomes: [{}] }},",
             message.kind.schema_name(),
             message.name,
             message.id,
@@ -969,7 +1928,6 @@ export interface MessageDescriptor {\n\
             request.to_ascii_lowercase(),
             generation.to_ascii_lowercase(),
             message.disposition == "yes",
-            message.disposition == "terminal",
             message.allowed_flags,
             message.min_transfer_slots,
             message.max_transfer_slots,
@@ -1039,9 +1997,9 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
             "  const header = value as unknown as EnvelopeHeader;\n\
   const descriptor = descriptorById(header.message_type);\n\
   if (descriptor === undefined) return false;\n\
-  if (header.major !== PROTOCOL_MAJOR || header.minor < MIN_COMPATIBLE_MINOR || header.minor > PROTOCOL_MINOR) return false;\n\
+  if (header.major !== PROTOCOL_MAJOR || header.minor !== PROTOCOL_MINOR) return false;\n\
   if ((header.flags & ~descriptor.allowed_flags) !== 0) return false;\n\
-  if (header.payload_len > MAX_MESSAGE_BYTES || header.payload_len > descriptor.max_payload_bytes) return false;\n\
+  if (header.payload_len > MAX_MESSAGE_BYTES || header.payload_len > descriptor.max_payload_bytes || header.payload_len > descriptor.maximum_encoded_payload_bytes) return false;\n\
   if (header.sequence === 0n) return false;\n",
         );
     }
@@ -1052,10 +2010,22 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   if ((capabilities.mandatory & ~capabilities.supported) !== 0n) return false;\n",
         );
     }
+    if record.name == "EngineExecutionCapabilities" {
+        out.push_str(
+            "  const capabilities = value as unknown as EngineExecutionCapabilities;\n\
+  if ((capabilities.supported & ~KNOWN_ENGINE_EXECUTION_CAPABILITIES) !== 0n) return false;\n",
+        );
+    }
     if record.name == "ByteRange" {
         out.push_str(
             "  const range = value as unknown as ByteRange;\n\
   if (range.len === 0n || range.start > MAX_U64 - range.len) return false;\n",
+        );
+    }
+    if record.name == "SourceIdentity" {
+        out.push_str(
+            "  const identity = value as unknown as SourceIdentity;\n\
+  if (identity.revision === 0n || !identity.stable_id.some((byte) => byte !== 0)) return false;\n",
         );
     }
     if record.name == "DataSegment" {
@@ -1064,10 +2034,166 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   if (segment.byte_length !== segment.range.len) return false;\n",
         );
     }
+    if record.name == "ProvideDataCommand" {
+        out.push_str(
+            "  const command = value as unknown as ProvideDataCommand;\n\
+  if (command.ticket === 0n || command.segments.length === 0) return false;\n\
+  let aggregate = 0n;\n\
+  let previousEnd = 0n;\n\
+  for (const [index, segment] of command.segments.entries()) {\n\
+    if (segment.slot !== index || segment.byte_length > MAX_DATA_SEGMENT_BYTES) return false;\n\
+    if (index !== 0 && segment.range.start <= previousEnd) return false;\n\
+    previousEnd = segment.range.start + segment.range.len;\n\
+    aggregate += segment.byte_length;\n\
+    if (aggregate > MAX_DATA_TICKET_BYTES) return false;\n\
+  }\n",
+        );
+    }
+    if record.name == "FailDataCommand" {
+        out.push_str(
+            "  const failure = value as unknown as FailDataCommand;\n\
+  if (failure.ticket === 0n) return false;\n\
+  const observedMatches = failure.observed !== undefined\n\
+    && failure.observed.revision === failure.expected.revision\n\
+    && fixedBytesEqual(failure.observed.stable_id, failure.expected.stable_id);\n\
+  if (failure.code === SourceFailureCode.SourceChanged) {\n\
+    if (failure.observed === undefined || observedMatches || failure.retryable) return false;\n\
+  } else if (failure.observed !== undefined) return false;\n",
+        );
+    }
+    if record.name == "NeedDataEvent" {
+        out.push_str(
+            "  const need = value as unknown as NeedDataEvent;\n\
+  if (need.ticket === 0n || need.ranges.length === 0) return false;\n\
+  let aggregate = 0n;\n\
+  let previousEnd = 0n;\n\
+  for (const [index, range] of need.ranges.entries()) {\n\
+    if (range.len > MAX_DATA_SEGMENT_BYTES) return false;\n\
+    if (index !== 0 && range.start <= previousEnd) return false;\n\
+    previousEnd = range.start + range.len;\n\
+    aggregate += range.len;\n\
+    if (aggregate > MAX_DATA_TICKET_BYTES) return false;\n\
+  }\n",
+        );
+    }
+    if record.name == "RegisterCanvasCommand" {
+        out.push_str(
+            "  const canvas = value as unknown as RegisterCanvasCommand;\n\
+  if (canvas.canvas === 0n || canvas.canvas_epoch === 0n || canvas.width === 0 || canvas.height === 0) return false;\n",
+        );
+    }
+    if record.name == "ReleaseCanvasCommand" {
+        out.push_str(
+            "  const canvas = value as unknown as ReleaseCanvasCommand;\n\
+  if (canvas.canvas === 0n || canvas.canvas_epoch === 0n) return false;\n",
+        );
+    }
+    if record.name == "ResizeCanvasCommand" {
+        out.push_str(
+            "  const canvas = value as unknown as ResizeCanvasCommand;\n\
+  if (canvas.canvas === 0n || canvas.canvas_epoch === 0n || canvas.width === 0 || canvas.height === 0) return false;\n",
+        );
+    }
+    if matches!(
+        record.name.as_str(),
+        "CanvasRegisteredEvent" | "CanvasResizedEvent"
+    ) {
+        out.push_str(
+            "  const canvas = value as unknown as CanvasRegisteredEvent | CanvasResizedEvent;\n\
+  if (canvas.canvas === 0n || canvas.canvas_epoch === 0n || canvas.width === 0 || canvas.height === 0) return false;\n",
+        );
+    }
+    if record.name == "GetPageMetricsCommand" {
+        out.push_str(
+            "  const request = value as unknown as GetPageMetricsCommand;\n\
+  if (request.document_revision === 0n || request.max_count === 0 || request.max_count > 64) return false;\n",
+        );
+    }
+    if record.name == "PageMetricsEvent" {
+        out.push_str(
+            "  const batch = value as unknown as PageMetricsEvent;\n\
+  if (batch.document_revision === 0n || batch.pages.length > 64) return false;\n\
+  if (batch.start_index > batch.total_pages || batch.pages.length > batch.total_pages - batch.start_index) return false;\n\
+  if (!batch.pages.every((page, index) => page.page_index === batch.start_index + index)) return false;\n",
+        );
+    }
+    if record.name == "GenerationPlannedEvent" {
+        out.push_str(
+            "  const plan = value as unknown as GenerationPlannedEvent;\n\
+  const manifest = plan.manifest;\n\
+  if (manifest.document_revision === 0n || manifest.renderer_epoch === 0 || manifest.plan_id === 0n || manifest.regions.length === 0) return false;\n\
+  if (!manifest.render_config.some((byte) => byte !== 0) || !plan.plan_hash.some((byte) => byte !== 0) || !manifest.scene_hash.some((byte) => byte !== 0) || !manifest.decision_hash.some((byte) => byte !== 0)) return false;\n\
+  const identities = new Set(manifest.regions.map((region) => `${region.page_index}:${region.x}:${region.y}:${region.width}:${region.height}`));\n\
+  if (identities.size !== manifest.regions.length || manifest.regions.some((region) => region.width === 0 || region.height === 0)) return false;\n",
+        );
+    }
+    if record.name == "GenerationCompletedEvent" {
+        out.push_str(
+            "  const completion = value as unknown as GenerationCompletedEvent;\n\
+  if (completion.status === GenerationCompletionStatus.Failed ? completion.error === undefined : completion.error !== undefined) return false;\n",
+        );
+    }
+    if record.name == "EngineError" {
+        out.push_str(
+            "  const error = value as unknown as EngineError;\n\
+  if (error.diagnostic_id === 0n || !ENGINE_ERROR_DESCRIPTORS.some((descriptor) => descriptor.code === error.code && descriptor.category === error.category && descriptor.severity === error.severity && descriptor.recoverability === error.recoverability)) return false;\n",
+        );
+    }
+    if record.name == "CapabilityReportedEvent" {
+        out.push_str(
+            "  const report = value as unknown as CapabilityReportedEvent;\n\
+  if (!report.decision_hash.some((byte) => byte !== 0)) return false;\n",
+        );
+    }
+    if record.name == "DataFailedEvent" {
+        out.push_str("  if ((value as unknown as DataFailedEvent).ticket === 0n) return false;\n");
+    }
+    if record.name == "DocumentReadyEvent" {
+        out.push_str(
+            "  const ready = value as unknown as DocumentReadyEvent;\n\
+  if (ready.session === 0n || ready.document_revision === 0n) return false;\n",
+        );
+    }
+    if record.name == "HelloCommand" {
+        out.push_str(
+            "  if ((value as unknown as HelloCommand).hello.endpoint_role !== EndpointRole.Host) return false;\n",
+        );
+    }
+    if record.name == "EngineHelloEvent" {
+        out.push_str(
+            "  if ((value as unknown as EngineHelloEvent).hello.endpoint_role !== EndpointRole.Engine) return false;\n",
+        );
+    }
+    if record.name == "ReadyEvent" {
+        out.push_str(
+            "  const ready = value as unknown as ReadyEvent;\n\
+  if (ready.worker === 0n || ready.capability_profiles.length === 0 || ready.output_profiles.length === 0) return false;\n\
+  if (!ready.capability_profiles.every((profile, index) => index === 0 || ready.capability_profiles[index - 1]! < profile)) return false;\n\
+  if (!ready.output_profiles.every((profile, index) => index === 0 || ready.output_profiles[index - 1]! < profile)) return false;\n",
+        );
+    }
+    if record.name == "ReleaseSurfaceCommand" {
+        out.push_str(
+            "  const release = value as unknown as ReleaseSurfaceCommand;\n\
+  if (release.surface === 0n || release.lease_token === 0n) return false;\n",
+        );
+    }
+    if record.name == "SurfaceReclaimedEvent" {
+        out.push_str(
+            "  const release = value as unknown as SurfaceReclaimedEvent;\n\
+  if (release.surface === 0n || release.lease_token === 0n) return false;\n",
+        );
+    }
+    if record.name == "SurfaceReleaseAcknowledgedEvent" {
+        out.push_str(
+            "  const release = value as unknown as SurfaceReleaseAcknowledgedEvent;\n\
+  if (release.surface === 0n || release.lease_token === 0n) return false;\n",
+        );
+    }
     if record.name == "ProtocolHello" {
         out.push_str(
             "  const hello = value as unknown as ProtocolHello;\n\
-  if (hello.major !== PROTOCOL_MAJOR || hello.minor < MIN_COMPATIBLE_MINOR || hello.minor > PROTOCOL_MINOR) return false;\n\
+  if (hello.major !== PROTOCOL_MAJOR || hello.minor !== PROTOCOL_MINOR) return false;\n\
   if (hello.max_message_bytes === 0 || hello.max_message_bytes > MAX_MESSAGE_BYTES) return false;\n\
   if (hello.max_transfer_slots === 0 || hello.max_transfer_slots > MAX_TRANSFER_SLOTS) return false;\n",
         );
@@ -1101,6 +2227,15 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
             "  const decision = value as unknown as CapabilityDecision;\n\
   const missingCount = decision.missing.length;\n\
   const contributorCount = decision.contributors.length;\n\
+  if (missingCount > CAPABILITY_DECISION_MISSING_MAX_COUNT || contributorCount > CAPABILITY_DECISION_CONTRIBUTORS_MAX_COUNT) return false;\n\
+  if (!decision.missing.every((requirement, index) => requirement.id !== 0 && (index === 0 || decision.missing[index - 1]!.id < requirement.id))) return false;\n\
+  if (!decision.contributors.every((contributor, index) => contributor.id !== 0 && (index === 0 || decision.contributors[index - 1]!.id < contributor.id))) return false;\n\
+  const requirementIds = new Set(decision.missing.map((requirement) => requirement.id));\n\
+  const contributorIds = new Set(decision.contributors.map((contributor) => contributor.id));\n\
+  if (!decision.missing.every((requirement) => requirement.dependencies.length <= CAPABILITY_REQUIREMENT_DEPENDENCIES_MAX_COUNT\n\
+    && requirement.contributor_ids.length <= CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT\n\
+    && requirement.dependencies.every((id, index) => id !== requirement.id && requirementIds.has(id) && (index === 0 || requirement.dependencies[index - 1]! < id))\n\
+    && requirement.contributor_ids.every((id, index) => contributorIds.has(id) && (index === 0 || requirement.contributor_ids[index - 1]! < id)))) return false;\n\
   if (decision.missing_completeness === CollectionCompleteness.Complete ? missingCount !== decision.missing_total : missingCount >= decision.missing_total) return false;\n\
   if (decision.contributors_completeness === CollectionCompleteness.Complete ? contributorCount !== decision.contributors_total : contributorCount >= decision.contributors_total) return false;\n\
   if (decision.status === SupportStatus.Supported && (decision.missing_total !== 0 || missingCount !== 0 || hasOwn(value, \"location\") || hasOwn(value, \"rejection_code\"))) return false;\n\
@@ -1112,7 +2247,7 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
         out.push_str(
             "  const surface = value as unknown as SurfaceReadyEvent;\n\
   const metadata = surface.metadata;\n\
-  if (metadata.id === 0n || metadata.owner.worker === 0n || metadata.owner.session === 0n || metadata.generation === 0n || metadata.renderer_epoch === 0 || metadata.plan_id === 0n) return false;\n\
+  if (metadata.id === 0n || metadata.lease_token === 0n || metadata.owner.worker === 0n || metadata.owner.session === 0n || metadata.generation === 0n || metadata.renderer_epoch === 0 || metadata.plan_id === 0n) return false;\n\
   if (!metadata.render_config.some((byte) => byte !== 0) || !metadata.plan_hash.some((byte) => byte !== 0) || !metadata.scene_hash.some((byte) => byte !== 0) || !metadata.decision_hash.some((byte) => byte !== 0)) return false;\n\
   if (metadata.width === 0 || metadata.height === 0 || metadata.stride === 0 || metadata.region.width === 0 || metadata.region.height === 0) return false;\n\
   const stride = BigInt(metadata.stride);\n\
@@ -1122,14 +2257,23 @@ fn write_ts_record(out: &mut String, record: &crate::model::Record) {
   if (metadata.byte_length !== layoutBytes) return false;\n\
   const rangeEnd = metadata.byte_offset + metadata.byte_length;\n\
   if (rangeEnd > 0xffffffffffffffffn) return false;\n\
-  let regionLength: bigint;\n\
+  let regionLength: bigint | undefined;\n\
   switch (surface.transport.kind) {\n\
-    case \"OffscreenCanvasCommit\": if (surface.transport.canvas === 0n) return false; regionLength = surface.transport.region_length; break;\n\
-    case \"BrowserTransfer\": regionLength = surface.transport.transfer_length; break;\n\
-    case \"SharedMemory\": if (surface.transport.handle === 0n || surface.transport.release_token === 0n) return false; regionLength = surface.transport.region_length; break;\n\
-    case \"LocalMemory\": if (surface.transport.memory_epoch === 0) return false; regionLength = surface.transport.region_length; break;\n\
+    case \"BrowserArrayBuffer\":\n\
+      if (metadata.alpha !== AlphaMode.Straight) return false;\n\
+      regionLength = surface.transport.buffer_length;\n\
+      break;\n\
+    case \"BrowserImageBitmap\":\n\
+      if (metadata.alpha !== AlphaMode.Premultiplied || surface.transport.width !== metadata.width || surface.transport.height !== metadata.height || metadata.byte_offset !== 0n || metadata.stride !== metadata.width * 4) return false;\n\
+      break;\n\
+    case \"BrowserSharedArrayBuffer\":\n\
+      if (metadata.alpha !== AlphaMode.Straight || surface.transport.publication_epoch === 0 || surface.transport.fence_byte_offset % 4n !== 0n) return false;\n\
+      if (surface.transport.fence_byte_offset > MAX_U64 - 4n || surface.transport.fence_byte_offset + 4n > surface.transport.buffer_length) return false;\n\
+      if (!(surface.transport.fence_byte_offset + 4n <= metadata.byte_offset || surface.transport.fence_byte_offset >= rangeEnd)) return false;\n\
+      regionLength = surface.transport.buffer_length;\n\
+      break;\n\
   }\n\
-  if (rangeEnd > regionLength) return false;\n",
+  if (regionLength !== undefined && rangeEnd > regionLength) return false;\n",
         );
     }
     writeln!(out, "  return true;\n}}\n").unwrap();
@@ -1173,9 +2317,107 @@ fn write_ts_messages(out: &mut String, protocol: &Protocol) {
         }
         writeln!(out, "    default: return false;\n  }}\n}}\n").unwrap();
     }
+    for (kind, name) in [
+        (MessageKind::Command, "Command"),
+        (MessageKind::Event, "Event"),
+    ] {
+        writeln!(
+            out,
+            "export function snapshot{name}(value: {name}): {name} {{\n  switch (value.type) {{"
+        )
+        .unwrap();
+        for message in protocol
+            .messages
+            .iter()
+            .filter(|message| message.kind == kind)
+        {
+            writeln!(
+                out,
+                "    case \"{}\": return Object.freeze({{ type: \"{}\", payload: snapshot{}(value.payload) }});",
+                message.name, message.name, message.payload
+            )
+            .unwrap();
+        }
+        out.push_str("  }\n}\n\n");
+        writeln!(
+            out,
+            "export function redact{name}(value: {name}): Readonly<Record<string, unknown>> {{\n  switch (value.type) {{"
+        )
+        .unwrap();
+        for message in protocol
+            .messages
+            .iter()
+            .filter(|message| message.kind == kind)
+        {
+            writeln!(
+                out,
+                "    case \"{}\": return {{ type: \"{}\", payload: redact{}(value.payload) }};",
+                message.name, message.name, message.payload
+            )
+            .unwrap();
+        }
+        out.push_str("  }\n}\n\n");
+    }
     out.push_str(
         "export interface CommandEnvelope { header: EnvelopeHeader; correlation: Correlation; command: Command }\n\
 export interface EventEnvelope { header: EnvelopeHeader; correlation: Correlation; event: Event }\n\n\
+const CONNECTION_CONTEXT_BRAND: unique symbol = Symbol(\"EngineProtocolConnection\");\n\
+export type ProtocolValidationErrorCode = \"InvalidHandshake\" | \"InvalidEnvelope\" | \"NonMonotonicSequence\";\n\
+export interface ProtocolValidationError { readonly code: ProtocolValidationErrorCode }\n\
+export type ProtocolValidationResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: Readonly<ProtocolValidationError> }>;\n\
+const protocolValidationOk = <T>(value: T): ProtocolValidationResult<T> => Object.freeze({ ok: true as const, value });\n\
+const protocolValidationError = <T>(code: ProtocolValidationErrorCode): ProtocolValidationResult<T> => Object.freeze({ ok: false as const, error: Object.freeze({ code }) });\n\
+export interface CompatibleHandshake {\n\
+  readonly [CONNECTION_CONTEXT_BRAND]: true;\n\
+  readonly minor: number;\n\
+  readonly capabilities: bigint;\n\
+  readonly max_message_bytes: number;\n\
+  readonly max_transfer_slots: number;\n\
+}\n\
+export function negotiateHandshake(localInput: unknown, peerInput: unknown): CompatibleHandshake | undefined {\n\
+  if (!validateProtocolHello(localInput) || !validateProtocolHello(peerInput)) return undefined;\n\
+  const local = snapshotProtocolHello(localInput);\n\
+  const peer = snapshotProtocolHello(peerInput);\n\
+  const opposite = (local.endpoint_role === EndpointRole.Host && peer.endpoint_role === EndpointRole.Engine)\n\
+    || (local.endpoint_role === EndpointRole.Engine && peer.endpoint_role === EndpointRole.Host);\n\
+  if (!opposite || local.minor !== peer.minor || !fixedBytesEqual(local.schema_hash, SCHEMA_HASH) || !fixedBytesEqual(peer.schema_hash, SCHEMA_HASH)) return undefined;\n\
+  if ((local.capabilities.mandatory & ~peer.capabilities.supported) !== 0n || (peer.capabilities.mandatory & ~local.capabilities.supported) !== 0n) return undefined;\n\
+  return Object.freeze({\n\
+    [CONNECTION_CONTEXT_BRAND]: true as const,\n\
+    minor: local.minor,\n\
+    capabilities: local.capabilities.supported & peer.capabilities.supported & KNOWN_ENDPOINT_CAPABILITIES,\n\
+    max_message_bytes: Math.min(local.max_message_bytes, peer.max_message_bytes),\n\
+    max_transfer_slots: Math.min(local.max_transfer_slots, peer.max_transfer_slots),\n\
+  });\n\
+}\n\
+export function negotiateHandshakeResult(localInput: unknown, peerInput: unknown): ProtocolValidationResult<CompatibleHandshake> {\n\
+  const value = negotiateHandshake(localInput, peerInput);\n\
+  return value === undefined ? protocolValidationError(\"InvalidHandshake\") : protocolValidationOk(value);\n\
+}\n\
+export function validateHandshakeTranscript(hostHello: Command, engineHello: Event, hostAccept: Command, engineReady: Event): CompatibleHandshake | undefined {\n\
+  if (hostHello.type !== \"Hello\" || engineHello.type !== \"EngineHello\" || hostAccept.type !== \"HelloAccept\" || engineReady.type !== \"Ready\") return undefined;\n\
+  if (hostHello.payload.hello.endpoint_role !== EndpointRole.Host || engineHello.payload.hello.endpoint_role !== EndpointRole.Engine) return undefined;\n\
+  const connection = negotiateHandshake(hostHello.payload.hello, engineHello.payload.hello);\n\
+  if (connection === undefined || hostAccept.payload.negotiated_minor !== connection.minor || engineReady.payload.negotiated_minor !== connection.minor) return undefined;\n\
+  if (!fixedBytesEqual(hostAccept.payload.schema_hash, SCHEMA_HASH) || !fixedBytesEqual(engineReady.payload.schema_hash, SCHEMA_HASH) || engineReady.payload.worker === 0n || engineReady.payload.execution_capabilities.supported !== engineHello.payload.execution_capabilities.supported) return undefined;\n\
+  return connection;\n\
+}\n\
+export interface PendingSequenceCommit { commit(): boolean }\n\
+export class EnvelopeSequenceTracker {\n\
+  private lastAcceptedValue: bigint | undefined;\n\
+  get lastAccepted(): bigint | undefined { return this.lastAcceptedValue; }\n\
+  pending(candidate: bigint): PendingSequenceCommit | undefined {\n\
+    if (candidate === 0n || (this.lastAcceptedValue !== undefined && candidate <= this.lastAcceptedValue)) return undefined;\n\
+    let consumed = false;\n\
+    return Object.freeze({ commit: (): boolean => {\n\
+      if (consumed) return false;\n\
+      consumed = true;\n\
+      if (this.lastAcceptedValue !== undefined && candidate <= this.lastAcceptedValue) return false;\n\
+      this.lastAcceptedValue = candidate;\n\
+      return true;\n\
+    }});\n\
+  }\n\
+}\n\
 const correlationRequirementMet = (present: boolean, requirement: CorrelationRequirement): boolean => requirement === \"required\" ? present : requirement === \"optional\" ? true : !present;\n\
 const validateDescriptorCorrelation = (correlation: Correlation, descriptor: MessageDescriptor): boolean => {\n\
   if (correlation.worker === 0n || correlation.session === 0n || correlation.request === 0n || correlation.generation === 0n) return false;\n\
@@ -1184,18 +2426,18 @@ const validateDescriptorCorrelation = (correlation: Correlation, descriptor: Mes
     && correlationRequirementMet(correlation.request !== undefined, descriptor.correlation_shape.request)\n\
     && correlationRequirementMet(correlation.generation !== undefined, descriptor.correlation_shape.generation);\n\
 };\n\
-const validateTransferBinding = (message: Command | Event, transferSlots: number, descriptor: MessageDescriptor): boolean => {\n\
-  if (!isU16(transferSlots) || transferSlots > MAX_TRANSFER_SLOTS || transferSlots < descriptor.min_transfer_slots || transferSlots > descriptor.max_transfer_slots) return false;\n\
+const validateTransferBinding = (message: Command | Event, transferSlots: number, descriptor: MessageDescriptor, connection: CompatibleHandshake): boolean => {\n\
+  if (!isU16(transferSlots) || transferSlots > connection.max_transfer_slots || transferSlots < descriptor.min_transfer_slots || transferSlots > descriptor.max_transfer_slots) return false;\n\
+  if ((descriptor.required_capability & ~connection.capabilities) !== 0n) return false;\n\
   switch (message.type) {\n\
     case \"ProvideData\": return message.payload.segments.length === transferSlots && message.payload.segments.every((segment, index) => segment.slot === index);\n\
-    case \"RegisterCanvas\": return message.payload.transfer_slot < transferSlots;\n\
     case \"SurfaceReady\": {\n\
       const transport = message.payload.transport;\n\
+      if ((surfaceTransportRequiredCapability(transport) & ~connection.capabilities) !== 0n) return false;\n\
       switch (transport.kind) {\n\
-        case \"BrowserTransfer\": return transferSlots === 1 && transport.slot < transferSlots;\n\
-        case \"SharedMemory\": return transferSlots === 1;\n\
-        case \"OffscreenCanvasCommit\":\n\
-        case \"LocalMemory\": return transferSlots === 0;\n\
+        case \"BrowserArrayBuffer\":\n\
+        case \"BrowserImageBitmap\": return transferSlots === 1 && transport.slot < transferSlots;\n\
+        case \"BrowserSharedArrayBuffer\": return transferSlots === 1 && transport.attachment_slot < transferSlots;\n\
       }\n\
     }\n\
     default: return true;\n\
@@ -1224,31 +2466,55 @@ const validatePayloadCorrelation = (correlation: Correlation, message: Command |
     default: return true;\n\
   }\n\
 };\n\
-const validateEnvelopeDescriptor = (header: EnvelopeHeader, correlation: Correlation, message: Command | Event, kind: MessageKind, transferSlots: number): boolean => {\n\
+const validateEnvelopeDescriptor = (header: EnvelopeHeader, correlation: Correlation, message: Command | Event, kind: MessageKind, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake): boolean => {\n\
   const descriptor = descriptorById(header.message_type);\n\
-  return descriptor !== undefined\n\
+  return connection[CONNECTION_CONTEXT_BRAND] === true\n\
+    && descriptor !== undefined\n\
     && descriptor.kind === kind\n\
     && descriptor.name === message.type\n\
+    && header.minor === connection.minor\n\
+    && isU32(actualPayloadBytes)\n\
+    && actualPayloadBytes === header.payload_len\n\
+    && actualPayloadBytes <= connection.max_message_bytes\n\
     && validateDescriptorCorrelation(correlation, descriptor)\n\
-    && validateTransferBinding(message, transferSlots, descriptor)\n\
+    && validateTransferBinding(message, transferSlots, descriptor, connection)\n\
     && validatePayloadCorrelation(correlation, message);\n\
 };\n\
 export function validateEnvelopeHeaderForMinor(value: unknown, negotiatedMinor: number): value is EnvelopeHeader {\n\
   return Number.isInteger(negotiatedMinor)\n\
-    && negotiatedMinor >= MIN_COMPATIBLE_MINOR\n\
-    && negotiatedMinor <= PROTOCOL_MINOR\n\
+    && negotiatedMinor === PROTOCOL_MINOR\n\
     && validateEnvelopeHeader(value)\n\
     && value.minor === negotiatedMinor;\n\
 }\n\
-export function validateCommandEnvelope(value: unknown, transferSlots = 0, negotiatedMinor: number = PROTOCOL_MINOR): value is CommandEnvelope {\n\
-  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"command\"], []) || !validateEnvelopeHeaderForMinor(value.header, negotiatedMinor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return false;\n\
-  const envelope = value as unknown as CommandEnvelope;\n\
-  return validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.command, \"command\", transferSlots);\n\
+export interface PendingCommandEnvelope { readonly envelope: CommandEnvelope; commitSequence(): boolean }\n\
+export interface PendingEventEnvelope { readonly envelope: EventEnvelope; commitSequence(): boolean }\n\
+export function beginValidateCommandEnvelope(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): PendingCommandEnvelope | undefined {\n\
+  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"command\"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateCommand(value.command)) return undefined;\n\
+  const input = value as unknown as CommandEnvelope;\n\
+  const envelope = Object.freeze({ header: snapshotEnvelopeHeader(input.header), correlation: snapshotCorrelation(input.correlation), command: snapshotCommand(input.command) });\n\
+  if (!validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.command, \"command\", transferSlots, actualPayloadBytes, connection)) return undefined;\n\
+  const pending = sequence.pending(envelope.header.sequence);\n\
+  return pending === undefined ? undefined : Object.freeze({ envelope, commitSequence: (): boolean => pending.commit() });\n\
 }\n\
-export function validateEventEnvelope(value: unknown, transferSlots = 0, negotiatedMinor: number = PROTOCOL_MINOR): value is EventEnvelope {\n\
-  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"event\"], []) || !validateEnvelopeHeaderForMinor(value.header, negotiatedMinor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return false;\n\
-  const envelope = value as unknown as EventEnvelope;\n\
-  return validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.event, \"event\", transferSlots);\n\
+export function beginValidateEventEnvelope(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): PendingEventEnvelope | undefined {\n\
+  if (!isRecord(value) || !exactKeys(value, [\"header\", \"correlation\", \"event\"], []) || !validateEnvelopeHeaderForMinor(value.header, connection.minor) || !validateCorrelation(value.correlation) || !validateEvent(value.event)) return undefined;\n\
+  const input = value as unknown as EventEnvelope;\n\
+  const envelope = Object.freeze({ header: snapshotEnvelopeHeader(input.header), correlation: snapshotCorrelation(input.correlation), event: snapshotEvent(input.event) });\n\
+  if (!validateEnvelopeDescriptor(envelope.header, envelope.correlation, envelope.event, \"event\", transferSlots, actualPayloadBytes, connection)) return undefined;\n\
+  const pending = sequence.pending(envelope.header.sequence);\n\
+  return pending === undefined ? undefined : Object.freeze({ envelope, commitSequence: (): boolean => pending.commit() });\n\
+}\n\
+export function beginValidateCommandEnvelopeResult(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): ProtocolValidationResult<PendingCommandEnvelope> {\n\
+  const pending = beginValidateCommandEnvelope(value, transferSlots, actualPayloadBytes, connection, sequence);\n\
+  if (pending !== undefined) return protocolValidationOk(pending);\n\
+  if (isRecord(value) && isRecord(value.header) && typeof value.header.sequence === \"bigint\" && (value.header.sequence === 0n || (sequence.lastAccepted !== undefined && value.header.sequence <= sequence.lastAccepted))) return protocolValidationError(\"NonMonotonicSequence\");\n\
+  return protocolValidationError(\"InvalidEnvelope\");\n\
+}\n\
+export function beginValidateEventEnvelopeResult(value: unknown, transferSlots: number, actualPayloadBytes: number, connection: CompatibleHandshake, sequence: EnvelopeSequenceTracker): ProtocolValidationResult<PendingEventEnvelope> {\n\
+  const pending = beginValidateEventEnvelope(value, transferSlots, actualPayloadBytes, connection, sequence);\n\
+  if (pending !== undefined) return protocolValidationOk(pending);\n\
+  if (isRecord(value) && isRecord(value.header) && typeof value.header.sequence === \"bigint\" && (value.header.sequence === 0n || (sequence.lastAccepted !== undefined && value.header.sequence <= sequence.lastAccepted))) return protocolValidationError(\"NonMonotonicSequence\");\n\
+  return protocolValidationError(\"InvalidEnvelope\");\n\
 }\n",
     );
 }
@@ -1295,7 +2561,9 @@ fn ts_validator(value: &Type, expression: &str) -> String {
             ts_validator(inner, "entry")
         ),
         Type::Bytes(limit) => {
-            format!("{expression} instanceof Uint8Array && {expression}.byteLength <= {limit}")
+            format!(
+                "{expression} instanceof Uint8Array && {expression}.byteLength <= {limit} && !(typeof SharedArrayBuffer !== \"undefined\" && {expression}.buffer instanceof SharedArrayBuffer)"
+            )
         }
     }
 }
@@ -1310,10 +2578,36 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
     )
     .unwrap();
     writeln!(out, "generator_version {GENERATOR_VERSION}").unwrap();
+    writeln!(out, "wire_identity_domain {WIRE_IDENTITY_DOMAIN}").unwrap();
+    writeln!(out, "payload_codec_abi_version {PAYLOAD_CODEC_ABI_VERSION}").unwrap();
     writeln!(out, "compatible_minor_min {}", protocol.minor).unwrap();
     writeln!(out, "schema_sha256 {}", lowercase_hex(digest)).unwrap();
     writeln!(out, "wire_schema_hash {}", lowercase_hex(&digest[..16])).unwrap();
     writeln!(out, "schema_hash_truncation {SCHEMA_HASH_TRUNCATION}").unwrap();
+    writeln!(out, "target_projection desktop").unwrap();
+    writeln!(out, "payload_codec {}", protocol.payload_codec).unwrap();
+    writeln!(
+        out,
+        "hash_domain CapabilityDecision {CAPABILITY_DECISION_HASH_DOMAIN}"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "hash_domain RenderPlanManifest {RENDER_PLAN_MANIFEST_HASH_DOMAIN}"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "max_data_segment_bytes {}",
+        protocol.max_data_segment_bytes
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "max_data_ticket_bytes {}",
+        protocol.max_data_ticket_bytes
+    )
+    .unwrap();
     writeln!(out, "byte_order little-endian").unwrap();
     writeln!(out, "header_bytes 20").unwrap();
     for (name, ty, offset, bytes) in [
@@ -1378,13 +2672,25 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
     }
     for union in &protocol.unions {
         writeln!(out, "union {} {}", union.name, union.repr.schema_name()).unwrap();
-        for variant in &union.variants {
+        for variant in union
+            .variants
+            .iter()
+            .filter(|variant| desktop_union_variant(variant))
+        {
             writeln!(
                 out,
                 "union_variant {} {} {}",
                 union.name, variant.name, variant.tag
             )
             .unwrap();
+            if let Some(capability) = &variant.required_capability {
+                writeln!(
+                    out,
+                    "union_variant_capability {} {} {}",
+                    union.name, variant.name, capability
+                )
+                .unwrap();
+            }
             for field in &variant.fields {
                 writeln!(
                     out,
@@ -1404,6 +2710,24 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
             }
         }
     }
+    if let Some(surface) = protocol
+        .unions
+        .iter()
+        .find(|union| union.name == "SurfaceTransport")
+    {
+        for variant in surface
+            .variants
+            .iter()
+            .filter(|variant| desktop_union_variant(variant))
+        {
+            writeln!(
+                out,
+                "target_union_variant SurfaceTransport {}",
+                variant.name
+            )
+            .unwrap();
+        }
+    }
     if let Some(capabilities) = protocol
         .enums
         .iter()
@@ -1416,7 +2740,7 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
     for message in &protocol.messages {
         writeln!(
             out,
-            "message {} {} {} {} {} {} {} {} {} {} {}",
+            "message {} {} {} {} {} {} {} {} {} {} {} {}",
             message.kind.schema_name(),
             message.id,
             message.name,
@@ -1427,6 +2751,7 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
             message.min_transfer_slots,
             message.max_transfer_slots,
             message.max_payload_bytes,
+            message.required_capability.as_deref().unwrap_or("none"),
             message.disposition
         )
         .unwrap();
@@ -1461,19 +2786,27 @@ fn generate_desktop_registry(protocol: &Protocol, digest: &[u8; 32]) -> String {
                 .messages
                 .iter()
                 .find(|candidate| {
-                    candidate.kind == MessageKind::Event && candidate.name == *outcome
+                    candidate.kind == MessageKind::Event && candidate.name == outcome.name
                 })
                 .expect("validated outcome")
                 .id;
-            writeln!(out, "outcome {} {}", message.id, id).unwrap();
+            writeln!(
+                out,
+                "outcome {} {} {}",
+                message.id,
+                id,
+                outcome.disposition.schema_name()
+            )
+            .unwrap();
         }
     }
     out
 }
 
-fn generate_hash_registry(digest: &[u8; 32]) -> String {
+fn generate_hash_registry(digest: &[u8; 32], canonical_digest: &[u8; 32]) -> String {
     format!(
-        "algorithm sha256\ngenerator_version {GENERATOR_VERSION}\ncanonical_source protocol/engine.protocol\nfull_sha256 {}\nwire_hash {}\nwire_hash_bytes 16\ntruncation_policy {SCHEMA_HASH_TRUNCATION}\n",
+        "algorithm sha256\ngenerator_version {GENERATOR_VERSION}\nwire_identity_domain {WIRE_IDENTITY_DOMAIN}\npayload_codec_abi_version {PAYLOAD_CODEC_ABI_VERSION}\ncanonical_source protocol/engine.protocol\ncanonical_schema_sha256 {}\nfull_sha256 {}\nwire_hash {}\nwire_hash_bytes 16\ntruncation_policy {SCHEMA_HASH_TRUNCATION}\n",
+        lowercase_hex(canonical_digest),
         lowercase_hex(digest),
         lowercase_hex(&digest[..16])
     )
@@ -1486,13 +2819,27 @@ fn generate_compatibility_vectors(protocol: &Protocol, digest: &[u8; 32]) -> Str
     let mut fork_hash = digest[..16].to_vec();
     fork_hash[0] ^= 0xff;
     let fork_wire = lowercase_hex(&fork_hash);
+    let endpoint_capabilities = protocol
+        .enums
+        .iter()
+        .find(|definition| definition.name == "EndpointCapability")
+        .expect("canonical schema has EndpointCapability");
+    let known_capabilities = endpoint_capabilities
+        .variants
+        .iter()
+        .fold(0_u64, |mask, variant| mask | u64::from(variant.tag));
+    let first_capability = u64::from(endpoint_capabilities.variants[0].tag);
+    let known_hex = format!("0x{known_capabilities:x}");
+    let known_with_unknown_hex = format!("0x{:x}", known_capabilities | (1_u64 << 63));
+    let missing_first_hex = format!("0x{:x}", known_capabilities & !first_capability);
+    let first_hex = format!("0x{first_capability:x}");
     let mut vectors = vec![format!(
-        "    {{\"name\":\"exact-schema\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected\":\"ExactSchema\"}}",
+        "    {{\"name\":\"exact-schema\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"{known_hex}\",\"peer_mandatory\":\"0x0\",\"expected\":\"ExactSchema\"}}",
         protocol.major, protocol.minor, protocol.major, protocol.minor
     )];
     if protocol.minor > 0 {
         vectors.push(format!(
-            "    {{\"name\":\"unregistered-older-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"11111111111111111111111111111111\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMinor\"}}",
+            "    {{\"name\":\"unregistered-older-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"11111111111111111111111111111111\",\"peer_supported\":\"{known_hex}\",\"peer_mandatory\":\"0x0\",\"expected_error\":\"UnsupportedMinor\"}}",
             protocol.major,
             protocol.minor,
             protocol.major,
@@ -1501,7 +2848,7 @@ fn generate_compatibility_vectors(protocol: &Protocol, digest: &[u8; 32]) -> Str
     }
     if protocol.minor < u16::MAX {
         vectors.push(format!(
-            "    {{\"name\":\"future-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{fork_wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMinor\"}}",
+            "    {{\"name\":\"future-minor\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{fork_wire}\",\"peer_supported\":\"{known_hex}\",\"peer_mandatory\":\"0x0\",\"expected_error\":\"UnsupportedMinor\"}}",
             protocol.major,
             protocol.minor,
             protocol.major,
@@ -1510,23 +2857,23 @@ fn generate_compatibility_vectors(protocol: &Protocol, digest: &[u8; 32]) -> Str
     }
     vectors.extend([
         format!(
-            "    {{\"name\":\"same-minor-schema-fork\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{fork_wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"IncompatibleSchema\"}}",
+            "    {{\"name\":\"same-minor-schema-fork\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{fork_wire}\",\"peer_supported\":\"{known_hex}\",\"peer_mandatory\":\"0x0\",\"expected_error\":\"IncompatibleSchema\"}}",
             protocol.major, protocol.minor, protocol.major, protocol.minor
         ),
         format!(
-            "    {{\"name\":\"unknown-optional-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x800000000000003f\",\"peer_mandatory\":\"0x00\",\"expected\":\"ExactSchema\"}}",
+            "    {{\"name\":\"unknown-optional-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"{known_with_unknown_hex}\",\"peer_mandatory\":\"0x0\",\"expected\":\"ExactSchema\"}}",
             protocol.major, protocol.minor, protocol.major, protocol.minor
         ),
         format!(
-            "    {{\"name\":\"unknown-mandatory-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}}",
+            "    {{\"name\":\"unknown-mandatory-capability\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"{known_hex}\",\"peer_mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}}",
             protocol.major, protocol.minor, protocol.major, protocol.minor
         ),
         format!(
-            "    {{\"name\":\"mandatory-not-supported-by-endpoint\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3e\",\"peer_mandatory\":\"0x01\",\"expected_error\":\"InvalidEndpointCapabilities\"}}",
+            "    {{\"name\":\"mandatory-not-supported-by-endpoint\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"{missing_first_hex}\",\"peer_mandatory\":\"{first_hex}\",\"expected_error\":\"InvalidEndpointCapabilities\"}}",
             protocol.major, protocol.minor, protocol.major, protocol.minor
         ),
         format!(
-            "    {{\"name\":\"major-mismatch\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"0x3f\",\"peer_mandatory\":\"0x00\",\"expected_error\":\"UnsupportedMajor\"}}",
+            "    {{\"name\":\"major-mismatch\",\"local_major\":{},\"local_minor\":{},\"peer_major\":{},\"peer_minor\":{},\"peer_schema_hash\":\"{wire}\",\"peer_supported\":\"{known_hex}\",\"peer_mandatory\":\"0x0\",\"expected_error\":\"UnsupportedMajor\"}}",
             protocol.major,
             protocol.minor,
             if protocol.major == u16::MAX {
@@ -1538,7 +2885,7 @@ fn generate_compatibility_vectors(protocol: &Protocol, digest: &[u8; 32]) -> Str
         ),
     ]);
     format!(
-        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"schema_sha256\": \"{full}\",\n  \"wire_schema_hash\": \"{wire}\",\n  \"truncation_policy\": \"{SCHEMA_HASH_TRUNCATION}\",\n  \"minimum_compatible_minor\": {minimum_minor},\n  \"vectors\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"wire_identity_domain\": \"{WIRE_IDENTITY_DOMAIN}\",\n  \"payload_codec_abi_version\": {PAYLOAD_CODEC_ABI_VERSION},\n  \"schema_sha256\": \"{full}\",\n  \"wire_schema_hash\": \"{wire}\",\n  \"truncation_policy\": \"{SCHEMA_HASH_TRUNCATION}\",\n  \"minimum_compatible_minor\": {minimum_minor},\n  \"vectors\": [\n{}\n  ]\n}}\n",
         vectors.join(",\n")
     )
 }
@@ -1551,6 +2898,16 @@ fn generate_invalid_vectors(protocol: &Protocol, digest: &[u8; 32]) -> String {
         .expect("canonical schema has Hello");
     let header = desktop_header_hex(protocol.major, protocol.minor, hello.id, 0, 0, 1);
     let zero_sequence = desktop_header_hex(protocol.major, protocol.minor, hello.id, 0, 0, 0);
+    let endpoint_capabilities = protocol
+        .enums
+        .iter()
+        .find(|definition| definition.name == "EndpointCapability")
+        .expect("canonical schema has EndpointCapability");
+    let known_capabilities = endpoint_capabilities
+        .variants
+        .iter()
+        .fold(0_u64, |mask, variant| mask | u64::from(variant.tag));
+    let first_capability = u64::from(endpoint_capabilities.variants[0].tag);
     let vectors = [
         format!(
             "    {{\"name\":\"truncated-header\",\"frame_hex\":\"{}\",\"transfer_slots\":0,\"expected_error\":\"TruncatedHeader\"}}",
@@ -1584,14 +2941,531 @@ fn generate_invalid_vectors(protocol: &Protocol, digest: &[u8; 32]) -> String {
         "    {\"name\":\"surface-range-overflow\",\"byte_offset\":\"18446744073709551615\",\"byte_length\":\"1\",\"region_length\":\"18446744073709551615\",\"expected_error\":\"NumericOverflow\"}".to_owned(),
         "    {\"name\":\"surface-reclaimed-missing-reason\",\"message_type\":113,\"payload\":{\"surface\":1},\"expected_error\":\"MissingRequiredField\"}".to_owned(),
         "    {\"name\":\"unknown-mandatory-capability\",\"mandatory\":\"0x8000000000000000\",\"expected_error\":\"UnknownMandatoryCapability\"}".to_owned(),
-        "    {\"name\":\"mandatory-not-supported-by-endpoint\",\"supported\":\"0x3e\",\"mandatory\":\"0x01\",\"expected_error\":\"InvalidEndpointCapabilities\"}".to_owned(),
+        format!(
+            "    {{\"name\":\"mandatory-not-supported-by-endpoint\",\"supported\":\"0x{:x}\",\"mandatory\":\"0x{first_capability:x}\",\"expected_error\":\"InvalidEndpointCapabilities\"}}",
+            known_capabilities & !first_capability
+        ),
         "    {\"name\":\"silent-decision-truncation\",\"missing_total\":17,\"missing_count\":16,\"missing_completeness\":\"Complete\",\"expected_error\":\"InvalidCapabilityDecision\"}".to_owned(),
     ];
     format!(
-        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"schema_sha256\": \"{}\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"wire_identity_domain\": \"{WIRE_IDENTITY_DOMAIN}\",\n  \"payload_codec_abi_version\": {PAYLOAD_CODEC_ABI_VERSION},\n  \"schema_sha256\": \"{}\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
         lowercase_hex(digest),
         vectors.join(",\n")
     )
+}
+
+fn generate_payload_codec_vectors(protocol: &Protocol, digest: &[u8; 32]) -> String {
+    let maximum_message_bytes =
+        usize::try_from(protocol.max_message_bytes).expect("u32 fits into usize");
+    let codec = FixedLeCodec::new(
+        protocol,
+        CodecLimits::new(64, maximum_message_bytes, maximum_message_bytes),
+    )
+    .expect("parser validates fixed_le_v1 schema");
+
+    let fail_data_absent = record([
+        ("ticket", WireValue::U64(9)),
+        ("expected", source_identity(0x11, 7)),
+        ("observed", WireValue::Optional(None)),
+        ("code", WireValue::Enum("Unavailable".into())),
+        ("retryable", WireValue::Bool(true)),
+    ]);
+    let fail_data_present = record([
+        ("ticket", WireValue::U64(10)),
+        ("expected", source_identity(0x22, 8)),
+        (
+            "observed",
+            WireValue::Optional(Some(Box::new(source_identity(0x33, 9)))),
+        ),
+        ("code", WireValue::Enum("SourceChanged".into())),
+        ("retryable", WireValue::Bool(false)),
+    ]);
+    let need_data = record([
+        ("ticket", WireValue::U64(12)),
+        ("source", source_identity(0x44, 10)),
+        (
+            "ranges",
+            WireValue::List(vec![
+                record([("start", WireValue::U64(0)), ("len", WireValue::U64(16))]),
+                record([("start", WireValue::U64(32)), ("len", WireValue::U64(8))]),
+            ]),
+        ),
+        ("priority", WireValue::Enum("VisiblePage".into())),
+        ("checkpoint", WireValue::U64(77)),
+    ]);
+    let shared_surface = WireValue::Union {
+        variant: "BrowserSharedArrayBuffer".into(),
+        fields: vec![
+            ("attachment_slot".into(), WireValue::U16(2)),
+            ("buffer_length".into(), WireValue::U64(4096)),
+            ("fence_byte_offset".into(), WireValue::U64(4080)),
+            ("publication_epoch".into(), WireValue::U32(3)),
+        ],
+    };
+
+    let fail_absent_bytes = encode_vector(&codec, "FailDataCommand", &fail_data_absent);
+    let fail_present_bytes = encode_vector(&codec, "FailDataCommand", &fail_data_present);
+    let need_data_bytes = encode_vector(&codec, "NeedDataEvent", &need_data);
+    let shared_surface_bytes = encode_vector(&codec, "SurfaceTransport", &shared_surface);
+    let fail_message = message_id(protocol, "FailData");
+    let need_data_message = message_id(protocol, "NeedData");
+    let fail_frame_payload =
+        encode_message_payload(&codec, "Session", "FailDataCommand", &fail_data_absent);
+    let need_data_frame_payload =
+        encode_message_payload(&codec, "SessionRequest", "NeedDataEvent", &need_data);
+    let valid = [
+        format!(
+            "    {{\"name\":\"fail-data-absent-optional\",\"type\":\"FailDataCommand\",\"message_kind\":\"command\",\"message_type\":{fail_message},\"payload_hex\":\"{}\",\"frame_payload_hex\":\"{}\"}}",
+            lowercase_hex(&fail_absent_bytes),
+            lowercase_hex(&fail_frame_payload)
+        ),
+        format!(
+            "    {{\"name\":\"fail-data-present-optional\",\"type\":\"FailDataCommand\",\"message_kind\":\"command\",\"message_type\":{fail_message},\"payload_hex\":\"{}\"}}",
+            lowercase_hex(&fail_present_bytes)
+        ),
+        format!(
+            "    {{\"name\":\"need-data-nested-list\",\"type\":\"NeedDataEvent\",\"message_kind\":\"event\",\"message_type\":{need_data_message},\"payload_hex\":\"{}\",\"frame_payload_hex\":\"{}\"}}",
+            lowercase_hex(&need_data_bytes),
+            lowercase_hex(&need_data_frame_payload)
+        ),
+        format!(
+            "    {{\"name\":\"surface-tagged-union\",\"type\":\"SurfaceTransport\",\"payload_hex\":\"{}\"}}",
+            lowercase_hex(&shared_surface_bytes)
+        ),
+    ];
+    let hash_known_answers = payload_hash_known_answers(&codec)
+        .into_iter()
+        .map(|answer| {
+            format!(
+                "    {{\"type\":\"{}\",\"domain\":\"{}\",\"payload_hex\":\"{}\",\"preimage_hex\":\"{}\",\"sha256\":\"{}\"}}",
+                answer.type_name,
+                answer.domain,
+                lowercase_hex(&answer.payload),
+                lowercase_hex(&answer.preimage),
+                lowercase_hex(&answer.sha256)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut invalid_optional = fail_absent_bytes.clone();
+    invalid_optional[48] = 2;
+    let mut invalid_boolean = fail_absent_bytes.clone();
+    *invalid_boolean
+        .last_mut()
+        .expect("FailDataCommand contains a boolean") = 2;
+    let mut invalid_union_tag = shared_surface_bytes.clone();
+    invalid_union_tag[0] = u8::MAX;
+    let mut over_limit_list = need_data_bytes.clone();
+    over_limit_list[48..52].copy_from_slice(&17_u32.to_le_bytes());
+    let mut impossible_list = need_data_bytes.clone();
+    impossible_list[48..52].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut trailing = fail_absent_bytes.clone();
+    trailing.push(0);
+    let mut truncated = need_data_bytes.clone();
+    truncated.pop();
+
+    let invalid_cases = [
+        (
+            "noncanonical-optional-marker",
+            "FailDataCommand",
+            invalid_optional,
+            CodecErrorKind::InvalidOptionalMarker,
+        ),
+        (
+            "noncanonical-boolean-marker",
+            "FailDataCommand",
+            invalid_boolean,
+            CodecErrorKind::InvalidBooleanMarker,
+        ),
+        (
+            "unknown-union-tag",
+            "SurfaceTransport",
+            invalid_union_tag,
+            CodecErrorKind::UnknownTag,
+        ),
+        (
+            "list-count-above-schema-limit",
+            "NeedDataEvent",
+            over_limit_list,
+            CodecErrorKind::LimitExceeded,
+        ),
+        (
+            "list-count-impossible-for-remaining-input",
+            "NeedDataEvent",
+            impossible_list,
+            CodecErrorKind::LimitExceeded,
+        ),
+        (
+            "trailing-payload-byte",
+            "FailDataCommand",
+            trailing,
+            CodecErrorKind::TrailingBytes,
+        ),
+        (
+            "truncated-nested-payload",
+            "NeedDataEvent",
+            truncated,
+            CodecErrorKind::Truncated,
+        ),
+    ];
+    let invalid = invalid_cases
+        .into_iter()
+        .map(|(name, type_name, bytes, expected)| {
+            let error = codec
+                .decode_named(type_name, &bytes)
+                .expect_err("invalid codec vector must fail");
+            assert_eq!(error.kind, expected, "invalid vector {name}");
+            format!(
+                "    {{\"name\":\"{name}\",\"type\":\"{type_name}\",\"payload_hex\":\"{}\",\"expected_error\":\"{}\"}}",
+                lowercase_hex(&bytes),
+                codec_error_name(expected)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let maximum_payload_bytes = protocol
+        .messages
+        .iter()
+        .map(|message| {
+            let maximum = maximum_message_payload(&codec, message);
+            assert!(maximum <= message.max_payload_bytes as usize);
+            format!(
+                "    {{\"message_type\":{},\"name\":\"{}\",\"payload_type\":\"{}\",\"schema_maximum\":{},\"declared_limit\":{}}}",
+                message.id,
+                message.name,
+                message.payload,
+                maximum,
+                message.max_payload_bytes
+            )
+        })
+        .collect::<Vec<_>>();
+
+    format!(
+        "{{\n  \"generator_version\": \"{GENERATOR_VERSION}\",\n  \"wire_identity_domain\": \"{WIRE_IDENTITY_DOMAIN}\",\n  \"payload_codec_abi_version\": {PAYLOAD_CODEC_ABI_VERSION},\n  \"schema_sha256\": \"{}\",\n  \"codec\": \"{}\",\n  \"byte_order\": \"little-endian\",\n  \"record_framing\": \"none\",\n  \"frame_payload_layout\": \"Correlation || message-specific payload\",\n  \"minor_compatibility\": \"exact-schema-layout-only\",\n  \"valid\": [\n{}\n  ],\n  \"hash_known_answers\": [\n{}\n  ],\n  \"invalid\": [\n{}\n  ],\n  \"maximum_payload_bytes\": [\n{}\n  ]\n}}\n",
+        lowercase_hex(digest),
+        protocol.payload_codec,
+        valid.join(",\n"),
+        hash_known_answers.join(",\n"),
+        invalid.join(",\n"),
+        maximum_payload_bytes.join(",\n")
+    )
+}
+
+struct PayloadHashKnownAnswer {
+    type_name: &'static str,
+    domain: &'static str,
+    payload: Vec<u8>,
+    preimage: Vec<u8>,
+    sha256: [u8; 32],
+}
+
+fn payload_hash_known_answers(codec: &FixedLeCodec<'_>) -> [PayloadHashKnownAnswer; 2] {
+    let decision = capability_decision_hash_fixture();
+    assert!(
+        capability_decision_hash_fixture_wire_invariants_valid(&decision),
+        "CapabilityDecision hash fixture must satisfy generated wire_invariants_valid"
+    );
+    let decision_payload = encode_vector(codec, "CapabilityDecision", &decision);
+    let decision_preimage =
+        frozen_payload_hash_preimage(CAPABILITY_DECISION_HASH_DOMAIN, &decision_payload);
+    let decision_sha256 = sha256(&decision_preimage);
+
+    let manifest = render_plan_manifest_hash_fixture(decision_sha256);
+    assert!(
+        render_plan_manifest_hash_fixture_wire_invariants_valid(&manifest),
+        "RenderPlanManifest hash fixture must satisfy projection wire invariants"
+    );
+    let manifest_payload = encode_vector(codec, "RenderPlanManifest", &manifest);
+    let manifest_preimage =
+        frozen_payload_hash_preimage(RENDER_PLAN_MANIFEST_HASH_DOMAIN, &manifest_payload);
+    let manifest_sha256 = sha256(&manifest_preimage);
+
+    [
+        PayloadHashKnownAnswer {
+            type_name: "CapabilityDecision",
+            domain: CAPABILITY_DECISION_HASH_DOMAIN,
+            payload: decision_payload,
+            preimage: decision_preimage,
+            sha256: decision_sha256,
+        },
+        PayloadHashKnownAnswer {
+            type_name: "RenderPlanManifest",
+            domain: RENDER_PLAN_MANIFEST_HASH_DOMAIN,
+            payload: manifest_payload,
+            preimage: manifest_preimage,
+            sha256: manifest_sha256,
+        },
+    ]
+}
+
+fn frozen_payload_hash_preimage(domain: &str, payload: &[u8]) -> Vec<u8> {
+    let payload_len = u64::try_from(payload.len()).expect("bounded payload length fits u64");
+    let capacity = domain
+        .len()
+        .checked_add(9)
+        .and_then(|length| length.checked_add(payload.len()))
+        .expect("bounded hash preimage length");
+    let mut preimage = Vec::with_capacity(capacity);
+    preimage.extend_from_slice(domain.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(&payload_len.to_le_bytes());
+    preimage.extend_from_slice(payload);
+    preimage
+}
+
+fn capability_decision_hash_fixture() -> WireValue {
+    record([
+        ("decision_schema_version", WireValue::U16(1)),
+        ("status", WireValue::Enum("Supported".into())),
+        ("profile", WireValue::Enum("BaselineNative".into())),
+        ("profile_version", WireValue::U32(1)),
+        ("policy_version", WireValue::U32(1)),
+        (
+            "subject",
+            record([
+                ("source", source_identity(0x55, 11)),
+                ("document_revision", WireValue::U64(12)),
+                ("revision_startxref", WireValue::U64(13)),
+                ("page_index", WireValue::U32(2)),
+                ("page_object_number", WireValue::U32(44)),
+                ("page_object_generation", WireValue::U16(0)),
+                ("scene_schema_major", WireValue::U16(1)),
+                ("scene_schema_minor", WireValue::U16(0)),
+                ("scene_hash", WireValue::Bytes32([0x77; 32])),
+            ]),
+        ),
+        ("missing", WireValue::List(Vec::new())),
+        ("missing_total", WireValue::U32(0)),
+        ("missing_completeness", WireValue::Enum("Complete".into())),
+        ("contributors", WireValue::List(Vec::new())),
+        ("contributors_total", WireValue::U32(0)),
+        (
+            "contributors_completeness",
+            WireValue::Enum("Complete".into()),
+        ),
+        (
+            "scope",
+            record([
+                ("kind", WireValue::Enum("Page".into())),
+                (
+                    "page",
+                    WireValue::Optional(Some(Box::new(WireValue::U32(2)))),
+                ),
+                ("command", WireValue::Optional(None)),
+                ("resource", WireValue::Optional(None)),
+            ]),
+        ),
+        ("location", WireValue::Optional(None)),
+        ("rejection_code", WireValue::Optional(None)),
+    ])
+}
+
+fn capability_decision_hash_fixture_wire_invariants_valid(value: &WireValue) -> bool {
+    matches!(
+        record_field(value, "status"),
+        Some(WireValue::Enum(status)) if status == "Supported"
+    ) && matches!(
+        record_field(value, "missing"),
+        Some(WireValue::List(missing)) if missing.is_empty()
+    ) && matches!(
+        record_field(value, "missing_total"),
+        Some(WireValue::U32(0))
+    ) && matches!(
+        record_field(value, "missing_completeness"),
+        Some(WireValue::Enum(completeness)) if completeness == "Complete"
+    ) && matches!(
+        record_field(value, "contributors"),
+        Some(WireValue::List(contributors)) if contributors.is_empty()
+    ) && matches!(
+        record_field(value, "contributors_total"),
+        Some(WireValue::U32(0))
+    ) && matches!(
+        record_field(value, "contributors_completeness"),
+        Some(WireValue::Enum(completeness)) if completeness == "Complete"
+    ) && matches!(
+        record_field(value, "location"),
+        Some(WireValue::Optional(None))
+    ) && matches!(
+        record_field(value, "rejection_code"),
+        Some(WireValue::Optional(None))
+    )
+}
+
+fn render_plan_manifest_hash_fixture(decision_hash: [u8; 32]) -> WireValue {
+    record([
+        ("document_revision", WireValue::U64(12)),
+        ("render_config", WireValue::Bytes32([0x66; 32])),
+        ("renderer_epoch", WireValue::U32(4)),
+        ("plan_id", WireValue::U64(21)),
+        ("scene_hash", WireValue::Bytes32([0x77; 32])),
+        ("decision_hash", WireValue::Bytes32(decision_hash)),
+        ("backend", WireValue::Enum("ReferenceCpu".into())),
+        ("output_profile", WireValue::Enum("Srgb".into())),
+        ("quality", WireValue::Enum("Full".into())),
+        (
+            "regions",
+            WireValue::List(vec![record([
+                ("page_index", WireValue::U32(2)),
+                ("x", WireValue::I32(-10)),
+                ("y", WireValue::I32(20)),
+                ("width", WireValue::U32(640)),
+                ("height", WireValue::U32(480)),
+                (
+                    "coordinate_space",
+                    WireValue::Enum("DevicePixelsTopLeft".into()),
+                ),
+            ])]),
+        ),
+    ])
+}
+
+fn render_plan_manifest_hash_fixture_wire_invariants_valid(value: &WireValue) -> bool {
+    let valid_region = match record_field(value, "regions") {
+        Some(WireValue::List(regions)) if regions.len() == 1 => regions.iter().all(|region| {
+            matches!(
+                record_field(region, "width"),
+                Some(WireValue::U32(width)) if *width != 0
+            ) && matches!(
+                record_field(region, "height"),
+                Some(WireValue::U32(height)) if *height != 0
+            )
+        }),
+        _ => false,
+    };
+    matches!(
+        record_field(value, "plan_id"),
+        Some(WireValue::U64(plan_id)) if *plan_id != 0
+    ) && matches!(
+        record_field(value, "output_profile"),
+        Some(WireValue::Enum(profile)) if profile == "Srgb"
+    ) && valid_region
+}
+
+fn record_field<'a>(value: &'a WireValue, name: &str) -> Option<&'a WireValue> {
+    match value {
+        WireValue::Record(fields) => fields
+            .iter()
+            .find_map(|(field_name, value)| (field_name == name).then_some(value)),
+        _ => None,
+    }
+}
+
+fn record<const N: usize>(fields: [(&str, WireValue); N]) -> WireValue {
+    WireValue::Record(
+        fields
+            .into_iter()
+            .map(|(name, value)| (name.into(), value))
+            .collect(),
+    )
+}
+
+fn correlation_value(shape: &str) -> WireValue {
+    let present = |value| WireValue::Optional(Some(Box::new(WireValue::U64(value))));
+    let absent = || WireValue::Optional(None);
+    let (session, request, generation) = match shape {
+        "Worker" => (absent(), absent(), absent()),
+        "Session" => (present(2), absent(), absent()),
+        "Request" => (present(2), present(3), absent()),
+        "OpenRequest" => (absent(), present(3), absent()),
+        "SessionRequest" => (present(2), present(3), absent()),
+        "Generation" => (present(2), absent(), present(4)),
+        other => panic!("validated correlation shape {other}"),
+    };
+    record([
+        ("worker", WireValue::U64(1)),
+        ("session", session),
+        ("request", request),
+        ("generation", generation),
+    ])
+}
+
+fn encode_message_payload(
+    codec: &FixedLeCodec<'_>,
+    correlation_shape: &str,
+    payload_type: &str,
+    payload: &WireValue,
+) -> Vec<u8> {
+    let correlation = encode_vector(codec, "Correlation", &correlation_value(correlation_shape));
+    let payload = encode_vector(codec, payload_type, payload);
+    let mut output = Vec::with_capacity(correlation.len() + payload.len());
+    output.extend_from_slice(&correlation);
+    output.extend_from_slice(&payload);
+    output
+}
+
+fn maximum_message_payload(codec: &FixedLeCodec<'_>, message: &crate::model::Message) -> usize {
+    let correlation = codec
+        .encode_named("Correlation", &correlation_value(&message.correlation))
+        .expect("generated correlation shape matches schema")
+        .len();
+    let payload = codec
+        .maximum_encoded_size(&Type::Named(message.payload.clone()))
+        .expect("parser proves bounded payload");
+    correlation
+        .checked_add(payload)
+        .expect("parser proves bounded envelope payload")
+}
+
+fn source_identity(stable_byte: u8, revision: u64) -> WireValue {
+    record([
+        ("stable_id", WireValue::Bytes32([stable_byte; 32])),
+        ("revision", WireValue::U64(revision)),
+    ])
+}
+
+fn encode_vector(codec: &FixedLeCodec<'_>, type_name: &str, value: &WireValue) -> Vec<u8> {
+    let ty = Type::Named(type_name.into());
+    let encoded = codec
+        .encode(&ty, value)
+        .expect("generator fixture matches canonical schema");
+    assert_eq!(
+        codec
+            .decode(&ty, &encoded)
+            .expect("generated fixture decodes"),
+        *value
+    );
+    assert_eq!(
+        codec
+            .reencode(&ty, &encoded)
+            .expect("generated fixture re-encodes"),
+        encoded
+    );
+    assert_eq!(
+        codec
+            .reencode_named(type_name, &encoded)
+            .expect("generated named fixture re-encodes"),
+        encoded
+    );
+    encoded
+}
+
+fn message_id(protocol: &Protocol, name: &str) -> u16 {
+    protocol
+        .messages
+        .iter()
+        .find(|message| message.name == name)
+        .unwrap_or_else(|| panic!("canonical schema has {name}"))
+        .id
+}
+
+const fn codec_error_name(kind: CodecErrorKind) -> &'static str {
+    match kind {
+        CodecErrorKind::UnsupportedCodec => "UnsupportedCodec",
+        CodecErrorKind::InvalidSchema => "InvalidSchema",
+        CodecErrorKind::UnknownType => "UnknownType",
+        CodecErrorKind::RecursiveType => "RecursiveType",
+        CodecErrorKind::TypeMismatch => "TypeMismatch",
+        CodecErrorKind::MissingField => "MissingField",
+        CodecErrorKind::UnknownField => "UnknownField",
+        CodecErrorKind::DuplicateField => "DuplicateField",
+        CodecErrorKind::UnknownVariant => "UnknownVariant",
+        CodecErrorKind::UnknownTag => "UnknownTag",
+        CodecErrorKind::InvalidBooleanMarker => "InvalidBooleanMarker",
+        CodecErrorKind::InvalidOptionalMarker => "InvalidOptionalMarker",
+        CodecErrorKind::LimitExceeded => "LimitExceeded",
+        CodecErrorKind::Truncated => "Truncated",
+        CodecErrorKind::TrailingBytes => "TrailingBytes",
+    }
 }
 
 fn desktop_header_hex(
@@ -1614,7 +3488,10 @@ fn desktop_header_hex(
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_compatibility_vectors, generated_files};
+    use super::{
+        GeneratedFile, generate_compatibility_vectors, generated_files, write_generated,
+        write_generated_transaction,
+    };
     use crate::parser::parse_schema;
     use std::path::Path;
 
@@ -1626,13 +3503,26 @@ mod tests {
         let first = generated_files(&protocol, SCHEMA);
         let second = generated_files(&protocol, SCHEMA);
         assert_eq!(first, second);
-        assert_eq!(first.len(), 6);
+        assert_eq!(first.len(), 7);
+        for path in [
+            "runtime/protocol/src/generated.rs",
+            "platform/browser/generated/engine-protocol.ts",
+        ] {
+            let contents = &first
+                .iter()
+                .find(|file| file.relative_path == Path::new(path))
+                .unwrap()
+                .contents;
+            assert!(contents.ends_with('\n'));
+            assert!(!contents.ends_with("\n\n"));
+        }
         for required in [
             "runtime/protocol/src/generated.rs",
             "platform/browser/generated/engine-protocol.ts",
             "platform/desktop/generated/engine-protocol.registry",
             "protocol/generated/compatibility-vectors.json",
             "protocol/generated/invalid-vectors.json",
+            "protocol/generated/payload-codec-vectors.json",
         ] {
             assert!(
                 first
@@ -1643,12 +3533,24 @@ mod tests {
     }
 
     #[test]
+    fn wire_identity_binds_codec_abi_and_is_not_the_raw_schema_digest() {
+        let protocol = parse_schema(SCHEMA).unwrap();
+        let identity = super::wire_identity_digest(&protocol, SCHEMA);
+        assert_ne!(identity, crate::hash::sha256(SCHEMA.as_bytes()));
+        let registry =
+            super::generate_hash_registry(&identity, &crate::hash::sha256(SCHEMA.as_bytes()));
+        assert!(registry.contains("wire_identity_domain PDF.rs/EngineProtocol/WireIdentity/v1"));
+        assert!(registry.contains("payload_codec_abi_version 1"));
+        assert!(registry.contains("canonical_schema_sha256"));
+    }
+
+    #[test]
     fn compatibility_replay_has_stable_outcomes() {
         let protocol = parse_schema(SCHEMA).unwrap();
         let vectors = generate_compatibility_vectors(&protocol, &[0x5a; 32]);
         assert!(vectors.contains("\"expected\":\"ExactSchema\""));
         assert!(!vectors.contains("\"expected\":\"CompatibleMinor\""));
-        assert!(vectors.contains("\"generator_version\": \"0.1.0\""));
+        assert!(vectors.contains("\"generator_version\": \"0.2.0\""));
         assert!(vectors.contains("\"minimum_compatible_minor\": 2"));
         assert!(vectors.contains("\"name\":\"unregistered-older-minor\""));
         assert!(vectors.contains("\"name\":\"future-minor\""));
@@ -1687,8 +3589,174 @@ mod tests {
     }
 
     #[test]
+    fn payload_codec_vectors_bind_envelope_layout_and_wire_maxima() {
+        let protocol = parse_schema(SCHEMA).unwrap();
+        let vectors = super::generate_payload_codec_vectors(&protocol, &[0x5a; 32]);
+        assert!(
+            vectors
+                .contains("\"frame_payload_layout\": \"Correlation || message-specific payload\"")
+        );
+        assert!(vectors.contains("\"name\":\"fail-data-absent-optional\""));
+        assert!(vectors.contains("\"name\":\"need-data-nested-list\""));
+        assert!(vectors.contains("\"name\":\"surface-tagged-union\""));
+        assert!(vectors.contains("\"expected_error\":\"InvalidOptionalMarker\""));
+        assert!(vectors.contains("\"expected_error\":\"InvalidBooleanMarker\""));
+        assert!(vectors.contains("\"expected_error\":\"UnknownTag\""));
+        assert!(vectors.contains("\"expected_error\":\"TrailingBytes\""));
+        assert!(vectors.contains("\"maximum_payload_bytes\""));
+        assert!(vectors.contains("\"name\":\"GenerationPlanned\""));
+    }
+
+    #[test]
+    fn payload_hash_known_answers_freeze_domain_length_payload_and_digest() {
+        let protocol = parse_schema(SCHEMA).unwrap();
+        let maximum_message_bytes =
+            usize::try_from(protocol.max_message_bytes).expect("u32 fits into usize");
+        let codec = crate::codec::FixedLeCodec::new(
+            &protocol,
+            crate::codec::CodecLimits::new(64, maximum_message_bytes, maximum_message_bytes),
+        )
+        .unwrap();
+        let answers = super::payload_hash_known_answers(&codec);
+        assert_eq!(answers[0].type_name, "CapabilityDecision");
+        assert_eq!(answers[0].domain, super::CAPABILITY_DECISION_HASH_DOMAIN);
+        assert_eq!(answers[1].type_name, "RenderPlanManifest");
+        assert_eq!(answers[1].domain, super::RENDER_PLAN_MANIFEST_HASH_DOMAIN);
+        assert!(
+            super::capability_decision_hash_fixture_wire_invariants_valid(
+                &super::capability_decision_hash_fixture()
+            )
+        );
+        assert!(
+            super::render_plan_manifest_hash_fixture_wire_invariants_valid(
+                &super::render_plan_manifest_hash_fixture(answers[0].sha256)
+            )
+        );
+
+        for answer in &answers {
+            let domain_len = answer.domain.len();
+            let payload_offset = domain_len + 1 + 8;
+            assert_eq!(answer.preimage.len(), payload_offset + answer.payload.len());
+            assert_eq!(
+                &answer.preimage[..domain_len],
+                answer.domain.as_bytes(),
+                "{} domain",
+                answer.type_name
+            );
+            assert_eq!(
+                answer.preimage[domain_len], 0,
+                "{} NUL separator",
+                answer.type_name
+            );
+            let length_bytes: [u8; 8] = answer.preimage[domain_len + 1..payload_offset]
+                .try_into()
+                .unwrap();
+            assert_eq!(
+                u64::from_le_bytes(length_bytes),
+                u64::try_from(answer.payload.len()).unwrap(),
+                "{} u64LE payload length",
+                answer.type_name
+            );
+            assert_eq!(
+                &answer.preimage[payload_offset..],
+                answer.payload.as_slice(),
+                "{} payload",
+                answer.type_name
+            );
+            assert_eq!(
+                crate::hash::sha256(&answer.preimage),
+                answer.sha256,
+                "{} SHA-256",
+                answer.type_name
+            );
+        }
+
+        let vectors = super::generate_payload_codec_vectors(&protocol, &[0x5a; 32]);
+        assert!(vectors.contains("\"hash_known_answers\""));
+        for answer in &answers {
+            let serialized = format!(
+                "\"type\":\"{}\",\"domain\":\"{}\",\"payload_hex\":\"{}\",\"preimage_hex\":\"{}\",\"sha256\":\"{}\"",
+                answer.type_name,
+                answer.domain,
+                crate::hash::lowercase_hex(&answer.payload),
+                crate::hash::lowercase_hex(&answer.preimage),
+                crate::hash::lowercase_hex(&answer.sha256)
+            );
+            assert!(vectors.contains(&serialized), "missing {serialized}");
+        }
+    }
+
+    #[test]
     fn output_path_guard_rejects_parent_and_absolute_paths() {
         assert!(super::reject_symlink_path(Path::new("."), Path::new("../escape")).is_err());
         assert!(super::reject_symlink_path(Path::new("."), Path::new("/absolute")).is_err());
+    }
+
+    #[test]
+    fn generated_set_replaces_existing_targets_and_rolls_back_injected_failure() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        let files = vec![
+            GeneratedFile {
+                relative_path: "generated/one.txt".into(),
+                contents: "new-one\n".into(),
+            },
+            GeneratedFile {
+                relative_path: "generated/two.txt".into(),
+                contents: "new-two\n".into(),
+            },
+        ];
+        std::fs::write(root.join("generated/one.txt"), b"old-one\n").unwrap();
+        std::fs::write(root.join("generated/two.txt"), b"old-two\n").unwrap();
+
+        assert!(write_generated_transaction(&root, &files, Some(1)).is_err());
+        assert_eq!(
+            std::fs::read(root.join("generated/one.txt")).unwrap(),
+            b"old-one\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("generated/two.txt")).unwrap(),
+            b"old-two\n"
+        );
+        assert!(!root.join(".protocol-codegen.lock").exists());
+
+        write_generated(&root, &files).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("generated/one.txt")).unwrap(),
+            b"new-one\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("generated/two.txt")).unwrap(),
+            b"new-two\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_generator_lock_fails_closed() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "pdf-rs-protocol-codegen-lock-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".protocol-codegen.lock"), b"held\n").unwrap();
+        let files = [GeneratedFile {
+            relative_path: "value.txt".into(),
+            contents: "value\n".into(),
+        }];
+        assert!(write_generated(&root, &files).is_err());
+        assert!(!root.join("value.txt").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

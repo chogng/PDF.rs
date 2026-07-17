@@ -30,16 +30,25 @@ generated definitions and must not maintain a second command, event, or field re
 
 # Security and resource rules
 
-- Raw desktop payload bytes are borrowed only after the fixed header, version, message descriptor,
+- Raw desktop payload bytes are prepared only after the fixed header, version, message descriptor,
   flags, payload length, complete frame length, global and message limits, transfer count, and
-  receive-direction sequence have all been accepted. A decoded command or event is not dispatched
-  until its generated payload schema and correlation shape are also accepted.
+  receive-direction sequence candidate have all been accepted. The sequence is committed only after
+  generated typed decoding, correlation/state validation, and OOB resource validation succeed.
+- Bootstrap frames are accepted only for current exact handshake message IDs and the compiled
+  `(major, minor, codec ABI)` registry. A post-handshake decoder can be created only from
+  `CompatibleHandshake`; callers cannot inject a raw version or a second message policy.
 - Receive-direction sequence trackers are independent. Sequences start at one. Gaps are allowed;
   zero, duplicates, and regressions are rejected without moving the accepted sequence.
 - All sizes, strides, offsets, and exclusive ends use checked arithmetic. A Surface byte range must
-  fit both protocol limits and the declared shared-memory region.
+  fit both protocol limits and the declared and actual resource extent. Browser bitmap alpha and
+  dimensions, fixed-length ArrayBuffer/SAB requirements, SAB publication fence, negotiated
+  capability, desktop slot, LocalMemory epoch, and nonzero Surface lease are transport-specific
+  fail-closed checks.
 - ProvideData ranges are non-empty with checked exclusive ends. Declared range and byte lengths,
   canonical slot order, and actual transfer byte lengths must all match before bytes are exposed.
+- Header message identity, decoded command/event variant, correlation shape, and duplicated payload
+  identities are accepted together. SurfaceReady correlation and actual resource validation use one
+  receiver operation; shape-only correlation validation is not dispatch authorization.
 - Surface handles and payload bytes never appear in `Debug`, `Display`, or stable protocol errors.
 - Protocol failures never invoke an external PDF engine and never convert malformed input into a
   successful empty payload or Surface.
@@ -48,5 +57,6 @@ generated definitions and must not maintain a second command, event, or field re
 
 `src/generated.rs` is generated data. It must be reproduced by the pinned protocol generator from
 the canonical schema and must not be edited as handwritten implementation. Repository tests bind
-the generated marker, generator version, schema hash, nested codec registry, compatibility and
-invalid vectors, and handwritten validation adapter so schema drift fails closed.
+the generated marker, generator version, wire identity, nested codec registry, compatibility,
+invalid, payload-codec, and hash known-answer vectors, and handwritten validation adapter so schema
+or codec drift fails closed.

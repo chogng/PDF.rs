@@ -1,1 +1,7 @@
 *.pdf binary
+protocol/engine.protocol text eol=lf
+protocol/generated/*.json text eol=lf
+protocol/generated/*.txt text eol=lf
+runtime/protocol/src/generated.rs text eol=lf
+platform/browser/generated/*.ts text eol=lf
+platform/desktop/generated/*.registry text eol=lf

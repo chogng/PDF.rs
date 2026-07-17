@@ -9,6 +9,7 @@
 
 mod error;
 mod frame;
+#[allow(clippy::deref_addrof, clippy::needless_borrow)]
 #[rustfmt::skip]
 mod generated;
 mod limits;
@@ -16,8 +17,8 @@ mod validation;
 
 pub use error::{ProtocolError, ProtocolErrorCategory, ProtocolErrorCode, ProtocolRecoverability};
 pub use frame::{
-    DESKTOP_FRAME_HEADER_BYTES, DesktopFrameDecoder, FrameMessagePolicy, SequenceTracker,
-    ValidatedDesktopFrame,
+    DESKTOP_FRAME_HEADER_BYTES, DesktopFrameDecoder, FrameMessagePolicy, HandshakeFrameDecoder,
+    PendingDesktopFrame, SequenceTracker, ValidatedDesktopFrame,
 };
 pub use generated::*;
 pub use limits::{ProtocolLimitConfig, ProtocolLimits};

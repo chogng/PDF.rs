@@ -1,14 +1,15 @@
 use std::fmt;
 
 use crate::{
-    BrowserTransferKind, CanvasId, CapabilityDecisionHash, CorrelationRequirement, EndpointRole,
-    FrameMessagePolicy, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES, MAX_TRANSFER_SLOTS,
-    MESSAGE_ID_PROVIDE_DATA, MESSAGE_ID_SET_VIEWPORT, MIN_COMPATIBLE_MINOR, MemoryEpoch,
-    NativeBackend, PROVIDE_DATA_COMMAND_SEGMENTS_MAX_COUNT, PlatformHandle, ProtocolError,
-    ProtocolErrorCode, ProtocolHello, ProtocolLimits, ProvideDataCommand, RenderConfigHash,
-    RenderPlanHash, RenderPlanId, RendererEpoch, SCHEMA_HASH, SceneHash, SessionId,
-    SetViewportCommand, SurfaceMetadata, SurfaceRegion, SurfaceTransport,
+    CapabilityDecisionHash, Command, CommandEnvelope, CorrelationRequirement, EndpointRole, Event,
+    EventEnvelope, FrameMessagePolicy, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES,
+    MAX_TRANSFER_SLOTS, MESSAGE_ID_PROVIDE_DATA, MESSAGE_ID_SET_VIEWPORT, MemoryEpoch, MessageKind,
+    NativeBackend, PROVIDE_DATA_COMMAND_SEGMENTS_MAX_COUNT, ProtocolError, ProtocolErrorCode,
+    ProtocolHello, ProtocolLimits, ProvideDataCommand, RenderConfigHash, RenderPlanHash,
+    RenderPlanId, RendererEpoch, SCHEMA_HASH, SceneHash, SessionId, SetViewportCommand,
+    SurfaceMetadata, SurfaceReadyEvent, SurfaceRegion, SurfaceTransport,
     VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT, ViewportRequest, WorkerId, descriptor_by_id,
+    surface_transport_required_capability,
 };
 
 /// Negotiated schema relationship between compatible endpoints.
@@ -16,8 +17,6 @@ use crate::{
 pub enum HandshakeCompatibility {
     /// Both endpoints advertise the exact generated schema hash.
     ExactSchema,
-    /// The endpoints share a major and negotiated capabilities but use compatible minor schemas.
-    CompatibleMinor,
 }
 
 /// Validated result of one Host-to-Engine handshake.
@@ -28,6 +27,7 @@ pub struct CompatibleHandshake {
     capabilities: u64,
     max_message_bytes: u32,
     max_transfer_slots: u16,
+    protocol_limits: ProtocolLimits,
 }
 
 impl CompatibleHandshake {
@@ -55,10 +55,14 @@ impl CompatibleHandshake {
     pub const fn max_transfer_slots(self) -> u16 {
         self.max_transfer_slots
     }
+
+    pub(crate) const fn protocol_limits(self) -> ProtocolLimits {
+        self.protocol_limits
+    }
 }
 
 /// Trusted render identity copied from one accepted Native render plan.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct SurfaceRenderIdentity {
     render_config: RenderConfigHash,
     renderer_epoch: RendererEpoch,
@@ -67,6 +71,21 @@ pub struct SurfaceRenderIdentity {
     scene_hash: SceneHash,
     decision_hash: CapabilityDecisionHash,
     backend: NativeBackend,
+}
+
+impl fmt::Debug for SurfaceRenderIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SurfaceRenderIdentity")
+            .field("render_config", &self.render_config)
+            .field("renderer_epoch", &self.renderer_epoch)
+            .field("plan_id", &self.plan_id)
+            .field("plan_hash", &self.plan_hash)
+            .field("scene_hash", &"[REDACTED]")
+            .field("decision_hash", &"[REDACTED]")
+            .field("backend", &self.backend)
+            .finish()
+    }
 }
 
 impl SurfaceRenderIdentity {
@@ -154,17 +173,26 @@ impl SurfacePlanBinding {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum SurfaceResourceBinding {
     None,
-    OffscreenCanvas {
-        canvas: CanvasId,
-        region_bytes: u64,
-    },
-    BrowserTransfer {
+    BrowserArrayBuffer {
         slot: u16,
-        kind: BrowserTransferKind,
-        region_bytes: u64,
+        buffer_length: u64,
+        fixed_length: bool,
+    },
+    BrowserImageBitmap {
+        slot: u16,
+        width: u32,
+        height: u32,
+        open: bool,
+    },
+    BrowserSharedArrayBuffer {
+        attachment_slot: u16,
+        buffer_length: u64,
+        fixed_length: bool,
+        fence_byte_offset: u64,
+        acquired_publication_epoch: u32,
     },
     SharedMemory {
-        handle: PlatformHandle,
+        slot: u16,
         region_bytes: u64,
     },
     LocalMemory {
@@ -180,6 +208,7 @@ pub struct SurfaceValidationContext {
     session: SessionId,
     generation: u64,
     plan: SurfacePlanBinding,
+    negotiated_capabilities: u64,
     transfer_slots: usize,
     resource: SurfaceResourceBinding,
 }
@@ -191,6 +220,7 @@ impl SurfaceValidationContext {
         session: SessionId,
         generation: u64,
         plan: SurfacePlanBinding,
+        handshake: CompatibleHandshake,
         transfer_slots: usize,
     ) -> Self {
         Self {
@@ -198,41 +228,66 @@ impl SurfaceValidationContext {
             session,
             generation,
             plan,
+            negotiated_capabilities: handshake.capabilities(),
             transfer_slots,
             resource: SurfaceResourceBinding::None,
         }
     }
 
-    /// Records the registered canvas and its receiver-known accessible byte extent.
-    pub const fn with_offscreen_canvas(mut self, canvas: CanvasId, region_bytes: u64) -> Self {
-        self.resource = SurfaceResourceBinding::OffscreenCanvas {
-            canvas,
-            region_bytes,
-        };
-        self
-    }
-
-    /// Records one actual browser transfer slot, kind, and byte extent.
-    pub const fn with_browser_transfer(
+    /// Records one received fixed-length transferable `ArrayBuffer`.
+    pub const fn with_browser_array_buffer(
         mut self,
         slot: u16,
-        kind: BrowserTransferKind,
-        region_bytes: u64,
+        buffer_length: u64,
+        fixed_length: bool,
     ) -> Self {
-        self.resource = SurfaceResourceBinding::BrowserTransfer {
+        self.resource = SurfaceResourceBinding::BrowserArrayBuffer {
             slot,
-            kind,
-            region_bytes,
+            buffer_length,
+            fixed_length,
         };
         self
     }
 
-    /// Records the shared-memory handle and accessible region imported with the frame.
-    pub const fn with_shared_memory(mut self, handle: PlatformHandle, region_bytes: u64) -> Self {
-        self.resource = SurfaceResourceBinding::SharedMemory {
-            handle,
-            region_bytes,
+    /// Records one received, still-open transferable `ImageBitmap`.
+    pub const fn with_browser_image_bitmap(
+        mut self,
+        slot: u16,
+        width: u32,
+        height: u32,
+        open: bool,
+    ) -> Self {
+        self.resource = SurfaceResourceBinding::BrowserImageBitmap {
+            slot,
+            width,
+            height,
+            open,
         };
+        self
+    }
+
+    /// Records one fixed-length shared buffer after acquiring its exact publication fence.
+    pub const fn with_browser_shared_array_buffer(
+        mut self,
+        attachment_slot: u16,
+        buffer_length: u64,
+        fixed_length: bool,
+        fence_byte_offset: u64,
+        acquired_publication_epoch: u32,
+    ) -> Self {
+        self.resource = SurfaceResourceBinding::BrowserSharedArrayBuffer {
+            attachment_slot,
+            buffer_length,
+            fixed_length,
+            fence_byte_offset,
+            acquired_publication_epoch,
+        };
+        self
+    }
+
+    /// Records one authenticated shared-memory table slot and its accessible extent.
+    pub const fn with_shared_memory(mut self, slot: u16, region_bytes: u64) -> Self {
+        self.resource = SurfaceResourceBinding::SharedMemory { slot, region_bytes };
         self
     }
 
@@ -275,11 +330,12 @@ impl fmt::Debug for SurfaceValidationContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (resource_kind, region_bytes) = match self.resource {
             SurfaceResourceBinding::None => ("none", None),
-            SurfaceResourceBinding::OffscreenCanvas { region_bytes, .. } => {
-                ("offscreen-canvas", Some(region_bytes))
+            SurfaceResourceBinding::BrowserArrayBuffer { buffer_length, .. } => {
+                ("browser-array-buffer", Some(buffer_length))
             }
-            SurfaceResourceBinding::BrowserTransfer { region_bytes, .. } => {
-                ("browser-transfer", Some(region_bytes))
+            SurfaceResourceBinding::BrowserImageBitmap { .. } => ("browser-image-bitmap", None),
+            SurfaceResourceBinding::BrowserSharedArrayBuffer { buffer_length, .. } => {
+                ("browser-shared-array-buffer", Some(buffer_length))
             }
             SurfaceResourceBinding::SharedMemory { region_bytes, .. } => {
                 ("shared-memory", Some(region_bytes))
@@ -294,10 +350,10 @@ impl fmt::Debug for SurfaceValidationContext {
             .field("session", &self.session)
             .field("generation", &self.generation)
             .field("plan", &self.plan)
+            .field("negotiated_capabilities", &self.negotiated_capabilities)
             .field("transfer_slots", &self.transfer_slots)
             .field("resource_kind", &resource_kind)
             .field("resource_region_bytes", &region_bytes)
-            .field("platform_handle", &"[REDACTED]")
             .finish()
     }
 }
@@ -360,13 +416,7 @@ impl ProtocolValidator {
     pub fn frame_policy(&self, message_type: u16) -> Result<FrameMessagePolicy, ProtocolError> {
         let descriptor = descriptor_by_id(message_type)
             .ok_or_else(|| ProtocolError::for_code(ProtocolErrorCode::UnknownMessage))?;
-        FrameMessagePolicy::new(
-            descriptor.id,
-            descriptor.allowed_flags,
-            descriptor.max_payload_bytes,
-            descriptor.min_transfer_slots,
-            descriptor.max_transfer_slots,
-        )
+        FrameMessagePolicy::from_descriptor(descriptor)
     }
 
     /// Validates Host/Engine version, schema, endpoint limits, and mandatory capabilities.
@@ -378,10 +428,7 @@ impl ProtocolValidator {
         if local.major != peer.major || local.major != crate::PROTOCOL_MAJOR {
             return Err(ProtocolError::for_code(ProtocolErrorCode::UnsupportedMajor));
         }
-        if local.minor != crate::PROTOCOL_MINOR
-            || peer.minor < MIN_COMPATIBLE_MINOR
-            || peer.minor > crate::PROTOCOL_MINOR
-        {
+        if local.minor != crate::PROTOCOL_MINOR || peer.minor != crate::PROTOCOL_MINOR {
             return Err(ProtocolError::for_code(ProtocolErrorCode::UnsupportedMinor));
         }
         if !opposite_roles(&local.endpoint_role, &peer.endpoint_role) {
@@ -389,7 +436,7 @@ impl ProtocolValidator {
                 ProtocolErrorCode::InvalidEndpointRole,
             ));
         }
-        if local.schema_hash != SCHEMA_HASH {
+        if local.schema_hash != SCHEMA_HASH || peer.schema_hash != SCHEMA_HASH {
             return Err(ProtocolError::for_code(
                 ProtocolErrorCode::IncompatibleSchema,
             ));
@@ -433,20 +480,7 @@ impl ProtocolValidator {
         }
 
         let minor = peer.minor;
-        let compatibility = if local.schema_hash == peer.schema_hash {
-            if peer.minor != crate::PROTOCOL_MINOR {
-                return Err(ProtocolError::for_code(
-                    ProtocolErrorCode::IncompatibleSchema,
-                ));
-            }
-            HandshakeCompatibility::ExactSchema
-        } else if peer.minor == crate::PROTOCOL_MINOR {
-            return Err(ProtocolError::for_code(
-                ProtocolErrorCode::IncompatibleSchema,
-            ));
-        } else {
-            HandshakeCompatibility::CompatibleMinor
-        };
+        let compatibility = HandshakeCompatibility::ExactSchema;
         let max_message_bytes = local
             .max_message_bytes
             .min(peer.max_message_bytes)
@@ -468,6 +502,7 @@ impl ProtocolValidator {
                 & KNOWN_ENDPOINT_CAPABILITIES,
             max_message_bytes,
             max_transfer_slots,
+            protocol_limits: self.limits,
         })
     }
 
@@ -569,6 +604,85 @@ impl ProtocolValidator {
         self.validate_viewport_request(&command.viewport)
     }
 
+    /// Atomically binds a decoded command variant and its payload identities to the envelope.
+    pub fn validate_command_payload_correlation(
+        &self,
+        envelope: &CommandEnvelope,
+        worker: WorkerId,
+        session: Option<SessionId>,
+    ) -> Result<(), ProtocolError> {
+        validate_message_binding(
+            envelope.header.message_type,
+            MessageKind::Command,
+            command_name(&envelope.command),
+        )?;
+        self.validate_correlation(
+            envelope.header.message_type,
+            &envelope.correlation,
+            worker,
+            session,
+        )?;
+        match &envelope.command {
+            Command::SetViewport(command) => {
+                if envelope.correlation.generation != Some(command.viewport.generation) {
+                    return Err(ProtocolError::for_code(
+                        ProtocolErrorCode::InvalidCorrelation,
+                    ));
+                }
+                self.validate_viewport_request(&command.viewport)
+            }
+            Command::Cancel(command) if envelope.correlation.request != Some(command.target) => {
+                Err(ProtocolError::for_code(
+                    ProtocolErrorCode::InvalidCorrelation,
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Atomically binds a decoded event variant and its payload identities to the envelope.
+    pub fn validate_event_payload_correlation(
+        &self,
+        envelope: &EventEnvelope,
+        worker: WorkerId,
+        session: Option<SessionId>,
+    ) -> Result<(), ProtocolError> {
+        validate_message_binding(
+            envelope.header.message_type,
+            MessageKind::Event,
+            event_name(&envelope.event),
+        )?;
+        self.validate_correlation(
+            envelope.header.message_type,
+            &envelope.correlation,
+            worker,
+            session,
+        )?;
+        let matches_payload = match &envelope.event {
+            Event::Ready(event) => envelope.correlation.worker == event.worker,
+            Event::DocumentReady(event) => {
+                envelope.correlation.session.is_none()
+                    || envelope.correlation.session == Some(event.session)
+            }
+            Event::SurfaceReady(event) => {
+                envelope.correlation.worker == event.metadata.owner.worker
+                    && envelope.correlation.session == Some(event.metadata.owner.session)
+                    && envelope.correlation.generation == Some(event.metadata.generation)
+            }
+            Event::RequestCancelled(event) => envelope.correlation.request == Some(event.target),
+            Event::SessionClosed(event) => envelope.correlation.session == Some(event.session),
+            Event::WorkerStopped(event) => envelope.correlation.worker == event.worker,
+            _ => true,
+        };
+        if matches_payload {
+            Ok(())
+        } else {
+            Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidCorrelation,
+            ))
+        }
+    }
+
     /// Validates one ProvideData command against its actual received transfer byte lengths.
     pub fn validate_provide_data(
         &self,
@@ -609,6 +723,29 @@ impl ProtocolValidator {
         Ok(())
     }
 
+    /// Validates a SurfaceReady envelope and resource as one indivisible receiver operation.
+    pub fn validate_surface_ready(
+        &self,
+        envelope: &EventEnvelope,
+        context: &SurfaceValidationContext,
+    ) -> Result<ValidatedSurface, ProtocolError> {
+        self.validate_event_payload_correlation(
+            envelope,
+            context.worker(),
+            Some(context.session()),
+        )?;
+        let Event::SurfaceReady(SurfaceReadyEvent {
+            metadata,
+            transport,
+        }) = &envelope.event
+        else {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidMessageBinding,
+            ));
+        };
+        self.validate_surface(metadata, transport, context)
+    }
+
     /// Validates Surface owner, generation, epoch, layout, format, range, and transfer binding.
     pub fn validate_surface(
         &self,
@@ -626,6 +763,11 @@ impl ProtocolValidator {
         {
             return Err(ProtocolError::for_code(
                 ProtocolErrorCode::InvalidSurfaceOwner,
+            ));
+        }
+        if metadata.lease_token == 0 {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::InvalidSurfaceLease,
             ));
         }
         if metadata.generation == 0
@@ -705,47 +847,29 @@ impl ProtocolValidator {
                 ProtocolErrorCode::InvalidSurfaceSlot,
             ));
         }
+        let required_capability = surface_transport_required_capability(transport);
+        if context.negotiated_capabilities & required_capability == 0 {
+            return Err(ProtocolError::for_code(
+                ProtocolErrorCode::MissingEndpointCapability,
+            ));
+        }
         match (&context.resource, transport) {
             (
-                SurfaceResourceBinding::OffscreenCanvas {
-                    canvas: expected_canvas,
-                    region_bytes,
-                },
-                SurfaceTransport::OffscreenCanvasCommit {
-                    canvas,
-                    region_length,
-                },
-            ) => {
-                if canvas.value() == 0 || canvas != expected_canvas || context.transfer_slots != 0 {
-                    return Err(ProtocolError::for_code(
-                        ProtocolErrorCode::InvalidSurfaceSlot,
-                    ));
-                }
-                validate_surface_range(
-                    metadata.byte_offset,
-                    metadata.byte_length,
-                    layout_bytes,
-                    *region_length,
-                    *region_bytes,
-                    self.limits.max_surface_bytes(),
-                )?;
-            }
-            (
-                SurfaceResourceBinding::BrowserTransfer {
+                SurfaceResourceBinding::BrowserArrayBuffer {
                     slot: expected_slot,
-                    kind: expected_kind,
-                    region_bytes,
+                    buffer_length: actual_length,
+                    fixed_length,
                 },
-                SurfaceTransport::BrowserTransfer {
+                SurfaceTransport::BrowserArrayBuffer {
                     slot,
-                    transfer_kind,
-                    transfer_length,
+                    buffer_length,
                 },
             ) => {
                 if context.transfer_slots != 1
                     || slot != expected_slot
-                    || transfer_kind != expected_kind
                     || usize::from(*slot) >= context.transfer_slots
+                    || !fixed_length
+                    || metadata.alpha != crate::AlphaMode::Straight
                 {
                     return Err(ProtocolError::for_code(
                         ProtocolErrorCode::InvalidSurfaceSlot,
@@ -755,26 +879,98 @@ impl ProtocolValidator {
                     metadata.byte_offset,
                     metadata.byte_length,
                     layout_bytes,
-                    *transfer_length,
-                    *region_bytes,
+                    *buffer_length,
+                    *actual_length,
+                    self.limits.max_surface_bytes(),
+                )?;
+            }
+            (
+                SurfaceResourceBinding::BrowserImageBitmap {
+                    slot: expected_slot,
+                    width: actual_width,
+                    height: actual_height,
+                    open,
+                },
+                SurfaceTransport::BrowserImageBitmap {
+                    slot,
+                    width,
+                    height,
+                },
+            ) => {
+                if context.transfer_slots != 1
+                    || slot != expected_slot
+                    || usize::from(*slot) >= context.transfer_slots
+                    || !open
+                    || width != actual_width
+                    || height != actual_height
+                    || *width != metadata.width
+                    || *height != metadata.height
+                    || metadata.alpha != crate::AlphaMode::Premultiplied
+                    || metadata.byte_offset != 0
+                    || stride != minimum_stride
+                    || metadata.byte_length != layout_bytes
+                {
+                    return Err(ProtocolError::for_code(
+                        ProtocolErrorCode::InvalidSurfaceSlot,
+                    ));
+                }
+            }
+            (
+                SurfaceResourceBinding::BrowserSharedArrayBuffer {
+                    attachment_slot: expected_slot,
+                    buffer_length: actual_length,
+                    fixed_length,
+                    fence_byte_offset: actual_fence_offset,
+                    acquired_publication_epoch,
+                },
+                SurfaceTransport::BrowserSharedArrayBuffer {
+                    attachment_slot,
+                    buffer_length,
+                    fence_byte_offset,
+                    publication_epoch,
+                },
+            ) => {
+                if context.transfer_slots != 1
+                    || attachment_slot != expected_slot
+                    || usize::from(*attachment_slot) >= context.transfer_slots
+                    || !fixed_length
+                    || fence_byte_offset != actual_fence_offset
+                    || publication_epoch != acquired_publication_epoch
+                    || *publication_epoch == 0
+                    || metadata.alpha != crate::AlphaMode::Straight
+                {
+                    return Err(ProtocolError::for_code(
+                        ProtocolErrorCode::InvalidSharedFence,
+                    ));
+                }
+                validate_shared_fence(
+                    *fence_byte_offset,
+                    metadata.byte_offset,
+                    metadata.byte_length,
+                    *buffer_length,
+                )?;
+                validate_surface_range(
+                    metadata.byte_offset,
+                    metadata.byte_length,
+                    layout_bytes,
+                    *buffer_length,
+                    *actual_length,
                     self.limits.max_surface_bytes(),
                 )?;
             }
             (
                 SurfaceResourceBinding::SharedMemory {
-                    handle: expected_handle,
+                    slot: expected_slot,
                     region_bytes,
                 },
                 SurfaceTransport::SharedMemory {
-                    handle,
+                    slot,
                     region_length,
-                    release_token,
                 },
             ) => {
                 if context.transfer_slots != 1
-                    || handle != expected_handle
-                    || handle.value() == 0
-                    || *release_token == 0
+                    || slot != expected_slot
+                    || usize::from(*slot) >= context.transfer_slots
                 {
                     return Err(ProtocolError::for_code(
                         ProtocolErrorCode::InvalidSurfaceSlot,
@@ -869,8 +1065,90 @@ fn validate_surface_range(
     Ok(())
 }
 
+fn validate_shared_fence(
+    fence_byte_offset: u64,
+    pixel_offset: u64,
+    pixel_length: u64,
+    buffer_length: u64,
+) -> Result<(), ProtocolError> {
+    const FENCE_BYTES: u64 = 4;
+    let fence_end = fence_byte_offset
+        .checked_add(FENCE_BYTES)
+        .ok_or_else(|| ProtocolError::for_code(ProtocolErrorCode::NumericOverflow))?;
+    let pixel_end = pixel_offset
+        .checked_add(pixel_length)
+        .ok_or_else(|| ProtocolError::for_code(ProtocolErrorCode::NumericOverflow))?;
+    if !fence_byte_offset.is_multiple_of(FENCE_BYTES)
+        || fence_end > buffer_length
+        || (fence_byte_offset < pixel_end && pixel_offset < fence_end)
+    {
+        return Err(ProtocolError::for_code(
+            ProtocolErrorCode::InvalidSharedFence,
+        ));
+    }
+    Ok(())
+}
+
 fn digest_is_nonzero(digest: &[u8; 32]) -> bool {
     digest.iter().any(|byte| *byte != 0)
+}
+
+fn validate_message_binding(
+    message_type: u16,
+    kind: MessageKind,
+    name: &str,
+) -> Result<(), ProtocolError> {
+    let descriptor = descriptor_by_id(message_type)
+        .ok_or_else(|| ProtocolError::for_code(ProtocolErrorCode::UnknownMessage))?;
+    if descriptor.kind == kind && descriptor.name == name {
+        Ok(())
+    } else {
+        Err(ProtocolError::for_code(
+            ProtocolErrorCode::InvalidMessageBinding,
+        ))
+    }
+}
+
+fn command_name(command: &Command) -> &'static str {
+    match command {
+        Command::Hello(_) => "Hello",
+        Command::HelloAccept(_) => "HelloAccept",
+        Command::Open(_) => "Open",
+        Command::ProvideData(_) => "ProvideData",
+        Command::SetViewport(_) => "SetViewport",
+        Command::Cancel(_) => "Cancel",
+        Command::ReleaseSurface(_) => "ReleaseSurface",
+        Command::CloseSession(_) => "CloseSession",
+        Command::Shutdown(_) => "Shutdown",
+        Command::FailData(_) => "FailData",
+        Command::GetPageMetrics(_) => "GetPageMetrics",
+    }
+}
+
+fn event_name(event: &Event) -> &'static str {
+    match event {
+        Event::Ready(_) => "Ready",
+        Event::NeedData(_) => "NeedData",
+        Event::DocumentReady(_) => "DocumentReady",
+        Event::CapabilityReported(_) => "CapabilityReported",
+        Event::SurfaceReady(_) => "SurfaceReady",
+        Event::RequestCancelled(_) => "RequestCancelled",
+        Event::RequestFailed(_) => "RequestFailed",
+        Event::SessionClosed(_) => "SessionClosed",
+        Event::WorkerStopped(_) => "WorkerStopped",
+        Event::WorkerFault(_) => "WorkerFault",
+        Event::ProtocolFault(_) => "ProtocolFault",
+        Event::SurfaceReclaimed(_) => "SurfaceReclaimed",
+        Event::EngineHello(_) => "EngineHello",
+        Event::DataFailed(_) => "DataFailed",
+        Event::PageMetrics(_) => "PageMetrics",
+        Event::GenerationPlanned(_) => "GenerationPlanned",
+        Event::GenerationCompleted(_) => "GenerationCompleted",
+        Event::CancelAcknowledged(_) => "CancelAcknowledged",
+        Event::SurfaceReleaseAcknowledged(_) => "SurfaceReleaseAcknowledged",
+        Event::CloseSessionAcknowledged(_) => "CloseSessionAcknowledged",
+        Event::ShutdownAcknowledged(_) => "ShutdownAcknowledged",
+    }
 }
 
 fn greatest_common_divisor(mut left: u32, mut right: u32) -> u32 {

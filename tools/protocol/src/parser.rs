@@ -1,14 +1,31 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::codec::{CodecErrorKind, CodecLimits, FixedLeCodec};
 use crate::model::{
-    EnumDef, Field, Message, MessageKind, Presence, Primitive, Privacy, Protocol, Record, Scalar,
-    Type, Union, UnionField, UnionVariant, Variant,
+    EnumDef, Field, Message, MessageKind, Outcome, OutcomeDisposition, Presence, Primitive,
+    Privacy, Protocol, Record, Scalar, Type, Union, UnionField, UnionVariant, Variant,
 };
 
 pub(crate) const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
 const MAX_DEFINITIONS: usize = 1024;
 const MAX_FIELDS: usize = 256;
+const MAX_TYPE_DEPTH: usize = 32;
+const MAX_WIRE_GRAPH_DEPTH: usize = 64;
+const STATE_PRECONDITIONS: &[&str] = &[
+    "ActiveOrTerminalRequest",
+    "Any",
+    "Closing",
+    "DrainingOrStopped",
+    "NonClosedOrClosed",
+    "Opening",
+    "OpeningOrReady",
+    "Ready",
+    "ReadyOrClosing",
+    "ReadyOrDrainingOrStopped",
+    "Starting",
+    "SurfaceAliveOrReclaimed",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SchemaError {
@@ -64,7 +81,15 @@ pub fn parse_schema(input: &str) -> Result<Protocol, SchemaError> {
     let max_transfer_slots = parse_limit(&mut cursor, "max_transfer_slots")?
         .try_into()
         .map_err(|_| cursor.error("RPE-PROTOCOL-SCHEMA-0003", "slot-limit-overflow"))?;
-    if max_message_bytes == 0 || max_transfer_slots == 0 {
+    let max_data_segment_bytes = parse_limit(&mut cursor, "max_data_segment_bytes")?;
+    let max_data_ticket_bytes = parse_limit(&mut cursor, "max_data_ticket_bytes")?;
+    let payload_codec = parse_codec(&mut cursor)?;
+    if max_message_bytes == 0
+        || max_transfer_slots == 0
+        || max_data_segment_bytes == 0
+        || max_data_ticket_bytes == 0
+        || max_data_segment_bytes > max_data_ticket_bytes
+    {
         return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0004", "zero-limit"));
     }
 
@@ -97,6 +122,9 @@ pub fn parse_schema(input: &str) -> Result<Protocol, SchemaError> {
         minor,
         max_message_bytes,
         max_transfer_slots,
+        max_data_segment_bytes,
+        max_data_ticket_bytes,
+        payload_codec,
         scalars,
         enums,
         records,
@@ -104,6 +132,7 @@ pub fn parse_schema(input: &str) -> Result<Protocol, SchemaError> {
         messages,
     };
     validate(&protocol)?;
+    validate_wire_contract(&protocol)?;
     if protocol.canonical_text() != input {
         return Err(SchemaError::new(
             0,
@@ -112,6 +141,16 @@ pub fn parse_schema(input: &str) -> Result<Protocol, SchemaError> {
         ));
     }
     Ok(protocol)
+}
+
+fn parse_codec(cursor: &mut Cursor<'_>) -> Result<String, SchemaError> {
+    let line = cursor.required_nonblank()?;
+    let words: Vec<&str> = line.split(' ').collect();
+    exact_words(cursor, &words, 2)?;
+    if words[0] != "codec" || words[1] != "fixed_le_v1" {
+        return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0037", "unsupported-payload-codec"));
+    }
+    Ok(words[1].into())
 }
 
 fn parse_header(cursor: &mut Cursor<'_>) -> Result<(String, u16, u16), SchemaError> {
@@ -235,12 +274,24 @@ fn parse_union(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Union, SchemaE
             break;
         }
         let parts: Vec<&str> = line.split(' ').collect();
-        if !(parts.len() == 3 || parts.len() == 4) || parts[0] != "variant" {
+        if !(3..=5).contains(&parts.len()) || parts[0] != "variant" {
             return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0015", "invalid-union-variant"));
         }
         require_name(cursor, parts[1])?;
         let mut fields = Vec::new();
-        if let Some(list) = parts.get(3) {
+        let (field_list, required_capability) = match parts.as_slice() {
+            [_, _, _] => (None, None),
+            [_, _, _, annotation] if annotation.starts_with("requires=") => {
+                (None, Some(parse_capability_annotation(cursor, annotation)?))
+            }
+            [_, _, _, list] => (Some(*list), None),
+            [_, _, _, list, annotation] => (
+                Some(*list),
+                Some(parse_capability_annotation(cursor, annotation)?),
+            ),
+            _ => unreachable!("union arity checked"),
+        };
+        if let Some(list) = field_list {
             for pair in list.split(',') {
                 let mut components = pair.split(':');
                 let field = components.next().unwrap_or_default();
@@ -276,6 +327,7 @@ fn parse_union(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Union, SchemaE
         variants.push(UnionVariant {
             name: parts[1].into(),
             tag: parse_number(cursor, parts[2])?,
+            required_capability,
             fields,
         });
         if variants.len() > MAX_FIELDS {
@@ -293,7 +345,7 @@ fn parse_union(cursor: &mut Cursor<'_>, words: &[&str]) -> Result<Union, SchemaE
 }
 
 fn parse_message(cursor: &Cursor<'_>, words: &[&str]) -> Result<Message, SchemaError> {
-    if words.len() < 12 || words.len() > 13 {
+    if words.len() < 12 || words.len() > 14 {
         return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0017", "invalid-message-shape"));
     }
     let kind = match words[1] {
@@ -301,7 +353,15 @@ fn parse_message(cursor: &Cursor<'_>, words: &[&str]) -> Result<Message, SchemaE
         "event" => MessageKind::Event,
         _ => return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0017", "invalid-message-kind")),
     };
-    if (kind == MessageKind::Command) != (words.len() == 13) {
+    let has_capability = match kind {
+        MessageKind::Command => words.len() == 14,
+        MessageKind::Event => words.len() == 13,
+    };
+    let expected_without_capability = match kind {
+        MessageKind::Command => 13,
+        MessageKind::Event => 12,
+    };
+    if words.len() != expected_without_capability + usize::from(has_capability) {
         return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0017", "message-kind-shape-mismatch"));
     }
     for word in [words[2], words[4], words[5], words[6]] {
@@ -311,18 +371,37 @@ fn parse_message(cursor: &Cursor<'_>, words: &[&str]) -> Result<Message, SchemaE
     }
     let disposition = words[7];
     match (kind, disposition) {
-        (MessageKind::Command, "yes" | "no") | (MessageKind::Event, "terminal" | "stream") => {}
+        (MessageKind::Command, "yes" | "no") | (MessageKind::Event, "event") => {}
         _ => return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0017", "invalid-disposition")),
     }
+    let required_capability = if has_capability {
+        Some(parse_capability_annotation(cursor, words[12])?)
+    } else {
+        None
+    };
     let outcomes = if kind == MessageKind::Command {
-        let raw = words[12];
+        let raw = words[12 + usize::from(has_capability)];
         if raw == "none" {
             Vec::new()
         } else {
             raw.split(',')
                 .map(|value| {
-                    require_name(cursor, value)?;
-                    Ok(value.into())
+                    let (name, disposition) = value.split_once(':').ok_or_else(|| {
+                        cursor.error("RPE-PROTOCOL-SCHEMA-0042", "outcome-missing-disposition")
+                    })?;
+                    require_name(cursor, name)?;
+                    let disposition = match disposition {
+                        "stream" => OutcomeDisposition::Stream,
+                        "terminal" => OutcomeDisposition::Terminal,
+                        _ => {
+                            return Err(cursor
+                                .error("RPE-PROTOCOL-SCHEMA-0042", "invalid-outcome-disposition"));
+                        }
+                    };
+                    Ok(Outcome {
+                        name: name.into(),
+                        disposition,
+                    })
                 })
                 .collect::<Result<Vec<_>, SchemaError>>()?
         }
@@ -341,6 +420,7 @@ fn parse_message(cursor: &Cursor<'_>, words: &[&str]) -> Result<Message, SchemaE
         min_transfer_slots: parse_number(cursor, words[9])?,
         max_transfer_slots: parse_number(cursor, words[10])?,
         max_payload_bytes: parse_number(cursor, words[11])?,
+        required_capability,
         outcomes,
     })
 }
@@ -424,6 +504,7 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
             &union.name,
         )?;
         for variant in &union.variants {
+            validate_required_capability(protocol, variant.required_capability.as_deref())?;
             let mut fields = BTreeSet::new();
             for field in &variant.fields {
                 if !fields.insert(&field.name) {
@@ -442,6 +523,7 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
     let mut message_names = BTreeSet::new();
     let mut events = BTreeMap::new();
     for message in &protocol.messages {
+        validate_required_capability(protocol, message.required_capability.as_deref())?;
         if message.id == 0 || !ids.insert(message.id) || !message_names.insert(&message.name) {
             return Err(SchemaError::new(
                 0,
@@ -464,6 +546,13 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
                 format!("invalid-message-limit-{}", message.name),
             ));
         }
+        if !STATE_PRECONDITIONS.contains(&message.state.as_str()) {
+            return Err(SchemaError::new(
+                0,
+                "RPE-PROTOCOL-SCHEMA-0043",
+                format!("unknown-state-precondition-{}", message.state),
+            ));
+        }
         if message.min_transfer_slots > message.max_transfer_slots
             || message.max_transfer_slots > protocol.max_transfer_slots
         {
@@ -478,7 +567,7 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
         }
         if !matches!(
             message.correlation.as_str(),
-            "Worker" | "Session" | "Request" | "Generation"
+            "Worker" | "Session" | "Request" | "OpenRequest" | "SessionRequest" | "Generation"
         ) {
             return Err(SchemaError::new(
                 0,
@@ -493,16 +582,121 @@ fn validate(protocol: &Protocol) -> Result<(), SchemaError> {
         .filter(|value| value.kind == MessageKind::Command)
     {
         for outcome in &command.outcomes {
-            if !events.contains_key(outcome) {
+            let Some(event) = events.get(&outcome.name) else {
                 return Err(SchemaError::new(
                     0,
                     "RPE-PROTOCOL-SCHEMA-0023",
-                    format!("unknown-outcome-{outcome}"),
+                    format!("unknown-outcome-{}", outcome.name),
+                ));
+            };
+            if !outcome_correlation_constructible(&command.correlation, &event.correlation) {
+                return Err(SchemaError::new(
+                    0,
+                    "RPE-PROTOCOL-SCHEMA-0041",
+                    format!(
+                        "unconstructible-outcome-correlation-{}-{}",
+                        command.name, event.name
+                    ),
                 ));
             }
         }
     }
     Ok(())
+}
+
+fn validate_wire_contract(protocol: &Protocol) -> Result<(), SchemaError> {
+    let codec = FixedLeCodec::new(
+        protocol,
+        CodecLimits::new(
+            MAX_WIRE_GRAPH_DEPTH,
+            usize::try_from(protocol.max_message_bytes).unwrap_or(usize::MAX),
+            usize::MAX,
+        ),
+    )
+    .map_err(codec_schema_error)?;
+    for message in &protocol.messages {
+        let payload_maximum = codec
+            .maximum_named_encoded_size(&message.payload)
+            .map_err(codec_schema_error)?;
+        let maximum = payload_maximum
+            .checked_add(correlation_wire_maximum(&message.correlation))
+            .ok_or_else(|| {
+                SchemaError::new(
+                    0,
+                    "RPE-PROTOCOL-SCHEMA-0045",
+                    format!("message-wire-maximum-overflow-{}", message.name),
+                )
+            })?;
+        if maximum > usize::try_from(message.max_payload_bytes).unwrap_or(usize::MAX) {
+            return Err(SchemaError::new(
+                0,
+                "RPE-PROTOCOL-SCHEMA-0045",
+                format!(
+                    "message-wire-maximum-exceeds-limit-{}-{maximum}-{}",
+                    message.name, message.max_payload_bytes
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn correlation_wire_maximum(shape: &str) -> usize {
+    match shape {
+        // WorkerId plus the three canonical optional markers.
+        "Worker" => 11,
+        // WorkerId, one present optional scalar, and two absent markers.
+        "Session" | "OpenRequest" => 19,
+        // WorkerId, two present optional scalars, and one absent marker.
+        "Request" | "SessionRequest" | "Generation" => 27,
+        other => panic!("validated correlation shape {other}"),
+    }
+}
+
+fn codec_schema_error(error: crate::codec::CodecError) -> SchemaError {
+    let code = match error.kind {
+        CodecErrorKind::RecursiveType => "RPE-PROTOCOL-SCHEMA-0044",
+        CodecErrorKind::LimitExceeded => "RPE-PROTOCOL-SCHEMA-0045",
+        _ => "RPE-PROTOCOL-SCHEMA-0046",
+    };
+    SchemaError::new(0, code, error.to_string())
+}
+
+fn outcome_correlation_constructible(command: &str, event: &str) -> bool {
+    event == "Worker"
+        || command == event
+        || matches!(
+            (command, event),
+            ("OpenRequest", "SessionRequest" | "Request") | ("SessionRequest", "Request")
+        )
+}
+
+fn validate_required_capability(
+    protocol: &Protocol,
+    required: Option<&str>,
+) -> Result<(), SchemaError> {
+    let Some(required) = required else {
+        return Ok(());
+    };
+    let known = protocol
+        .enums
+        .iter()
+        .find(|value| value.name == "EndpointCapability")
+        .is_some_and(|value| {
+            value
+                .variants
+                .iter()
+                .any(|variant| variant.name == required)
+        });
+    if known {
+        Ok(())
+    } else {
+        Err(SchemaError::new(
+            0,
+            "RPE-PROTOCOL-SCHEMA-0038",
+            format!("unknown-required-capability-{required}"),
+        ))
+    }
 }
 
 fn validate_variants(variants: &[(&String, u16)]) -> Result<(), SchemaError> {
@@ -565,7 +759,30 @@ fn parse_privacy(cursor: &Cursor<'_>, value: &str) -> Result<Privacy, SchemaErro
     }
 }
 
+fn parse_capability_annotation(cursor: &Cursor<'_>, value: &str) -> Result<String, SchemaError> {
+    let capability = value
+        .strip_prefix("requires=")
+        .ok_or_else(|| cursor.error("RPE-PROTOCOL-SCHEMA-0038", "invalid-capability-annotation"))?;
+    require_name(cursor, capability)?;
+    Ok(capability.into())
+}
+
 fn validate_type(ty: &Type, names: &BTreeSet<String>) -> Result<(), SchemaError> {
+    validate_type_at_depth(ty, names, 0)
+}
+
+fn validate_type_at_depth(
+    ty: &Type,
+    names: &BTreeSet<String>,
+    depth: usize,
+) -> Result<(), SchemaError> {
+    if depth > MAX_TYPE_DEPTH {
+        return Err(SchemaError::new(
+            0,
+            "RPE-PROTOCOL-SCHEMA-0039",
+            "type-nesting-too-deep",
+        ));
+    }
     match ty {
         Type::Primitive(_) => Ok(()),
         Type::Named(name) if names.contains(name) => Ok(()),
@@ -574,8 +791,8 @@ fn validate_type(ty: &Type, names: &BTreeSet<String>) -> Result<(), SchemaError>
             "RPE-PROTOCOL-SCHEMA-0025",
             format!("unknown-type-{name}"),
         )),
-        Type::Optional(inner) => validate_type(inner, names),
-        Type::List(inner, limit) if *limit != 0 => validate_type(inner, names),
+        Type::Optional(inner) => validate_type_at_depth(inner, names, depth + 1),
+        Type::List(inner, limit) if *limit != 0 => validate_type_at_depth(inner, names, depth + 1),
         Type::List(_, _) | Type::Bytes(0) => Err(SchemaError::new(
             0,
             "RPE-PROTOCOL-SCHEMA-0026",
@@ -586,6 +803,17 @@ fn validate_type(ty: &Type, names: &BTreeSet<String>) -> Result<(), SchemaError>
 }
 
 fn parse_type(cursor: &Cursor<'_>, value: &str) -> Result<Type, SchemaError> {
+    parse_type_at_depth(cursor, value, 0)
+}
+
+fn parse_type_at_depth(
+    cursor: &Cursor<'_>,
+    value: &str,
+    depth: usize,
+) -> Result<Type, SchemaError> {
+    if depth > MAX_TYPE_DEPTH {
+        return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0039", "type-nesting-too-deep"));
+    }
     if let Ok(primitive) = parse_primitive(cursor, value) {
         return Ok(Type::Primitive(primitive));
     }
@@ -593,7 +821,11 @@ fn parse_type(cursor: &Cursor<'_>, value: &str) -> Result<Type, SchemaError> {
         .strip_prefix("optional<")
         .and_then(|value| value.strip_suffix('>'))
     {
-        return Ok(Type::Optional(Box::new(parse_type(cursor, inner)?)));
+        let parsed = parse_type_at_depth(cursor, inner, depth + 1)?;
+        if matches!(parsed, Type::Optional(_)) {
+            return Err(cursor.error("RPE-PROTOCOL-SCHEMA-0040", "redundant-nested-optional"));
+        }
+        return Ok(Type::Optional(Box::new(parsed)));
     }
     if let Some(inner) = value
         .strip_prefix("list<")
@@ -603,7 +835,7 @@ fn parse_type(cursor: &Cursor<'_>, value: &str) -> Result<Type, SchemaError> {
             .rsplit_once(',')
             .ok_or_else(|| cursor.error("RPE-PROTOCOL-SCHEMA-0027", "invalid-list"))?;
         return Ok(Type::List(
-            Box::new(parse_type(cursor, ty)?),
+            Box::new(parse_type_at_depth(cursor, ty, depth + 1)?),
             parse_number(cursor, limit)?,
         ));
     }
@@ -725,7 +957,7 @@ impl<'a> Cursor<'a> {
 mod tests {
     use super::{MAX_SCHEMA_BYTES, parse_schema};
 
-    const MINIMAL: &str = "protocol Test 1 0\nlimit max_message_bytes 64\nlimit max_transfer_slots 1\n\nrecord PingCommand\nend\n\nrecord PongEvent\nend\n\nmessage command Ping 1 PingCommand Ready Request no 0 0 0 32 Pong\nmessage event Pong 2 PongEvent Ready Request terminal 0 0 0 32\n";
+    const MINIMAL: &str = "protocol Test 1 0\nlimit max_message_bytes 64\nlimit max_transfer_slots 1\nlimit max_data_segment_bytes 16\nlimit max_data_ticket_bytes 64\ncodec fixed_le_v1\n\nrecord PingCommand\nend\n\nrecord PongEvent\nend\n\nmessage command Ping 1 PingCommand Ready Request no 0 0 0 32 Pong:terminal\nmessage event Pong 2 PongEvent Ready Request event 0 0 0 32\n";
 
     #[test]
     fn parses_and_replays_canonical_schema() {
@@ -740,7 +972,7 @@ mod tests {
             parse_schema(&spacing).unwrap_err().code(),
             "RPE-PROTOCOL-SCHEMA-0030"
         );
-        let unknown = MINIMAL.replace("32 Pong", "32 Missing");
+        let unknown = MINIMAL.replace("32 Pong:terminal", "32 Missing:terminal");
         assert_eq!(
             parse_schema(&unknown).unwrap_err().code(),
             "RPE-PROTOCOL-SCHEMA-0023"
@@ -833,6 +1065,62 @@ mod tests {
         assert_eq!(
             parse_schema(&too_many_fields).unwrap_err().code(),
             "RPE-PROTOCOL-SCHEMA-0001"
+        );
+    }
+
+    #[test]
+    fn type_nesting_has_an_exact_stack_budget() {
+        let within = format!("{}u8{}", "list<".repeat(32), ",1>".repeat(32));
+        let accepted = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            &format!(
+                "\n\nrecord Nested\nfield value {within} required public\nend\n\nrecord PingCommand"
+            ),
+        );
+        parse_schema(&accepted).unwrap();
+
+        let over = format!("{}u8{}", "list<".repeat(33), ",1>".repeat(33));
+        let rejected = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            &format!(
+                "\n\nrecord Nested\nfield value {over} required public\nend\n\nrecord PingCommand"
+            ),
+        );
+        assert_eq!(
+            parse_schema(&rejected).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0039"
+        );
+
+        let redundant = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            "\n\nrecord Nested\nfield value optional<optional<u8>> optional public\nend\n\nrecord PingCommand",
+        );
+        assert_eq!(
+            parse_schema(&redundant).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0040"
+        );
+    }
+
+    #[test]
+    fn recursive_types_and_unrepresentable_message_limits_fail_closed() {
+        let recursive = MINIMAL.replace(
+            "\n\nrecord PingCommand",
+            "\n\nrecord Recursive\nfield child optional<Recursive> optional public\nend\n\nrecord PingCommand",
+        );
+        assert_eq!(
+            parse_schema(&recursive).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0044"
+        );
+
+        let undersized = MINIMAL
+            .replace(
+                "record PingCommand\nend",
+                "record PingCommand\nfield value u64 required public\nend",
+            )
+            .replace("Request no 0 0 0 32", "Request no 0 0 0 4");
+        assert_eq!(
+            parse_schema(&undersized).unwrap_err().code(),
+            "RPE-PROTOCOL-SCHEMA-0045"
         );
     }
 }

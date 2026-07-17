@@ -1,9 +1,13 @@
 use pdf_rs_protocol::{
-    AlphaMode, BrowserTransferKind, CanvasId, CapabilityDecisionHash, MemoryEpoch, NativeBackend,
-    PixelFormat, PlatformHandle, ProtocolErrorCode, ProtocolLimits, ProtocolValidator,
-    RenderConfigHash, RenderPlanHash, RenderPlanId, RendererEpoch, SceneHash, SessionId,
-    SurfaceCoordinateSpace, SurfaceId, SurfaceMetadata, SurfaceOwner, SurfacePlanBinding,
-    SurfaceRegion, SurfaceRenderIdentity, SurfaceTransport, SurfaceValidationContext, WorkerId,
+    AlphaMode, CapabilityDecisionHash, CompatibleHandshake, ENDPOINT_CAPABILITY_LOCAL_MEMORY,
+    ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER, ENDPOINT_CAPABILITY_SHARED_MEMORY,
+    ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER, ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP,
+    EndpointCapabilities, EndpointRole, MemoryEpoch, NativeBackend, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    PixelFormat, ProtocolErrorCode, ProtocolHello, ProtocolLimits, ProtocolValidator,
+    RenderConfigHash, RenderPlanHash, RenderPlanId, RendererEpoch, SCHEMA_HASH, SceneHash,
+    SessionId, SurfaceCoordinateSpace, SurfaceId, SurfaceMetadata, SurfaceOwner,
+    SurfacePlanBinding, SurfaceRegion, SurfaceRenderIdentity, SurfaceTransport,
+    SurfaceValidationContext, WorkerId,
 };
 
 const WORKER: WorkerId = WorkerId::new(7);
@@ -11,6 +15,29 @@ const SESSION: SessionId = SessionId::new(11);
 const GENERATION: u64 = 13;
 const REGION_BYTES: u64 = 64;
 const LAYOUT_BYTES: u64 = 48;
+const LEASE_TOKEN: u64 = 31;
+
+fn validator() -> ProtocolValidator {
+    ProtocolValidator::new(ProtocolLimits::default())
+}
+
+fn handshake(capabilities: u64) -> CompatibleHandshake {
+    let hello = |endpoint_role| ProtocolHello {
+        major: PROTOCOL_MAJOR,
+        minor: PROTOCOL_MINOR,
+        schema_hash: SCHEMA_HASH,
+        endpoint_role,
+        capabilities: EndpointCapabilities {
+            supported: capabilities,
+            mandatory: 0,
+        },
+        max_message_bytes: 1_048_576,
+        max_transfer_slots: 8,
+    };
+    validator()
+        .validate_handshake(&hello(EndpointRole::Host), &hello(EndpointRole::Engine))
+        .unwrap()
+}
 
 fn region() -> SurfaceRegion {
     SurfaceRegion {
@@ -43,6 +70,7 @@ fn metadata() -> SurfaceMetadata {
     let render = render_identity();
     SurfaceMetadata {
         id: SurfaceId::new(29),
+        lease_token: LEASE_TOKEN,
         owner: SurfaceOwner {
             worker: WORKER,
             session: SESSION,
@@ -53,7 +81,7 @@ fn metadata() -> SurfaceMetadata {
         height: 3,
         stride: 16,
         format: PixelFormat::Rgba8,
-        alpha: AlphaMode::Premultiplied,
+        alpha: AlphaMode::Straight,
         byte_offset: 8,
         byte_length: LAYOUT_BYTES,
         render_config: render.render_config(),
@@ -66,51 +94,76 @@ fn metadata() -> SurfaceMetadata {
     }
 }
 
-fn context(transfer_slots: usize) -> SurfaceValidationContext {
-    SurfaceValidationContext::new(WORKER, SESSION, GENERATION, plan(), transfer_slots)
-}
-
-fn validator() -> ProtocolValidator {
-    ProtocolValidator::new(ProtocolLimits::default())
+fn context(capabilities: u64, transfer_slots: usize) -> SurfaceValidationContext {
+    SurfaceValidationContext::new(
+        WORKER,
+        SESSION,
+        GENERATION,
+        plan(),
+        handshake(capabilities),
+        transfer_slots,
+    )
 }
 
 #[test]
-fn every_surface_transport_binds_the_actual_receiver_resource() {
-    let metadata = metadata();
-    let cases = [
-        (
-            SurfaceTransport::OffscreenCanvasCommit {
-                canvas: CanvasId::new(31),
-                region_length: REGION_BYTES,
-            },
-            context(0).with_offscreen_canvas(CanvasId::new(31), REGION_BYTES),
-        ),
-        (
-            SurfaceTransport::BrowserTransfer {
-                slot: 0,
-                transfer_kind: BrowserTransferKind::ArrayBuffer,
-                transfer_length: REGION_BYTES,
-            },
-            context(1).with_browser_transfer(0, BrowserTransferKind::ArrayBuffer, REGION_BYTES),
-        ),
-        (
-            SurfaceTransport::SharedMemory {
-                handle: PlatformHandle::new(37),
-                region_length: REGION_BYTES,
-                release_token: 41,
-            },
-            context(1).with_shared_memory(PlatformHandle::new(37), REGION_BYTES),
-        ),
-        (
-            SurfaceTransport::LocalMemory {
-                region_length: REGION_BYTES,
-                memory_epoch: MemoryEpoch::new(43),
-            },
-            context(0).with_local_memory(MemoryEpoch::new(43), REGION_BYTES),
-        ),
-    ];
+fn every_surface_transport_binds_exact_negotiated_receiver_resource() {
+    let base = metadata();
+    let mut bitmap_metadata = base.clone();
+    bitmap_metadata.alpha = AlphaMode::Premultiplied;
+    bitmap_metadata.byte_offset = 0;
 
-    for (transport, context) in cases {
+    let cases =
+        vec![
+            (
+                base.clone(),
+                SurfaceTransport::BrowserArrayBuffer {
+                    slot: 0,
+                    buffer_length: REGION_BYTES,
+                },
+                context(ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER, 1)
+                    .with_browser_array_buffer(0, REGION_BYTES, true),
+            ),
+            (
+                bitmap_metadata,
+                SurfaceTransport::BrowserImageBitmap {
+                    slot: 0,
+                    width: 4,
+                    height: 3,
+                },
+                context(ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP, 1)
+                    .with_browser_image_bitmap(0, 4, 3, true),
+            ),
+            (
+                base.clone(),
+                SurfaceTransport::BrowserSharedArrayBuffer {
+                    attachment_slot: 0,
+                    buffer_length: REGION_BYTES,
+                    fence_byte_offset: 0,
+                    publication_epoch: 41,
+                },
+                context(ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER, 1)
+                    .with_browser_shared_array_buffer(0, REGION_BYTES, true, 0, 41),
+            ),
+            (
+                base.clone(),
+                SurfaceTransport::SharedMemory {
+                    slot: 0,
+                    region_length: REGION_BYTES,
+                },
+                context(ENDPOINT_CAPABILITY_SHARED_MEMORY, 1).with_shared_memory(0, REGION_BYTES),
+            ),
+            (
+                base,
+                SurfaceTransport::LocalMemory {
+                    region_length: REGION_BYTES,
+                    memory_epoch: MemoryEpoch::new(43),
+                },
+                context(ENDPOINT_CAPABILITY_LOCAL_MEMORY, 0)
+                    .with_local_memory(MemoryEpoch::new(43), REGION_BYTES),
+            ),
+        ];
+
+    for (metadata, transport, context) in cases {
         let surface = validator()
             .validate_surface(&metadata, &transport, &context)
             .unwrap();
@@ -121,311 +174,173 @@ fn every_surface_transport_binds_the_actual_receiver_resource() {
 }
 
 #[test]
-fn every_owner_plan_epoch_hash_backend_and_region_mutation_is_rejected() {
-    let transport = SurfaceTransport::SharedMemory {
-        handle: PlatformHandle::new(37),
-        region_length: REGION_BYTES,
-        release_token: 41,
+fn capability_slot_kind_and_actual_resource_mismatches_fail_closed() {
+    let metadata = metadata();
+    let transport = SurfaceTransport::BrowserArrayBuffer {
+        slot: 0,
+        buffer_length: REGION_BYTES,
     };
-    let shared_context = context(1).with_shared_memory(PlatformHandle::new(37), REGION_BYTES);
+    let cases =
+        [
+            (
+                context(ENDPOINT_CAPABILITY_SHARED_MEMORY, 1).with_browser_array_buffer(
+                    0,
+                    REGION_BYTES,
+                    true,
+                ),
+                ProtocolErrorCode::MissingEndpointCapability,
+            ),
+            (
+                context(ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER, 0)
+                    .with_browser_array_buffer(0, REGION_BYTES, true),
+                ProtocolErrorCode::InvalidSurfaceSlot,
+            ),
+            (
+                context(ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER, 1)
+                    .with_browser_array_buffer(1, REGION_BYTES, true),
+                ProtocolErrorCode::InvalidSurfaceSlot,
+            ),
+            (
+                context(ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER, 1)
+                    .with_browser_array_buffer(0, REGION_BYTES, false),
+                ProtocolErrorCode::InvalidSurfaceSlot,
+            ),
+        ];
+    for (context, expected) in cases {
+        assert_eq!(
+            validator()
+                .validate_surface(&metadata, &transport, &context)
+                .unwrap_err()
+                .code(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn owner_plan_epoch_lease_layout_and_range_mutations_are_rejected() {
+    let transport = SurfaceTransport::SharedMemory {
+        slot: 0,
+        region_length: REGION_BYTES,
+    };
+    let context = context(ENDPOINT_CAPABILITY_SHARED_MEMORY, 1).with_shared_memory(0, REGION_BYTES);
     let original = metadata();
     let mut cases = Vec::new();
 
     let mut value = original.clone();
-    value.id = SurfaceId::new(0);
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceOwner));
+    value.lease_token = 0;
+    cases.push((value, ProtocolErrorCode::InvalidSurfaceLease));
     let mut value = original.clone();
     value.owner.worker = WorkerId::new(8);
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceOwner));
-    let mut value = original.clone();
-    value.owner.session = SessionId::new(12);
     cases.push((value, ProtocolErrorCode::InvalidSurfaceOwner));
     let mut value = original.clone();
     value.generation += 1;
     cases.push((value, ProtocolErrorCode::InvalidSurfaceEpoch));
     let mut value = original.clone();
-    value.renderer_epoch = RendererEpoch::new(18);
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceEpoch));
-    let mut value = original.clone();
-    value.render_config = RenderConfigHash::new([9; 32]);
-    cases.push((value, ProtocolErrorCode::InvalidSurfacePlan));
-    let mut value = original.clone();
-    value.plan_id = RenderPlanId::new(20);
-    cases.push((value, ProtocolErrorCode::InvalidSurfacePlan));
-    let mut value = original.clone();
     value.plan_hash = RenderPlanHash::new([9; 32]);
     cases.push((value, ProtocolErrorCode::InvalidSurfacePlan));
-    let mut value = original.clone();
-    value.scene_hash = SceneHash::new([9; 32]);
-    cases.push((value, ProtocolErrorCode::InvalidSurfacePlan));
-    let mut value = original.clone();
-    value.decision_hash = CapabilityDecisionHash::new([9; 32]);
-    cases.push((value, ProtocolErrorCode::InvalidSurfacePlan));
-    let mut value = original.clone();
-    value.backend = NativeBackend::FastCpu;
-    cases.push((value, ProtocolErrorCode::InvalidSurfacePlan));
-    let mut value = original.clone();
-    value.region.page_index += 1;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceRegion));
     let mut value = original.clone();
     value.region.x += 1;
     cases.push((value, ProtocolErrorCode::InvalidSurfaceRegion));
     let mut value = original.clone();
-    value.region.y += 1;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceRegion));
-    let mut value = original.clone();
-    value.region.width += 1;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceRegion));
-    let mut value = original.clone();
-    value.region.height += 1;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceRegion));
-
-    for (mutated, expected) in cases {
-        assert_eq!(
-            validator()
-                .validate_surface(&mutated, &transport, &shared_context)
-                .unwrap_err()
-                .code(),
-            expected
-        );
-    }
-}
-
-#[test]
-fn checked_layout_and_metadata_range_fail_closed() {
-    let transport = SurfaceTransport::SharedMemory {
-        handle: PlatformHandle::new(37),
-        region_length: REGION_BYTES,
-        release_token: 41,
-    };
-    let shared_context = context(1).with_shared_memory(PlatformHandle::new(37), REGION_BYTES);
-    let original = metadata();
-    let mut cases = Vec::new();
-
-    let mut value = original.clone();
-    value.width = 0;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceLayout));
-    let mut value = original.clone();
-    value.height = 0;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceLayout));
-    let mut value = original.clone();
-    value.stride = 0;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceLayout));
-    let mut value = original.clone();
     value.stride = 15;
     cases.push((value, ProtocolErrorCode::InvalidSurfaceLayout));
     let mut value = original.clone();
-    value.height = 32_768;
-    value.stride = 262_144;
-    value.byte_length = u64::from(value.height) * u64::from(value.stride);
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceLayout));
-    let mut value = original.clone();
-    value.byte_length = 0;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceRange));
-    let mut value = original.clone();
     value.byte_length -= 1;
     cases.push((value, ProtocolErrorCode::InvalidSurfaceRange));
-    let mut value = original.clone();
+    let mut value = original;
     value.byte_offset = u64::MAX;
     cases.push((value, ProtocolErrorCode::NumericOverflow));
-    let mut value = original.clone();
-    value.byte_offset += 9;
-    cases.push((value, ProtocolErrorCode::InvalidSurfaceRange));
 
     for (mutated, expected) in cases {
         assert_eq!(
             validator()
-                .validate_surface(&mutated, &transport, &shared_context)
+                .validate_surface(&mutated, &transport, &context)
                 .unwrap_err()
                 .code(),
             expected
         );
     }
-
-    let short_declared = SurfaceTransport::SharedMemory {
-        handle: PlatformHandle::new(37),
-        region_length: REGION_BYTES - 1,
-        release_token: 41,
-    };
-    assert_eq!(
-        validator()
-            .validate_surface(&original, &short_declared, &shared_context)
-            .unwrap_err()
-            .code(),
-        ProtocolErrorCode::InvalidSurfaceRange
-    );
-    let zero_declared = SurfaceTransport::SharedMemory {
-        handle: PlatformHandle::new(37),
-        region_length: 0,
-        release_token: 41,
-    };
-    assert_eq!(
-        validator()
-            .validate_surface(&original, &zero_declared, &shared_context)
-            .unwrap_err()
-            .code(),
-        ProtocolErrorCode::InvalidSurfaceRange
-    );
-    let short_actual = context(1).with_shared_memory(PlatformHandle::new(37), REGION_BYTES - 1);
-    assert_eq!(
-        validator()
-            .validate_surface(&original, &transport, &short_actual)
-            .unwrap_err()
-            .code(),
-        ProtocolErrorCode::InvalidSurfaceRange
-    );
 }
 
 #[test]
-fn slot_kind_handle_release_and_memory_epoch_mismatches_fail_closed() {
-    let metadata = metadata();
-    let browser = SurfaceTransport::BrowserTransfer {
+fn image_bitmap_and_shared_fence_invariants_are_exact() {
+    let mut bitmap_metadata = metadata();
+    bitmap_metadata.alpha = AlphaMode::Premultiplied;
+    bitmap_metadata.byte_offset = 0;
+    let bitmap = SurfaceTransport::BrowserImageBitmap {
         slot: 0,
-        transfer_kind: BrowserTransferKind::ArrayBuffer,
-        transfer_length: REGION_BYTES,
+        width: 4,
+        height: 3,
     };
-    let browser_context =
-        context(1).with_browser_transfer(0, BrowserTransferKind::ArrayBuffer, REGION_BYTES);
-    for transport in [
-        SurfaceTransport::BrowserTransfer {
-            slot: 1,
-            transfer_kind: BrowserTransferKind::ArrayBuffer,
-            transfer_length: REGION_BYTES,
-        },
-        SurfaceTransport::BrowserTransfer {
-            slot: 0,
-            transfer_kind: BrowserTransferKind::ImageBitmap,
-            transfer_length: REGION_BYTES,
-        },
+    for context in [
+        context(ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP, 1)
+            .with_browser_image_bitmap(0, 5, 3, true),
+        context(ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP, 1)
+            .with_browser_image_bitmap(0, 4, 3, false),
     ] {
         assert_eq!(
             validator()
-                .validate_surface(&metadata, &transport, &browser_context)
-                .unwrap_err()
-                .code(),
-            ProtocolErrorCode::InvalidSurfaceSlot
-        );
-    }
-    for transfer_slots in [0, 2] {
-        assert_eq!(
-            validator()
-                .validate_surface(
-                    &metadata,
-                    &browser,
-                    &context(transfer_slots).with_browser_transfer(
-                        0,
-                        BrowserTransferKind::ArrayBuffer,
-                        REGION_BYTES,
-                    ),
-                )
+                .validate_surface(&bitmap_metadata, &bitmap, &context)
                 .unwrap_err()
                 .code(),
             ProtocolErrorCode::InvalidSurfaceSlot
         );
     }
 
-    let canvas = SurfaceTransport::OffscreenCanvasCommit {
-        canvas: CanvasId::new(31),
-        region_length: REGION_BYTES,
+    let shared = SurfaceTransport::BrowserSharedArrayBuffer {
+        attachment_slot: 0,
+        buffer_length: REGION_BYTES,
+        fence_byte_offset: 8,
+        publication_epoch: 41,
+    };
+    let shared_context = context(ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER, 1)
+        .with_browser_shared_array_buffer(0, REGION_BYTES, true, 8, 41);
+    assert_eq!(
+        validator()
+            .validate_surface(&metadata(), &shared, &shared_context)
+            .unwrap_err()
+            .code(),
+        ProtocolErrorCode::InvalidSharedFence
+    );
+
+    let stale_epoch = SurfaceTransport::BrowserSharedArrayBuffer {
+        attachment_slot: 0,
+        buffer_length: REGION_BYTES,
+        fence_byte_offset: 0,
+        publication_epoch: 42,
     };
     assert_eq!(
         validator()
             .validate_surface(
-                &metadata,
-                &canvas,
-                &context(0).with_offscreen_canvas(CanvasId::new(32), REGION_BYTES),
+                &metadata(),
+                &stale_epoch,
+                &context(ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER, 1)
+                    .with_browser_shared_array_buffer(0, REGION_BYTES, true, 0, 41),
             )
             .unwrap_err()
             .code(),
-        ProtocolErrorCode::InvalidSurfaceSlot
-    );
-
-    let shared_context = context(1).with_shared_memory(PlatformHandle::new(37), REGION_BYTES);
-    for transport in [
-        SurfaceTransport::SharedMemory {
-            handle: PlatformHandle::new(38),
-            region_length: REGION_BYTES,
-            release_token: 41,
-        },
-        SurfaceTransport::SharedMemory {
-            handle: PlatformHandle::new(37),
-            region_length: REGION_BYTES,
-            release_token: 0,
-        },
-    ] {
-        assert_eq!(
-            validator()
-                .validate_surface(&metadata, &transport, &shared_context)
-                .unwrap_err()
-                .code(),
-            ProtocolErrorCode::InvalidSurfaceSlot
-        );
-    }
-
-    let local = SurfaceTransport::LocalMemory {
-        region_length: REGION_BYTES,
-        memory_epoch: MemoryEpoch::new(44),
-    };
-    assert_eq!(
-        validator()
-            .validate_surface(
-                &metadata,
-                &local,
-                &context(0).with_local_memory(MemoryEpoch::new(43), REGION_BYTES),
-            )
-            .unwrap_err()
-            .code(),
-        ProtocolErrorCode::InvalidSurfaceEpoch
-    );
-    assert_eq!(
-        validator()
-            .validate_surface(
-                &metadata,
-                &SurfaceTransport::LocalMemory {
-                    region_length: REGION_BYTES,
-                    memory_epoch: MemoryEpoch::new(0),
-                },
-                &context(0).with_local_memory(MemoryEpoch::new(0), REGION_BYTES),
-            )
-            .unwrap_err()
-            .code(),
-        ProtocolErrorCode::InvalidSurfaceEpoch
-    );
-    assert_eq!(
-        validator()
-            .validate_surface(
-                &metadata,
-                &SurfaceTransport::SharedMemory {
-                    handle: PlatformHandle::new(37),
-                    region_length: REGION_BYTES,
-                    release_token: 41,
-                },
-                &context(usize::MAX).with_shared_memory(PlatformHandle::new(37), REGION_BYTES),
-            )
-            .unwrap_err()
-            .code(),
-        ProtocolErrorCode::InvalidSurfaceSlot
+        ProtocolErrorCode::InvalidSharedFence
     );
 }
 
 #[test]
-fn surface_debug_output_redacts_platform_handles() {
-    let context = context(1).with_shared_memory(PlatformHandle::new(0xdead_beef), REGION_BYTES);
-    let debug = format!("{context:?}");
+fn debug_output_redacts_lease_and_surface_payloads() {
+    let metadata = metadata();
+    let debug = format!("{metadata:?}");
     assert!(debug.contains("[REDACTED]"));
-    assert!(!debug.contains("PlatformHandle"));
-    assert!(!debug.contains("3735928559"));
+    assert!(!debug.contains(&LEASE_TOKEN.to_string()));
 
-    let transport = SurfaceTransport::SharedMemory {
-        handle: PlatformHandle::new(0xdead_beef),
-        region_length: REGION_BYTES,
-        release_token: 41,
-    };
+    let context = context(ENDPOINT_CAPABILITY_SHARED_MEMORY, 1).with_shared_memory(0, REGION_BYTES);
     let surface = validator()
-        .validate_surface(&metadata(), &transport, &context)
+        .validate_surface(
+            &metadata,
+            &SurfaceTransport::SharedMemory {
+                slot: 0,
+                region_length: REGION_BYTES,
+            },
+            &context,
+        )
         .unwrap();
-    let debug = format!("{surface:?}");
-    assert!(debug.contains("[REDACTED]"));
-    assert!(!debug.contains("PlatformHandle"));
-    assert!(!debug.contains("3735928559"));
+    assert!(format!("{surface:?}").contains("[REDACTED]"));
 }

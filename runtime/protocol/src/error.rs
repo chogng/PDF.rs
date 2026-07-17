@@ -64,10 +64,32 @@ pub enum ProtocolErrorCode {
     InvalidDataRange,
     /// A data segment refers to a missing, duplicate, or wrong-length transfer slot.
     InvalidTransferBinding,
+    /// A decoded command or event variant does not match its envelope message identifier.
+    InvalidMessageBinding,
     /// Surface render-plan, scene, decision, configuration, or backend identity is stale.
     InvalidSurfacePlan,
     /// Surface placement does not match the accepted render plan.
     InvalidSurfaceRegion,
+    /// The canonical payload codec rejected a marker, tag, count, truncation, or trailing byte.
+    InvalidPayloadEncoding,
+    /// A message or resource variant requires an endpoint capability absent from negotiation.
+    MissingEndpointCapability,
+    /// An out-of-band resource has the wrong role, class, rights, extent, or logical slot.
+    InvalidResourceBinding,
+    /// A command is not admitted by its generated state precondition.
+    InvalidStateTransition,
+    /// A lifecycle event, acknowledgement, or tombstone transition is inconsistent.
+    InvalidLifecycle,
+    /// A domain-separated canonical hash does not match the decoded value it claims to bind.
+    InvalidHashBinding,
+    /// A FailData payload violates the SourceChanged/observed/retryability matrix.
+    InvalidSourceFailure,
+    /// A data ticket is unknown, already terminal, or does not exactly match requested ranges.
+    InvalidDataTicket,
+    /// A Surface release or reclaim carries an absent, stale, or foreign lease token.
+    InvalidSurfaceLease,
+    /// A shared-pixel publication fence is mutable, misaligned, overlapping, or stale.
+    InvalidSharedFence,
 }
 
 impl ProtocolErrorCode {
@@ -106,6 +128,17 @@ impl ProtocolErrorCode {
             Self::InvalidViewport => "RPE-PROTOCOL-0030",
             Self::InvalidDataRange => "RPE-PROTOCOL-0031",
             Self::InvalidTransferBinding => "RPE-PROTOCOL-0032",
+            Self::InvalidMessageBinding => "RPE-PROTOCOL-0033",
+            Self::InvalidPayloadEncoding => "RPE-PROTOCOL-0034",
+            Self::MissingEndpointCapability => "RPE-PROTOCOL-0035",
+            Self::InvalidResourceBinding => "RPE-PROTOCOL-0036",
+            Self::InvalidStateTransition => "RPE-PROTOCOL-0037",
+            Self::InvalidLifecycle => "RPE-PROTOCOL-0038",
+            Self::InvalidHashBinding => "RPE-PROTOCOL-0039",
+            Self::InvalidSourceFailure => "RPE-PROTOCOL-0040",
+            Self::InvalidDataTicket => "RPE-PROTOCOL-0041",
+            Self::InvalidSurfaceLease => "RPE-PROTOCOL-0042",
+            Self::InvalidSharedFence => "RPE-PROTOCOL-0043",
         }
     }
 }
@@ -176,14 +209,22 @@ impl ProtocolError {
             | ProtocolErrorCode::InvalidEndpointLimits
             | ProtocolErrorCode::UnknownMandatoryCapability
             | ProtocolErrorCode::MissingMandatoryCapability
-            | ProtocolErrorCode::InvalidEndpointCapabilities => (
+            | ProtocolErrorCode::InvalidEndpointCapabilities
+            | ProtocolErrorCode::MissingEndpointCapability => (
                 ProtocolErrorCategory::Compatibility,
                 ProtocolRecoverability::RejectConnection,
             ),
             ProtocolErrorCode::UnknownMessage
             | ProtocolErrorCode::InvalidFlags
             | ProtocolErrorCode::InvalidViewport
-            | ProtocolErrorCode::InvalidDataRange => (
+            | ProtocolErrorCode::InvalidDataRange
+            | ProtocolErrorCode::InvalidMessageBinding
+            | ProtocolErrorCode::InvalidPayloadEncoding
+            | ProtocolErrorCode::InvalidStateTransition
+            | ProtocolErrorCode::InvalidLifecycle
+            | ProtocolErrorCode::InvalidHashBinding
+            | ProtocolErrorCode::InvalidSourceFailure
+            | ProtocolErrorCode::InvalidDataTicket => (
                 ProtocolErrorCategory::Message,
                 ProtocolRecoverability::RejectFrame,
             ),
@@ -197,7 +238,8 @@ impl ProtocolError {
             ),
             ProtocolErrorCode::InvalidTransferCount
             | ProtocolErrorCode::InvalidTransferBinding
-            | ProtocolErrorCode::InvalidSurfaceSlot => (
+            | ProtocolErrorCode::InvalidSurfaceSlot
+            | ProtocolErrorCode::InvalidResourceBinding => (
                 ProtocolErrorCategory::Transfer,
                 ProtocolRecoverability::RejectFrame,
             ),
@@ -207,7 +249,9 @@ impl ProtocolError {
             | ProtocolErrorCode::InvalidSurfaceFormat
             | ProtocolErrorCode::InvalidSurfaceRange
             | ProtocolErrorCode::InvalidSurfacePlan
-            | ProtocolErrorCode::InvalidSurfaceRegion => (
+            | ProtocolErrorCode::InvalidSurfaceRegion
+            | ProtocolErrorCode::InvalidSurfaceLease
+            | ProtocolErrorCode::InvalidSharedFence => (
                 ProtocolErrorCategory::Surface,
                 ProtocolRecoverability::RejectSurface,
             ),

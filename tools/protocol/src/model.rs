@@ -7,6 +7,9 @@ pub struct Protocol {
     pub minor: u16,
     pub max_message_bytes: u32,
     pub max_transfer_slots: u16,
+    pub max_data_segment_bytes: u64,
+    pub max_data_ticket_bytes: u64,
+    pub payload_codec: String,
     pub scalars: Vec<Scalar>,
     pub enums: Vec<EnumDef>,
     pub records: Vec<Record>,
@@ -50,6 +53,7 @@ pub struct Union {
 pub struct UnionVariant {
     pub name: String,
     pub tag: u16,
+    pub required_capability: Option<String>,
     pub fields: Vec<UnionField>,
 }
 
@@ -121,7 +125,20 @@ pub struct Message {
     pub min_transfer_slots: u16,
     pub max_transfer_slots: u16,
     pub max_payload_bytes: u32,
-    pub outcomes: Vec<String>,
+    pub required_capability: Option<String>,
+    pub outcomes: Vec<Outcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Outcome {
+    pub name: String,
+    pub disposition: OutcomeDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutcomeDisposition {
+    Stream,
+    Terminal,
 }
 
 impl Protocol {
@@ -130,6 +147,19 @@ impl Protocol {
         writeln!(out, "protocol {} {} {}", self.name, self.major, self.minor).unwrap();
         writeln!(out, "limit max_message_bytes {}", self.max_message_bytes).unwrap();
         writeln!(out, "limit max_transfer_slots {}", self.max_transfer_slots).unwrap();
+        writeln!(
+            out,
+            "limit max_data_segment_bytes {}",
+            self.max_data_segment_bytes
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "limit max_data_ticket_bytes {}",
+            self.max_data_ticket_bytes
+        )
+        .unwrap();
+        writeln!(out, "codec {}", self.payload_codec).unwrap();
         if !self.scalars.is_empty() {
             out.push('\n');
         }
@@ -190,6 +220,9 @@ impl Protocol {
                         .unwrap();
                     }
                 }
+                if let Some(capability) = &variant.required_capability {
+                    write!(out, " requires={capability}").unwrap();
+                }
                 out.push('\n');
             }
             writeln!(out, "end").unwrap();
@@ -214,12 +247,24 @@ impl Protocol {
                 message.max_payload_bytes
             )
             .unwrap();
+            if let Some(capability) = &message.required_capability {
+                write!(out, " requires={capability}").unwrap();
+            }
             if message.kind == MessageKind::Command {
                 out.push(' ');
                 if message.outcomes.is_empty() {
                     out.push_str("none");
                 } else {
-                    out.push_str(&message.outcomes.join(","));
+                    out.push_str(
+                        &message
+                            .outcomes
+                            .iter()
+                            .map(|outcome| {
+                                format!("{}:{}", outcome.name, outcome.disposition.schema_name())
+                            })
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    );
                 }
             }
             out.push('\n');
@@ -279,6 +324,15 @@ impl MessageKind {
         match self {
             Self::Command => "command",
             Self::Event => "event",
+        }
+    }
+}
+
+impl OutcomeDisposition {
+    pub const fn schema_name(self) -> &'static str {
+        match self {
+            Self::Stream => "stream",
+            Self::Terminal => "terminal",
         }
     }
 }

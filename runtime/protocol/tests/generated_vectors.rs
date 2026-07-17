@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_rs_protocol::{
-    ByteRange, Correlation, DataSegment, DataTicket, DesktopFrameDecoder, EndpointCapabilities,
-    EndpointRole, HandshakeCompatibility, MIN_COMPATIBLE_MINOR, PROTOCOL_GENERATOR_VERSION,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, ProtocolErrorCode, ProtocolHello, ProtocolLimits,
-    ProtocolValidator, ProvideDataCommand, SCHEMA_HASH, SCHEMA_SHA256_HEX, SequenceTracker,
-    SessionId, SourceIdentity, WorkerId,
+    ByteRange, Correlation, DataAttachmentRole, DataSegment, DataTicket, EndpointCapabilities,
+    EndpointRole, HandshakeCompatibility, HandshakeFrameDecoder, MIN_COMPATIBLE_MINOR,
+    PROTOCOL_GENERATOR_VERSION, PROTOCOL_MAJOR, PROTOCOL_MINOR, ProtocolErrorCode, ProtocolHello,
+    ProtocolLimits, ProtocolValidator, ProvideDataCommand, SCHEMA_HASH, SCHEMA_SHA256_HEX,
+    SequenceTracker, SessionId, SourceIdentity, WorkerId,
 };
 
 const COMPATIBILITY_VECTORS: &str =
@@ -122,8 +122,6 @@ fn generated_invalid_frame_vectors_replay_against_desktop_decoder() {
         SCHEMA_SHA256_HEX
     );
     let limits = ProtocolLimits::default();
-    let validator = ProtocolValidator::new(limits);
-    let hello = validator.frame_policy(1).unwrap();
     let mut replayed = BTreeSet::new();
     for vector in INVALID_VECTORS
         .lines()
@@ -134,13 +132,12 @@ fn generated_invalid_frame_vectors_replay_against_desktop_decoder() {
         let name = string(&vector, "name");
         assert!(replayed.insert(name.to_owned()), "duplicate vector {name}");
         let frame = bytes_hex(string(&vector, "frame_hex"));
-        let mut sequence = SequenceTracker::new();
-        let error = DesktopFrameDecoder::current(limits)
-            .decode(
+        let sequence = SequenceTracker::new();
+        let error = HandshakeFrameDecoder::new(limits)
+            .prepare(
                 &frame,
                 number(&vector, "transfer_slots") as usize,
-                hello,
-                &mut sequence,
+                &sequence,
             )
             .unwrap_err();
         assert_eq!(
@@ -193,6 +190,7 @@ fn generated_provide_data_range_vectors_replay_against_rust_validator() {
             },
             slot: 0,
             byte_length: string(&vector, "byte_length").parse().unwrap(),
+            role: DataAttachmentRole::ImmutableRangeBytes,
         };
         let command = ProvideDataCommand {
             ticket: DataTicket::new(3),
@@ -234,20 +232,20 @@ fn generated_provide_data_range_vectors_replay_against_rust_validator() {
 #[test]
 fn desktop_registry_contains_nested_codec_tags_fields_privacy_and_outcomes() {
     for exact in [
-        "generator_version 0.1.0",
+        "generator_version 0.2.0",
         "compatible_minor_min 2",
         "enum SurfaceReclaimReason u8",
         "enum_variant SurfaceReclaimReason ReleasedByHost 1",
         "record SurfaceMetadata",
+        "record_field SurfaceMetadata lease_token u64 required sensitive 0",
         "record_field SurfaceMetadata plan_hash RenderPlanHash required public 0",
         "union SurfaceTransport u8",
-        "union_variant SurfaceTransport OffscreenCanvasCommit 1",
-        "union_variant SurfaceTransport BrowserTransfer 2",
-        "union_variant SurfaceTransport SharedMemory 3",
-        "union_variant SurfaceTransport LocalMemory 4",
-        "union_variant_field SurfaceTransport SharedMemory handle PlatformHandle sensitive 0",
-        "union_variant_field SurfaceTransport SharedMemory release_token u64 sensitive 0",
-        "outcome 9 113",
+        "union_variant SurfaceTransport SharedMemory 4",
+        "union_variant SurfaceTransport LocalMemory 5",
+        "union_variant_field SurfaceTransport SharedMemory slot u16 public 0",
+        "union_variant_field SurfaceTransport SharedMemory region_length u64 public 0",
+        "outcome 9 123 terminal",
+        "outcome 9 113 stream",
     ] {
         assert_eq!(
             DESKTOP_REGISTRY

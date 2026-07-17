@@ -1,7 +1,7 @@
 use pdf_rs_protocol::{
-    Correlation, PageCoordinateSpace, PageGeometry, PageRotation, PageViewport, ProtocolErrorCode,
-    ProtocolLimits, ProtocolValidator, QualityPolicy, SessionId, SetViewportCommand,
-    VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT, ViewportRequest, WorkerId,
+    Correlation, OutputProfile, PageCoordinateSpace, PageGeometry, PageRotation, PageViewport,
+    ProtocolErrorCode, ProtocolLimits, ProtocolValidator, QualityPolicy, SessionId,
+    SetViewportCommand, VIEWPORT_REQUEST_VISIBLE_PAGES_MAX_COUNT, ViewportRequest, WorkerId,
 };
 
 fn page(page_index: u32) -> PageViewport {
@@ -36,7 +36,7 @@ fn viewport() -> ViewportRequest {
         zoom_denominator: 2,
         visible_pages: vec![page(0), page(1)],
         quality: QualityPolicy::Full,
-        output_profile: 0,
+        output_profile: OutputProfile::Srgb,
         device_scale_milli: 2_000,
         rotation: PageRotation::Degrees0,
         optional_content_id: 0,

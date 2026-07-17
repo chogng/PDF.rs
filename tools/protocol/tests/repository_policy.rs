@@ -75,6 +75,7 @@ fn generated_paths_are_a_fixed_parent_free_allowlist() {
         "platform/desktop/generated/engine-protocol.registry",
         "protocol/generated/compatibility-vectors.json",
         "protocol/generated/invalid-vectors.json",
+        "protocol/generated/payload-codec-vectors.json",
         "protocol/generated/schema-hash.txt",
         "runtime/protocol/src/generated.rs",
     ]

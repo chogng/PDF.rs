@@ -5,13 +5,20 @@
 
 pub const PROTOCOL_MAJOR: u16 = 0;
 pub const PROTOCOL_MINOR: u16 = 2;
-pub const PROTOCOL_GENERATOR_VERSION: &str = "0.1.0";
+pub const PROTOCOL_GENERATOR_VERSION: &str = "0.2.0";
+pub const WIRE_IDENTITY_DOMAIN: &str = "PDF.rs/EngineProtocol/WireIdentity/v1";
+pub const PAYLOAD_CODEC_ABI_VERSION: u16 = 1;
 pub const MIN_COMPATIBLE_MINOR: u16 = 2;
 pub const MAX_MESSAGE_BYTES: u32 = 16777216;
 pub const MAX_TRANSFER_SLOTS: u16 = 64;
-pub const SCHEMA_SHA256: [u8; 32] = [0x7b, 0xaf, 0xe6, 0x55, 0xec, 0x2d, 0xdb, 0x58, 0xfc, 0x8d, 0xf4, 0x18, 0x4d, 0xa6, 0xe7, 0x22, 0xc9, 0x24, 0x30, 0x7b, 0xbf, 0x6e, 0x0a, 0x68, 0xe9, 0x1f, 0x7b, 0x29, 0x2f, 0x70, 0x8e, 0xe5];
-pub const SCHEMA_SHA256_HEX: &str = "7bafe655ec2ddb58fc8df4184da6e722c924307bbf6e0a68e91f7b292f708ee5";
-pub const SCHEMA_HASH: [u8; 16] = [0x7b, 0xaf, 0xe6, 0x55, 0xec, 0x2d, 0xdb, 0x58, 0xfc, 0x8d, 0xf4, 0x18, 0x4d, 0xa6, 0xe7, 0x22];
+pub const MAX_DATA_SEGMENT_BYTES: u64 = 4194304;
+pub const MAX_DATA_TICKET_BYTES: u64 = 16777216;
+pub const PAYLOAD_CODEC: &str = "fixed_le_v1";
+pub const CAPABILITY_DECISION_HASH_DOMAIN: &str = "PDF.rs/EngineProtocol/CapabilityDecision/fixed_le_v1/v1";
+pub const RENDER_PLAN_MANIFEST_HASH_DOMAIN: &str = "PDF.rs/EngineProtocol/RenderPlanManifest/fixed_le_v1/v1";
+pub const SCHEMA_SHA256: [u8; 32] = [0xab, 0x67, 0x12, 0xbc, 0xca, 0x32, 0xd2, 0x27, 0xa6, 0x14, 0xb7, 0x86, 0x92, 0x5e, 0x5b, 0x19, 0x90, 0x54, 0x36, 0x95, 0xbd, 0xe0, 0xe8, 0x65, 0x51, 0x3a, 0xb9, 0x5e, 0x90, 0x77, 0x9a, 0x03];
+pub const SCHEMA_SHA256_HEX: &str = "ab6712bcca32d227a614b786925e5b1990543695bde0e865513ab95e90779a03";
+pub const SCHEMA_HASH: [u8; 16] = [0xab, 0x67, 0x12, 0xbc, 0xca, 0x32, 0xd2, 0x27, 0xa6, 0x14, 0xb7, 0x86, 0x92, 0x5e, 0x5b, 0x19];
 pub const SCHEMA_HASH_TRUNCATION: &str = "sha256-first-16-bytes";
 pub const DESKTOP_BYTE_ORDER: &str = "little-endian";
 pub const ENVELOPE_HEADER_BYTES: usize = 20;
@@ -22,7 +29,11 @@ pub const CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT: usize = 16;
 pub const CAPABILITY_DECISION_MISSING_MAX_COUNT: usize = 16;
 pub const CAPABILITY_DECISION_CONTRIBUTORS_MAX_COUNT: usize = 32;
 pub const PROVIDE_DATA_COMMAND_SEGMENTS_MAX_COUNT: usize = 16;
+pub const READY_EVENT_CAPABILITY_PROFILES_MAX_COUNT: usize = 8;
+pub const READY_EVENT_OUTPUT_PROFILES_MAX_COUNT: usize = 8;
 pub const NEED_DATA_EVENT_RANGES_MAX_COUNT: usize = 16;
+pub const PAGE_METRICS_EVENT_PAGES_MAX_COUNT: usize = 64;
+pub const RENDER_PLAN_MANIFEST_REGIONS_MAX_COUNT: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct WorkerId(u64);
@@ -60,26 +71,6 @@ impl SurfaceId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CanvasId(u64);
-impl CanvasId {
-    pub const fn new(value: u64) -> Self { Self(value) }
-    pub const fn value(self) -> u64 { self.0 }
-}
-
-#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct PlatformHandle(u64);
-impl PlatformHandle {
-    pub const fn new(value: u64) -> Self { Self(value) }
-    pub const fn value(self) -> u64 { self.0 }
-}
-
-impl core::fmt::Debug for PlatformHandle {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("PlatformHandle([REDACTED])")
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MemoryEpoch(u32);
 impl MemoryEpoch {
     pub const fn new(value: u32) -> Self { Self(value) }
@@ -101,12 +92,18 @@ impl RenderConfigHash {
     pub const fn into_digest(self) -> [u8; 32] { self.0 }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SceneHash([u8; 32]);
 impl SceneHash {
     pub const fn new(value: [u8; 32]) -> Self { Self(value) }
     pub const fn digest(&self) -> &[u8; 32] { &self.0 }
     pub const fn into_digest(self) -> [u8; 32] { self.0 }
+}
+
+impl core::fmt::Debug for SceneHash {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("SceneHash([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -124,7 +121,7 @@ impl RenderPlanHash {
     pub const fn into_digest(self) -> [u8; 32] { self.0 }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CapabilityDecisionHash([u8; 32]);
 impl CapabilityDecisionHash {
     pub const fn new(value: [u8; 32]) -> Self { Self(value) }
@@ -132,11 +129,10 @@ impl CapabilityDecisionHash {
     pub const fn into_digest(self) -> [u8; 32] { self.0 }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CapabilityProfileId(u32);
-impl CapabilityProfileId {
-    pub const fn new(value: u32) -> Self { Self(value) }
-    pub const fn value(self) -> u32 { self.0 }
+impl core::fmt::Debug for CapabilityDecisionHash {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("CapabilityDecisionHash([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -156,12 +152,29 @@ pub enum EndpointRole {
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum EndpointCapability {
-    OffscreenCanvas = 1,
-    TransferableArrayBuffer = 2,
-    TransferableImageBitmap = 4,
-    SharedArrayBuffer = 8,
-    SharedMemory = 16,
-    LocalMemory = 32,
+    TransferableArrayBuffer = 1,
+    TransferableImageBitmap = 2,
+    SharedArrayBuffer = 4,
+    SharedMemory = 8,
+    LocalMemory = 16,
+}
+
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum EngineExecutionCapability {
+    OffscreenCanvasStaging = 1,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum CapabilityProfileId {
+    BaselineNative = 1,
+}
+
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum OutputProfile {
+    Srgb = 1,
 }
 
 #[repr(u8)]
@@ -179,9 +192,32 @@ pub enum AlphaMode {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum BrowserTransferKind {
-    ArrayBuffer = 1,
-    ImageBitmap = 2,
+pub enum SourceFailureCode {
+    SourceChanged = 1,
+    Unavailable = 2,
+    PermissionDenied = 3,
+    Timeout = 4,
+    Truncated = 5,
+    InvalidRangeResponse = 6,
+    TransportFailure = 7,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum GenerationCompletionStatus {
+    Completed = 1,
+    Superseded = 2,
+    Cancelled = 3,
+    Failed = 4,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum OperationAckStatus {
+    Applied = 1,
+    AlreadyApplied = 2,
+    AlreadyTerminal = 3,
+    UnknownTarget = 4,
 }
 
 #[repr(u8)]
@@ -189,6 +225,22 @@ pub enum BrowserTransferKind {
 pub enum QualityPolicy {
     Preview = 1,
     Full = 2,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DataPriority {
+    BackgroundPrefetch = 1,
+    Metadata = 2,
+    AdjacentPage = 3,
+    FirstViewportResource = 4,
+    VisiblePage = 5,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DataAttachmentRole {
+    ImmutableRangeBytes = 1,
 }
 
 #[repr(u8)]
@@ -293,14 +345,31 @@ pub enum ErrorRecoverability {
     RestartWorker = 5,
 }
 
-pub const ENDPOINT_CAPABILITY_OFFSCREEN_CANVAS: u64 = EndpointCapability::OffscreenCanvas as u64;
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum EngineErrorCode {
+    InvalidDocument = 1,
+    SourceChanged = 2,
+    SourceUnavailable = 3,
+    InvalidPassword = 4,
+    UnsupportedFeature = 5,
+    ResourceLimit = 6,
+    Cancelled = 7,
+    StaleGeneration = 8,
+    SurfaceImportFailed = 9,
+    Internal = 10,
+    ProtocolViolation = 11,
+}
+
 pub const ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER: u64 = EndpointCapability::TransferableArrayBuffer as u64;
 pub const ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP: u64 = EndpointCapability::TransferableImageBitmap as u64;
 pub const ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER: u64 = EndpointCapability::SharedArrayBuffer as u64;
 pub const ENDPOINT_CAPABILITY_SHARED_MEMORY: u64 = EndpointCapability::SharedMemory as u64;
 pub const ENDPOINT_CAPABILITY_LOCAL_MEMORY: u64 = EndpointCapability::LocalMemory as u64;
-pub const KNOWN_ENDPOINT_CAPABILITIES: u64 = ENDPOINT_CAPABILITY_OFFSCREEN_CANVAS | ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER | ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP | ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER | ENDPOINT_CAPABILITY_SHARED_MEMORY | ENDPOINT_CAPABILITY_LOCAL_MEMORY;
-pub const ENGINE_SUPPORTED_ENDPOINT_CAPABILITIES: u64 = KNOWN_ENDPOINT_CAPABILITIES;
+pub const KNOWN_ENDPOINT_CAPABILITIES: u64 = ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER | ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP | ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER | ENDPOINT_CAPABILITY_SHARED_MEMORY | ENDPOINT_CAPABILITY_LOCAL_MEMORY;
+
+pub const ENGINE_EXECUTION_CAPABILITY_OFFSCREEN_CANVAS_STAGING: u64 = EngineExecutionCapability::OffscreenCanvasStaging as u64;
+pub const KNOWN_ENGINE_EXECUTION_CAPABILITIES: u64 = ENGINE_EXECUTION_CAPABILITY_OFFSCREEN_CANVAS_STAGING;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolHello {
@@ -317,6 +386,11 @@ pub struct ProtocolHello {
 pub struct EndpointCapabilities {
     pub supported: u64,
     pub mandatory: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EngineExecutionCapabilities {
+    pub supported: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -380,6 +454,7 @@ pub struct DataSegment {
     pub range: ByteRange,
     pub slot: u16,
     pub byte_length: u64,
+    pub role: DataAttachmentRole,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -433,7 +508,7 @@ pub struct ViewportRequest {
     pub zoom_denominator: u32,
     pub visible_pages: Vec<PageViewport>,
     pub quality: QualityPolicy,
-    pub output_profile: u32,
+    pub output_profile: OutputProfile,
     pub device_scale_milli: u32,
     pub rotation: PageRotation,
     pub optional_content_id: u64,
@@ -458,6 +533,7 @@ pub struct SurfaceRegion {
 #[derive(Clone, Eq, PartialEq)]
 pub struct SurfaceMetadata {
     pub id: SurfaceId,
+    pub lease_token: u64,
     pub owner: SurfaceOwner,
     pub generation: u64,
     pub region: SurfaceRegion,
@@ -481,6 +557,7 @@ impl core::fmt::Debug for SurfaceMetadata {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut output = formatter.debug_struct("SurfaceMetadata");
         output.field("id", &self.id);
+        output.field("lease_token", &"[REDACTED]");
         output.field("owner", &self.owner);
         output.field("generation", &self.generation);
         output.field("region", &self.region);
@@ -668,7 +745,7 @@ impl core::fmt::Debug for CapabilityDecision {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EngineError {
-    pub code: u32,
+    pub code: EngineErrorCode,
     pub category: ErrorCategory,
     pub severity: ErrorSeverity,
     pub recoverability: ErrorRecoverability,
@@ -716,17 +793,25 @@ impl core::fmt::Debug for ProvideDataCommand {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RegisterCanvasCommand {
-    pub canvas: CanvasId,
-    pub transfer_slot: u16,
-    pub width: u32,
-    pub height: u32,
+#[derive(Clone, Eq, PartialEq)]
+pub struct FailDataCommand {
+    pub ticket: DataTicket,
+    pub expected: SourceIdentity,
+    pub observed: Option<SourceIdentity>,
+    pub code: SourceFailureCode,
+    pub retryable: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReleaseCanvasCommand {
-    pub canvas: CanvasId,
+impl core::fmt::Debug for FailDataCommand {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("FailDataCommand");
+        output.field("ticket", &self.ticket);
+        output.field("expected", &self.expected);
+        output.field("observed", &"[REDACTED]");
+        output.field("code", &self.code);
+        output.field("retryable", &self.retryable);
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -739,9 +824,19 @@ pub struct CancelCommand {
     pub target: RequestId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ReleaseSurfaceCommand {
     pub surface: SurfaceId,
+    pub lease_token: u64,
+}
+
+impl core::fmt::Debug for ReleaseSurfaceCommand {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("ReleaseSurfaceCommand");
+        output.field("surface", &self.surface);
+        output.field("lease_token", &"[REDACTED]");
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -754,10 +849,26 @@ pub struct ShutdownCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetPageMetricsCommand {
+    pub document_revision: u64,
+    pub start_index: u32,
+    pub max_count: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EngineHelloEvent {
+    pub hello: ProtocolHello,
+    pub execution_capabilities: EngineExecutionCapabilities,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadyEvent {
     pub worker: WorkerId,
     pub negotiated_minor: u16,
     pub schema_hash: [u8; 16],
+    pub execution_capabilities: EngineExecutionCapabilities,
+    pub capability_profiles: Vec<CapabilityProfileId>,
+    pub output_profiles: Vec<OutputProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -765,7 +876,7 @@ pub struct NeedDataEvent {
     pub ticket: DataTicket,
     pub source: SourceIdentity,
     pub ranges: Vec<ByteRange>,
-    pub priority: u8,
+    pub priority: DataPriority,
     pub checkpoint: u64,
 }
 
@@ -773,19 +884,24 @@ pub struct NeedDataEvent {
 pub struct DocumentReadyEvent {
     pub session: SessionId,
     pub document_revision: u64,
-    pub page_count: Option<u32>,
+    pub page_count: u32,
     pub profile: CapabilityProfileId,
     pub policy_version: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CanvasReleasedEvent {
-    pub canvas: CanvasId,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CapabilityReportedEvent {
     pub decision: CapabilityDecision,
+    pub decision_hash: CapabilityDecisionHash,
+}
+
+impl core::fmt::Debug for CapabilityReportedEvent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("CapabilityReportedEvent");
+        output.field("decision", &self.decision);
+        output.field("decision_hash", &"[REDACTED]");
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -794,10 +910,21 @@ pub struct SurfaceReadyEvent {
     pub transport: SurfaceTransport,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct SurfaceReclaimedEvent {
     pub surface: SurfaceId,
+    pub lease_token: u64,
     pub reason: SurfaceReclaimReason,
+}
+
+impl core::fmt::Debug for SurfaceReclaimedEvent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("SurfaceReclaimedEvent");
+        output.field("surface", &self.surface);
+        output.field("lease_token", &"[REDACTED]");
+        output.field("reason", &self.reason);
+        output.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -830,21 +957,157 @@ pub struct ProtocolFaultEvent {
     pub error: EngineError,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataFailedEvent {
+    pub ticket: DataTicket,
+    pub error: EngineError,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageMetric {
+    pub page_index: u32,
+    pub geometry: PageGeometry,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageMetricsEvent {
+    pub document_revision: u64,
+    pub start_index: u32,
+    pub total_pages: u32,
+    pub pages: Vec<PageMetric>,
+}
+
 #[derive(Clone, Eq, PartialEq)]
+pub struct RenderPlanManifest {
+    pub document_revision: u64,
+    pub render_config: RenderConfigHash,
+    pub renderer_epoch: RendererEpoch,
+    pub plan_id: RenderPlanId,
+    pub scene_hash: SceneHash,
+    pub decision_hash: CapabilityDecisionHash,
+    pub backend: NativeBackend,
+    pub output_profile: OutputProfile,
+    pub quality: QualityPolicy,
+    pub regions: Vec<SurfaceRegion>,
+}
+
+impl core::fmt::Debug for RenderPlanManifest {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("RenderPlanManifest");
+        output.field("document_revision", &self.document_revision);
+        output.field("render_config", &self.render_config);
+        output.field("renderer_epoch", &self.renderer_epoch);
+        output.field("plan_id", &self.plan_id);
+        output.field("scene_hash", &"[REDACTED]");
+        output.field("decision_hash", &"[REDACTED]");
+        output.field("backend", &self.backend);
+        output.field("output_profile", &self.output_profile);
+        output.field("quality", &self.quality);
+        output.field("regions", &self.regions);
+        output.finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenerationPlannedEvent {
+    pub manifest: RenderPlanManifest,
+    pub plan_hash: RenderPlanHash,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenerationCompletedEvent {
+    pub status: GenerationCompletionStatus,
+    pub produced_regions: u32,
+    pub error: Option<EngineError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelAcknowledgedEvent {
+    pub target: RequestId,
+    pub status: OperationAckStatus,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct SurfaceReleaseAcknowledgedEvent {
+    pub surface: SurfaceId,
+    pub lease_token: u64,
+    pub status: OperationAckStatus,
+}
+
+impl core::fmt::Debug for SurfaceReleaseAcknowledgedEvent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut output = formatter.debug_struct("SurfaceReleaseAcknowledgedEvent");
+        output.field("surface", &self.surface);
+        output.field("lease_token", &"[REDACTED]");
+        output.field("status", &self.status);
+        output.finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CloseSessionAcknowledgedEvent {
+    pub session: SessionId,
+    pub status: OperationAckStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShutdownAcknowledgedEvent {
+    pub worker: WorkerId,
+    pub status: OperationAckStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineErrorDescriptor {
+pub code: EngineErrorCode,
+pub category: ErrorCategory,
+pub severity: ErrorSeverity,
+pub recoverability: ErrorRecoverability,
+}
+
+pub const ENGINE_ERROR_DESCRIPTORS: &[EngineErrorDescriptor] = &[
+    EngineErrorDescriptor { code: EngineErrorCode::InvalidDocument, category: ErrorCategory::Document, severity: ErrorSeverity::Fatal, recoverability: ErrorRecoverability::ReopenSession },
+    EngineErrorDescriptor { code: EngineErrorCode::SourceChanged, category: ErrorCategory::Source, severity: ErrorSeverity::Recoverable, recoverability: ErrorRecoverability::ReopenSession },
+    EngineErrorDescriptor { code: EngineErrorCode::SourceUnavailable, category: ErrorCategory::Source, severity: ErrorSeverity::Recoverable, recoverability: ErrorRecoverability::RetryRequest },
+    EngineErrorDescriptor { code: EngineErrorCode::InvalidPassword, category: ErrorCategory::Document, severity: ErrorSeverity::Recoverable, recoverability: ErrorRecoverability::RetryRequest },
+    EngineErrorDescriptor { code: EngineErrorCode::UnsupportedFeature, category: ErrorCategory::Capability, severity: ErrorSeverity::Recoverable, recoverability: ErrorRecoverability::RetryNativeRenderer },
+    EngineErrorDescriptor { code: EngineErrorCode::ResourceLimit, category: ErrorCategory::Resource, severity: ErrorSeverity::Recoverable, recoverability: ErrorRecoverability::RetryNativeRenderer },
+    EngineErrorDescriptor { code: EngineErrorCode::Cancelled, category: ErrorCategory::Cancelled, severity: ErrorSeverity::Info, recoverability: ErrorRecoverability::None },
+    EngineErrorDescriptor { code: EngineErrorCode::StaleGeneration, category: ErrorCategory::Cancelled, severity: ErrorSeverity::Info, recoverability: ErrorRecoverability::None },
+    EngineErrorDescriptor { code: EngineErrorCode::SurfaceImportFailed, category: ErrorCategory::Resource, severity: ErrorSeverity::Recoverable, recoverability: ErrorRecoverability::RetryRequest },
+    EngineErrorDescriptor { code: EngineErrorCode::Internal, category: ErrorCategory::Internal, severity: ErrorSeverity::Fatal, recoverability: ErrorRecoverability::RestartWorker },
+    EngineErrorDescriptor { code: EngineErrorCode::ProtocolViolation, category: ErrorCategory::Protocol, severity: ErrorSeverity::Fatal, recoverability: ErrorRecoverability::RestartWorker },
+];
+
+impl EngineError {
+pub fn wire_invariants_valid(&self) -> bool {
+self.diagnostic_id.value() != 0
+&& ENGINE_ERROR_DESCRIPTORS.iter().any(|descriptor| descriptor.code == self.code
+&& descriptor.category == self.category
+&& descriptor.severity == self.severity
+&& descriptor.recoverability == self.recoverability)
+}
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceTransport {
-    OffscreenCanvasCommit {
-        canvas: CanvasId,
-        region_length: u64,
-    },
-    BrowserTransfer {
+    BrowserArrayBuffer {
         slot: u16,
-        transfer_kind: BrowserTransferKind,
-        transfer_length: u64,
+        buffer_length: u64,
+    },
+    BrowserImageBitmap {
+        slot: u16,
+        width: u32,
+        height: u32,
+    },
+    BrowserSharedArrayBuffer {
+        attachment_slot: u16,
+        buffer_length: u64,
+        fence_byte_offset: u64,
+        publication_epoch: u32,
     },
     SharedMemory {
-        handle: PlatformHandle,
+        slot: u16,
         region_length: u64,
-        release_token: u64,
     },
     LocalMemory {
         region_length: u64,
@@ -852,9 +1115,28 @@ pub enum SurfaceTransport {
     },
 }
 
-impl core::fmt::Debug for SurfaceTransport {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("SurfaceTransport([REDACTED])")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnionVariantCapabilityRequirement {
+pub union_name: &'static str,
+pub variant_name: &'static str,
+pub capability: u64,
+}
+
+pub const UNION_VARIANT_CAPABILITY_REQUIREMENTS: &[UnionVariantCapabilityRequirement] = &[
+    UnionVariantCapabilityRequirement { union_name: "SurfaceTransport", variant_name: "BrowserArrayBuffer", capability: ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER },
+    UnionVariantCapabilityRequirement { union_name: "SurfaceTransport", variant_name: "BrowserImageBitmap", capability: ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP },
+    UnionVariantCapabilityRequirement { union_name: "SurfaceTransport", variant_name: "BrowserSharedArrayBuffer", capability: ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER },
+    UnionVariantCapabilityRequirement { union_name: "SurfaceTransport", variant_name: "SharedMemory", capability: ENDPOINT_CAPABILITY_SHARED_MEMORY },
+    UnionVariantCapabilityRequirement { union_name: "SurfaceTransport", variant_name: "LocalMemory", capability: ENDPOINT_CAPABILITY_LOCAL_MEMORY },
+];
+
+pub const fn surface_transport_required_capability(value: &SurfaceTransport) -> u64 {
+    match value {
+        SurfaceTransport::BrowserArrayBuffer { .. } => ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER,
+        SurfaceTransport::BrowserImageBitmap { .. } => ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP,
+        SurfaceTransport::BrowserSharedArrayBuffer { .. } => ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER,
+        SurfaceTransport::SharedMemory { .. } => ENDPOINT_CAPABILITY_SHARED_MEMORY,
+        SurfaceTransport::LocalMemory { .. } => ENDPOINT_CAPABILITY_LOCAL_MEMORY,
     }
 }
 
@@ -864,13 +1146,13 @@ pub enum Command {
     HelloAccept(HelloAcceptCommand),
     Open(OpenCommand),
     ProvideData(ProvideDataCommand),
-    RegisterCanvas(RegisterCanvasCommand),
-    ReleaseCanvas(ReleaseCanvasCommand),
     SetViewport(SetViewportCommand),
     Cancel(CancelCommand),
     ReleaseSurface(ReleaseSurfaceCommand),
     CloseSession(CloseSessionCommand),
     Shutdown(ShutdownCommand),
+    FailData(FailDataCommand),
+    GetPageMetrics(GetPageMetricsCommand),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -878,7 +1160,6 @@ pub enum Event {
     Ready(ReadyEvent),
     NeedData(NeedDataEvent),
     DocumentReady(DocumentReadyEvent),
-    CanvasReleased(CanvasReleasedEvent),
     CapabilityReported(CapabilityReportedEvent),
     SurfaceReady(SurfaceReadyEvent),
     RequestCancelled(RequestCancelledEvent),
@@ -888,6 +1169,15 @@ pub enum Event {
     WorkerFault(WorkerFaultEvent),
     ProtocolFault(ProtocolFaultEvent),
     SurfaceReclaimed(SurfaceReclaimedEvent),
+    EngineHello(EngineHelloEvent),
+    DataFailed(DataFailedEvent),
+    PageMetrics(PageMetricsEvent),
+    GenerationPlanned(GenerationPlannedEvent),
+    GenerationCompleted(GenerationCompletedEvent),
+    CancelAcknowledged(CancelAcknowledgedEvent),
+    SurfaceReleaseAcknowledged(SurfaceReleaseAcknowledgedEvent),
+    CloseSessionAcknowledged(CloseSessionAcknowledgedEvent),
+    ShutdownAcknowledged(ShutdownAcknowledgedEvent),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -908,17 +1198,16 @@ pub const MESSAGE_ID_HELLO: u16 = 1;
 pub const MESSAGE_ID_HELLO_ACCEPT: u16 = 2;
 pub const MESSAGE_ID_OPEN: u16 = 3;
 pub const MESSAGE_ID_PROVIDE_DATA: u16 = 4;
-pub const MESSAGE_ID_REGISTER_CANVAS: u16 = 5;
-pub const MESSAGE_ID_RELEASE_CANVAS: u16 = 6;
 pub const MESSAGE_ID_SET_VIEWPORT: u16 = 7;
 pub const MESSAGE_ID_CANCEL: u16 = 8;
 pub const MESSAGE_ID_RELEASE_SURFACE: u16 = 9;
 pub const MESSAGE_ID_CLOSE_SESSION: u16 = 10;
 pub const MESSAGE_ID_SHUTDOWN: u16 = 11;
+pub const MESSAGE_ID_FAIL_DATA: u16 = 12;
+pub const MESSAGE_ID_GET_PAGE_METRICS: u16 = 13;
 pub const MESSAGE_ID_READY: u16 = 101;
 pub const MESSAGE_ID_NEED_DATA: u16 = 102;
 pub const MESSAGE_ID_DOCUMENT_READY: u16 = 103;
-pub const MESSAGE_ID_CANVAS_RELEASED: u16 = 104;
 pub const MESSAGE_ID_CAPABILITY_REPORTED: u16 = 105;
 pub const MESSAGE_ID_SURFACE_READY: u16 = 106;
 pub const MESSAGE_ID_REQUEST_CANCELLED: u16 = 107;
@@ -928,6 +1217,15 @@ pub const MESSAGE_ID_WORKER_STOPPED: u16 = 110;
 pub const MESSAGE_ID_WORKER_FAULT: u16 = 111;
 pub const MESSAGE_ID_PROTOCOL_FAULT: u16 = 112;
 pub const MESSAGE_ID_SURFACE_RECLAIMED: u16 = 113;
+pub const MESSAGE_ID_ENGINE_HELLO: u16 = 114;
+pub const MESSAGE_ID_DATA_FAILED: u16 = 115;
+pub const MESSAGE_ID_PAGE_METRICS: u16 = 116;
+pub const MESSAGE_ID_GENERATION_PLANNED: u16 = 117;
+pub const MESSAGE_ID_GENERATION_COMPLETED: u16 = 118;
+pub const MESSAGE_ID_CANCEL_ACKNOWLEDGED: u16 = 121;
+pub const MESSAGE_ID_SURFACE_RELEASE_ACKNOWLEDGED: u16 = 123;
+pub const MESSAGE_ID_CLOSE_SESSION_ACKNOWLEDGED: u16 = 124;
+pub const MESSAGE_ID_SHUTDOWN_ACKNOWLEDGED: u16 = 125;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MessageKind { Command, Event }
@@ -947,7 +1245,27 @@ pub generation: CorrelationRequirement,
 pub enum FieldPrivacy { Public, Private, Sensitive }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutcomeDisposition { Stream, Terminal }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OutcomeDescriptor {
+pub event_id: u16,
+pub disposition: OutcomeDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FieldDescriptor {
+pub name: &'static str,
+pub wire_type: &'static str,
+pub required: bool,
+pub privacy: FieldPrivacy,
+pub max_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TypeFieldDescriptor {
+pub owner: &'static str,
+pub variant: Option<&'static str>,
 pub name: &'static str,
 pub wire_type: &'static str,
 pub required: bool,
@@ -961,92 +1279,339 @@ pub kind: MessageKind,
 pub name: &'static str,
 pub id: u16,
 pub payload: &'static str,
-pub state: &'static str,
+pub state_precondition: &'static str,
 pub correlation: &'static str,
 pub correlation_shape: CorrelationShape,
 pub replayable: bool,
-pub terminal: bool,
 pub allowed_flags: u16,
 pub min_transfer_slots: u16,
 pub max_transfer_slots: u16,
 pub max_payload_bytes: u32,
+pub maximum_encoded_payload_bytes: u32,
+pub required_capability: u64,
 pub fields: &'static [FieldDescriptor],
-pub outcome_events: &'static [u16],
+pub outcomes: &'static [OutcomeDescriptor],
 }
+
+pub const STATE_PRECONDITIONS: &[&str] = &["ActiveOrTerminalRequest", "Any", "Closing", "DrainingOrStopped", "NonClosedOrClosed", "Opening", "OpeningOrReady", "Ready", "ReadyOrClosing", "ReadyOrDrainingOrStopped", "Starting", "SurfaceAliveOrReclaimed"];
+
+pub const TYPE_FIELD_DESCRIPTORS: &[TypeFieldDescriptor] = &[
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "major", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "schema_hash", wire_type: "bytes16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "endpoint_role", wire_type: "EndpointRole", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "capabilities", wire_type: "EndpointCapabilities", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "max_message_bytes", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolHello", variant: None, name: "max_transfer_slots", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EndpointCapabilities", variant: None, name: "supported", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EndpointCapabilities", variant: None, name: "mandatory", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineExecutionCapabilities", variant: None, name: "supported", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EnvelopeHeader", variant: None, name: "major", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EnvelopeHeader", variant: None, name: "minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EnvelopeHeader", variant: None, name: "message_type", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EnvelopeHeader", variant: None, name: "flags", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EnvelopeHeader", variant: None, name: "payload_len", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EnvelopeHeader", variant: None, name: "sequence", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "Correlation", variant: None, name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "Correlation", variant: None, name: "session", wire_type: "optional<SessionId>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "Correlation", variant: None, name: "request", wire_type: "optional<RequestId>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "Correlation", variant: None, name: "generation", wire_type: "optional<u64>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SourceIdentity", variant: None, name: "stable_id", wire_type: "bytes32", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "SourceIdentity", variant: None, name: "revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SourceDescriptor", variant: None, name: "identity", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SourceDescriptor", variant: None, name: "length", wire_type: "optional<u64>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SourceDescriptor", variant: None, name: "validator", wire_type: "bytes32", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "ByteRange", variant: None, name: "start", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ByteRange", variant: None, name: "len", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DataSegment", variant: None, name: "range", wire_type: "ByteRange", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DataSegment", variant: None, name: "slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DataSegment", variant: None, name: "byte_length", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DataSegment", variant: None, name: "role", wire_type: "DataAttachmentRole", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "identity", wire_type: "bytes32", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "media_box_x_milli_points", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "media_box_y_milli_points", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "media_box_width_milli_points", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "media_box_height_milli_points", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "crop_box_x_milli_points", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "crop_box_y_milli_points", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "crop_box_width_milli_points", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "crop_box_height_milli_points", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageGeometry", variant: None, name: "intrinsic_rotation", wire_type: "PageRotation", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "page_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "coordinate_space", wire_type: "PageCoordinateSpace", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "geometry", wire_type: "PageGeometry", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "clip_x_milli_points", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "clip_y_milli_points", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "clip_width_milli_points", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageViewport", variant: None, name: "clip_height_milli_points", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "generation", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "annotation_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "zoom_numerator", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "zoom_denominator", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "visible_pages", wire_type: "list<PageViewport,64>", required: true, privacy: FieldPrivacy::Public, max_count: 64 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "quality", wire_type: "QualityPolicy", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "output_profile", wire_type: "OutputProfile", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "device_scale_milli", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "rotation", wire_type: "PageRotation", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ViewportRequest", variant: None, name: "optional_content_id", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceOwner", variant: None, name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceOwner", variant: None, name: "session", wire_type: "SessionId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceRegion", variant: None, name: "page_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceRegion", variant: None, name: "x", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceRegion", variant: None, name: "y", wire_type: "i32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceRegion", variant: None, name: "width", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceRegion", variant: None, name: "height", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceRegion", variant: None, name: "coordinate_space", wire_type: "SurfaceCoordinateSpace", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "id", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "owner", wire_type: "SurfaceOwner", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "generation", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "region", wire_type: "SurfaceRegion", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "width", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "height", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "stride", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "format", wire_type: "PixelFormat", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "alpha", wire_type: "AlphaMode", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "byte_offset", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "byte_length", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "scene_hash", wire_type: "SceneHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceMetadata", variant: None, name: "backend", wire_type: "NativeBackend", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityLocation", variant: None, name: "page_index", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityLocation", variant: None, name: "object_number", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityLocation", variant: None, name: "object_generation", wire_type: "optional<u16>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityLocation", variant: None, name: "source_offset", wire_type: "optional<u64>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityLocation", variant: None, name: "command_index", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityLocation", variant: None, name: "resource_id", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityScope", variant: None, name: "kind", wire_type: "CapabilityScopeKind", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityScope", variant: None, name: "page", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityScope", variant: None, name: "command", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityScope", variant: None, name: "resource", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContributor", variant: None, name: "id", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContributor", variant: None, name: "kind", wire_type: "CapabilityContributorKind", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContributor", variant: None, name: "code", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContributor", variant: None, name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContext", variant: None, name: "code", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContext", variant: None, name: "value", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityContext", variant: None, name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "id", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "capability", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "parameter", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "context", wire_type: "CapabilityContext", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "dependencies", wire_type: "list<u32,32>", required: true, privacy: FieldPrivacy::Public, max_count: 32 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "scope", wire_type: "CapabilityScope", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "contributor_ids", wire_type: "list<u32,16>", required: true, privacy: FieldPrivacy::Public, max_count: 16 },
+    TypeFieldDescriptor { owner: "CapabilityRequirement", variant: None, name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "source", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "revision_startxref", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "page_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "page_object_number", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "page_object_generation", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "scene_schema_major", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "scene_schema_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilitySubject", variant: None, name: "scene_hash", wire_type: "SceneHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "decision_schema_version", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "status", wire_type: "SupportStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "profile_version", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "policy_version", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "subject", wire_type: "CapabilitySubject", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "missing", wire_type: "list<CapabilityRequirement,16>", required: true, privacy: FieldPrivacy::Public, max_count: 16 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "missing_total", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "missing_completeness", wire_type: "CollectionCompleteness", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "contributors", wire_type: "list<CapabilityContributor,32>", required: true, privacy: FieldPrivacy::Public, max_count: 32 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "contributors_total", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "contributors_completeness", wire_type: "CollectionCompleteness", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "scope", wire_type: "CapabilityScope", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "location", wire_type: "optional<CapabilityLocation>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityDecision", variant: None, name: "rejection_code", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineError", variant: None, name: "code", wire_type: "EngineErrorCode", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineError", variant: None, name: "category", wire_type: "ErrorCategory", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineError", variant: None, name: "severity", wire_type: "ErrorSeverity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineError", variant: None, name: "recoverability", wire_type: "ErrorRecoverability", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineError", variant: None, name: "diagnostic_id", wire_type: "DiagnosticId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "HelloCommand", variant: None, name: "hello", wire_type: "ProtocolHello", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "HelloAcceptCommand", variant: None, name: "negotiated_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "HelloAcceptCommand", variant: None, name: "schema_hash", wire_type: "bytes16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "OpenCommand", variant: None, name: "source", wire_type: "SourceDescriptor", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProvideDataCommand", variant: None, name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProvideDataCommand", variant: None, name: "source", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProvideDataCommand", variant: None, name: "segments", wire_type: "list<DataSegment,16>", required: true, privacy: FieldPrivacy::Sensitive, max_count: 16 },
+    TypeFieldDescriptor { owner: "FailDataCommand", variant: None, name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "FailDataCommand", variant: None, name: "expected", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "FailDataCommand", variant: None, name: "observed", wire_type: "optional<SourceIdentity>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "FailDataCommand", variant: None, name: "code", wire_type: "SourceFailureCode", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "FailDataCommand", variant: None, name: "retryable", wire_type: "bool", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SetViewportCommand", variant: None, name: "viewport", wire_type: "ViewportRequest", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CancelCommand", variant: None, name: "target", wire_type: "RequestId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReleaseSurfaceCommand", variant: None, name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReleaseSurfaceCommand", variant: None, name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
+    TypeFieldDescriptor { owner: "ShutdownCommand", variant: None, name: "deadline_ms", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GetPageMetricsCommand", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GetPageMetricsCommand", variant: None, name: "start_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GetPageMetricsCommand", variant: None, name: "max_count", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineHelloEvent", variant: None, name: "hello", wire_type: "ProtocolHello", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "EngineHelloEvent", variant: None, name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReadyEvent", variant: None, name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReadyEvent", variant: None, name: "negotiated_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReadyEvent", variant: None, name: "schema_hash", wire_type: "bytes16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReadyEvent", variant: None, name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ReadyEvent", variant: None, name: "capability_profiles", wire_type: "list<CapabilityProfileId,8>", required: true, privacy: FieldPrivacy::Public, max_count: 8 },
+    TypeFieldDescriptor { owner: "ReadyEvent", variant: None, name: "output_profiles", wire_type: "list<OutputProfile,8>", required: true, privacy: FieldPrivacy::Public, max_count: 8 },
+    TypeFieldDescriptor { owner: "NeedDataEvent", variant: None, name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "NeedDataEvent", variant: None, name: "source", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "NeedDataEvent", variant: None, name: "ranges", wire_type: "list<ByteRange,16>", required: true, privacy: FieldPrivacy::Public, max_count: 16 },
+    TypeFieldDescriptor { owner: "NeedDataEvent", variant: None, name: "priority", wire_type: "DataPriority", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "NeedDataEvent", variant: None, name: "checkpoint", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DocumentReadyEvent", variant: None, name: "session", wire_type: "SessionId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DocumentReadyEvent", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DocumentReadyEvent", variant: None, name: "page_count", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DocumentReadyEvent", variant: None, name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DocumentReadyEvent", variant: None, name: "policy_version", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityReportedEvent", variant: None, name: "decision", wire_type: "CapabilityDecision", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CapabilityReportedEvent", variant: None, name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReadyEvent", variant: None, name: "metadata", wire_type: "SurfaceMetadata", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReadyEvent", variant: None, name: "transport", wire_type: "SurfaceTransport", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReclaimedEvent", variant: None, name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReclaimedEvent", variant: None, name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReclaimedEvent", variant: None, name: "reason", wire_type: "SurfaceReclaimReason", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RequestCancelledEvent", variant: None, name: "target", wire_type: "RequestId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RequestFailedEvent", variant: None, name: "error", wire_type: "EngineError", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SessionClosedEvent", variant: None, name: "session", wire_type: "SessionId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "WorkerStoppedEvent", variant: None, name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "WorkerFaultEvent", variant: None, name: "error", wire_type: "EngineError", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ProtocolFaultEvent", variant: None, name: "error", wire_type: "EngineError", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DataFailedEvent", variant: None, name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "DataFailedEvent", variant: None, name: "error", wire_type: "EngineError", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageMetric", variant: None, name: "page_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageMetric", variant: None, name: "geometry", wire_type: "PageGeometry", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "start_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "total_pages", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "PageMetricsEvent", variant: None, name: "pages", wire_type: "list<PageMetric,64>", required: true, privacy: FieldPrivacy::Public, max_count: 64 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "render_config", wire_type: "RenderConfigHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "renderer_epoch", wire_type: "RendererEpoch", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "plan_id", wire_type: "RenderPlanId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "scene_hash", wire_type: "SceneHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "backend", wire_type: "NativeBackend", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "output_profile", wire_type: "OutputProfile", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "quality", wire_type: "QualityPolicy", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "RenderPlanManifest", variant: None, name: "regions", wire_type: "list<SurfaceRegion,1024>", required: true, privacy: FieldPrivacy::Public, max_count: 1024 },
+    TypeFieldDescriptor { owner: "GenerationPlannedEvent", variant: None, name: "manifest", wire_type: "RenderPlanManifest", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GenerationPlannedEvent", variant: None, name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GenerationCompletedEvent", variant: None, name: "status", wire_type: "GenerationCompletionStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GenerationCompletedEvent", variant: None, name: "produced_regions", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "GenerationCompletedEvent", variant: None, name: "error", wire_type: "optional<EngineError>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CancelAcknowledgedEvent", variant: None, name: "target", wire_type: "RequestId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CancelAcknowledgedEvent", variant: None, name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReleaseAcknowledgedEvent", variant: None, name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReleaseAcknowledgedEvent", variant: None, name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceReleaseAcknowledgedEvent", variant: None, name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CloseSessionAcknowledgedEvent", variant: None, name: "session", wire_type: "SessionId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "CloseSessionAcknowledgedEvent", variant: None, name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ShutdownAcknowledgedEvent", variant: None, name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "ShutdownAcknowledgedEvent", variant: None, name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserArrayBuffer"), name: "slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserArrayBuffer"), name: "buffer_length", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserImageBitmap"), name: "slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserImageBitmap"), name: "width", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserImageBitmap"), name: "height", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserSharedArrayBuffer"), name: "attachment_slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserSharedArrayBuffer"), name: "buffer_length", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserSharedArrayBuffer"), name: "fence_byte_offset", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("BrowserSharedArrayBuffer"), name: "publication_epoch", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("SharedMemory"), name: "slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("SharedMemory"), name: "region_length", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("LocalMemory"), name: "region_length", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    TypeFieldDescriptor { owner: "SurfaceTransport", variant: Some("LocalMemory"), name: "memory_epoch", wire_type: "MemoryEpoch", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
 
 const HELLO_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "hello", wire_type: "ProtocolHello", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const HELLO_OUTCOME_EVENTS: &[u16] = &[101, 112];
+const HELLO_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 114, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 112, disposition: OutcomeDisposition::Terminal }];
 const HELLO_ACCEPT_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "negotiated_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "schema_hash", wire_type: "bytes16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const HELLO_ACCEPT_OUTCOME_EVENTS: &[u16] = &[101, 112];
+const HELLO_ACCEPT_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 101, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 112, disposition: OutcomeDisposition::Terminal }];
 const OPEN_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "source", wire_type: "SourceDescriptor", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
 ];
-const OPEN_OUTCOME_EVENTS: &[u16] = &[103, 108, 107];
+const OPEN_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 102, disposition: OutcomeDisposition::Stream }, OutcomeDescriptor { event_id: 103, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 108, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 107, disposition: OutcomeDisposition::Terminal }];
 const PROVIDE_DATA_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "source", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "segments", wire_type: "list<DataSegment,16>", required: true, privacy: FieldPrivacy::Sensitive, max_count: 16 },
 ];
-const PROVIDE_DATA_OUTCOME_EVENTS: &[u16] = &[108];
-const REGISTER_CANVAS_FIELDS: &[FieldDescriptor] = &[
-    FieldDescriptor { name: "canvas", wire_type: "CanvasId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-    FieldDescriptor { name: "transfer_slot", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-    FieldDescriptor { name: "width", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-    FieldDescriptor { name: "height", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-];
-const REGISTER_CANVAS_OUTCOME_EVENTS: &[u16] = &[104, 112];
-const RELEASE_CANVAS_FIELDS: &[FieldDescriptor] = &[
-    FieldDescriptor { name: "canvas", wire_type: "CanvasId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-];
-const RELEASE_CANVAS_OUTCOME_EVENTS: &[u16] = &[104, 112];
+const PROVIDE_DATA_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 115, disposition: OutcomeDisposition::Terminal }];
 const SET_VIEWPORT_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "viewport", wire_type: "ViewportRequest", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const SET_VIEWPORT_OUTCOME_EVENTS: &[u16] = &[105, 106, 108];
+const SET_VIEWPORT_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 117, disposition: OutcomeDisposition::Stream }, OutcomeDescriptor { event_id: 105, disposition: OutcomeDisposition::Stream }, OutcomeDescriptor { event_id: 106, disposition: OutcomeDisposition::Stream }, OutcomeDescriptor { event_id: 118, disposition: OutcomeDisposition::Terminal }];
 const CANCEL_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "target", wire_type: "RequestId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const CANCEL_OUTCOME_EVENTS: &[u16] = &[107, 108];
+const CANCEL_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 121, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 107, disposition: OutcomeDisposition::Stream }];
 const RELEASE_SURFACE_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
 ];
-const RELEASE_SURFACE_OUTCOME_EVENTS: &[u16] = &[113, 112];
+const RELEASE_SURFACE_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 123, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 113, disposition: OutcomeDisposition::Stream }];
 const CLOSE_SESSION_FIELDS: &[FieldDescriptor] = &[
 ];
-const CLOSE_SESSION_OUTCOME_EVENTS: &[u16] = &[109];
+const CLOSE_SESSION_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 124, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 113, disposition: OutcomeDisposition::Stream }, OutcomeDescriptor { event_id: 109, disposition: OutcomeDisposition::Stream }];
 const SHUTDOWN_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "deadline_ms", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const SHUTDOWN_OUTCOME_EVENTS: &[u16] = &[110, 111];
+const SHUTDOWN_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 125, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 110, disposition: OutcomeDisposition::Stream }, OutcomeDescriptor { event_id: 111, disposition: OutcomeDisposition::Stream }];
+const FAIL_DATA_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "expected", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "observed", wire_type: "optional<SourceIdentity>", required: false, privacy: FieldPrivacy::Private, max_count: 0 },
+    FieldDescriptor { name: "code", wire_type: "SourceFailureCode", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "retryable", wire_type: "bool", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const FAIL_DATA_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 115, disposition: OutcomeDisposition::Terminal }];
+const GET_PAGE_METRICS_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "start_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "max_count", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const GET_PAGE_METRICS_OUTCOMES: &[OutcomeDescriptor] = &[OutcomeDescriptor { event_id: 116, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 108, disposition: OutcomeDisposition::Terminal }, OutcomeDescriptor { event_id: 107, disposition: OutcomeDisposition::Terminal }];
 const READY_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "negotiated_minor", wire_type: "u16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "schema_hash", wire_type: "bytes16", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "capability_profiles", wire_type: "list<CapabilityProfileId,8>", required: true, privacy: FieldPrivacy::Public, max_count: 8 },
+    FieldDescriptor { name: "output_profiles", wire_type: "list<OutputProfile,8>", required: true, privacy: FieldPrivacy::Public, max_count: 8 },
 ];
 const NEED_DATA_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "source", wire_type: "SourceIdentity", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "ranges", wire_type: "list<ByteRange,16>", required: true, privacy: FieldPrivacy::Public, max_count: 16 },
-    FieldDescriptor { name: "priority", wire_type: "u8", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "priority", wire_type: "DataPriority", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "checkpoint", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
 const DOCUMENT_READY_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "session", wire_type: "SessionId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-    FieldDescriptor { name: "page_count", wire_type: "optional<u32>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "page_count", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "profile", wire_type: "CapabilityProfileId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
     FieldDescriptor { name: "policy_version", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
-const CANVAS_RELEASED_FIELDS: &[FieldDescriptor] = &[
-    FieldDescriptor { name: "canvas", wire_type: "CanvasId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
-];
 const CAPABILITY_REPORTED_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "decision", wire_type: "CapabilityDecision", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "decision_hash", wire_type: "CapabilityDecisionHash", required: true, privacy: FieldPrivacy::Private, max_count: 0 },
 ];
 const SURFACE_READY_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "metadata", wire_type: "SurfaceMetadata", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
@@ -1072,37 +1637,86 @@ const PROTOCOL_FAULT_FIELDS: &[FieldDescriptor] = &[
 ];
 const SURFACE_RECLAIMED_FIELDS: &[FieldDescriptor] = &[
     FieldDescriptor { name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
     FieldDescriptor { name: "reason", wire_type: "SurfaceReclaimReason", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const ENGINE_HELLO_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "hello", wire_type: "ProtocolHello", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "execution_capabilities", wire_type: "EngineExecutionCapabilities", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const DATA_FAILED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "ticket", wire_type: "DataTicket", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "error", wire_type: "EngineError", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const PAGE_METRICS_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "document_revision", wire_type: "u64", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "start_index", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "total_pages", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "pages", wire_type: "list<PageMetric,64>", required: true, privacy: FieldPrivacy::Public, max_count: 64 },
+];
+const GENERATION_PLANNED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "manifest", wire_type: "RenderPlanManifest", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "plan_hash", wire_type: "RenderPlanHash", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const GENERATION_COMPLETED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "status", wire_type: "GenerationCompletionStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "produced_regions", wire_type: "u32", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "error", wire_type: "optional<EngineError>", required: false, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const CANCEL_ACKNOWLEDGED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "target", wire_type: "RequestId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const SURFACE_RELEASE_ACKNOWLEDGED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "surface", wire_type: "SurfaceId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "lease_token", wire_type: "u64", required: true, privacy: FieldPrivacy::Sensitive, max_count: 0 },
+    FieldDescriptor { name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const CLOSE_SESSION_ACKNOWLEDGED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "session", wire_type: "SessionId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+];
+const SHUTDOWN_ACKNOWLEDGED_FIELDS: &[FieldDescriptor] = &[
+    FieldDescriptor { name: "worker", wire_type: "WorkerId", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
+    FieldDescriptor { name: "status", wire_type: "OperationAckStatus", required: true, privacy: FieldPrivacy::Public, max_count: 0 },
 ];
 
 pub const COMMAND_DESCRIPTORS: &[MessageDescriptor] = &[
-    MessageDescriptor { kind: MessageKind::Command, name: "Hello", id: 1, payload: "HelloCommand", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, fields: HELLO_FIELDS, outcome_events: HELLO_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "HelloAccept", id: 2, payload: "HelloAcceptCommand", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: HELLO_ACCEPT_FIELDS, outcome_events: HELLO_ACCEPT_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "Open", id: 3, payload: "OpenCommand", state: "Ready", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, fields: OPEN_FIELDS, outcome_events: OPEN_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "ProvideData", id: 4, payload: "ProvideDataCommand", state: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 16, max_payload_bytes: 16777216, fields: PROVIDE_DATA_FIELDS, outcome_events: PROVIDE_DATA_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "RegisterCanvas", id: 5, payload: "RegisterCanvasCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 1, max_payload_bytes: 256, fields: REGISTER_CANVAS_FIELDS, outcome_events: REGISTER_CANVAS_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseCanvas", id: 6, payload: "ReleaseCanvasCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: RELEASE_CANVAS_FIELDS, outcome_events: RELEASE_CANVAS_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "SetViewport", id: 7, payload: "SetViewportCommand", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 8192, fields: SET_VIEWPORT_FIELDS, outcome_events: SET_VIEWPORT_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "Cancel", id: 8, payload: "CancelCommand", state: "ActiveRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: CANCEL_FIELDS, outcome_events: CANCEL_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseSurface", id: 9, payload: "ReleaseSurfaceCommand", state: "SurfaceAlive", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: RELEASE_SURFACE_FIELDS, outcome_events: RELEASE_SURFACE_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "CloseSession", id: 10, payload: "CloseSessionCommand", state: "NonClosed", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 64, fields: CLOSE_SESSION_FIELDS, outcome_events: CLOSE_SESSION_OUTCOME_EVENTS },
-    MessageDescriptor { kind: MessageKind::Command, name: "Shutdown", id: 11, payload: "ShutdownCommand", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SHUTDOWN_FIELDS, outcome_events: SHUTDOWN_OUTCOME_EVENTS },
+    MessageDescriptor { kind: MessageKind::Command, name: "Hello", id: 1, payload: "HelloCommand", state_precondition: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 54, required_capability: 0, fields: HELLO_FIELDS, outcomes: HELLO_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "HelloAccept", id: 2, payload: "HelloAcceptCommand", state_precondition: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 29, required_capability: 0, fields: HELLO_ACCEPT_FIELDS, outcomes: HELLO_ACCEPT_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "Open", id: 3, payload: "OpenCommand", state_precondition: "Ready", correlation: "OpenRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, maximum_encoded_payload_bytes: 100, required_capability: 0, fields: OPEN_FIELDS, outcomes: OPEN_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "ProvideData", id: 4, payload: "ProvideDataCommand", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 1, max_transfer_slots: 16, max_payload_bytes: 512, maximum_encoded_payload_bytes: 503, required_capability: 0, fields: PROVIDE_DATA_FIELDS, outcomes: PROVIDE_DATA_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "SetViewport", id: 7, payload: "SetViewportCommand", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 8192, maximum_encoded_payload_bytes: 5583, required_capability: 0, fields: SET_VIEWPORT_FIELDS, outcomes: SET_VIEWPORT_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "Cancel", id: 8, payload: "CancelCommand", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0, fields: CANCEL_FIELDS, outcomes: CANCEL_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "ReleaseSurface", id: 9, payload: "ReleaseSurfaceCommand", state_precondition: "SurfaceAliveOrReclaimed", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0, fields: RELEASE_SURFACE_FIELDS, outcomes: RELEASE_SURFACE_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "CloseSession", id: 10, payload: "CloseSessionCommand", state_precondition: "NonClosedOrClosed", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 64, maximum_encoded_payload_bytes: 19, required_capability: 0, fields: CLOSE_SESSION_FIELDS, outcomes: CLOSE_SESSION_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "Shutdown", id: 11, payload: "ShutdownCommand", state_precondition: "ReadyOrDrainingOrStopped", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 15, required_capability: 0, fields: SHUTDOWN_FIELDS, outcomes: SHUTDOWN_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "FailData", id: 12, payload: "FailDataCommand", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 110, required_capability: 0, fields: FAIL_DATA_FIELDS, outcomes: FAIL_DATA_OUTCOMES },
+    MessageDescriptor { kind: MessageKind::Command, name: "GetPageMetrics", id: 13, payload: "GetPageMetricsCommand", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 41, required_capability: 0, fields: GET_PAGE_METRICS_FIELDS, outcomes: GET_PAGE_METRICS_OUTCOMES },
 ];
 
 pub const EVENT_DESCRIPTORS: &[MessageDescriptor] = &[
-    MessageDescriptor { kind: MessageKind::Event, name: "Ready", id: 101, payload: "ReadyEvent", state: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: READY_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "NeedData", id: 102, payload: "NeedDataEvent", state: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, fields: NEED_DATA_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state: "Opening", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, fields: DOCUMENT_READY_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "CanvasReleased", id: 104, payload: "CanvasReleasedEvent", state: "Ready", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: CANVAS_RELEASED_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 4096, fields: CAPABILITY_REPORTED_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, fields: SURFACE_READY_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state: "ActiveRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: REQUEST_CANCELLED_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state: "Any", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: REQUEST_FAILED_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "SessionClosed", id: 109, payload: "SessionClosedEvent", state: "Closing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SESSION_CLOSED_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "WorkerStopped", id: 110, payload: "WorkerStoppedEvent", state: "Draining", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: WORKER_STOPPED_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "WorkerFault", id: 111, payload: "WorkerFaultEvent", state: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: WORKER_FAULT_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "ProtocolFault", id: 112, payload: "ProtocolFaultEvent", state: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: true, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, fields: PROTOCOL_FAULT_FIELDS, outcome_events: &[] },
-    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReclaimed", id: 113, payload: "SurfaceReclaimedEvent", state: "Ready", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, terminal: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, fields: SURFACE_RECLAIMED_FIELDS, outcome_events: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "Ready", id: 101, payload: "ReadyEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 101, required_capability: 0, fields: READY_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "NeedData", id: 102, payload: "NeedDataEvent", state_precondition: "OpeningOrReady", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 344, required_capability: 0, fields: NEED_DATA_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "DocumentReady", id: 103, payload: "DocumentReadyEvent", state_precondition: "Opening", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 55, required_capability: 0, fields: DOCUMENT_READY_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "CapabilityReported", id: 105, payload: "CapabilityReportedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 6520, required_capability: 0, fields: CAPABILITY_REPORTED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReady", id: 106, payload: "SurfaceReadyEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 1, max_payload_bytes: 2048, maximum_encoded_payload_bytes: 282, required_capability: 0, fields: SURFACE_READY_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "RequestCancelled", id: 107, payload: "RequestCancelledEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 35, required_capability: 0, fields: REQUEST_CANCELLED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "RequestFailed", id: 108, payload: "RequestFailedEvent", state_precondition: "Any", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0, fields: REQUEST_FAILED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SessionClosed", id: 109, payload: "SessionClosedEvent", state_precondition: "Closing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 27, required_capability: 0, fields: SESSION_CLOSED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "WorkerStopped", id: 110, payload: "WorkerStoppedEvent", state_precondition: "DrainingOrStopped", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 19, required_capability: 0, fields: WORKER_STOPPED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "WorkerFault", id: 111, payload: "WorkerFaultEvent", state_precondition: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 26, required_capability: 0, fields: WORKER_FAULT_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "ProtocolFault", id: 112, payload: "ProtocolFaultEvent", state_precondition: "Any", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 26, required_capability: 0, fields: PROTOCOL_FAULT_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReclaimed", id: 113, payload: "SurfaceReclaimedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0, fields: SURFACE_RECLAIMED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "EngineHello", id: 114, payload: "EngineHelloEvent", state_precondition: "Starting", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 62, required_capability: 0, fields: ENGINE_HELLO_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "DataFailed", id: 115, payload: "DataFailedEvent", state_precondition: "OpeningOrReady", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 256, maximum_encoded_payload_bytes: 42, required_capability: 0, fields: DATA_FAILED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "PageMetrics", id: 116, payload: "PageMetricsEvent", state_precondition: "Ready", correlation: "SessionRequest", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 16384, maximum_encoded_payload_bytes: 4463, required_capability: 0, fields: PAGE_METRICS_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "GenerationPlanned", id: 117, payload: "GenerationPlannedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 65536, maximum_encoded_payload_bytes: 21687, required_capability: 0, fields: GENERATION_PLANNED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "GenerationCompleted", id: 118, payload: "GenerationCompletedEvent", state_precondition: "Ready", correlation: "Generation", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Required }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 512, maximum_encoded_payload_bytes: 48, required_capability: 0, fields: GENERATION_COMPLETED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "CancelAcknowledged", id: 121, payload: "CancelAcknowledgedEvent", state_precondition: "ActiveOrTerminalRequest", correlation: "Request", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Optional, request: CorrelationRequirement::Required, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0, fields: CANCEL_ACKNOWLEDGED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "SurfaceReleaseAcknowledged", id: 123, payload: "SurfaceReleaseAcknowledgedEvent", state_precondition: "ReadyOrClosing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 36, required_capability: 0, fields: SURFACE_RELEASE_ACKNOWLEDGED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "CloseSessionAcknowledged", id: 124, payload: "CloseSessionAcknowledgedEvent", state_precondition: "Closing", correlation: "Session", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Required, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 28, required_capability: 0, fields: CLOSE_SESSION_ACKNOWLEDGED_FIELDS, outcomes: &[] },
+    MessageDescriptor { kind: MessageKind::Event, name: "ShutdownAcknowledged", id: 125, payload: "ShutdownAcknowledgedEvent", state_precondition: "DrainingOrStopped", correlation: "Worker", correlation_shape: CorrelationShape { worker: CorrelationRequirement::Required, session: CorrelationRequirement::Forbidden, request: CorrelationRequirement::Forbidden, generation: CorrelationRequirement::Forbidden }, replayable: false, allowed_flags: 0, min_transfer_slots: 0, max_transfer_slots: 0, max_payload_bytes: 128, maximum_encoded_payload_bytes: 20, required_capability: 0, fields: SHUTDOWN_ACKNOWLEDGED_FIELDS, outcomes: &[] },
 ];
 
 pub fn descriptor_by_id(id: u16) -> Option<&'static MessageDescriptor> {
@@ -1122,6 +1736,22 @@ let contributors_accounted = match self.contributors_completeness {
 CollectionCompleteness::Complete => contributors_len == Some(self.contributors_total),
 CollectionCompleteness::Truncated => contributors_len.is_some_and(|len| len < self.contributors_total),
 };
+let contributor_ids: std::collections::BTreeSet<u32> = self.contributors.iter().map(|value| value.id).collect();
+let requirement_ids: std::collections::BTreeSet<u32> = self.missing.iter().map(|value| value.id).collect();
+let bounded_and_canonical = self.missing.len() <= CAPABILITY_DECISION_MISSING_MAX_COUNT
+&& self.contributors.len() <= CAPABILITY_DECISION_CONTRIBUTORS_MAX_COUNT
+&& self.missing.windows(2).all(|pair| pair[0].id < pair[1].id)
+&& self.contributors.windows(2).all(|pair| pair[0].id < pair[1].id)
+&& requirement_ids.len() == self.missing.len()
+&& contributor_ids.len() == self.contributors.len()
+&& self.missing.iter().all(|requirement| requirement.id != 0
+&& requirement.dependencies.len() <= CAPABILITY_REQUIREMENT_DEPENDENCIES_MAX_COUNT
+&& requirement.contributor_ids.len() <= CAPABILITY_REQUIREMENT_CONTRIBUTOR_IDS_MAX_COUNT
+&& requirement.dependencies.windows(2).all(|pair| pair[0] < pair[1])
+&& requirement.contributor_ids.windows(2).all(|pair| pair[0] < pair[1])
+&& requirement.dependencies.iter().all(|id| *id != requirement.id && requirement_ids.contains(id))
+&& requirement.contributor_ids.iter().all(|id| contributor_ids.contains(id)))
+&& self.contributors.iter().all(|contributor| contributor.id != 0);
 let status_valid = match self.status {
 SupportStatus::Supported => self.missing_total == 0
 && self.missing.is_empty()
@@ -1130,6 +1760,3844 @@ SupportStatus::Supported => self.missing_total == 0
 SupportStatus::Unsupported => self.rejection_code.is_none(),
 SupportStatus::Rejected => self.rejection_code.is_some(),
 };
-missing_accounted && contributors_accounted && status_valid
+missing_accounted && contributors_accounted && bounded_and_canonical && status_valid
 }
+}
+
+// Canonical fixed_le_v1 typed payload codec.
+pub const DEFAULT_PAYLOAD_CODEC_MAX_DEPTH: usize = 64;
+pub const DEFAULT_PAYLOAD_CODEC_MAX_CONTAINER_ITEMS: usize = 1048576;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadCodecErrorCode {
+    LimitExceeded = 1,
+    Truncated = 2,
+    TrailingBytes = 3,
+    InvalidBooleanMarker = 4,
+    InvalidOptionalMarker = 5,
+    UnknownTag = 6,
+    UnknownMessage = 7,
+    InvalidValue = 8,
+    SharedArrayBuffer = 9,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PayloadCodecError {
+    pub code: PayloadCodecErrorCode,
+    pub offset: usize,
+}
+
+impl PayloadCodecError {
+    const fn new(code: PayloadCodecErrorCode, offset: usize) -> Self {
+        Self { code, offset }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PayloadCodecLimits {
+    pub max_depth: usize,
+    pub max_bytes: usize,
+    pub max_container_items: usize,
+}
+
+impl PayloadCodecLimits {
+    pub const fn new(max_depth: usize, max_bytes: usize, max_container_items: usize) -> Self {
+        Self { max_depth, max_bytes, max_container_items }
+    }
+
+    pub const fn protocol_default() -> Self {
+        Self {
+            max_depth: DEFAULT_PAYLOAD_CODEC_MAX_DEPTH,
+            max_bytes: MAX_MESSAGE_BYTES as usize,
+            max_container_items: DEFAULT_PAYLOAD_CODEC_MAX_CONTAINER_ITEMS,
+        }
+    }
+
+    const fn capped_bytes(self, maximum: usize) -> Self {
+        Self {
+            max_depth: self.max_depth,
+            max_bytes: if self.max_bytes < maximum { self.max_bytes } else { maximum },
+            max_container_items: self.max_container_items,
+        }
+    }
+
+    const fn valid(self) -> bool {
+        self.max_depth != 0 && self.max_bytes != 0 && self.max_container_items != 0
+    }
+}
+
+struct PayloadWriter {
+    bytes: Vec<u8>,
+    limits: PayloadCodecLimits,
+    remaining_container_items: usize,
+}
+
+impl PayloadWriter {
+    fn new(limits: PayloadCodecLimits) -> Result<Self, PayloadCodecError> {
+        if !limits.valid() {
+            return Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0));
+        }
+        Ok(Self {
+            bytes: Vec::new(),
+            limits,
+            remaining_container_items: limits.max_container_items,
+        })
+    }
+
+    fn offset(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn check_depth(&self, depth: usize) -> Result<(), PayloadCodecError> {
+        if depth > self.limits.max_depth {
+            Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, self.offset()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn charge_container(&mut self, count: usize) -> Result<(), PayloadCodecError> {
+        if count > self.remaining_container_items {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::LimitExceeded,
+                self.offset(),
+            ));
+        }
+        self.remaining_container_items -= count;
+        Ok(())
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), PayloadCodecError> {
+        let length = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, self.offset()))?;
+        if length > self.limits.max_bytes {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::LimitExceeded,
+                self.offset(),
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn write_optional(&mut self, present: bool) -> Result<(), PayloadCodecError> {
+        if present {
+            self.charge_container(1)?;
+        }
+        self.write(&[u8::from(present)])
+    }
+
+    fn write_count(&mut self, count: usize, maximum: u32) -> Result<(), PayloadCodecError> {
+        let offset = self.offset();
+        let count_u32 = u32::try_from(count)
+            .map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, offset))?;
+        if count_u32 > maximum {
+            return Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, offset));
+        }
+        self.charge_container(count)?;
+        self.write(&count_u32.to_le_bytes())
+    }
+
+    #[allow(dead_code)]
+    fn write_bytes(&mut self, value: &[u8], maximum: u32) -> Result<(), PayloadCodecError> {
+        self.write_count(value.len(), maximum)?;
+        self.write(value)
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+struct PayloadReader<'a> {
+    input: &'a [u8],
+    offset: usize,
+    limits: PayloadCodecLimits,
+    remaining_container_items: usize,
+}
+
+impl<'a> PayloadReader<'a> {
+    fn new(input: &'a [u8], limits: PayloadCodecLimits) -> Result<Self, PayloadCodecError> {
+        if !limits.valid() {
+            return Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0));
+        }
+        if input.len() > limits.max_bytes {
+            return Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0));
+        }
+        Ok(Self {
+            input,
+            offset: 0,
+            limits,
+            remaining_container_items: limits.max_container_items,
+        })
+    }
+
+    fn offset(&self) -> usize {
+        self.offset
+    }
+
+    fn check_depth(&self, depth: usize) -> Result<(), PayloadCodecError> {
+        if depth > self.limits.max_depth {
+            Err(PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, self.offset))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn charge_container(&mut self, count: usize) -> Result<(), PayloadCodecError> {
+        if count > self.remaining_container_items {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::LimitExceeded,
+                self.offset,
+            ));
+        }
+        self.remaining_container_items -= count;
+        Ok(())
+    }
+
+    fn take(&mut self, count: usize) -> Result<&'a [u8], PayloadCodecError> {
+        let start = self.offset;
+        let end = start
+            .checked_add(count)
+            .ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::Truncated, start))?;
+        let bytes = self
+            .input
+            .get(start..end)
+            .ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::Truncated, start))?;
+        self.offset = end;
+        Ok(bytes)
+    }
+
+    fn read_u8(&mut self) -> Result<u8, PayloadCodecError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn read_u16(&mut self) -> Result<u16, PayloadCodecError> {
+        let mut bytes = [0_u8; 2];
+        bytes.copy_from_slice(self.take(2)?);
+        Ok(u16::from_le_bytes(bytes))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, PayloadCodecError> {
+        let mut bytes = [0_u8; 4];
+        bytes.copy_from_slice(self.take(4)?);
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, PayloadCodecError> {
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(self.take(8)?);
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn read_i32(&mut self) -> Result<i32, PayloadCodecError> {
+        let mut bytes = [0_u8; 4];
+        bytes.copy_from_slice(self.take(4)?);
+        Ok(i32::from_le_bytes(bytes))
+    }
+
+    fn read_bool(&mut self) -> Result<bool, PayloadCodecError> {
+        let offset = self.offset;
+        match self.read_u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidBooleanMarker, offset)),
+        }
+    }
+
+    fn read_optional(&mut self) -> Result<bool, PayloadCodecError> {
+        let offset = self.offset;
+        match self.read_u8()? {
+            0 => Ok(false),
+            1 => {
+                self.charge_container(1)?;
+                Ok(true)
+            }
+            _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidOptionalMarker, offset)),
+        }
+    }
+
+    fn read_fixed_16(&mut self) -> Result<[u8; 16], PayloadCodecError> {
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(self.take(16)?);
+        Ok(bytes)
+    }
+
+    fn read_fixed_32(&mut self) -> Result<[u8; 32], PayloadCodecError> {
+        let mut bytes = [0_u8; 32];
+        bytes.copy_from_slice(self.take(32)?);
+        Ok(bytes)
+    }
+
+    fn read_count(
+        &mut self,
+        maximum: u32,
+        minimum_item_bytes: usize,
+    ) -> Result<usize, PayloadCodecError> {
+        let count_offset = self.offset;
+        let count_u32 = self.read_u32()?;
+        if count_u32 > maximum {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::LimitExceeded,
+                count_offset,
+            ));
+        }
+        let count = usize::try_from(count_u32)
+            .map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, count_offset))?;
+        self.charge_container(count)?;
+        let minimum = count
+            .checked_mul(minimum_item_bytes)
+            .ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, count_offset))?;
+        if minimum > self.input.len().saturating_sub(self.offset) {
+            return Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::Truncated,
+                self.offset,
+            ));
+        }
+        Ok(count)
+    }
+
+    #[allow(dead_code)]
+    fn read_bytes(&mut self, maximum: u32) -> Result<Vec<u8>, PayloadCodecError> {
+        let count = self.read_count(maximum, 1)?;
+        Ok(self.take(count)?.to_vec())
+    }
+
+    fn finish(&self) -> Result<(), PayloadCodecError> {
+        if self.offset == self.input.len() {
+            Ok(())
+        } else {
+            Err(PayloadCodecError::new(
+                PayloadCodecErrorCode::TrailingBytes,
+                self.offset,
+            ))
+        }
+    }
+}
+const _: () = { assert!(MAX_MESSAGE_BYTES == 16777216); };
+
+fn payload_encode_worker_id_into(value: &WorkerId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_worker_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<WorkerId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(WorkerId::new(reader.read_u64()?))
+}
+
+pub fn encode_worker_id_payload(value: &WorkerId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_worker_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_worker_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<WorkerId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_worker_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_session_id_into(value: &SessionId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_session_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SessionId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SessionId::new(reader.read_u64()?))
+}
+
+pub fn encode_session_id_payload(value: &SessionId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_session_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_session_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SessionId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_session_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_request_id_into(value: &RequestId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_request_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RequestId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RequestId::new(reader.read_u64()?))
+}
+
+pub fn encode_request_id_payload(value: &RequestId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_request_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_request_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RequestId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_request_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_data_ticket_into(value: &DataTicket, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_data_ticket_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DataTicket, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(DataTicket::new(reader.read_u64()?))
+}
+
+pub fn encode_data_ticket_payload(value: &DataTicket, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_data_ticket_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_data_ticket_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DataTicket, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_data_ticket_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_id_into(value: &SurfaceId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_surface_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceId::new(reader.read_u64()?))
+}
+
+pub fn encode_surface_id_payload(value: &SurfaceId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_memory_epoch_into(value: &MemoryEpoch, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_memory_epoch_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<MemoryEpoch, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(MemoryEpoch::new(reader.read_u32()?))
+}
+
+pub fn encode_memory_epoch_payload(value: &MemoryEpoch, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_memory_epoch_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_memory_epoch_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<MemoryEpoch, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_memory_epoch_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_renderer_epoch_into(value: &RendererEpoch, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_renderer_epoch_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RendererEpoch, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RendererEpoch::new(reader.read_u32()?))
+}
+
+pub fn encode_renderer_epoch_payload(value: &RendererEpoch, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_renderer_epoch_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_renderer_epoch_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RendererEpoch, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_renderer_epoch_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_render_config_hash_into(value: &RenderConfigHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(value.digest())?;
+    Ok(())
+}
+
+fn payload_decode_render_config_hash_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RenderConfigHash, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RenderConfigHash::new(reader.read_fixed_32()?))
+}
+
+pub fn encode_render_config_hash_payload(value: &RenderConfigHash, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_render_config_hash_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_render_config_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RenderConfigHash, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_render_config_hash_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_scene_hash_into(value: &SceneHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(value.digest())?;
+    Ok(())
+}
+
+fn payload_decode_scene_hash_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SceneHash, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SceneHash::new(reader.read_fixed_32()?))
+}
+
+pub fn encode_scene_hash_payload(value: &SceneHash, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_scene_hash_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_scene_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SceneHash, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_scene_hash_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_render_plan_id_into(value: &RenderPlanId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_render_plan_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RenderPlanId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RenderPlanId::new(reader.read_u64()?))
+}
+
+pub fn encode_render_plan_id_payload(value: &RenderPlanId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_render_plan_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_render_plan_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RenderPlanId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_render_plan_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_render_plan_hash_into(value: &RenderPlanHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(value.digest())?;
+    Ok(())
+}
+
+fn payload_decode_render_plan_hash_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RenderPlanHash, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RenderPlanHash::new(reader.read_fixed_32()?))
+}
+
+pub fn encode_render_plan_hash_payload(value: &RenderPlanHash, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_render_plan_hash_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_render_plan_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RenderPlanHash, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_render_plan_hash_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_decision_hash_into(value: &CapabilityDecisionHash, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(value.digest())?;
+    Ok(())
+}
+
+fn payload_decode_capability_decision_hash_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityDecisionHash, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityDecisionHash::new(reader.read_fixed_32()?))
+}
+
+pub fn encode_capability_decision_hash_payload(value: &CapabilityDecisionHash, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_decision_hash_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_decision_hash_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityDecisionHash, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_decision_hash_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_diagnostic_id_into(value: &DiagnosticId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    let primitive = value.value();
+    writer.write(&(*(&primitive)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_diagnostic_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DiagnosticId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(DiagnosticId::new(reader.read_u64()?))
+}
+
+pub fn encode_diagnostic_id_payload(value: &DiagnosticId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_diagnostic_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_diagnostic_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DiagnosticId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_diagnostic_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_endpoint_role_into(value: &EndpointRole, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        EndpointRole::Host => writer.write(&[1]),
+        EndpointRole::Engine => writer.write(&[2]),
+    }
+}
+
+fn payload_decode_endpoint_role_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EndpointRole, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(EndpointRole::Host),
+        2_u8 => Ok(EndpointRole::Engine),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_endpoint_role_payload(value: &EndpointRole, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_endpoint_role_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_endpoint_role_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EndpointRole, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_endpoint_role_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_endpoint_capability_into(value: &EndpointCapability, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        EndpointCapability::TransferableArrayBuffer => writer.write(&(1_u64).to_le_bytes()),
+        EndpointCapability::TransferableImageBitmap => writer.write(&(2_u64).to_le_bytes()),
+        EndpointCapability::SharedArrayBuffer => writer.write(&(4_u64).to_le_bytes()),
+        EndpointCapability::SharedMemory => writer.write(&(8_u64).to_le_bytes()),
+        EndpointCapability::LocalMemory => writer.write(&(16_u64).to_le_bytes()),
+    }
+}
+
+fn payload_decode_endpoint_capability_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EndpointCapability, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u64()?;
+    match tag {
+        1_u64 => Ok(EndpointCapability::TransferableArrayBuffer),
+        2_u64 => Ok(EndpointCapability::TransferableImageBitmap),
+        4_u64 => Ok(EndpointCapability::SharedArrayBuffer),
+        8_u64 => Ok(EndpointCapability::SharedMemory),
+        16_u64 => Ok(EndpointCapability::LocalMemory),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_endpoint_capability_payload(value: &EndpointCapability, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_endpoint_capability_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_endpoint_capability_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EndpointCapability, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_endpoint_capability_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_engine_execution_capability_into(value: &EngineExecutionCapability, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        EngineExecutionCapability::OffscreenCanvasStaging => writer.write(&(1_u64).to_le_bytes()),
+    }
+}
+
+fn payload_decode_engine_execution_capability_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EngineExecutionCapability, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u64()?;
+    match tag {
+        1_u64 => Ok(EngineExecutionCapability::OffscreenCanvasStaging),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_engine_execution_capability_payload(value: &EngineExecutionCapability, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_engine_execution_capability_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_engine_execution_capability_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EngineExecutionCapability, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_engine_execution_capability_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_profile_id_into(value: &CapabilityProfileId, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        CapabilityProfileId::BaselineNative => writer.write(&(1_u32).to_le_bytes()),
+    }
+}
+
+fn payload_decode_capability_profile_id_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityProfileId, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u32()?;
+    match tag {
+        1_u32 => Ok(CapabilityProfileId::BaselineNative),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_capability_profile_id_payload(value: &CapabilityProfileId, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_profile_id_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_profile_id_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityProfileId, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_profile_id_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_output_profile_into(value: &OutputProfile, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        OutputProfile::Srgb => writer.write(&(1_u16).to_le_bytes()),
+    }
+}
+
+fn payload_decode_output_profile_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<OutputProfile, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u16()?;
+    match tag {
+        1_u16 => Ok(OutputProfile::Srgb),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_output_profile_payload(value: &OutputProfile, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_output_profile_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_output_profile_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<OutputProfile, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_output_profile_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_pixel_format_into(value: &PixelFormat, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        PixelFormat::Rgba8 => writer.write(&[1]),
+    }
+}
+
+fn payload_decode_pixel_format_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PixelFormat, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(PixelFormat::Rgba8),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_pixel_format_payload(value: &PixelFormat, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_pixel_format_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_pixel_format_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PixelFormat, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_pixel_format_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_alpha_mode_into(value: &AlphaMode, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        AlphaMode::Straight => writer.write(&[1]),
+        AlphaMode::Premultiplied => writer.write(&[2]),
+    }
+}
+
+fn payload_decode_alpha_mode_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<AlphaMode, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(AlphaMode::Straight),
+        2_u8 => Ok(AlphaMode::Premultiplied),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_alpha_mode_payload(value: &AlphaMode, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_alpha_mode_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_alpha_mode_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<AlphaMode, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_alpha_mode_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_source_failure_code_into(value: &SourceFailureCode, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        SourceFailureCode::SourceChanged => writer.write(&[1]),
+        SourceFailureCode::Unavailable => writer.write(&[2]),
+        SourceFailureCode::PermissionDenied => writer.write(&[3]),
+        SourceFailureCode::Timeout => writer.write(&[4]),
+        SourceFailureCode::Truncated => writer.write(&[5]),
+        SourceFailureCode::InvalidRangeResponse => writer.write(&[6]),
+        SourceFailureCode::TransportFailure => writer.write(&[7]),
+    }
+}
+
+fn payload_decode_source_failure_code_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SourceFailureCode, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(SourceFailureCode::SourceChanged),
+        2_u8 => Ok(SourceFailureCode::Unavailable),
+        3_u8 => Ok(SourceFailureCode::PermissionDenied),
+        4_u8 => Ok(SourceFailureCode::Timeout),
+        5_u8 => Ok(SourceFailureCode::Truncated),
+        6_u8 => Ok(SourceFailureCode::InvalidRangeResponse),
+        7_u8 => Ok(SourceFailureCode::TransportFailure),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_source_failure_code_payload(value: &SourceFailureCode, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_source_failure_code_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_source_failure_code_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SourceFailureCode, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_source_failure_code_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_generation_completion_status_into(value: &GenerationCompletionStatus, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        GenerationCompletionStatus::Completed => writer.write(&[1]),
+        GenerationCompletionStatus::Superseded => writer.write(&[2]),
+        GenerationCompletionStatus::Cancelled => writer.write(&[3]),
+        GenerationCompletionStatus::Failed => writer.write(&[4]),
+    }
+}
+
+fn payload_decode_generation_completion_status_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<GenerationCompletionStatus, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(GenerationCompletionStatus::Completed),
+        2_u8 => Ok(GenerationCompletionStatus::Superseded),
+        3_u8 => Ok(GenerationCompletionStatus::Cancelled),
+        4_u8 => Ok(GenerationCompletionStatus::Failed),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_generation_completion_status_payload(value: &GenerationCompletionStatus, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_generation_completion_status_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_generation_completion_status_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<GenerationCompletionStatus, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_generation_completion_status_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_operation_ack_status_into(value: &OperationAckStatus, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        OperationAckStatus::Applied => writer.write(&[1]),
+        OperationAckStatus::AlreadyApplied => writer.write(&[2]),
+        OperationAckStatus::AlreadyTerminal => writer.write(&[3]),
+        OperationAckStatus::UnknownTarget => writer.write(&[4]),
+    }
+}
+
+fn payload_decode_operation_ack_status_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<OperationAckStatus, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(OperationAckStatus::Applied),
+        2_u8 => Ok(OperationAckStatus::AlreadyApplied),
+        3_u8 => Ok(OperationAckStatus::AlreadyTerminal),
+        4_u8 => Ok(OperationAckStatus::UnknownTarget),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_operation_ack_status_payload(value: &OperationAckStatus, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_operation_ack_status_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_operation_ack_status_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<OperationAckStatus, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_operation_ack_status_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_quality_policy_into(value: &QualityPolicy, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        QualityPolicy::Preview => writer.write(&[1]),
+        QualityPolicy::Full => writer.write(&[2]),
+    }
+}
+
+fn payload_decode_quality_policy_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<QualityPolicy, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(QualityPolicy::Preview),
+        2_u8 => Ok(QualityPolicy::Full),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_quality_policy_payload(value: &QualityPolicy, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_quality_policy_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_quality_policy_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<QualityPolicy, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_quality_policy_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_data_priority_into(value: &DataPriority, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        DataPriority::BackgroundPrefetch => writer.write(&[1]),
+        DataPriority::Metadata => writer.write(&[2]),
+        DataPriority::AdjacentPage => writer.write(&[3]),
+        DataPriority::FirstViewportResource => writer.write(&[4]),
+        DataPriority::VisiblePage => writer.write(&[5]),
+    }
+}
+
+fn payload_decode_data_priority_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DataPriority, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(DataPriority::BackgroundPrefetch),
+        2_u8 => Ok(DataPriority::Metadata),
+        3_u8 => Ok(DataPriority::AdjacentPage),
+        4_u8 => Ok(DataPriority::FirstViewportResource),
+        5_u8 => Ok(DataPriority::VisiblePage),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_data_priority_payload(value: &DataPriority, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_data_priority_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_data_priority_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DataPriority, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_data_priority_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_data_attachment_role_into(value: &DataAttachmentRole, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        DataAttachmentRole::ImmutableRangeBytes => writer.write(&[1]),
+    }
+}
+
+fn payload_decode_data_attachment_role_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DataAttachmentRole, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(DataAttachmentRole::ImmutableRangeBytes),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_data_attachment_role_payload(value: &DataAttachmentRole, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_data_attachment_role_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_data_attachment_role_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DataAttachmentRole, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_data_attachment_role_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_page_rotation_into(value: &PageRotation, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        PageRotation::Degrees0 => writer.write(&[1]),
+        PageRotation::Degrees90 => writer.write(&[2]),
+        PageRotation::Degrees180 => writer.write(&[3]),
+        PageRotation::Degrees270 => writer.write(&[4]),
+    }
+}
+
+fn payload_decode_page_rotation_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PageRotation, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(PageRotation::Degrees0),
+        2_u8 => Ok(PageRotation::Degrees90),
+        3_u8 => Ok(PageRotation::Degrees180),
+        4_u8 => Ok(PageRotation::Degrees270),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_page_rotation_payload(value: &PageRotation, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_page_rotation_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_page_rotation_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PageRotation, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_page_rotation_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_page_coordinate_space_into(value: &PageCoordinateSpace, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        PageCoordinateSpace::PdfPointsBottomLeft => writer.write(&[1]),
+    }
+}
+
+fn payload_decode_page_coordinate_space_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PageCoordinateSpace, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(PageCoordinateSpace::PdfPointsBottomLeft),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_page_coordinate_space_payload(value: &PageCoordinateSpace, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_page_coordinate_space_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_page_coordinate_space_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PageCoordinateSpace, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_page_coordinate_space_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_coordinate_space_into(value: &SurfaceCoordinateSpace, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        SurfaceCoordinateSpace::DevicePixelsTopLeft => writer.write(&[1]),
+    }
+}
+
+fn payload_decode_surface_coordinate_space_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceCoordinateSpace, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(SurfaceCoordinateSpace::DevicePixelsTopLeft),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_surface_coordinate_space_payload(value: &SurfaceCoordinateSpace, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_coordinate_space_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_coordinate_space_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceCoordinateSpace, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_coordinate_space_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_reclaim_reason_into(value: &SurfaceReclaimReason, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        SurfaceReclaimReason::ReleasedByHost => writer.write(&[1]),
+        SurfaceReclaimReason::GenerationReplaced => writer.write(&[2]),
+        SurfaceReclaimReason::SessionClosed => writer.write(&[3]),
+        SurfaceReclaimReason::MemoryPressure => writer.write(&[4]),
+        SurfaceReclaimReason::RendererRestarted => writer.write(&[5]),
+    }
+}
+
+fn payload_decode_surface_reclaim_reason_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceReclaimReason, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(SurfaceReclaimReason::ReleasedByHost),
+        2_u8 => Ok(SurfaceReclaimReason::GenerationReplaced),
+        3_u8 => Ok(SurfaceReclaimReason::SessionClosed),
+        4_u8 => Ok(SurfaceReclaimReason::MemoryPressure),
+        5_u8 => Ok(SurfaceReclaimReason::RendererRestarted),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_surface_reclaim_reason_payload(value: &SurfaceReclaimReason, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_reclaim_reason_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_reclaim_reason_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceReclaimReason, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_reclaim_reason_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_support_status_into(value: &SupportStatus, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        SupportStatus::Supported => writer.write(&[1]),
+        SupportStatus::Unsupported => writer.write(&[2]),
+        SupportStatus::Rejected => writer.write(&[3]),
+    }
+}
+
+fn payload_decode_support_status_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SupportStatus, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(SupportStatus::Supported),
+        2_u8 => Ok(SupportStatus::Unsupported),
+        3_u8 => Ok(SupportStatus::Rejected),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_support_status_payload(value: &SupportStatus, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_support_status_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_support_status_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SupportStatus, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_support_status_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_collection_completeness_into(value: &CollectionCompleteness, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        CollectionCompleteness::Complete => writer.write(&[1]),
+        CollectionCompleteness::Truncated => writer.write(&[2]),
+    }
+}
+
+fn payload_decode_collection_completeness_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CollectionCompleteness, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(CollectionCompleteness::Complete),
+        2_u8 => Ok(CollectionCompleteness::Truncated),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_collection_completeness_payload(value: &CollectionCompleteness, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_collection_completeness_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_collection_completeness_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CollectionCompleteness, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_collection_completeness_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_native_backend_into(value: &NativeBackend, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        NativeBackend::ReferenceCpu => writer.write(&[1]),
+        NativeBackend::FastCpu => writer.write(&[2]),
+    }
+}
+
+fn payload_decode_native_backend_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<NativeBackend, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(NativeBackend::ReferenceCpu),
+        2_u8 => Ok(NativeBackend::FastCpu),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_native_backend_payload(value: &NativeBackend, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_native_backend_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_native_backend_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<NativeBackend, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_native_backend_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_contributor_kind_into(value: &CapabilityContributorKind, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        CapabilityContributorKind::Scene => writer.write(&[1]),
+        CapabilityContributorKind::Renderer => writer.write(&[2]),
+        CapabilityContributorKind::Policy => writer.write(&[3]),
+        CapabilityContributorKind::Runtime => writer.write(&[4]),
+    }
+}
+
+fn payload_decode_capability_contributor_kind_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityContributorKind, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(CapabilityContributorKind::Scene),
+        2_u8 => Ok(CapabilityContributorKind::Renderer),
+        3_u8 => Ok(CapabilityContributorKind::Policy),
+        4_u8 => Ok(CapabilityContributorKind::Runtime),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_capability_contributor_kind_payload(value: &CapabilityContributorKind, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_contributor_kind_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_contributor_kind_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityContributorKind, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_contributor_kind_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_scope_kind_into(value: &CapabilityScopeKind, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        CapabilityScopeKind::Worker => writer.write(&[1]),
+        CapabilityScopeKind::Session => writer.write(&[2]),
+        CapabilityScopeKind::Page => writer.write(&[3]),
+        CapabilityScopeKind::Command => writer.write(&[4]),
+        CapabilityScopeKind::Resource => writer.write(&[5]),
+    }
+}
+
+fn payload_decode_capability_scope_kind_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityScopeKind, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(CapabilityScopeKind::Worker),
+        2_u8 => Ok(CapabilityScopeKind::Session),
+        3_u8 => Ok(CapabilityScopeKind::Page),
+        4_u8 => Ok(CapabilityScopeKind::Command),
+        5_u8 => Ok(CapabilityScopeKind::Resource),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_capability_scope_kind_payload(value: &CapabilityScopeKind, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_scope_kind_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_scope_kind_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityScopeKind, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_scope_kind_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_error_category_into(value: &ErrorCategory, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        ErrorCategory::Protocol => writer.write(&[1]),
+        ErrorCategory::Source => writer.write(&[2]),
+        ErrorCategory::Document => writer.write(&[3]),
+        ErrorCategory::Capability => writer.write(&[4]),
+        ErrorCategory::Resource => writer.write(&[5]),
+        ErrorCategory::Cancelled => writer.write(&[6]),
+        ErrorCategory::Internal => writer.write(&[7]),
+    }
+}
+
+fn payload_decode_error_category_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ErrorCategory, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(ErrorCategory::Protocol),
+        2_u8 => Ok(ErrorCategory::Source),
+        3_u8 => Ok(ErrorCategory::Document),
+        4_u8 => Ok(ErrorCategory::Capability),
+        5_u8 => Ok(ErrorCategory::Resource),
+        6_u8 => Ok(ErrorCategory::Cancelled),
+        7_u8 => Ok(ErrorCategory::Internal),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_error_category_payload(value: &ErrorCategory, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_error_category_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_error_category_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ErrorCategory, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_error_category_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_error_severity_into(value: &ErrorSeverity, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        ErrorSeverity::Info => writer.write(&[1]),
+        ErrorSeverity::Recoverable => writer.write(&[2]),
+        ErrorSeverity::Fatal => writer.write(&[3]),
+    }
+}
+
+fn payload_decode_error_severity_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ErrorSeverity, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(ErrorSeverity::Info),
+        2_u8 => Ok(ErrorSeverity::Recoverable),
+        3_u8 => Ok(ErrorSeverity::Fatal),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_error_severity_payload(value: &ErrorSeverity, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_error_severity_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_error_severity_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ErrorSeverity, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_error_severity_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_error_recoverability_into(value: &ErrorRecoverability, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        ErrorRecoverability::None => writer.write(&[1]),
+        ErrorRecoverability::RetryRequest => writer.write(&[2]),
+        ErrorRecoverability::RetryNativeRenderer => writer.write(&[3]),
+        ErrorRecoverability::ReopenSession => writer.write(&[4]),
+        ErrorRecoverability::RestartWorker => writer.write(&[5]),
+    }
+}
+
+fn payload_decode_error_recoverability_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ErrorRecoverability, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(ErrorRecoverability::None),
+        2_u8 => Ok(ErrorRecoverability::RetryRequest),
+        3_u8 => Ok(ErrorRecoverability::RetryNativeRenderer),
+        4_u8 => Ok(ErrorRecoverability::ReopenSession),
+        5_u8 => Ok(ErrorRecoverability::RestartWorker),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_error_recoverability_payload(value: &ErrorRecoverability, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_error_recoverability_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_error_recoverability_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ErrorRecoverability, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_error_recoverability_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_engine_error_code_into(value: &EngineErrorCode, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        EngineErrorCode::InvalidDocument => writer.write(&(1_u32).to_le_bytes()),
+        EngineErrorCode::SourceChanged => writer.write(&(2_u32).to_le_bytes()),
+        EngineErrorCode::SourceUnavailable => writer.write(&(3_u32).to_le_bytes()),
+        EngineErrorCode::InvalidPassword => writer.write(&(4_u32).to_le_bytes()),
+        EngineErrorCode::UnsupportedFeature => writer.write(&(5_u32).to_le_bytes()),
+        EngineErrorCode::ResourceLimit => writer.write(&(6_u32).to_le_bytes()),
+        EngineErrorCode::Cancelled => writer.write(&(7_u32).to_le_bytes()),
+        EngineErrorCode::StaleGeneration => writer.write(&(8_u32).to_le_bytes()),
+        EngineErrorCode::SurfaceImportFailed => writer.write(&(9_u32).to_le_bytes()),
+        EngineErrorCode::Internal => writer.write(&(10_u32).to_le_bytes()),
+        EngineErrorCode::ProtocolViolation => writer.write(&(11_u32).to_le_bytes()),
+    }
+}
+
+fn payload_decode_engine_error_code_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EngineErrorCode, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u32()?;
+    match tag {
+        1_u32 => Ok(EngineErrorCode::InvalidDocument),
+        2_u32 => Ok(EngineErrorCode::SourceChanged),
+        3_u32 => Ok(EngineErrorCode::SourceUnavailable),
+        4_u32 => Ok(EngineErrorCode::InvalidPassword),
+        5_u32 => Ok(EngineErrorCode::UnsupportedFeature),
+        6_u32 => Ok(EngineErrorCode::ResourceLimit),
+        7_u32 => Ok(EngineErrorCode::Cancelled),
+        8_u32 => Ok(EngineErrorCode::StaleGeneration),
+        9_u32 => Ok(EngineErrorCode::SurfaceImportFailed),
+        10_u32 => Ok(EngineErrorCode::Internal),
+        11_u32 => Ok(EngineErrorCode::ProtocolViolation),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_engine_error_code_payload(value: &EngineErrorCode, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_engine_error_code_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_engine_error_code_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EngineErrorCode, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_engine_error_code_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_protocol_hello_into(value: &ProtocolHello, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.major)).to_le_bytes())?;
+    writer.write(&(*(&value.minor)).to_le_bytes())?;
+    writer.write(&value.schema_hash)?;
+    payload_encode_endpoint_role_into(&value.endpoint_role, depth + 1, writer)?;
+    payload_encode_endpoint_capabilities_into(&value.capabilities, depth + 1, writer)?;
+    writer.write(&(*(&value.max_message_bytes)).to_le_bytes())?;
+    writer.write(&(*(&value.max_transfer_slots)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_protocol_hello_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ProtocolHello, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ProtocolHello {
+        major: reader.read_u16()?,
+        minor: reader.read_u16()?,
+        schema_hash: reader.read_fixed_16()?,
+        endpoint_role: payload_decode_endpoint_role_from(depth + 1, reader)?,
+        capabilities: payload_decode_endpoint_capabilities_from(depth + 1, reader)?,
+        max_message_bytes: reader.read_u32()?,
+        max_transfer_slots: reader.read_u16()?,
+    })
+}
+
+pub fn encode_protocol_hello_payload(value: &ProtocolHello, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_protocol_hello_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_protocol_hello_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ProtocolHello, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_protocol_hello_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_endpoint_capabilities_into(value: &EndpointCapabilities, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.supported)).to_le_bytes())?;
+    writer.write(&(*(&value.mandatory)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_endpoint_capabilities_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EndpointCapabilities, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(EndpointCapabilities {
+        supported: reader.read_u64()?,
+        mandatory: reader.read_u64()?,
+    })
+}
+
+pub fn encode_endpoint_capabilities_payload(value: &EndpointCapabilities, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_endpoint_capabilities_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_endpoint_capabilities_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EndpointCapabilities, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_endpoint_capabilities_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_engine_execution_capabilities_into(value: &EngineExecutionCapabilities, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.supported)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_engine_execution_capabilities_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EngineExecutionCapabilities, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(EngineExecutionCapabilities {
+        supported: reader.read_u64()?,
+    })
+}
+
+pub fn encode_engine_execution_capabilities_payload(value: &EngineExecutionCapabilities, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_engine_execution_capabilities_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_engine_execution_capabilities_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EngineExecutionCapabilities, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_engine_execution_capabilities_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_envelope_header_into(value: &EnvelopeHeader, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.major)).to_le_bytes())?;
+    writer.write(&(*(&value.minor)).to_le_bytes())?;
+    writer.write(&(*(&value.message_type)).to_le_bytes())?;
+    writer.write(&(*(&value.flags)).to_le_bytes())?;
+    writer.write(&(*(&value.payload_len)).to_le_bytes())?;
+    writer.write(&(*(&value.sequence)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_envelope_header_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EnvelopeHeader, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(EnvelopeHeader {
+        major: reader.read_u16()?,
+        minor: reader.read_u16()?,
+        message_type: reader.read_u16()?,
+        flags: reader.read_u16()?,
+        payload_len: reader.read_u32()?,
+        sequence: reader.read_u64()?,
+    })
+}
+
+pub fn encode_envelope_header_payload(value: &EnvelopeHeader, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_envelope_header_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_envelope_header_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EnvelopeHeader, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_envelope_header_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_correlation_into(value: &Correlation, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
+    match &value.session {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_session_id_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.request {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_request_id_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.generation {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_correlation_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<Correlation, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(Correlation {
+        worker: payload_decode_worker_id_from(depth + 1, reader)?,
+        session: if reader.read_optional()? { Some(payload_decode_session_id_from(depth + 1 + 1, reader)?) } else { None },
+        request: if reader.read_optional()? { Some(payload_decode_request_id_from(depth + 1 + 1, reader)?) } else { None },
+        generation: if reader.read_optional()? { Some(reader.read_u64()?) } else { None },
+    })
+}
+
+pub fn encode_correlation_payload(value: &Correlation, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_correlation_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_correlation_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<Correlation, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_correlation_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_source_identity_into(value: &SourceIdentity, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&value.stable_id)?;
+    writer.write(&(*(&value.revision)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_source_identity_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SourceIdentity, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SourceIdentity {
+        stable_id: reader.read_fixed_32()?,
+        revision: reader.read_u64()?,
+    })
+}
+
+pub fn encode_source_identity_payload(value: &SourceIdentity, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_source_identity_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_source_identity_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SourceIdentity, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_source_identity_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_source_descriptor_into(value: &SourceDescriptor, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_source_identity_into(&value.identity, depth + 1, writer)?;
+    match &value.length {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    writer.write(&value.validator)?;
+    Ok(())
+}
+
+fn payload_decode_source_descriptor_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SourceDescriptor, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SourceDescriptor {
+        identity: payload_decode_source_identity_from(depth + 1, reader)?,
+        length: if reader.read_optional()? { Some(reader.read_u64()?) } else { None },
+        validator: reader.read_fixed_32()?,
+    })
+}
+
+pub fn encode_source_descriptor_payload(value: &SourceDescriptor, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_source_descriptor_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_source_descriptor_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SourceDescriptor, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_source_descriptor_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_byte_range_into(value: &ByteRange, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.start)).to_le_bytes())?;
+    writer.write(&(*(&value.len)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_byte_range_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ByteRange, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ByteRange {
+        start: reader.read_u64()?,
+        len: reader.read_u64()?,
+    })
+}
+
+pub fn encode_byte_range_payload(value: &ByteRange, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_byte_range_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_byte_range_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ByteRange, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_byte_range_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_data_segment_into(value: &DataSegment, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_byte_range_into(&value.range, depth + 1, writer)?;
+    writer.write(&(*(&value.slot)).to_le_bytes())?;
+    writer.write(&(*(&value.byte_length)).to_le_bytes())?;
+    payload_encode_data_attachment_role_into(&value.role, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_data_segment_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DataSegment, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(DataSegment {
+        range: payload_decode_byte_range_from(depth + 1, reader)?,
+        slot: reader.read_u16()?,
+        byte_length: reader.read_u64()?,
+        role: payload_decode_data_attachment_role_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_data_segment_payload(value: &DataSegment, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_data_segment_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_data_segment_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DataSegment, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_data_segment_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_page_geometry_into(value: &PageGeometry, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&value.identity)?;
+    writer.write(&(*(&value.media_box_x_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.media_box_y_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.media_box_width_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.media_box_height_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.crop_box_x_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.crop_box_y_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.crop_box_width_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.crop_box_height_milli_points)).to_le_bytes())?;
+    payload_encode_page_rotation_into(&value.intrinsic_rotation, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_page_geometry_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PageGeometry, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(PageGeometry {
+        identity: reader.read_fixed_32()?,
+        media_box_x_milli_points: reader.read_i32()?,
+        media_box_y_milli_points: reader.read_i32()?,
+        media_box_width_milli_points: reader.read_u32()?,
+        media_box_height_milli_points: reader.read_u32()?,
+        crop_box_x_milli_points: reader.read_i32()?,
+        crop_box_y_milli_points: reader.read_i32()?,
+        crop_box_width_milli_points: reader.read_u32()?,
+        crop_box_height_milli_points: reader.read_u32()?,
+        intrinsic_rotation: payload_decode_page_rotation_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_page_geometry_payload(value: &PageGeometry, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_page_geometry_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_page_geometry_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PageGeometry, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_page_geometry_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_page_viewport_into(value: &PageViewport, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.page_index)).to_le_bytes())?;
+    payload_encode_page_coordinate_space_into(&value.coordinate_space, depth + 1, writer)?;
+    payload_encode_page_geometry_into(&value.geometry, depth + 1, writer)?;
+    writer.write(&(*(&value.clip_x_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.clip_y_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.clip_width_milli_points)).to_le_bytes())?;
+    writer.write(&(*(&value.clip_height_milli_points)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_page_viewport_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PageViewport, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(PageViewport {
+        page_index: reader.read_u32()?,
+        coordinate_space: payload_decode_page_coordinate_space_from(depth + 1, reader)?,
+        geometry: payload_decode_page_geometry_from(depth + 1, reader)?,
+        clip_x_milli_points: reader.read_i32()?,
+        clip_y_milli_points: reader.read_i32()?,
+        clip_width_milli_points: reader.read_u32()?,
+        clip_height_milli_points: reader.read_u32()?,
+    })
+}
+
+pub fn encode_page_viewport_payload(value: &PageViewport, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_page_viewport_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_page_viewport_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PageViewport, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_page_viewport_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_viewport_request_into(value: &ViewportRequest, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.generation)).to_le_bytes())?;
+    writer.write(&(*(&value.document_revision)).to_le_bytes())?;
+    writer.write(&(*(&value.annotation_revision)).to_le_bytes())?;
+    writer.write(&(*(&value.zoom_numerator)).to_le_bytes())?;
+    writer.write(&(*(&value.zoom_denominator)).to_le_bytes())?;
+    {
+        writer.write_count((&value.visible_pages).len(), 64)?;
+        for payload_item in &value.visible_pages {
+            payload_encode_page_viewport_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    payload_encode_quality_policy_into(&value.quality, depth + 1, writer)?;
+    payload_encode_output_profile_into(&value.output_profile, depth + 1, writer)?;
+    writer.write(&(*(&value.device_scale_milli)).to_le_bytes())?;
+    payload_encode_page_rotation_into(&value.rotation, depth + 1, writer)?;
+    writer.write(&(*(&value.optional_content_id)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_viewport_request_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ViewportRequest, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ViewportRequest {
+        generation: reader.read_u64()?,
+        document_revision: reader.read_u64()?,
+        annotation_revision: reader.read_u64()?,
+        zoom_numerator: reader.read_u32()?,
+        zoom_denominator: reader.read_u32()?,
+        visible_pages: { let payload_count = reader.read_count(64, 86)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_page_viewport_from(depth + 1 + 1, reader)?); } payload_values },
+        quality: payload_decode_quality_policy_from(depth + 1, reader)?,
+        output_profile: payload_decode_output_profile_from(depth + 1, reader)?,
+        device_scale_milli: reader.read_u32()?,
+        rotation: payload_decode_page_rotation_from(depth + 1, reader)?,
+        optional_content_id: reader.read_u64()?,
+    })
+}
+
+pub fn encode_viewport_request_payload(value: &ViewportRequest, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_viewport_request_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_viewport_request_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ViewportRequest, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_viewport_request_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_owner_into(value: &SurfaceOwner, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
+    payload_encode_session_id_into(&value.session, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_surface_owner_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceOwner, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceOwner {
+        worker: payload_decode_worker_id_from(depth + 1, reader)?,
+        session: payload_decode_session_id_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_surface_owner_payload(value: &SurfaceOwner, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_owner_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_owner_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceOwner, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_owner_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_region_into(value: &SurfaceRegion, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.page_index)).to_le_bytes())?;
+    writer.write(&(*(&value.x)).to_le_bytes())?;
+    writer.write(&(*(&value.y)).to_le_bytes())?;
+    writer.write(&(*(&value.width)).to_le_bytes())?;
+    writer.write(&(*(&value.height)).to_le_bytes())?;
+    payload_encode_surface_coordinate_space_into(&value.coordinate_space, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_surface_region_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceRegion, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceRegion {
+        page_index: reader.read_u32()?,
+        x: reader.read_i32()?,
+        y: reader.read_i32()?,
+        width: reader.read_u32()?,
+        height: reader.read_u32()?,
+        coordinate_space: payload_decode_surface_coordinate_space_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_surface_region_payload(value: &SurfaceRegion, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_region_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_region_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceRegion, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_region_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_metadata_into(value: &SurfaceMetadata, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_surface_id_into(&value.id, depth + 1, writer)?;
+    writer.write(&(*(&value.lease_token)).to_le_bytes())?;
+    payload_encode_surface_owner_into(&value.owner, depth + 1, writer)?;
+    writer.write(&(*(&value.generation)).to_le_bytes())?;
+    payload_encode_surface_region_into(&value.region, depth + 1, writer)?;
+    writer.write(&(*(&value.width)).to_le_bytes())?;
+    writer.write(&(*(&value.height)).to_le_bytes())?;
+    writer.write(&(*(&value.stride)).to_le_bytes())?;
+    payload_encode_pixel_format_into(&value.format, depth + 1, writer)?;
+    payload_encode_alpha_mode_into(&value.alpha, depth + 1, writer)?;
+    writer.write(&(*(&value.byte_offset)).to_le_bytes())?;
+    writer.write(&(*(&value.byte_length)).to_le_bytes())?;
+    payload_encode_render_config_hash_into(&value.render_config, depth + 1, writer)?;
+    payload_encode_renderer_epoch_into(&value.renderer_epoch, depth + 1, writer)?;
+    payload_encode_render_plan_id_into(&value.plan_id, depth + 1, writer)?;
+    payload_encode_render_plan_hash_into(&value.plan_hash, depth + 1, writer)?;
+    payload_encode_scene_hash_into(&value.scene_hash, depth + 1, writer)?;
+    payload_encode_capability_decision_hash_into(&value.decision_hash, depth + 1, writer)?;
+    payload_encode_native_backend_into(&value.backend, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_surface_metadata_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceMetadata, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceMetadata {
+        id: payload_decode_surface_id_from(depth + 1, reader)?,
+        lease_token: reader.read_u64()?,
+        owner: payload_decode_surface_owner_from(depth + 1, reader)?,
+        generation: reader.read_u64()?,
+        region: payload_decode_surface_region_from(depth + 1, reader)?,
+        width: reader.read_u32()?,
+        height: reader.read_u32()?,
+        stride: reader.read_u32()?,
+        format: payload_decode_pixel_format_from(depth + 1, reader)?,
+        alpha: payload_decode_alpha_mode_from(depth + 1, reader)?,
+        byte_offset: reader.read_u64()?,
+        byte_length: reader.read_u64()?,
+        render_config: payload_decode_render_config_hash_from(depth + 1, reader)?,
+        renderer_epoch: payload_decode_renderer_epoch_from(depth + 1, reader)?,
+        plan_id: payload_decode_render_plan_id_from(depth + 1, reader)?,
+        plan_hash: payload_decode_render_plan_hash_from(depth + 1, reader)?,
+        scene_hash: payload_decode_scene_hash_from(depth + 1, reader)?,
+        decision_hash: payload_decode_capability_decision_hash_from(depth + 1, reader)?,
+        backend: payload_decode_native_backend_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_surface_metadata_payload(value: &SurfaceMetadata, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_metadata_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_metadata_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceMetadata, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_metadata_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_location_into(value: &CapabilityLocation, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match &value.page_index {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.object_number {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.object_generation {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.source_offset {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.command_index {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.resource_id {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_capability_location_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityLocation, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityLocation {
+        page_index: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+        object_number: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+        object_generation: if reader.read_optional()? { Some(reader.read_u16()?) } else { None },
+        source_offset: if reader.read_optional()? { Some(reader.read_u64()?) } else { None },
+        command_index: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+        resource_id: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+    })
+}
+
+pub fn encode_capability_location_payload(value: &CapabilityLocation, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_location_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_location_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityLocation, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_location_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_scope_into(value: &CapabilityScope, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_capability_scope_kind_into(&value.kind, depth + 1, writer)?;
+    match &value.page {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.command {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.resource {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_capability_scope_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityScope, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityScope {
+        kind: payload_decode_capability_scope_kind_from(depth + 1, reader)?,
+        page: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+        command: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+        resource: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+    })
+}
+
+pub fn encode_capability_scope_payload(value: &CapabilityScope, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_scope_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_scope_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityScope, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_scope_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_contributor_into(value: &CapabilityContributor, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.id)).to_le_bytes())?;
+    payload_encode_capability_contributor_kind_into(&value.kind, depth + 1, writer)?;
+    writer.write(&(*(&value.code)).to_le_bytes())?;
+    match &value.location {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_capability_location_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_capability_contributor_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityContributor, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityContributor {
+        id: reader.read_u32()?,
+        kind: payload_decode_capability_contributor_kind_from(depth + 1, reader)?,
+        code: reader.read_u32()?,
+        location: if reader.read_optional()? { Some(payload_decode_capability_location_from(depth + 1 + 1, reader)?) } else { None },
+    })
+}
+
+pub fn encode_capability_contributor_payload(value: &CapabilityContributor, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_contributor_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_contributor_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityContributor, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_contributor_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_context_into(value: &CapabilityContext, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.code)).to_le_bytes())?;
+    writer.write(&(*(&value.value)).to_le_bytes())?;
+    match &value.location {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_capability_location_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_capability_context_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityContext, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityContext {
+        code: reader.read_u32()?,
+        value: reader.read_u64()?,
+        location: if reader.read_optional()? { Some(payload_decode_capability_location_from(depth + 1 + 1, reader)?) } else { None },
+    })
+}
+
+pub fn encode_capability_context_payload(value: &CapabilityContext, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_context_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_context_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityContext, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_context_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_requirement_into(value: &CapabilityRequirement, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.id)).to_le_bytes())?;
+    writer.write(&(*(&value.capability)).to_le_bytes())?;
+    writer.write(&(*(&value.parameter)).to_le_bytes())?;
+    payload_encode_capability_context_into(&value.context, depth + 1, writer)?;
+    {
+        writer.write_count((&value.dependencies).len(), 32)?;
+        for payload_item in &value.dependencies {
+            writer.write(&(*(payload_item)).to_le_bytes())?;
+        }
+    }
+    payload_encode_capability_scope_into(&value.scope, depth + 1, writer)?;
+    {
+        writer.write_count((&value.contributor_ids).len(), 16)?;
+        for payload_item in &value.contributor_ids {
+            writer.write(&(*(payload_item)).to_le_bytes())?;
+        }
+    }
+    match &value.location {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_capability_location_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_capability_requirement_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityRequirement, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityRequirement {
+        id: reader.read_u32()?,
+        capability: reader.read_u16()?,
+        parameter: reader.read_u64()?,
+        context: payload_decode_capability_context_from(depth + 1, reader)?,
+        dependencies: { let payload_count = reader.read_count(32, 4)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(reader.read_u32()?); } payload_values },
+        scope: payload_decode_capability_scope_from(depth + 1, reader)?,
+        contributor_ids: { let payload_count = reader.read_count(16, 4)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(reader.read_u32()?); } payload_values },
+        location: if reader.read_optional()? { Some(payload_decode_capability_location_from(depth + 1 + 1, reader)?) } else { None },
+    })
+}
+
+pub fn encode_capability_requirement_payload(value: &CapabilityRequirement, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_requirement_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_requirement_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityRequirement, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_requirement_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_subject_into(value: &CapabilitySubject, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_source_identity_into(&value.source, depth + 1, writer)?;
+    writer.write(&(*(&value.document_revision)).to_le_bytes())?;
+    writer.write(&(*(&value.revision_startxref)).to_le_bytes())?;
+    writer.write(&(*(&value.page_index)).to_le_bytes())?;
+    writer.write(&(*(&value.page_object_number)).to_le_bytes())?;
+    writer.write(&(*(&value.page_object_generation)).to_le_bytes())?;
+    writer.write(&(*(&value.scene_schema_major)).to_le_bytes())?;
+    writer.write(&(*(&value.scene_schema_minor)).to_le_bytes())?;
+    payload_encode_scene_hash_into(&value.scene_hash, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_capability_subject_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilitySubject, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilitySubject {
+        source: payload_decode_source_identity_from(depth + 1, reader)?,
+        document_revision: reader.read_u64()?,
+        revision_startxref: reader.read_u64()?,
+        page_index: reader.read_u32()?,
+        page_object_number: reader.read_u32()?,
+        page_object_generation: reader.read_u16()?,
+        scene_schema_major: reader.read_u16()?,
+        scene_schema_minor: reader.read_u16()?,
+        scene_hash: payload_decode_scene_hash_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_capability_subject_payload(value: &CapabilitySubject, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_subject_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_subject_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilitySubject, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_subject_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_decision_into(value: &CapabilityDecision, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.decision_schema_version)).to_le_bytes())?;
+    payload_encode_support_status_into(&value.status, depth + 1, writer)?;
+    payload_encode_capability_profile_id_into(&value.profile, depth + 1, writer)?;
+    writer.write(&(*(&value.profile_version)).to_le_bytes())?;
+    writer.write(&(*(&value.policy_version)).to_le_bytes())?;
+    payload_encode_capability_subject_into(&value.subject, depth + 1, writer)?;
+    {
+        writer.write_count((&value.missing).len(), 16)?;
+        for payload_item in &value.missing {
+            payload_encode_capability_requirement_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    writer.write(&(*(&value.missing_total)).to_le_bytes())?;
+    payload_encode_collection_completeness_into(&value.missing_completeness, depth + 1, writer)?;
+    {
+        writer.write_count((&value.contributors).len(), 32)?;
+        for payload_item in &value.contributors {
+            payload_encode_capability_contributor_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    writer.write(&(*(&value.contributors_total)).to_le_bytes())?;
+    payload_encode_collection_completeness_into(&value.contributors_completeness, depth + 1, writer)?;
+    payload_encode_capability_scope_into(&value.scope, depth + 1, writer)?;
+    match &value.location {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_capability_location_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    match &value.rejection_code {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            writer.write(&(*(payload_value)).to_le_bytes())?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_capability_decision_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityDecision, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityDecision {
+        decision_schema_version: reader.read_u16()?,
+        status: payload_decode_support_status_from(depth + 1, reader)?,
+        profile: payload_decode_capability_profile_id_from(depth + 1, reader)?,
+        profile_version: reader.read_u32()?,
+        policy_version: reader.read_u32()?,
+        subject: payload_decode_capability_subject_from(depth + 1, reader)?,
+        missing: { let payload_count = reader.read_count(16, 40)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_capability_requirement_from(depth + 1 + 1, reader)?); } payload_values },
+        missing_total: reader.read_u32()?,
+        missing_completeness: payload_decode_collection_completeness_from(depth + 1, reader)?,
+        contributors: { let payload_count = reader.read_count(32, 10)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_capability_contributor_from(depth + 1 + 1, reader)?); } payload_values },
+        contributors_total: reader.read_u32()?,
+        contributors_completeness: payload_decode_collection_completeness_from(depth + 1, reader)?,
+        scope: payload_decode_capability_scope_from(depth + 1, reader)?,
+        location: if reader.read_optional()? { Some(payload_decode_capability_location_from(depth + 1 + 1, reader)?) } else { None },
+        rejection_code: if reader.read_optional()? { Some(reader.read_u32()?) } else { None },
+    })
+}
+
+pub fn encode_capability_decision_payload(value: &CapabilityDecision, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_decision_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_decision_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityDecision, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_decision_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_engine_error_into(value: &EngineError, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_engine_error_code_into(&value.code, depth + 1, writer)?;
+    payload_encode_error_category_into(&value.category, depth + 1, writer)?;
+    payload_encode_error_severity_into(&value.severity, depth + 1, writer)?;
+    payload_encode_error_recoverability_into(&value.recoverability, depth + 1, writer)?;
+    payload_encode_diagnostic_id_into(&value.diagnostic_id, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_engine_error_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EngineError, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(EngineError {
+        code: payload_decode_engine_error_code_from(depth + 1, reader)?,
+        category: payload_decode_error_category_from(depth + 1, reader)?,
+        severity: payload_decode_error_severity_from(depth + 1, reader)?,
+        recoverability: payload_decode_error_recoverability_from(depth + 1, reader)?,
+        diagnostic_id: payload_decode_diagnostic_id_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_engine_error_payload(value: &EngineError, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_engine_error_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_engine_error_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EngineError, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_engine_error_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_hello_command_into(value: &HelloCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_protocol_hello_into(&value.hello, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_hello_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<HelloCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(HelloCommand {
+        hello: payload_decode_protocol_hello_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_hello_command_payload(value: &HelloCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_hello_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_hello_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<HelloCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_hello_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_hello_accept_command_into(value: &HelloAcceptCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.negotiated_minor)).to_le_bytes())?;
+    writer.write(&value.schema_hash)?;
+    Ok(())
+}
+
+fn payload_decode_hello_accept_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<HelloAcceptCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(HelloAcceptCommand {
+        negotiated_minor: reader.read_u16()?,
+        schema_hash: reader.read_fixed_16()?,
+    })
+}
+
+pub fn encode_hello_accept_command_payload(value: &HelloAcceptCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_hello_accept_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_hello_accept_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<HelloAcceptCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_hello_accept_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_open_command_into(value: &OpenCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_source_descriptor_into(&value.source, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_open_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<OpenCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(OpenCommand {
+        source: payload_decode_source_descriptor_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_open_command_payload(value: &OpenCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_open_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_open_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<OpenCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_open_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_provide_data_command_into(value: &ProvideDataCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
+    payload_encode_source_identity_into(&value.source, depth + 1, writer)?;
+    {
+        writer.write_count((&value.segments).len(), 16)?;
+        for payload_item in &value.segments {
+            payload_encode_data_segment_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    Ok(())
+}
+
+fn payload_decode_provide_data_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ProvideDataCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ProvideDataCommand {
+        ticket: payload_decode_data_ticket_from(depth + 1, reader)?,
+        source: payload_decode_source_identity_from(depth + 1, reader)?,
+        segments: { let payload_count = reader.read_count(16, 27)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_data_segment_from(depth + 1 + 1, reader)?); } payload_values },
+    })
+}
+
+pub fn encode_provide_data_command_payload(value: &ProvideDataCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_provide_data_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_provide_data_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ProvideDataCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_provide_data_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_fail_data_command_into(value: &FailDataCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
+    payload_encode_source_identity_into(&value.expected, depth + 1, writer)?;
+    match &value.observed {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_source_identity_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    payload_encode_source_failure_code_into(&value.code, depth + 1, writer)?;
+    writer.write(&[u8::from(*(&value.retryable))])?;
+    Ok(())
+}
+
+fn payload_decode_fail_data_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<FailDataCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(FailDataCommand {
+        ticket: payload_decode_data_ticket_from(depth + 1, reader)?,
+        expected: payload_decode_source_identity_from(depth + 1, reader)?,
+        observed: if reader.read_optional()? { Some(payload_decode_source_identity_from(depth + 1 + 1, reader)?) } else { None },
+        code: payload_decode_source_failure_code_from(depth + 1, reader)?,
+        retryable: reader.read_bool()?,
+    })
+}
+
+pub fn encode_fail_data_command_payload(value: &FailDataCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_fail_data_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_fail_data_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<FailDataCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_fail_data_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_set_viewport_command_into(value: &SetViewportCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_viewport_request_into(&value.viewport, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_set_viewport_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SetViewportCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SetViewportCommand {
+        viewport: payload_decode_viewport_request_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_set_viewport_command_payload(value: &SetViewportCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_set_viewport_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_set_viewport_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SetViewportCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_set_viewport_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_cancel_command_into(value: &CancelCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_request_id_into(&value.target, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_cancel_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CancelCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CancelCommand {
+        target: payload_decode_request_id_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_cancel_command_payload(value: &CancelCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_cancel_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_cancel_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CancelCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_cancel_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_release_surface_command_into(value: &ReleaseSurfaceCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_surface_id_into(&value.surface, depth + 1, writer)?;
+    writer.write(&(*(&value.lease_token)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_release_surface_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ReleaseSurfaceCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ReleaseSurfaceCommand {
+        surface: payload_decode_surface_id_from(depth + 1, reader)?,
+        lease_token: reader.read_u64()?,
+    })
+}
+
+pub fn encode_release_surface_command_payload(value: &ReleaseSurfaceCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_release_surface_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_release_surface_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ReleaseSurfaceCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_release_surface_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_close_session_command_into(_value: &CloseSessionCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    Ok(())
+}
+
+fn payload_decode_close_session_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CloseSessionCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CloseSessionCommand {
+    })
+}
+
+pub fn encode_close_session_command_payload(value: &CloseSessionCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_close_session_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_close_session_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CloseSessionCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_close_session_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_shutdown_command_into(value: &ShutdownCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.deadline_ms)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_shutdown_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ShutdownCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ShutdownCommand {
+        deadline_ms: reader.read_u32()?,
+    })
+}
+
+pub fn encode_shutdown_command_payload(value: &ShutdownCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_shutdown_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_shutdown_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ShutdownCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_shutdown_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_get_page_metrics_command_into(value: &GetPageMetricsCommand, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.document_revision)).to_le_bytes())?;
+    writer.write(&(*(&value.start_index)).to_le_bytes())?;
+    writer.write(&(*(&value.max_count)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_get_page_metrics_command_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<GetPageMetricsCommand, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(GetPageMetricsCommand {
+        document_revision: reader.read_u64()?,
+        start_index: reader.read_u32()?,
+        max_count: reader.read_u16()?,
+    })
+}
+
+pub fn encode_get_page_metrics_command_payload(value: &GetPageMetricsCommand, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_get_page_metrics_command_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_get_page_metrics_command_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<GetPageMetricsCommand, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_get_page_metrics_command_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_engine_hello_event_into(value: &EngineHelloEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_protocol_hello_into(&value.hello, depth + 1, writer)?;
+    payload_encode_engine_execution_capabilities_into(&value.execution_capabilities, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_engine_hello_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<EngineHelloEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(EngineHelloEvent {
+        hello: payload_decode_protocol_hello_from(depth + 1, reader)?,
+        execution_capabilities: payload_decode_engine_execution_capabilities_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_engine_hello_event_payload(value: &EngineHelloEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_engine_hello_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_engine_hello_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<EngineHelloEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_engine_hello_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_ready_event_into(value: &ReadyEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
+    writer.write(&(*(&value.negotiated_minor)).to_le_bytes())?;
+    writer.write(&value.schema_hash)?;
+    payload_encode_engine_execution_capabilities_into(&value.execution_capabilities, depth + 1, writer)?;
+    {
+        writer.write_count((&value.capability_profiles).len(), 8)?;
+        for payload_item in &value.capability_profiles {
+            payload_encode_capability_profile_id_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    {
+        writer.write_count((&value.output_profiles).len(), 8)?;
+        for payload_item in &value.output_profiles {
+            payload_encode_output_profile_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    Ok(())
+}
+
+fn payload_decode_ready_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ReadyEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ReadyEvent {
+        worker: payload_decode_worker_id_from(depth + 1, reader)?,
+        negotiated_minor: reader.read_u16()?,
+        schema_hash: reader.read_fixed_16()?,
+        execution_capabilities: payload_decode_engine_execution_capabilities_from(depth + 1, reader)?,
+        capability_profiles: { let payload_count = reader.read_count(8, 4)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_capability_profile_id_from(depth + 1 + 1, reader)?); } payload_values },
+        output_profiles: { let payload_count = reader.read_count(8, 2)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_output_profile_from(depth + 1 + 1, reader)?); } payload_values },
+    })
+}
+
+pub fn encode_ready_event_payload(value: &ReadyEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_ready_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_ready_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ReadyEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_ready_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_need_data_event_into(value: &NeedDataEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
+    payload_encode_source_identity_into(&value.source, depth + 1, writer)?;
+    {
+        writer.write_count((&value.ranges).len(), 16)?;
+        for payload_item in &value.ranges {
+            payload_encode_byte_range_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    payload_encode_data_priority_into(&value.priority, depth + 1, writer)?;
+    writer.write(&(*(&value.checkpoint)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_need_data_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<NeedDataEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(NeedDataEvent {
+        ticket: payload_decode_data_ticket_from(depth + 1, reader)?,
+        source: payload_decode_source_identity_from(depth + 1, reader)?,
+        ranges: { let payload_count = reader.read_count(16, 16)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_byte_range_from(depth + 1 + 1, reader)?); } payload_values },
+        priority: payload_decode_data_priority_from(depth + 1, reader)?,
+        checkpoint: reader.read_u64()?,
+    })
+}
+
+pub fn encode_need_data_event_payload(value: &NeedDataEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_need_data_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_need_data_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<NeedDataEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_need_data_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_document_ready_event_into(value: &DocumentReadyEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_session_id_into(&value.session, depth + 1, writer)?;
+    writer.write(&(*(&value.document_revision)).to_le_bytes())?;
+    writer.write(&(*(&value.page_count)).to_le_bytes())?;
+    payload_encode_capability_profile_id_into(&value.profile, depth + 1, writer)?;
+    writer.write(&(*(&value.policy_version)).to_le_bytes())?;
+    Ok(())
+}
+
+fn payload_decode_document_ready_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DocumentReadyEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(DocumentReadyEvent {
+        session: payload_decode_session_id_from(depth + 1, reader)?,
+        document_revision: reader.read_u64()?,
+        page_count: reader.read_u32()?,
+        profile: payload_decode_capability_profile_id_from(depth + 1, reader)?,
+        policy_version: reader.read_u32()?,
+    })
+}
+
+pub fn encode_document_ready_event_payload(value: &DocumentReadyEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_document_ready_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_document_ready_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DocumentReadyEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_document_ready_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_capability_reported_event_into(value: &CapabilityReportedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_capability_decision_into(&value.decision, depth + 1, writer)?;
+    payload_encode_capability_decision_hash_into(&value.decision_hash, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_capability_reported_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CapabilityReportedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CapabilityReportedEvent {
+        decision: payload_decode_capability_decision_from(depth + 1, reader)?,
+        decision_hash: payload_decode_capability_decision_hash_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_capability_reported_event_payload(value: &CapabilityReportedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_capability_reported_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_capability_reported_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CapabilityReportedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_capability_reported_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_ready_event_into(value: &SurfaceReadyEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_surface_metadata_into(&value.metadata, depth + 1, writer)?;
+    payload_encode_surface_transport_into(&value.transport, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_surface_ready_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceReadyEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceReadyEvent {
+        metadata: payload_decode_surface_metadata_from(depth + 1, reader)?,
+        transport: payload_decode_surface_transport_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_surface_ready_event_payload(value: &SurfaceReadyEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_ready_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_ready_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceReadyEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_ready_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_reclaimed_event_into(value: &SurfaceReclaimedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_surface_id_into(&value.surface, depth + 1, writer)?;
+    writer.write(&(*(&value.lease_token)).to_le_bytes())?;
+    payload_encode_surface_reclaim_reason_into(&value.reason, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_surface_reclaimed_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceReclaimedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceReclaimedEvent {
+        surface: payload_decode_surface_id_from(depth + 1, reader)?,
+        lease_token: reader.read_u64()?,
+        reason: payload_decode_surface_reclaim_reason_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_surface_reclaimed_event_payload(value: &SurfaceReclaimedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_reclaimed_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_reclaimed_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceReclaimedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_reclaimed_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_request_cancelled_event_into(value: &RequestCancelledEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_request_id_into(&value.target, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_request_cancelled_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RequestCancelledEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RequestCancelledEvent {
+        target: payload_decode_request_id_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_request_cancelled_event_payload(value: &RequestCancelledEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_request_cancelled_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_request_cancelled_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RequestCancelledEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_request_cancelled_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_request_failed_event_into(value: &RequestFailedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_request_failed_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RequestFailedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RequestFailedEvent {
+        error: payload_decode_engine_error_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_request_failed_event_payload(value: &RequestFailedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_request_failed_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_request_failed_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RequestFailedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_request_failed_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_session_closed_event_into(value: &SessionClosedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_session_id_into(&value.session, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_session_closed_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SessionClosedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SessionClosedEvent {
+        session: payload_decode_session_id_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_session_closed_event_payload(value: &SessionClosedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_session_closed_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_session_closed_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SessionClosedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_session_closed_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_worker_stopped_event_into(value: &WorkerStoppedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_worker_stopped_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<WorkerStoppedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(WorkerStoppedEvent {
+        worker: payload_decode_worker_id_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_worker_stopped_event_payload(value: &WorkerStoppedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_worker_stopped_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_worker_stopped_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<WorkerStoppedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_worker_stopped_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_worker_fault_event_into(value: &WorkerFaultEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_worker_fault_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<WorkerFaultEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(WorkerFaultEvent {
+        error: payload_decode_engine_error_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_worker_fault_event_payload(value: &WorkerFaultEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_worker_fault_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_worker_fault_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<WorkerFaultEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_worker_fault_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_protocol_fault_event_into(value: &ProtocolFaultEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_protocol_fault_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ProtocolFaultEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ProtocolFaultEvent {
+        error: payload_decode_engine_error_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_protocol_fault_event_payload(value: &ProtocolFaultEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_protocol_fault_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_protocol_fault_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ProtocolFaultEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_protocol_fault_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_data_failed_event_into(value: &DataFailedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_data_ticket_into(&value.ticket, depth + 1, writer)?;
+    payload_encode_engine_error_into(&value.error, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_data_failed_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<DataFailedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(DataFailedEvent {
+        ticket: payload_decode_data_ticket_from(depth + 1, reader)?,
+        error: payload_decode_engine_error_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_data_failed_event_payload(value: &DataFailedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_data_failed_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_data_failed_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<DataFailedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_data_failed_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_page_metric_into(value: &PageMetric, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.page_index)).to_le_bytes())?;
+    payload_encode_page_geometry_into(&value.geometry, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_page_metric_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PageMetric, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(PageMetric {
+        page_index: reader.read_u32()?,
+        geometry: payload_decode_page_geometry_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_page_metric_payload(value: &PageMetric, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_page_metric_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_page_metric_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PageMetric, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_page_metric_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_page_metrics_event_into(value: &PageMetricsEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.document_revision)).to_le_bytes())?;
+    writer.write(&(*(&value.start_index)).to_le_bytes())?;
+    writer.write(&(*(&value.total_pages)).to_le_bytes())?;
+    {
+        writer.write_count((&value.pages).len(), 64)?;
+        for payload_item in &value.pages {
+            payload_encode_page_metric_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    Ok(())
+}
+
+fn payload_decode_page_metrics_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<PageMetricsEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(PageMetricsEvent {
+        document_revision: reader.read_u64()?,
+        start_index: reader.read_u32()?,
+        total_pages: reader.read_u32()?,
+        pages: { let payload_count = reader.read_count(64, 69)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_page_metric_from(depth + 1 + 1, reader)?); } payload_values },
+    })
+}
+
+pub fn encode_page_metrics_event_payload(value: &PageMetricsEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_page_metrics_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_page_metrics_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<PageMetricsEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_page_metrics_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_render_plan_manifest_into(value: &RenderPlanManifest, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    writer.write(&(*(&value.document_revision)).to_le_bytes())?;
+    payload_encode_render_config_hash_into(&value.render_config, depth + 1, writer)?;
+    payload_encode_renderer_epoch_into(&value.renderer_epoch, depth + 1, writer)?;
+    payload_encode_render_plan_id_into(&value.plan_id, depth + 1, writer)?;
+    payload_encode_scene_hash_into(&value.scene_hash, depth + 1, writer)?;
+    payload_encode_capability_decision_hash_into(&value.decision_hash, depth + 1, writer)?;
+    payload_encode_native_backend_into(&value.backend, depth + 1, writer)?;
+    payload_encode_output_profile_into(&value.output_profile, depth + 1, writer)?;
+    payload_encode_quality_policy_into(&value.quality, depth + 1, writer)?;
+    {
+        writer.write_count((&value.regions).len(), 1024)?;
+        for payload_item in &value.regions {
+            payload_encode_surface_region_into(payload_item, depth + 1 + 1, writer)?;
+        }
+    }
+    Ok(())
+}
+
+fn payload_decode_render_plan_manifest_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<RenderPlanManifest, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(RenderPlanManifest {
+        document_revision: reader.read_u64()?,
+        render_config: payload_decode_render_config_hash_from(depth + 1, reader)?,
+        renderer_epoch: payload_decode_renderer_epoch_from(depth + 1, reader)?,
+        plan_id: payload_decode_render_plan_id_from(depth + 1, reader)?,
+        scene_hash: payload_decode_scene_hash_from(depth + 1, reader)?,
+        decision_hash: payload_decode_capability_decision_hash_from(depth + 1, reader)?,
+        backend: payload_decode_native_backend_from(depth + 1, reader)?,
+        output_profile: payload_decode_output_profile_from(depth + 1, reader)?,
+        quality: payload_decode_quality_policy_from(depth + 1, reader)?,
+        regions: { let payload_count = reader.read_count(1024, 21)?; let mut payload_values = Vec::with_capacity(payload_count); for _ in 0..payload_count { payload_values.push(payload_decode_surface_region_from(depth + 1 + 1, reader)?); } payload_values },
+    })
+}
+
+pub fn encode_render_plan_manifest_payload(value: &RenderPlanManifest, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_render_plan_manifest_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_render_plan_manifest_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<RenderPlanManifest, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_render_plan_manifest_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_generation_planned_event_into(value: &GenerationPlannedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_render_plan_manifest_into(&value.manifest, depth + 1, writer)?;
+    payload_encode_render_plan_hash_into(&value.plan_hash, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_generation_planned_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<GenerationPlannedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(GenerationPlannedEvent {
+        manifest: payload_decode_render_plan_manifest_from(depth + 1, reader)?,
+        plan_hash: payload_decode_render_plan_hash_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_generation_planned_event_payload(value: &GenerationPlannedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_generation_planned_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_generation_planned_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<GenerationPlannedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_generation_planned_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_generation_completed_event_into(value: &GenerationCompletedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_generation_completion_status_into(&value.status, depth + 1, writer)?;
+    writer.write(&(*(&value.produced_regions)).to_le_bytes())?;
+    match &value.error {
+        Some(payload_value) => {
+            writer.write_optional(true)?;
+            payload_encode_engine_error_into(payload_value, depth + 1 + 1, writer)?;
+        }
+        None => writer.write_optional(false)?,
+    }
+    Ok(())
+}
+
+fn payload_decode_generation_completed_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<GenerationCompletedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(GenerationCompletedEvent {
+        status: payload_decode_generation_completion_status_from(depth + 1, reader)?,
+        produced_regions: reader.read_u32()?,
+        error: if reader.read_optional()? { Some(payload_decode_engine_error_from(depth + 1 + 1, reader)?) } else { None },
+    })
+}
+
+pub fn encode_generation_completed_event_payload(value: &GenerationCompletedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_generation_completed_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_generation_completed_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<GenerationCompletedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_generation_completed_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_cancel_acknowledged_event_into(value: &CancelAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_request_id_into(&value.target, depth + 1, writer)?;
+    payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_cancel_acknowledged_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CancelAcknowledgedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CancelAcknowledgedEvent {
+        target: payload_decode_request_id_from(depth + 1, reader)?,
+        status: payload_decode_operation_ack_status_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_cancel_acknowledged_event_payload(value: &CancelAcknowledgedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_cancel_acknowledged_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_cancel_acknowledged_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CancelAcknowledgedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_cancel_acknowledged_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_release_acknowledged_event_into(value: &SurfaceReleaseAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_surface_id_into(&value.surface, depth + 1, writer)?;
+    writer.write(&(*(&value.lease_token)).to_le_bytes())?;
+    payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_surface_release_acknowledged_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceReleaseAcknowledgedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(SurfaceReleaseAcknowledgedEvent {
+        surface: payload_decode_surface_id_from(depth + 1, reader)?,
+        lease_token: reader.read_u64()?,
+        status: payload_decode_operation_ack_status_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_surface_release_acknowledged_event_payload(value: &SurfaceReleaseAcknowledgedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_release_acknowledged_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_release_acknowledged_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceReleaseAcknowledgedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_release_acknowledged_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_close_session_acknowledged_event_into(value: &CloseSessionAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_session_id_into(&value.session, depth + 1, writer)?;
+    payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_close_session_acknowledged_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<CloseSessionAcknowledgedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(CloseSessionAcknowledgedEvent {
+        session: payload_decode_session_id_from(depth + 1, reader)?,
+        status: payload_decode_operation_ack_status_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_close_session_acknowledged_event_payload(value: &CloseSessionAcknowledgedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_close_session_acknowledged_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_close_session_acknowledged_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<CloseSessionAcknowledgedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_close_session_acknowledged_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_shutdown_acknowledged_event_into(value: &ShutdownAcknowledgedEvent, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    payload_encode_worker_id_into(&value.worker, depth + 1, writer)?;
+    payload_encode_operation_ack_status_into(&value.status, depth + 1, writer)?;
+    Ok(())
+}
+
+fn payload_decode_shutdown_acknowledged_event_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<ShutdownAcknowledgedEvent, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    Ok(ShutdownAcknowledgedEvent {
+        worker: payload_decode_worker_id_from(depth + 1, reader)?,
+        status: payload_decode_operation_ack_status_from(depth + 1, reader)?,
+    })
+}
+
+pub fn encode_shutdown_acknowledged_event_payload(value: &ShutdownAcknowledgedEvent, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_shutdown_acknowledged_event_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_shutdown_acknowledged_event_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<ShutdownAcknowledgedEvent, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_shutdown_acknowledged_event_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn payload_encode_surface_transport_into(value: &SurfaceTransport, depth: usize, writer: &mut PayloadWriter) -> Result<(), PayloadCodecError> {
+    writer.check_depth(depth)?;
+    match value {
+        SurfaceTransport::BrowserArrayBuffer { slot, buffer_length } => {
+            writer.write(&[1])?;
+            writer.write(&(*(slot)).to_le_bytes())?;
+            writer.write(&(*(buffer_length)).to_le_bytes())?;
+            Ok(())
+        }
+        SurfaceTransport::BrowserImageBitmap { slot, width, height } => {
+            writer.write(&[2])?;
+            writer.write(&(*(slot)).to_le_bytes())?;
+            writer.write(&(*(width)).to_le_bytes())?;
+            writer.write(&(*(height)).to_le_bytes())?;
+            Ok(())
+        }
+        SurfaceTransport::BrowserSharedArrayBuffer { attachment_slot, buffer_length, fence_byte_offset, publication_epoch } => {
+            writer.write(&[3])?;
+            writer.write(&(*(attachment_slot)).to_le_bytes())?;
+            writer.write(&(*(buffer_length)).to_le_bytes())?;
+            writer.write(&(*(fence_byte_offset)).to_le_bytes())?;
+            writer.write(&(*(publication_epoch)).to_le_bytes())?;
+            Ok(())
+        }
+        SurfaceTransport::SharedMemory { slot, region_length } => {
+            writer.write(&[4])?;
+            writer.write(&(*(slot)).to_le_bytes())?;
+            writer.write(&(*(region_length)).to_le_bytes())?;
+            Ok(())
+        }
+        SurfaceTransport::LocalMemory { region_length, memory_epoch } => {
+            writer.write(&[5])?;
+            writer.write(&(*(region_length)).to_le_bytes())?;
+            payload_encode_memory_epoch_into(memory_epoch, depth + 1, writer)?;
+            Ok(())
+        }
+    }
+}
+
+fn payload_decode_surface_transport_from(depth: usize, reader: &mut PayloadReader<'_>) -> Result<SurfaceTransport, PayloadCodecError> {
+    reader.check_depth(depth)?;
+    let tag_offset = reader.offset();
+    let tag = reader.read_u8()?;
+    match tag {
+        1_u8 => Ok(SurfaceTransport::BrowserArrayBuffer {
+            slot: reader.read_u16()?,
+            buffer_length: reader.read_u64()?,
+        }),
+        2_u8 => Ok(SurfaceTransport::BrowserImageBitmap {
+            slot: reader.read_u16()?,
+            width: reader.read_u32()?,
+            height: reader.read_u32()?,
+        }),
+        3_u8 => Ok(SurfaceTransport::BrowserSharedArrayBuffer {
+            attachment_slot: reader.read_u16()?,
+            buffer_length: reader.read_u64()?,
+            fence_byte_offset: reader.read_u64()?,
+            publication_epoch: reader.read_u32()?,
+        }),
+        4_u8 => Ok(SurfaceTransport::SharedMemory {
+            slot: reader.read_u16()?,
+            region_length: reader.read_u64()?,
+        }),
+        5_u8 => Ok(SurfaceTransport::LocalMemory {
+            region_length: reader.read_u64()?,
+            memory_epoch: payload_decode_memory_epoch_from(depth + 1, reader)?,
+        }),
+        _ => Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownTag, tag_offset)),
+    }
+}
+
+pub fn encode_surface_transport_payload(value: &SurfaceTransport, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let mut writer = PayloadWriter::new(limits)?;
+    payload_encode_surface_transport_into(value, 0, &mut writer)?;
+    Ok(writer.finish())
+}
+
+pub fn decode_surface_transport_payload(input: &[u8], limits: PayloadCodecLimits) -> Result<SurfaceTransport, PayloadCodecError> {
+    let mut reader = PayloadReader::new(input, limits)?;
+    let value = payload_decode_surface_transport_from(0, &mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+pub fn encode_command_payload(value: &CommandEnvelope, limits: PayloadCodecLimits) -> Result<(u16, Vec<u8>), PayloadCodecError> {
+    let (message_id, message_limit) = match &value.command {
+        Command::Hello(_) => (1, 512_usize),
+        Command::HelloAccept(_) => (2, 256_usize),
+        Command::Open(_) => (3, 4096_usize),
+        Command::ProvideData(_) => (4, 512_usize),
+        Command::SetViewport(_) => (7, 8192_usize),
+        Command::Cancel(_) => (8, 128_usize),
+        Command::ReleaseSurface(_) => (9, 128_usize),
+        Command::CloseSession(_) => (10, 64_usize),
+        Command::Shutdown(_) => (11, 128_usize),
+        Command::FailData(_) => (12, 512_usize),
+        Command::GetPageMetrics(_) => (13, 256_usize),
+    };
+    if value.header.message_type != message_id {
+        return Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidValue, 0));
+    }
+    let mut writer = PayloadWriter::new(limits.capped_bytes(message_limit))?;
+    payload_encode_correlation_into(&value.correlation, 0, &mut writer)?;
+    match &value.command {
+        Command::Hello(payload) => payload_encode_hello_command_into(payload, 0, &mut writer)?,
+        Command::HelloAccept(payload) => payload_encode_hello_accept_command_into(payload, 0, &mut writer)?,
+        Command::Open(payload) => payload_encode_open_command_into(payload, 0, &mut writer)?,
+        Command::ProvideData(payload) => payload_encode_provide_data_command_into(payload, 0, &mut writer)?,
+        Command::SetViewport(payload) => payload_encode_set_viewport_command_into(payload, 0, &mut writer)?,
+        Command::Cancel(payload) => payload_encode_cancel_command_into(payload, 0, &mut writer)?,
+        Command::ReleaseSurface(payload) => payload_encode_release_surface_command_into(payload, 0, &mut writer)?,
+        Command::CloseSession(payload) => payload_encode_close_session_command_into(payload, 0, &mut writer)?,
+        Command::Shutdown(payload) => payload_encode_shutdown_command_into(payload, 0, &mut writer)?,
+        Command::FailData(payload) => payload_encode_fail_data_command_into(payload, 0, &mut writer)?,
+        Command::GetPageMetrics(payload) => payload_encode_get_page_metrics_command_into(payload, 0, &mut writer)?,
+    }
+    let bytes = writer.finish();
+    let actual = u32::try_from(bytes.len()).map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+    if value.header.payload_len != actual {
+        return Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidValue, 0));
+    }
+    Ok((message_id, bytes))
+}
+
+pub fn decode_command_payload(header: EnvelopeHeader, input: &[u8], limits: PayloadCodecLimits) -> Result<CommandEnvelope, PayloadCodecError> {
+    let actual = u32::try_from(input.len()).map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+    if header.payload_len != actual {
+        return Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidValue, 0));
+    }
+    let message_limit = match header.message_type {
+        1 => 512_usize,
+        2 => 256_usize,
+        3 => 4096_usize,
+        4 => 512_usize,
+        7 => 8192_usize,
+        8 => 128_usize,
+        9 => 128_usize,
+        10 => 64_usize,
+        11 => 128_usize,
+        12 => 512_usize,
+        13 => 256_usize,
+        _ => return Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownMessage, 0)),
+    };
+    let mut reader = PayloadReader::new(input, limits.capped_bytes(message_limit))?;
+    let correlation = payload_decode_correlation_from(0, &mut reader)?;
+    let command = match header.message_type {
+        1 => Command::Hello(payload_decode_hello_command_from(0, &mut reader)?),
+        2 => Command::HelloAccept(payload_decode_hello_accept_command_from(0, &mut reader)?),
+        3 => Command::Open(payload_decode_open_command_from(0, &mut reader)?),
+        4 => Command::ProvideData(payload_decode_provide_data_command_from(0, &mut reader)?),
+        7 => Command::SetViewport(payload_decode_set_viewport_command_from(0, &mut reader)?),
+        8 => Command::Cancel(payload_decode_cancel_command_from(0, &mut reader)?),
+        9 => Command::ReleaseSurface(payload_decode_release_surface_command_from(0, &mut reader)?),
+        10 => Command::CloseSession(payload_decode_close_session_command_from(0, &mut reader)?),
+        11 => Command::Shutdown(payload_decode_shutdown_command_from(0, &mut reader)?),
+        12 => Command::FailData(payload_decode_fail_data_command_from(0, &mut reader)?),
+        13 => Command::GetPageMetrics(payload_decode_get_page_metrics_command_from(0, &mut reader)?),
+        _ => return Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownMessage, 0)),
+    };
+    reader.finish()?;
+    Ok(CommandEnvelope { header, correlation, command })
+}
+
+pub fn encode_event_payload(value: &EventEnvelope, limits: PayloadCodecLimits) -> Result<(u16, Vec<u8>), PayloadCodecError> {
+    let (message_id, message_limit) = match &value.event {
+        Event::Ready(_) => (101, 256_usize),
+        Event::NeedData(_) => (102, 2048_usize),
+        Event::DocumentReady(_) => (103, 512_usize),
+        Event::CapabilityReported(_) => (105, 65536_usize),
+        Event::SurfaceReady(_) => (106, 2048_usize),
+        Event::RequestCancelled(_) => (107, 128_usize),
+        Event::RequestFailed(_) => (108, 256_usize),
+        Event::SessionClosed(_) => (109, 128_usize),
+        Event::WorkerStopped(_) => (110, 128_usize),
+        Event::WorkerFault(_) => (111, 256_usize),
+        Event::ProtocolFault(_) => (112, 256_usize),
+        Event::SurfaceReclaimed(_) => (113, 128_usize),
+        Event::EngineHello(_) => (114, 512_usize),
+        Event::DataFailed(_) => (115, 256_usize),
+        Event::PageMetrics(_) => (116, 16384_usize),
+        Event::GenerationPlanned(_) => (117, 65536_usize),
+        Event::GenerationCompleted(_) => (118, 512_usize),
+        Event::CancelAcknowledged(_) => (121, 128_usize),
+        Event::SurfaceReleaseAcknowledged(_) => (123, 128_usize),
+        Event::CloseSessionAcknowledged(_) => (124, 128_usize),
+        Event::ShutdownAcknowledged(_) => (125, 128_usize),
+    };
+    if value.header.message_type != message_id {
+        return Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidValue, 0));
+    }
+    let mut writer = PayloadWriter::new(limits.capped_bytes(message_limit))?;
+    payload_encode_correlation_into(&value.correlation, 0, &mut writer)?;
+    match &value.event {
+        Event::Ready(payload) => payload_encode_ready_event_into(payload, 0, &mut writer)?,
+        Event::NeedData(payload) => payload_encode_need_data_event_into(payload, 0, &mut writer)?,
+        Event::DocumentReady(payload) => payload_encode_document_ready_event_into(payload, 0, &mut writer)?,
+        Event::CapabilityReported(payload) => payload_encode_capability_reported_event_into(payload, 0, &mut writer)?,
+        Event::SurfaceReady(payload) => payload_encode_surface_ready_event_into(payload, 0, &mut writer)?,
+        Event::RequestCancelled(payload) => payload_encode_request_cancelled_event_into(payload, 0, &mut writer)?,
+        Event::RequestFailed(payload) => payload_encode_request_failed_event_into(payload, 0, &mut writer)?,
+        Event::SessionClosed(payload) => payload_encode_session_closed_event_into(payload, 0, &mut writer)?,
+        Event::WorkerStopped(payload) => payload_encode_worker_stopped_event_into(payload, 0, &mut writer)?,
+        Event::WorkerFault(payload) => payload_encode_worker_fault_event_into(payload, 0, &mut writer)?,
+        Event::ProtocolFault(payload) => payload_encode_protocol_fault_event_into(payload, 0, &mut writer)?,
+        Event::SurfaceReclaimed(payload) => payload_encode_surface_reclaimed_event_into(payload, 0, &mut writer)?,
+        Event::EngineHello(payload) => payload_encode_engine_hello_event_into(payload, 0, &mut writer)?,
+        Event::DataFailed(payload) => payload_encode_data_failed_event_into(payload, 0, &mut writer)?,
+        Event::PageMetrics(payload) => payload_encode_page_metrics_event_into(payload, 0, &mut writer)?,
+        Event::GenerationPlanned(payload) => payload_encode_generation_planned_event_into(payload, 0, &mut writer)?,
+        Event::GenerationCompleted(payload) => payload_encode_generation_completed_event_into(payload, 0, &mut writer)?,
+        Event::CancelAcknowledged(payload) => payload_encode_cancel_acknowledged_event_into(payload, 0, &mut writer)?,
+        Event::SurfaceReleaseAcknowledged(payload) => payload_encode_surface_release_acknowledged_event_into(payload, 0, &mut writer)?,
+        Event::CloseSessionAcknowledged(payload) => payload_encode_close_session_acknowledged_event_into(payload, 0, &mut writer)?,
+        Event::ShutdownAcknowledged(payload) => payload_encode_shutdown_acknowledged_event_into(payload, 0, &mut writer)?,
+    }
+    let bytes = writer.finish();
+    let actual = u32::try_from(bytes.len()).map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+    if value.header.payload_len != actual {
+        return Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidValue, 0));
+    }
+    Ok((message_id, bytes))
+}
+
+pub fn decode_event_payload(header: EnvelopeHeader, input: &[u8], limits: PayloadCodecLimits) -> Result<EventEnvelope, PayloadCodecError> {
+    let actual = u32::try_from(input.len()).map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+    if header.payload_len != actual {
+        return Err(PayloadCodecError::new(PayloadCodecErrorCode::InvalidValue, 0));
+    }
+    let message_limit = match header.message_type {
+        101 => 256_usize,
+        102 => 2048_usize,
+        103 => 512_usize,
+        105 => 65536_usize,
+        106 => 2048_usize,
+        107 => 128_usize,
+        108 => 256_usize,
+        109 => 128_usize,
+        110 => 128_usize,
+        111 => 256_usize,
+        112 => 256_usize,
+        113 => 128_usize,
+        114 => 512_usize,
+        115 => 256_usize,
+        116 => 16384_usize,
+        117 => 65536_usize,
+        118 => 512_usize,
+        121 => 128_usize,
+        123 => 128_usize,
+        124 => 128_usize,
+        125 => 128_usize,
+        _ => return Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownMessage, 0)),
+    };
+    let mut reader = PayloadReader::new(input, limits.capped_bytes(message_limit))?;
+    let correlation = payload_decode_correlation_from(0, &mut reader)?;
+    let event = match header.message_type {
+        101 => Event::Ready(payload_decode_ready_event_from(0, &mut reader)?),
+        102 => Event::NeedData(payload_decode_need_data_event_from(0, &mut reader)?),
+        103 => Event::DocumentReady(payload_decode_document_ready_event_from(0, &mut reader)?),
+        105 => Event::CapabilityReported(payload_decode_capability_reported_event_from(0, &mut reader)?),
+        106 => Event::SurfaceReady(payload_decode_surface_ready_event_from(0, &mut reader)?),
+        107 => Event::RequestCancelled(payload_decode_request_cancelled_event_from(0, &mut reader)?),
+        108 => Event::RequestFailed(payload_decode_request_failed_event_from(0, &mut reader)?),
+        109 => Event::SessionClosed(payload_decode_session_closed_event_from(0, &mut reader)?),
+        110 => Event::WorkerStopped(payload_decode_worker_stopped_event_from(0, &mut reader)?),
+        111 => Event::WorkerFault(payload_decode_worker_fault_event_from(0, &mut reader)?),
+        112 => Event::ProtocolFault(payload_decode_protocol_fault_event_from(0, &mut reader)?),
+        113 => Event::SurfaceReclaimed(payload_decode_surface_reclaimed_event_from(0, &mut reader)?),
+        114 => Event::EngineHello(payload_decode_engine_hello_event_from(0, &mut reader)?),
+        115 => Event::DataFailed(payload_decode_data_failed_event_from(0, &mut reader)?),
+        116 => Event::PageMetrics(payload_decode_page_metrics_event_from(0, &mut reader)?),
+        117 => Event::GenerationPlanned(payload_decode_generation_planned_event_from(0, &mut reader)?),
+        118 => Event::GenerationCompleted(payload_decode_generation_completed_event_from(0, &mut reader)?),
+        121 => Event::CancelAcknowledged(payload_decode_cancel_acknowledged_event_from(0, &mut reader)?),
+        123 => Event::SurfaceReleaseAcknowledged(payload_decode_surface_release_acknowledged_event_from(0, &mut reader)?),
+        124 => Event::CloseSessionAcknowledged(payload_decode_close_session_acknowledged_event_from(0, &mut reader)?),
+        125 => Event::ShutdownAcknowledged(payload_decode_shutdown_acknowledged_event_from(0, &mut reader)?),
+        _ => return Err(PayloadCodecError::new(PayloadCodecErrorCode::UnknownMessage, 0)),
+    };
+    reader.finish()?;
+    Ok(EventEnvelope { header, correlation, event })
+}
+
+fn payload_codec_hash_preimage(domain: &str, payload: Vec<u8>) -> Result<Vec<u8>, PayloadCodecError> {
+let payload_len = u64::try_from(payload.len())
+.map_err(|_| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+let capacity = domain.len().checked_add(9)
+.and_then(|length| length.checked_add(payload.len()))
+.ok_or_else(|| PayloadCodecError::new(PayloadCodecErrorCode::LimitExceeded, 0))?;
+let mut preimage = Vec::with_capacity(capacity);
+preimage.extend_from_slice(domain.as_bytes());
+preimage.push(0);
+preimage.extend_from_slice(&payload_len.to_le_bytes());
+preimage.extend_from_slice(&payload);
+Ok(preimage)
+}
+
+pub fn capability_decision_hash_preimage(value: &CapabilityDecision, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let payload = encode_capability_decision_payload(value, limits)?;
+    payload_codec_hash_preimage(CAPABILITY_DECISION_HASH_DOMAIN, payload)
+}
+
+pub fn render_plan_manifest_hash_preimage(value: &RenderPlanManifest, limits: PayloadCodecLimits) -> Result<Vec<u8>, PayloadCodecError> {
+    let payload = encode_render_plan_manifest_payload(value, limits)?;
+    payload_codec_hash_preimage(RENDER_PLAN_MANIFEST_HASH_DOMAIN, payload)
 }

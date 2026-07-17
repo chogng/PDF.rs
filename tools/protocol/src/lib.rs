@@ -7,7 +7,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod codec;
 mod generate;
+mod generate_codec;
 mod hash;
 mod model;
 mod parser;

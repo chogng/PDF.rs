@@ -2,18 +2,19 @@ import { readFileSync } from "node:fs";
 
 import {
   AlphaMode,
-  BrowserTransferKind,
   CapabilityScopeKind,
   CollectionCompleteness,
+  DataAttachmentRole,
   EndpointRole,
+  EnvelopeSequenceTracker,
   KNOWN_ENDPOINT_CAPABILITIES,
   MESSAGE_ID_CLOSE_SESSION,
   MESSAGE_ID_PROVIDE_DATA,
-  MESSAGE_ID_REGISTER_CANVAS,
   MESSAGE_ID_SET_VIEWPORT,
   MESSAGE_ID_SURFACE_READY,
   MIN_COMPATIBLE_MINOR,
   NativeBackend,
+  OutputProfile,
   PageCoordinateSpace,
   PageRotation,
   PixelFormat,
@@ -21,18 +22,22 @@ import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   QualityPolicy,
+  SCHEMA_HASH,
   SCHEMA_HASH_HEX,
   SCHEMA_SHA256_HEX,
   SupportStatus,
   SurfaceCoordinateSpace,
+  beginValidateCommandEnvelope,
+  beginValidateCommandEnvelopeResult,
+  beginValidateEventEnvelope,
+  negotiateHandshake,
+  negotiateHandshakeResult,
   validateCapabilityDecision,
-  validateCommandEnvelope,
   validateCorrelation,
   validateDataSegment,
   validateEndpointCapabilities,
   validateEnvelopeHeader,
   validateEnvelopeHeaderForMinor,
-  validateEventEnvelope,
   validateProtocolHello,
   validateProvideDataTransferLengths,
   validateSurfaceReclaimedEvent,
@@ -58,6 +63,86 @@ const header = (message_type: number, payload_len = 0) => ({
 });
 const workerCorrelation = { worker: 1n };
 const sessionCorrelation = { worker: 1n, session: 2n };
+const knownCapabilities = KNOWN_ENDPOINT_CAPABILITIES;
+const handshakeHello = (endpoint_role: EndpointRole) => ({
+  major: PROTOCOL_MAJOR,
+  minor: PROTOCOL_MINOR,
+  schema_hash: SCHEMA_HASH,
+  endpoint_role,
+  capabilities: { supported: knownCapabilities, mandatory: 0n },
+  max_message_bytes: 1_048_576,
+  max_transfer_slots: 8,
+});
+const connection = negotiateHandshake(
+  handshakeHello(EndpointRole.Host),
+  handshakeHello(EndpointRole.Engine),
+);
+if (connection === undefined) {
+  throw new Error("generated exact handshake must negotiate");
+}
+expect(
+  negotiateHandshakeResult(
+    handshakeHello(EndpointRole.Host),
+    handshakeHello(EndpointRole.Engine),
+  ).ok,
+  "handshake result API accepts exact transcript",
+);
+const invalidHandshake = negotiateHandshakeResult(
+  handshakeHello(EndpointRole.Host),
+  { ...handshakeHello(EndpointRole.Engine), minor: PROTOCOL_MINOR + 1 },
+);
+expect(
+  !invalidHandshake.ok && invalidHandshake.error.code === "InvalidHandshake",
+  "handshake result API is stable and redacted",
+);
+
+const declaredPayloadLength = (value: unknown): number | undefined => {
+  if (typeof value !== "object" || value === null) return undefined;
+  const headerValue = Reflect.get(value, "header");
+  if (typeof headerValue !== "object" || headerValue === null) return undefined;
+  const payloadLength = Reflect.get(headerValue, "payload_len");
+  return typeof payloadLength === "number" ? payloadLength : undefined;
+};
+const validateCommandEnvelope = (
+  value: unknown,
+  transferSlots = 0,
+  negotiatedMinor = PROTOCOL_MINOR,
+): boolean => {
+  const payloadLength = declaredPayloadLength(value);
+  return negotiatedMinor === connection.minor
+    && payloadLength !== undefined
+    && beginValidateCommandEnvelope(
+      value,
+      transferSlots,
+      payloadLength,
+      connection,
+      new EnvelopeSequenceTracker(),
+    ) !== undefined;
+};
+const validateEventEnvelope = (
+  value: unknown,
+  transferSlots?: number,
+): boolean => {
+  const payloadLength = declaredPayloadLength(value);
+  const eventValue =
+    typeof value === "object" && value !== null
+      ? Reflect.get(value, "event")
+      : undefined;
+  const eventType =
+    typeof eventValue === "object" && eventValue !== null
+      ? Reflect.get(eventValue, "type")
+      : undefined;
+  const actualTransferSlots =
+    transferSlots ?? (eventType === "SurfaceReady" ? 1 : 0);
+  return payloadLength !== undefined
+    && beginValidateEventEnvelope(
+      value,
+      actualTransferSlots,
+      payloadLength,
+      connection,
+      new EnvelopeSequenceTracker(),
+    ) !== undefined;
+};
 
 expect(validateEnvelopeHeader(header(MESSAGE_ID_CLOSE_SESSION)), "known header");
 expect(!validateEnvelopeHeader(header(65535)), "unknown message id");
@@ -87,6 +172,30 @@ const close = {
   command: { type: "CloseSession", payload: {} },
 };
 expect(validateCommandEnvelope(close), "valid command envelope");
+const committedCloseSequence = new EnvelopeSequenceTracker();
+const pendingClose = beginValidateCommandEnvelopeResult(
+  close,
+  0,
+  close.header.payload_len,
+  connection,
+  committedCloseSequence,
+);
+expect(
+  pendingClose.ok && pendingClose.value.commitSequence(),
+  "envelope result API commits only explicitly",
+);
+const duplicateClose = beginValidateCommandEnvelopeResult(
+  close,
+  0,
+  close.header.payload_len,
+  connection,
+  committedCloseSequence,
+);
+expect(
+  !duplicateClose.ok
+    && duplicateClose.error.code === "NonMonotonicSequence",
+  "envelope result API reports stable sequence failure",
+);
 expect(
   validateEnvelopeHeaderForMinor(close.header, MIN_COMPATIBLE_MINOR),
   "header matches registered negotiated minor",
@@ -102,7 +211,7 @@ expect(
 expect(
   !validateCommandEnvelope({
     ...close,
-    header: header(MESSAGE_ID_REGISTER_CANVAS),
+    header: header(MESSAGE_ID_SET_VIEWPORT),
     correlation: workerCorrelation,
   }),
   "header id and command type mismatch",
@@ -141,7 +250,7 @@ const viewport = {
   zoom_denominator: 2,
   visible_pages: [pageViewport(0)],
   quality: QualityPolicy.Full,
-  output_profile: 0,
+  output_profile: OutputProfile.Srgb,
   device_scale_milli: 2_000,
   rotation: PageRotation.Degrees0,
   optional_content_id: 0n,
@@ -184,25 +293,15 @@ for (const invalidViewport of [
   );
 }
 
-const canvas = {
-  header: header(MESSAGE_ID_REGISTER_CANVAS, 32),
-  correlation: workerCorrelation,
-  command: {
-    type: "RegisterCanvas",
-    payload: { canvas: 3n, transfer_slot: 0, width: 10, height: 10 },
-  },
-};
-expect(validateCommandEnvelope(canvas, 1), "registered canvas transfer");
-expect(!validateCommandEnvelope(canvas, 0), "missing registered canvas transfer");
-
 const source = {
-  stable_id: new Uint8Array(32),
+  stable_id: bytes32(),
   revision: 1n,
 };
 const segment = (slot: number) => ({
-  range: { start: BigInt(slot), len: 1n },
+  range: { start: BigInt(slot * 2), len: 1n },
   slot,
   byte_length: 1n,
+  role: DataAttachmentRole.ImmutableRangeBytes,
 });
 const provide = {
   header: header(MESSAGE_ID_PROVIDE_DATA, 128),
@@ -245,7 +344,6 @@ expect(
   "unreferenced transfer slot",
 );
 
-const knownCapabilities = 0x3fn;
 expect(
   validateEndpointCapabilities({ supported: knownCapabilities, mandatory: 1n }),
   "known mandatory capability",
@@ -271,7 +369,7 @@ expect(
 const hello = {
   major: PROTOCOL_MAJOR,
   minor: PROTOCOL_MINOR,
-  schema_hash: new Uint8Array(16),
+  schema_hash: SCHEMA_HASH,
   endpoint_role: EndpointRole.Host,
   capabilities: { supported: knownCapabilities, mandatory: 0n },
   max_message_bytes: 1024,
@@ -299,6 +397,7 @@ expect(
 const surfacePayload = (stride: number, byteLength: bigint) => ({
   metadata: {
     id: 5n,
+    lease_token: 7n,
     owner: { worker: 1n, session: 2n },
     generation: 3n,
     region: {
@@ -313,7 +412,7 @@ const surfacePayload = (stride: number, byteLength: bigint) => ({
     height: 1,
     stride,
     format: PixelFormat.Rgba8,
-    alpha: AlphaMode.Premultiplied,
+    alpha: AlphaMode.Straight,
     byte_offset: 0n,
     byte_length: byteLength,
     render_config: bytes32(),
@@ -324,10 +423,14 @@ const surfacePayload = (stride: number, byteLength: bigint) => ({
     decision_hash: bytes32(),
     backend: NativeBackend.ReferenceCpu,
   },
-  transport: { kind: "LocalMemory", region_length: byteLength, memory_epoch: 1 },
+  transport: {
+    kind: "BrowserArrayBuffer",
+    slot: 0,
+    buffer_length: byteLength,
+  },
 });
 const surfaceEnvelope = (payload: ReturnType<typeof surfacePayload>) => ({
-  header: header(MESSAGE_ID_SURFACE_READY, 1024),
+  header: header(MESSAGE_ID_SURFACE_READY, 282),
   correlation: { worker: 1n, session: 2n, generation: 3n },
   event: { type: "SurfaceReady", payload },
 });
@@ -364,19 +467,22 @@ expect(
   !validateEventEnvelope(
     surfaceEnvelope({
       ...surfacePayload(400, 400n),
-      transport: { kind: "LocalMemory", region_length: 400n, memory_epoch: 0 },
+      transport: {
+        kind: "BrowserArrayBuffer",
+        slot: 1,
+        buffer_length: 400n,
+      },
     }),
   ),
-  "zero local memory epoch",
+  "browser surface slot must bind the only logical resource",
 );
 expect(
   validateSurfaceTransport({
-    kind: "BrowserTransfer",
+    kind: "BrowserArrayBuffer",
     slot: 0,
-    transfer_kind: BrowserTransferKind.ArrayBuffer,
-    transfer_length: 400n,
+    buffer_length: 400n,
   }),
-  "browser transfer discriminant is distinct from transfer kind",
+  "browser ArrayBuffer transport is generated",
 );
 
 type JsonObject = { readonly [key: string]: unknown };
@@ -579,6 +685,7 @@ for (const raw of jsonArray(invalidDocument.vectors, "invalid vectors")) {
         byte_length: BigInt(
           jsonString(vector.byte_length, `${name}.byte_length`),
         ),
+        role: DataAttachmentRole.ImmutableRangeBytes,
       };
       const transferLength = BigInt(
         jsonString(vector.transfer_length, `${name}.transfer_length`),
@@ -624,7 +731,7 @@ for (const raw of jsonArray(invalidDocument.vectors, "invalid vectors")) {
       payload.metadata.region.width = 1;
       payload.metadata.region.height = 1;
       payload.metadata.byte_offset = byteOffset;
-      payload.transport.region_length = regionLength;
+      payload.transport.buffer_length = regionLength;
       expect(!validateEventEnvelope(surfaceEnvelope(payload)), name);
       break;
     }

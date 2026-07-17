@@ -1,6 +1,6 @@
 use pdf_rs_protocol::{
-    ByteRange, Correlation, DataSegment, DataTicket, ProtocolErrorCode, ProtocolLimits,
-    ProtocolValidator, ProvideDataCommand, SessionId, SourceIdentity, WorkerId,
+    ByteRange, Correlation, DataAttachmentRole, DataSegment, DataTicket, ProtocolErrorCode,
+    ProtocolLimits, ProtocolValidator, ProvideDataCommand, SessionId, SourceIdentity, WorkerId,
 };
 
 const WORKER: WorkerId = WorkerId::new(7);
@@ -20,6 +20,7 @@ fn segment(start: u64, len: u64, slot: u16) -> DataSegment {
         range: ByteRange { start, len },
         slot,
         byte_length: len,
+        role: DataAttachmentRole::ImmutableRangeBytes,
     }
 }
 

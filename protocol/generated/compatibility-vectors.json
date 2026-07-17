@@ -1,17 +1,19 @@
 {
-  "generator_version": "0.1.0",
-  "schema_sha256": "7bafe655ec2ddb58fc8df4184da6e722c924307bbf6e0a68e91f7b292f708ee5",
-  "wire_schema_hash": "7bafe655ec2ddb58fc8df4184da6e722",
+  "generator_version": "0.2.0",
+  "wire_identity_domain": "PDF.rs/EngineProtocol/WireIdentity/v1",
+  "payload_codec_abi_version": 1,
+  "schema_sha256": "ab6712bcca32d227a614b786925e5b1990543695bde0e865513ab95e90779a03",
+  "wire_schema_hash": "ab6712bcca32d227a614b786925e5b19",
   "truncation_policy": "sha256-first-16-bytes",
   "minimum_compatible_minor": 2,
   "vectors": [
-    {"name":"exact-schema","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"7bafe655ec2ddb58fc8df4184da6e722","peer_supported":"0x3f","peer_mandatory":"0x00","expected":"ExactSchema"},
-    {"name":"unregistered-older-minor","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":1,"peer_schema_hash":"11111111111111111111111111111111","peer_supported":"0x3f","peer_mandatory":"0x00","expected_error":"UnsupportedMinor"},
-    {"name":"future-minor","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":3,"peer_schema_hash":"84afe655ec2ddb58fc8df4184da6e722","peer_supported":"0x3f","peer_mandatory":"0x00","expected_error":"UnsupportedMinor"},
-    {"name":"same-minor-schema-fork","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"84afe655ec2ddb58fc8df4184da6e722","peer_supported":"0x3f","peer_mandatory":"0x00","expected_error":"IncompatibleSchema"},
-    {"name":"unknown-optional-capability","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"7bafe655ec2ddb58fc8df4184da6e722","peer_supported":"0x800000000000003f","peer_mandatory":"0x00","expected":"ExactSchema"},
-    {"name":"unknown-mandatory-capability","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"7bafe655ec2ddb58fc8df4184da6e722","peer_supported":"0x3f","peer_mandatory":"0x8000000000000000","expected_error":"UnknownMandatoryCapability"},
-    {"name":"mandatory-not-supported-by-endpoint","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"7bafe655ec2ddb58fc8df4184da6e722","peer_supported":"0x3e","peer_mandatory":"0x01","expected_error":"InvalidEndpointCapabilities"},
-    {"name":"major-mismatch","local_major":0,"local_minor":2,"peer_major":1,"peer_minor":2,"peer_schema_hash":"7bafe655ec2ddb58fc8df4184da6e722","peer_supported":"0x3f","peer_mandatory":"0x00","expected_error":"UnsupportedMajor"}
+    {"name":"exact-schema","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"ab6712bcca32d227a614b786925e5b19","peer_supported":"0x1f","peer_mandatory":"0x0","expected":"ExactSchema"},
+    {"name":"unregistered-older-minor","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":1,"peer_schema_hash":"11111111111111111111111111111111","peer_supported":"0x1f","peer_mandatory":"0x0","expected_error":"UnsupportedMinor"},
+    {"name":"future-minor","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":3,"peer_schema_hash":"546712bcca32d227a614b786925e5b19","peer_supported":"0x1f","peer_mandatory":"0x0","expected_error":"UnsupportedMinor"},
+    {"name":"same-minor-schema-fork","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"546712bcca32d227a614b786925e5b19","peer_supported":"0x1f","peer_mandatory":"0x0","expected_error":"IncompatibleSchema"},
+    {"name":"unknown-optional-capability","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"ab6712bcca32d227a614b786925e5b19","peer_supported":"0x800000000000001f","peer_mandatory":"0x0","expected":"ExactSchema"},
+    {"name":"unknown-mandatory-capability","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"ab6712bcca32d227a614b786925e5b19","peer_supported":"0x1f","peer_mandatory":"0x8000000000000000","expected_error":"UnknownMandatoryCapability"},
+    {"name":"mandatory-not-supported-by-endpoint","local_major":0,"local_minor":2,"peer_major":0,"peer_minor":2,"peer_schema_hash":"ab6712bcca32d227a614b786925e5b19","peer_supported":"0x1e","peer_mandatory":"0x1","expected_error":"InvalidEndpointCapabilities"},
+    {"name":"major-mismatch","local_major":0,"local_minor":2,"peer_major":1,"peer_minor":2,"peer_schema_hash":"ab6712bcca32d227a614b786925e5b19","peer_supported":"0x1f","peer_mandatory":"0x0","expected_error":"UnsupportedMajor"}
   ]
 }
