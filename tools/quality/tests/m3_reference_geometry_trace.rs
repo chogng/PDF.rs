@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.76.0";
+const TRACE_VERSION: &str = "0.77.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "213652f80d9d8c6749102f0aa7d6d53163e5ac3c";
 const IMPLEMENTATION_TREE: &str = "de487ccfee70952024ea15b16e5c497794ec3269";
@@ -127,12 +127,16 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
     image
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-08 completion is exact");
-    for index in 10..=11 {
-        let id = format!("M3-{index:02}");
-        table_record(&plan_text, "work_item", &id)
-            .expect_string("status", "planned")
-            .unwrap_or_else(|error| panic!("{id} status: {error}"));
-    }
+    let integrated = table_record(&plan_text, "work_item", "M3-10");
+    integrated
+        .expect_string("status", "complete")
+        .expect("M3-10 status is exact");
+    integrated
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-10 completion is exact");
+    table_record(&plan_text, "work_item", "M3-11")
+        .expect_string("status", "planned")
+        .expect("M3-11 remains planned");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature map root is strict TOML");
     feature_root
@@ -265,6 +269,7 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
                 "core.content-vm-scene-v1",
                 "core.content-graphics-v2",
                 "core.reference-stroke-clip",
+                "core.reference-raster-v1",
             ],
         )
         .expect("clip-state features are exact");

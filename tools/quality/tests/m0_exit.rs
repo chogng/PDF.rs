@@ -59,8 +59,8 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
     }
     assert!(date_value(m1, "start_date") <= date_value(m1, "completed_at"));
 
-    assert_line(SPEC_MAP, "version = \"0.76.0\"");
-    assert_line(FEATURE_MAP, "version = \"0.76.0\"");
+    assert_line(SPEC_MAP, "version = \"0.77.0\"");
+    assert_line(FEATURE_MAP, "version = \"0.77.0\"");
     let requirement = array_record(SPEC_MAP, "[[requirement]]", "RPE-ARCH-001/15.3/M0");
     for required in [
         "status = \"covered\"",

@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.76.0";
+const TRACE_VERSION: &str = "0.77.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "127ee3cac4ab5595abbecd6438e6e309a58b23cb";
 const IMPLEMENTATION_TREE: &str = "c5e3ba0d5cd5e5de7b30845bb177e196ec8655b7";
@@ -293,12 +293,16 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
     image
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-08 completion is exact");
-    for index in 10..=11 {
-        let id = format!("M3-{index:02}");
-        table_record(&plan_text, "work_item", &id)
-            .expect_string("status", "planned")
-            .unwrap_or_else(|error| panic!("{id} status: {error}"));
-    }
+    let integrated = table_record(&plan_text, "work_item", "M3-10");
+    integrated
+        .expect_string("status", "complete")
+        .expect("M3-10 status is exact");
+    integrated
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-10 completion is exact");
+    table_record(&plan_text, "work_item", "M3-11")
+        .expect_string("status", "planned")
+        .expect("M3-11 remains planned");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature map root is strict TOML");
     feature_root
@@ -402,7 +406,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "reference-color-v1",
                 "soft-mask",
-                "M3-10 still owns integrated ReferenceRenderJob acceptance",
+                "M3-10 separately accepts",
             ][..],
         ),
         (
@@ -410,15 +414,16 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "m3.reference-color-compositing.v1",
                 "transparent-black canonicalization",
-                "M3-10 owns integrated ReferenceRenderJob acceptance",
+                "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
             ][..],
         ),
         (
             "RPE-ARCH-001/15.3/M3",
             &[
                 "M3-07 closes project-owned",
-                "M3-08 now closes",
-                "M3-10 and M3-11",
+                "M3-08 closes",
+                "M3-10 now closes",
+                "M3-11 still owns",
             ][..],
         ),
     ] {

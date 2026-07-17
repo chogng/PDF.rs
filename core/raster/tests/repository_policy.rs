@@ -324,8 +324,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.76.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.76.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.77.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.77.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -434,6 +434,9 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "M3-07 adds the allocation-free `reference-color-v1`",
         "named `soft-mask` capability",
         "M3-08 and M3-09 add proof-bound basic image and glyph Scene resources",
+        "core.reference-raster-v1",
+        "M3-10 separately accepts",
+        "M3-11 still owns formal O0/O1/O3",
         "status = \"partial\"",
     ] {
         assert!(
@@ -445,14 +448,15 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let reference_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/8.1-8.3")
         .expect("Reference architecture requirement must be registered");
     for required in [
-        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\", \"core.basic-image-xobjects\", \"core.basic-embedded-text\"]",
+        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\", \"core.basic-image-xobjects\", \"core.basic-embedded-text\", \"core.reference-raster-v1\"]",
         "implementation = [\"core/raster\"]",
         "sRGB-reference-v1",
         "reference-color-v1",
         "structured unsupported color, blend, soft-mask, and group requirements",
-        "M3-10 owns integrated ReferenceRenderJob acceptance and final dispatch",
-        "register no final O0/O1 case authority",
-        "All six linked feature records remain PLANNED",
+        "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
+        "preceding work items still register no final case authority",
+        "M3-11 retains formal O0/O1/O3 pixels",
+        "All seven linked feature records remain PLANNED",
         "status = \"partial\"",
     ] {
         assert!(
@@ -467,20 +471,25 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "core.reference-color-compositing",
         "core.basic-image-xobjects",
         "core.basic-embedded-text",
+        "core.reference-raster-v1",
         "M3-01 through M3-04 close the bounded pixel foundation",
         "M3-05 and M3-06 close the commit-pinned geometry/coverage and stroke/clip stages",
         "M3-07 closes project-owned DeviceGray/RGB/CMYK conversion",
-        "M3-08 now closes the commit-pinned basic unmasked Image XObject slice",
-        "M3-09 now closes the commit-pinned bounded embedded simple TrueType slice",
-        "Independent review evidence for all nine completed work items reports SHIP",
-        "M3-10 and M3-11 still own integrated reference-raster-v1",
+        "M3-08 closes the commit-pinned basic unmasked Image XObject slice",
+        "M3-09 closes the commit-pinned bounded embedded simple TrueType slice",
+        "M3-10 now closes the separately reviewed integrated",
+        "Independent review evidence for all ten completed work items reports SHIP",
+        "M3-11 still owns registered formal O0/O1/O3 pixels",
         "tools/quality::m3_raster_oracle_contract",
         "tools/quality::m3_content_graphics_trace",
         "tools/quality::m3_reference_color_trace",
         "tools/quality::m3_basic_image_trace",
         "tools/quality::m3_basic_text_trace",
+        "tools/quality::m3_reference_gate",
+        "tools/quality::m3_reference_raster_trace",
         "tools/quality::purity",
-        "does not claim integrated visible PDF rendering",
+        "claims bounded integrated ReferenceRenderJob acceptance",
+        "not formal final case authority",
         "status = \"partial\"",
     ] {
         assert!(
@@ -512,7 +521,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/11.3.2-11.3.4")
             .expect("Transparency requirement must be registered");
     for required in [
-        "features = [\"core.reference-color-compositing\"]",
+        "features = [\"core.reference-color-compositing\", \"core.reference-raster-v1\"]",
         "implementation = [\"core/raster\"]",
         "core/raster::reference_color",
         "tools/quality::m3_reference_color_trace",
@@ -552,15 +561,14 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "{id} must retain its completion date"
         );
     }
-    for index in 10..=11 {
-        let id = format!("M3-{index:02}");
-        let item = record_with_id(&plan, "work_item", &id)
-            .unwrap_or_else(|| panic!("{id} work item must exist"));
-        assert!(
-            item.contains("status = \"planned\""),
-            "{id} must remain planned"
-        );
-    }
+    let m3_10 = record_with_id(&plan, "work_item", "M3-10").expect("M3-10 work item must exist");
+    assert!(m3_10.contains("status = \"complete\""));
+    assert!(m3_10.contains("completed_at = 2026-07-16"));
+    let m3_11 = record_with_id(&plan, "work_item", "M3-11").expect("M3-11 work item must exist");
+    assert!(
+        m3_11.contains("status = \"planned\""),
+        "M3-11 must remain planned"
+    );
     assert!(
         !capability_profiles.contains("m3.content-graphics-v2.v1"),
         "M3-04 must not create a maturity profile"

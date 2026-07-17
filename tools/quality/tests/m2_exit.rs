@@ -12,7 +12,7 @@ use evidence::{
     verify_reviewed_subjects, verify_subject_entries,
 };
 
-const TRACE_VERSION: &str = "0.76.0";
+const TRACE_VERSION: &str = "0.77.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const M1_PAGE_TREE_SHA256: &str =
     "e680abd131a3a4da61262eb152820c3e4f6252c6396a15447039713da3a0f5e1";
@@ -646,7 +646,7 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     assert!(symlink_guard < destructive_clean);
     assert!(destructive_clean < debug_1);
 
-    let shared_checks = "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m3-reference-geometry-trace,m3-reference-color-trace,m3-basic-image-trace,m3-basic-text-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle";
+    let shared_checks = "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m3-reference-geometry-trace,m3-reference-color-trace,m3-basic-image-trace,m3-basic-text-trace,m2-scene-gate,m2-exit,m3-reference-gate,m3-reference-raster-trace,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle";
     assert!(quality_main.contains(&format!("checks: \"{shared_checks}\"")));
     assert!(
         quality_main.contains(&format!("checks: \"{shared_checks},doc\"")),
@@ -654,7 +654,7 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     );
     assert!(
         quality_main.contains(
-            "local/pr checks include the M3 raster-oracle, Content graphics, Reference geometry, Reference color, basic Image, and basic Text contracts, M2 Scene profile replay, and M2 exit closure"
+            "local/pr checks include the M3 raster-oracle, Content graphics, Reference geometry, Reference color, basic Image, basic Text, integrated Reference gate, and Reference trace contracts, plus M2 Scene profile replay and M2 exit closure"
         )
     );
     for required in [

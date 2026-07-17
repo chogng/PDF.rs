@@ -1,0 +1,75 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.reference-raster-integration.independent-review"
+milestone = "M3"
+work_item = "M3-10"
+profile = "m3.reference-raster-v1.v1"
+feature = "core.reference-raster-v1"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "a917aee672ce6be294e479956d5be87c835d0507"
+reviewed_subject_commit = "a917aee672ce6be294e479956d5be87c835d0507"
+reviewed_subject_tree = "e3f9a6f98e61afc9034df02b24fd2f3c293a97a8"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-not-working-tree"
+reviewed_subject_commit_map = [
+  "Cargo.lock@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/Cargo.toml@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/tests/m3_reference_gate.rs@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/tests/m3_reference_gate_support/artifact.rs@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/tests/m3_reference_gate_support/fixture.rs@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/tests/m3_reference_gate_support/mod.rs@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/tests/m3_reference_gate_support/pending.rs@a917aee672ce6be294e479956d5be87c835d0507",
+  "scripts/ci.sh@a917aee672ce6be294e479956d5be87c835d0507",
+  "tools/quality/tests/m2_exit.rs@a917aee672ce6be294e479956d5be87c835d0507",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = [
+  "strict proof-bound PDF open through owned Page acquisition and immutable Content and Scene publication",
+  "source-ordered path, image, and embedded-glyph dispatch through one bounded ReferenceRenderJob",
+  "exact Pending ticket, checkpoint, range, source-change, cancellation, and one-less budget boundaries",
+  "atomic canonical pixel publication, deterministic audit output, and implementation identity binding",
+  "fresh debug and release replay with three recursive artifact comparisons and unchanged M2 closure",
+]
+reviewed_subjects = [
+  "Cargo.lock@a917aee672ce6be294e479956d5be87c835d0507#sha256:997a0ae69da189fb7475724ff2368606cc16eb419f36898b846aac1de3e0830d",
+  "tools/quality/Cargo.toml@a917aee672ce6be294e479956d5be87c835d0507#sha256:65390a314dbf781257ba92bfbc35e43085e0e0c8ea09b91b8394b6032cbbec88",
+  "tools/quality/tests/m3_reference_gate.rs@a917aee672ce6be294e479956d5be87c835d0507#sha256:fc91da374f2f61057c24324bf5526239e54d828d95b83ff4c33f37a66d1448b2",
+  "tools/quality/tests/m3_reference_gate_support/artifact.rs@a917aee672ce6be294e479956d5be87c835d0507#sha256:800df8ab5035c6f03b7ce7c2af2a243c50ac36427f9e1fd2c4bd40f807d90e6f",
+  "tools/quality/tests/m3_reference_gate_support/fixture.rs@a917aee672ce6be294e479956d5be87c835d0507#sha256:ffa3e76b1624566dd2572161f0df32d61897d8078ae4ee8b03561e3daf355b78",
+  "tools/quality/tests/m3_reference_gate_support/mod.rs@a917aee672ce6be294e479956d5be87c835d0507#sha256:d7202c0f220b5251918feeb8391308ba5b6a11275d689e73d38aeb4dfc3336cf",
+  "tools/quality/tests/m3_reference_gate_support/pending.rs@a917aee672ce6be294e479956d5be87c835d0507#sha256:6ce2caaf2672db9e8fb9088d45c32204c51cc43369ef170f1454c22ee18df8bb",
+  "scripts/ci.sh@a917aee672ce6be294e479956d5be87c835d0507#sha256:222adac1c5040c28b5daa521facd70de5e66dba3849c5f94ca36c3af86794c77",
+  "tools/quality/tests/m2_exit.rs@a917aee672ce6be294e479956d5be87c835d0507#sha256:a66079ec16fff80888a61c1db14000060dd183b1b5f9d7839747b250b680b5cd",
+]
+commands = [
+  "git show --check --format=fuller --no-ext-diff a917aee672ce6be294e479956d5be87c835d0507",
+  "git diff-tree --check --no-ext-diff a917aee672ce6be294e479956d5be87c835d0507^ a917aee672ce6be294e479956d5be87c835d0507",
+  "cargo test --locked --package pdf-rs-quality --test m3_reference_gate",
+  "cargo test --locked --release --package pdf-rs-quality --test m3_reference_gate",
+  "cargo test --locked --package pdf-rs-quality --test m2_exit",
+  "cargo clippy --locked --package pdf-rs-quality --test m3_reference_gate -- -D warnings",
+  "cargo fmt --all --check",
+  "bash -n scripts/ci.sh",
+]
+verification_summary = "The reviewed tree passed two fresh debug and two fresh release gate runs, all three recursive normalized-artifact comparisons, M2 exit, targeted Clippy with warnings denied, formatting, shell syntax, and diff checks."
+review_scope = "M3-10 only; includes the integrated strict-to-ReferenceRenderJob path, registered path/image/glyph dispatch, deterministic Pending replay, structured non-publication boundaries, canonical audit and pixel artifacts, and exact Raster implementation identity, but excludes formal M3-11 O0/O1/O3 authority, REFERENCE maturity promotion, product Surface/runtime integration, and M3 exit"
+review_rounds = [
+  "strict open, Page acquisition, Content planning, immutable Scene, and source-order review",
+  "Pending ranges, ticket and checkpoint namespaces, source change, cancellation, limits, and terminal replay review",
+  "Reference dispatch, final-publication ownership, canonical artifacts, implementation identity, and nondeterminism review",
+  "debug and release replay, CI cleanup safety, M2 compatibility, provenance, and immutable M1 review",
+]
+closed_findings = [
+  "P1 mixed-source ordering: the fixture now overlaps path, image, and glyph output and pins Fill, Save, DrawImage, Restore, DrawGlyphRun plus raw and canonical pixel hashes.",
+  "P1 output-root safety: CI restricts cleanup to one fixed repository artifact root, rejects symlink traversal, and uses option-safe path arguments.",
+  "P2 authority separation: integrated pixels are M3-10 acceptance artifacts only; M3-11 retains formal O0/O1/O3 case authority and any REFERENCE promotion.",
+]
+open_p0 = 0
+open_p1 = 0
+open_p2 = 0
+open_p0_p2 = 0
+verdict = "SHIP"

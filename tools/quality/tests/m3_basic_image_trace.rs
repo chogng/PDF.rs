@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.76.0";
+const TRACE_VERSION: &str = "0.77.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "fe379fe1eb2ab5398f627a2db2835bcf41dc3bb0";
 const IMPLEMENTATION_TREE: &str = "8a314214f5abe7c0eca0354ef7c616356966ac77";
@@ -375,12 +375,16 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
         ],
     )
     .expect("acceptance is exact");
-    for index in 10..=11 {
-        let id = format!("M3-{index:02}");
-        table_record(&plan_text, "work_item", &id)
-            .expect_string("status", "planned")
-            .unwrap_or_else(|error| panic!("{id} status: {error}"));
-    }
+    let integrated = table_record(&plan_text, "work_item", "M3-10");
+    integrated
+        .expect_string("status", "complete")
+        .expect("M3-10 status is exact");
+    integrated
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-10 completion is exact");
+    table_record(&plan_text, "work_item", "M3-11")
+        .expect_string("status", "planned")
+        .expect("M3-11 remains planned");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature map is strict TOML");
     feature_root
@@ -461,10 +465,7 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
         (
             "RPE-ARCH-001/6.4-6.7",
             ARCH_SNAPSHOT,
-            &[
-                "ImageResource",
-                "M3-10 owns integrated ReferenceRenderJob acceptance",
-            ][..],
+            &["ImageResource", "M3-10 separately accepts"][..],
         ),
         (
             "RPE-ARCH-001/8.1-8.3",
@@ -473,13 +474,13 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
                 "reference-image-v1",
                 "nearest-neighbor sampling",
                 "Interpolate true remains a structured unsupported outcome",
-                "M3-10 owns integrated ReferenceRenderJob acceptance",
+                "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
             ][..],
         ),
         (
             "RPE-ARCH-001/15.3/M3",
             ARCH_SNAPSHOT,
-            &["M3-08 now closes", "M3-10 and M3-11"][..],
+            &["M3-08 closes", "M3-10 now closes", "M3-11 still owns"][..],
         ),
     ] {
         assert_requirement(

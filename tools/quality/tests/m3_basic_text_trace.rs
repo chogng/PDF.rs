@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.76.0";
+const TRACE_VERSION: &str = "0.77.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "e54b16e609e8fe3b47bc4a3617cf65da54d168dc";
 const IMPLEMENTATION_TREE: &str = "d80008e164bcd2c951d2a093e8c6e098f0009f5d";
@@ -365,11 +365,16 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
         "Font tables, glyph segments, recursion, retained bytes, and raster work are independently bounded.",
         "Missing or unsupported font features produce structured capability outcomes before pixel publication.",
     ]).expect("acceptance");
-    for id in ["M3-10", "M3-11"] {
-        table_record(&plan_text, "work_item", id)
-            .expect_string("status", "planned")
-            .unwrap_or_else(|error| panic!("{id}: {error}"));
-    }
+    let integrated = table_record(&plan_text, "work_item", "M3-10");
+    integrated
+        .expect_string("status", "complete")
+        .expect("M3-10 status");
+    integrated
+        .expect_bare("completed_at", COMPLETED_AT)
+        .expect("M3-10 completion");
+    table_record(&plan_text, "work_item", "M3-11")
+        .expect_string("status", "planned")
+        .expect("M3-11 remains planned");
 
     let feature_root = RootToml::parse(&feature_text).expect("feature TOML");
     feature_root
@@ -486,10 +491,7 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
         (
             "RPE-ARCH-001/6.4-6.7",
             ARCH_SNAPSHOT,
-            &[
-                "GlyphOutline",
-                "later integrated implementation does not retroactively expand",
-            ][..],
+            &["GlyphOutline", "not retroactively expanded"][..],
         ),
         (
             "RPE-ARCH-001/8.1-8.3",
@@ -497,13 +499,18 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
             &[
                 "reference-image-v1",
                 "reference-glyph-v1",
-                "All six linked feature records remain PLANNED",
+                "All seven linked feature records remain PLANNED",
             ][..],
         ),
         (
             "RPE-ARCH-001/15.3/M3",
             ARCH_SNAPSHOT,
-            &["M3-09", "nine completed work items", "M3-10 and M3-11"][..],
+            &[
+                "M3-09 closes",
+                "all ten completed work items",
+                "M3-10 now closes",
+                "M3-11 still owns",
+            ][..],
         ),
     ] {
         assert_requirement(&spec_text, id, snapshot, markers);
@@ -522,20 +529,17 @@ fn m3_basic_text_plan_feature_and_spec_links_are_exact() {
             "ISO-32000-1:2008/8.4.3",
             &[
                 "M3-08 and M3-09 carry",
-                "accepted final integrated M3-10 raster authority",
+                "M3-10 now accepts those transforms",
             ][..],
         ),
         (
             "RPE-ARCH-001/6.4-6.7",
-            &[
-                "M3-10 still owns integrated ReferenceRenderJob acceptance",
-                "M3-03 through M3-09",
-            ][..],
+            &["M3-10 separately accepts", "M3-03 through M3-10"][..],
         ),
         (
             "RPE-ARCH-001/8.1-8.3",
             &[
-                "M3-10 owns integrated ReferenceRenderJob acceptance",
+                "M3-10 now accepts one bounded strict-to-ReferenceRenderJob path",
                 "Advanced fonts and text",
             ][..],
         ),

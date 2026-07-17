@@ -54,6 +54,17 @@ independent reviewer roles, and canonical hash-bound review evidence. The case v
 every linked component without symlinks, preflights bytes from case budgets, verifies raw hashes,
 strictly decodes canonical pixels, checks render dimensions, and performs no expected-file writes.
 
+The M3-10 integrated Reference gate closes only the reviewed implementation slice registered as
+the still-`PLANNED` `m3.reference-raster-v1.v1` profile. It drives strict proof-bound open, owned
+Page acquisition, immutable source-ordered path/image/glyph Scene publication, and one bounded
+`ReferenceRenderJob` across twelve Ready and non-publication cases. CI repeats the gate in two
+fresh debug and two fresh release processes and performs three recursive normalized-artifact
+comparisons. The independent review binds implementation commit
+`a917aee672ce6be294e479956d5be87c835d0507` and tree
+`e3f9a6f98e61afc9034df02b24fd2f3c293a97a8` with parser-security and spec-conformance SHIP,
+P0/P1/P2 zero. M3-11 still owns formal O0/O1/O3 case authority, any profile promotion, and the
+milestone exit; M3-10 is not a REFERENCE maturity promotion.
+
 # Semantic owner
 
 Quality/Corpus workstream.

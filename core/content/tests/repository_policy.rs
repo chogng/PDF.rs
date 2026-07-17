@@ -177,8 +177,8 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan is readable");
     let ci = fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.76.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.76.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.77.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.77.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -467,7 +467,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         "proof-bearing AcquiredPageContent",
         "validates known operand shapes before state or unsupported policy",
         "scanner, document, and Scene failures retain their original structured diagnostic types",
-        "Inline images, Forms, paths, painting, text showing",
+        "historically excluded inline images, Forms, paths, painting, text showing",
     ] {
         assert!(
             content_stream.contains(required),
@@ -554,7 +554,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     let transparency = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/11.3.2-11.3.4")
         .expect("transparency requirement is registered");
     for required in [
-        "features = [\"core.reference-color-compositing\"]",
+        "features = [\"core.reference-color-compositing\", \"core.reference-raster-v1\"]",
         "implementation = [\"core/raster\"]",
         "core/raster::reference_color",
         "core/raster::reference_scene_v2_boundary",
@@ -600,7 +600,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     assert!(scene_requirement.contains("M2-06 supplies one bounded producer"));
     assert!(scene_requirement.contains("quality.m2-scene-gate"));
     assert!(scene_requirement.contains("M2-07 now closes the bounded M2 exit gate"));
-    assert!(scene_requirement.contains("All component and quality feature records remain PLANNED"));
+    assert!(scene_requirement.contains("M2 and M3 feature records remain PLANNED"));
     assert!(scene_requirement.contains("M3-04 adds the first bounded producer"));
     assert!(scene_requirement.contains("core.reference-color-compositing"));
     assert!(scene_requirement.contains("M3-07 adds the allocation-free `reference-color-v1`"));
@@ -659,15 +659,14 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     let m3_09 = record_with_id(&m3_plan, "work_item", "M3-09").expect("M3-09 work item exists");
     assert!(m3_09.contains("status = \"complete\""));
     assert!(m3_09.contains("completed_at = 2026-07-16"));
-    for index in 10..=11 {
-        let id = format!("M3-{index:02}");
-        let item = record_with_id(&m3_plan, "work_item", &id)
-            .unwrap_or_else(|| panic!("{id} work item exists"));
-        assert!(
-            item.contains("status = \"planned\""),
-            "{id} must remain planned after M3-09"
-        );
-    }
+    let m3_10 = record_with_id(&m3_plan, "work_item", "M3-10").expect("M3-10 work item exists");
+    assert!(m3_10.contains("status = \"complete\""));
+    assert!(m3_10.contains("completed_at = 2026-07-16"));
+    let m3_11 = record_with_id(&m3_plan, "work_item", "M3-11").expect("M3-11 work item exists");
+    assert!(
+        m3_11.contains("status = \"planned\""),
+        "M3-11 must remain planned after M3-10"
+    );
     assert!(
         ci.contains(
             "cargo test --locked --package pdf-rs-quality --test m3_content_graphics_trace"
