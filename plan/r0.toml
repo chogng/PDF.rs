@@ -203,7 +203,8 @@ deliverables = [
   "TypeScript viewer",
 ]
 exit_gate = "Chromium, Firefox, and WebKit complete the R0 reading flow; resource and dependency scans find no external PDF engine."
-status = "planned"
+status = "in_progress"
+started_at = 2026-07-17
 execution_plan = "plan/m5.toml"
 
 [[milestone]]
