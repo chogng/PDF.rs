@@ -18,6 +18,7 @@ pdf-rs-content = { path = "../../core/content" }
 pdf-rs-corpus = { path = "../corpus" }
 pdf-rs-document = { path = "../../core/document" }
 pdf-rs-filters = { path = "../../core/filters" }
+pdf-rs-font = { path = "../../core/font" }
 pdf-rs-object = { path = "../../core/object" }
 pdf-rs-raster = { path = "../../core/raster" }
 pdf-rs-scene = { path = "../../core/scene" }

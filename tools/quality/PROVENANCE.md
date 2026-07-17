@@ -65,6 +65,18 @@ comparisons. The independent review binds implementation commit
 P0/P1/P2 zero. M3-11 still owns formal O0/O1/O3 case authority, any profile promotion, and the
 milestone exit; M3-10 is not a REFERENCE maturity promotion.
 
+The M3-11 Reference pipeline gate takes its only case registry from the twelve sorted,
+symlink-free manifests and committed inputs under `tests/cases/raster/m3-reference`. Its fixture
+builder is only a byte-equality self-check: strict open, Page acquisition, Content interpretation,
+and Reference rendering consume the committed input bytes and manifest-owned budgets. Successful
+outputs compare byte-for-byte with committed canonical pixel artifacts. O0/O1 pixels remain
+independently modeled and forbid Reference generation; the mixed O3 pixel golden is separately
+bound to the reviewed `core/raster` implementation identity and hash-bound
+`spec-conformance`/`parser-security` review. Normalized schema-2 gate artifacts record the manifest
+hash, case and pixel oracle levels, expected pixel hash, and exact pass verdict. Non-Ready cases
+retain no pixel artifact, and CI runs the independent oracle model before two debug and two release
+gate replays with three recursive artifact comparisons.
+
 # Semantic owner
 
 Quality/Corpus workstream.

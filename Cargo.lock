@@ -121,6 +121,7 @@ dependencies = [
  "pdf-rs-digest",
  "pdf-rs-document",
  "pdf-rs-filters",
+ "pdf-rs-font",
  "pdf-rs-generate",
  "pdf-rs-object",
  "pdf-rs-raster",

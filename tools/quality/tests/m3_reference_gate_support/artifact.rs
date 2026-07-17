@@ -10,17 +10,23 @@ use pdf_rs_raster::reference::{
 use pdf_rs_scene::SceneBinding;
 
 use super::pending::PendingEvent;
+use super::registry::{CaseContract, REFERENCE_IMPLEMENTATION_SHA256};
 
 const REFERENCE_IMPLEMENTATION_COMMIT: &str = "8c3e28c8ce4cbe5113cc565a36744158e283a7fb";
 const REFERENCE_IMPLEMENTATION_TREE: &str = "724c2a646114a8aff0fabe29f6008a8b73802783";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct NormalizedOutcome {
-    pub(super) case_id: &'static str,
+    pub(super) case_id: String,
     pub(super) outcome: &'static str,
     pub(super) stage: &'static str,
     pub(super) diagnostic_id: Option<&'static str>,
+    pub(super) exact_verdict: &'static str,
+    pub(super) expected_pixel_sha256: Option<String>,
     pub(super) input_sha256: String,
+    pub(super) manifest_sha256: String,
+    pub(super) oracle_level: String,
+    pub(super) pixel_oracle_level: Option<String>,
     pub(super) scene_sha256: Option<String>,
     pub(super) pixel_sha256: Option<String>,
     pub(super) scene: Option<Vec<u8>>,
@@ -47,11 +53,10 @@ pub(super) struct LimitEvidence {
 }
 
 pub(super) struct OutcomeInput<'a> {
-    pub(super) case_id: &'static str,
+    pub(super) contract: &'a CaseContract,
     pub(super) outcome: &'static str,
     pub(super) stage: &'static str,
     pub(super) diagnostic_id: Option<&'static str>,
-    pub(super) input: &'a [u8],
     pub(super) pending: &'a [PendingEvent],
     pub(super) scene: Option<Vec<u8>>,
     pub(super) pixel: Option<Vec<u8>>,
@@ -60,7 +65,18 @@ pub(super) struct OutcomeInput<'a> {
 }
 
 pub(super) fn normalize(input: OutcomeInput<'_>) -> NormalizedOutcome {
-    let input_sha256 = digest(input.input);
+    input.contract.assert_observed(
+        input.outcome,
+        input.stage,
+        input.diagnostic_id,
+        input.scene.as_deref(),
+        input.pixel.as_deref(),
+    );
+    let input_sha256 = digest(&input.contract.input);
+    assert_eq!(
+        input_sha256, input.contract.input_sha256,
+        "formal input hash changed after registry validation"
+    );
     let scene_sha256 = input.scene.as_deref().map(digest);
     let pixel_sha256 = input.pixel.as_deref().map(digest);
     let audit = audit_json(
@@ -70,11 +86,16 @@ pub(super) fn normalize(input: OutcomeInput<'_>) -> NormalizedOutcome {
         pixel_sha256.as_deref(),
     );
     NormalizedOutcome {
-        case_id: input.case_id,
+        case_id: input.contract.id().to_owned(),
         outcome: input.outcome,
         stage: input.stage,
         diagnostic_id: input.diagnostic_id,
+        exact_verdict: "pass",
+        expected_pixel_sha256: input.contract.expected_pixel_sha256.clone(),
         input_sha256,
+        manifest_sha256: input.contract.manifest_sha256.clone(),
+        oracle_level: input.contract.oracle_level.clone(),
+        pixel_oracle_level: input.contract.pixel_oracle_level.clone(),
         scene_sha256,
         pixel_sha256,
         scene: input.scene,
@@ -113,7 +134,7 @@ pub(super) fn write_outputs(root: &Path, outcomes: &[NormalizedOutcome]) {
         .expect("canonical M3 Reference result is writable");
 
     for outcome in outcomes {
-        let directory = root.join(outcome.case_id);
+        let directory = root.join(&outcome.case_id);
         fs::create_dir_all(&directory).expect("case artifact directory is writable");
         fs::write(directory.join("audit.json"), &outcome.audit)
             .expect("canonical case audit is writable");
@@ -135,13 +156,23 @@ fn result_json(outcomes: &[NormalizedOutcome]) -> Vec<u8> {
             output.push(',');
         }
         output.push_str("{\"case_id\":");
-        push_string(&mut output, outcome.case_id);
+        push_string(&mut output, &outcome.case_id);
         output.push_str(",\"diagnostic_id\":");
         push_optional_string(&mut output, outcome.diagnostic_id);
+        output.push_str(",\"exact_verdict\":");
+        push_string(&mut output, outcome.exact_verdict);
+        output.push_str(",\"expected_pixel_sha256\":");
+        push_optional_string(&mut output, outcome.expected_pixel_sha256.as_deref());
         output.push_str(",\"input_sha256\":");
         push_string(&mut output, &outcome.input_sha256);
+        output.push_str(",\"manifest_sha256\":");
+        push_string(&mut output, &outcome.manifest_sha256);
+        output.push_str(",\"oracle_level\":");
+        push_string(&mut output, &outcome.oracle_level);
         output.push_str(",\"outcome\":");
         push_string(&mut output, outcome.outcome);
+        output.push_str(",\"pixel_oracle_level\":");
+        push_optional_string(&mut output, outcome.pixel_oracle_level.as_deref());
         output.push_str(",\"pixel_sha256\":");
         push_optional_string(&mut output, outcome.pixel_sha256.as_deref());
         output.push_str(",\"scene_sha256\":");
@@ -150,7 +181,7 @@ fn result_json(outcomes: &[NormalizedOutcome]) -> Vec<u8> {
         push_string(&mut output, outcome.stage);
         output.push('}');
     }
-    output.push_str("],\"schema\":1}");
+    output.push_str("],\"schema\":2}");
     output.into_bytes()
 }
 
@@ -177,7 +208,7 @@ fn audit_json(
         },
     );
     output.push_str(",\"case_id\":");
-    push_string(&mut output, input.case_id);
+    push_string(&mut output, input.contract.id());
     output.push_str(",\"config\":");
     if let Some(render) = input.render {
         push_config(&mut output, render.config);
@@ -186,6 +217,9 @@ fn audit_json(
     }
     output.push_str(",\"diagnostic_id\":");
     push_optional_string(&mut output, input.diagnostic_id);
+    output.push_str(",\"exact_verdict\":\"pass\"");
+    output.push_str(",\"expected_pixel_sha256\":");
+    push_optional_string(&mut output, input.contract.expected_pixel_sha256.as_deref());
     output.push_str(",\"identity\":");
     if let Some(render) = input.render {
         push_identity(&mut output, render.identity);
@@ -194,6 +228,8 @@ fn audit_json(
     }
     output.push_str(",\"input_sha256\":");
     push_string(&mut output, input_sha256);
+    output.push_str(",\"manifest_sha256\":");
+    push_string(&mut output, &input.contract.manifest_sha256);
     output.push_str(",\"limit\":");
     if let Some(limit) = input.limit {
         output.push_str("{\"attempted\":");
@@ -216,6 +252,8 @@ fn audit_json(
     }
     output.push_str(",\"outcome\":");
     push_string(&mut output, input.outcome);
+    output.push_str(",\"oracle_level\":");
+    push_string(&mut output, &input.contract.oracle_level);
     output.push_str(",\"pending\":[");
     for (index, event) in input.pending.iter().enumerate() {
         if index != 0 {
@@ -242,11 +280,13 @@ fn audit_json(
     }
     output.push_str("],\"pixel_sha256\":");
     push_optional_string(&mut output, pixel_sha256);
+    output.push_str(",\"pixel_oracle_level\":");
+    push_optional_string(&mut output, input.contract.pixel_oracle_level.as_deref());
     output.push_str(",\"render_phase\":");
     push_optional_string(&mut output, input.render.map(|render| render.phase));
     output.push_str(",\"scene_sha256\":");
     push_optional_string(&mut output, scene_sha256);
-    output.push_str(",\"schema\":1,\"stage\":");
+    output.push_str(",\"schema\":2,\"stage\":");
     push_string(&mut output, input.stage);
     output.push_str(",\"stats\":");
     if let Some(render) = input.render {
@@ -294,6 +334,8 @@ fn push_identity(output: &mut String, identity: ReferenceRenderIdentity) {
     push_string(output, identity.image_label());
     output.push_str(",\"implementation_commit\":");
     push_string(output, REFERENCE_IMPLEMENTATION_COMMIT);
+    output.push_str(",\"implementation_sha256\":");
+    push_string(output, REFERENCE_IMPLEMENTATION_SHA256);
     output.push_str(",\"implementation_tree\":");
     push_string(output, REFERENCE_IMPLEMENTATION_TREE);
     output.push_str(",\"output\":");

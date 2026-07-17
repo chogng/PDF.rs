@@ -4,47 +4,55 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pdf_rs_bytes::{
-    ByteSlice, ByteSource, JobId, RangeStore, ReadPoll, ReadRequest, RequestPriority,
-    ResumeCheckpoint, SourceIdentity, SourceRevision, SourceSnapshot, SourceStableId,
-    SourceValidator, SourceValidatorKind,
+    ByteSlice, ByteSource, JobId, RangeStore, RangeStoreLimitConfig, RangeStoreLimits, ReadPoll,
+    ReadRequest, RequestPriority, ResumeCheckpoint, SourceIdentity, SourceRevision, SourceSnapshot,
+    SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentFontLimits, ContentFontProfile, ContentGraphicsLimits, ContentImageLimitConfig,
-    ContentImageLimits, ContentImageProfile, ContentLimits, ContentVmErrorCode, ContentVmFailure,
+    ContentFontLimitConfig, ContentFontLimits, ContentFontProfile, ContentGraphicsLimitConfig,
+    ContentGraphicsLimits, ContentImageLimitConfig, ContentImageLimits, ContentImageProfile,
+    ContentLimitConfig, ContentLimits, ContentVmErrorCode, ContentVmFailure, ContentVmLimitConfig,
     ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
-use pdf_rs_digest::{hex_digest, sha256};
 use pdf_rs_document::{
-    AcquiredPageContent, FontResourceJobContext, FontResourceLimits, ImageXObjectJobContext,
+    AcquiredPageContent, DocumentLimitConfig, DocumentLimits, FontResourceJobContext,
+    FontResourceLimitConfig, FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimitConfig,
     ImageXObjectLimits, ImageXObjectUnsupportedKind, NeverCancelled, OpenStrictBaseRevisionJob,
-    PageContentJobContext, PageContentLimits, PageContentPoll, PageFontLookupLimits,
-    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
-    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
-    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionId, SharedAttestedRevisionIndex, StrictBaseOpenContext,
-    StrictBaseOpenError, StrictBaseOpenLimits, StrictBaseOpenPoll,
+    PageContentJobContext, PageContentLimitConfig, PageContentLimits, PageContentPoll,
+    PageFontLookupLimitConfig, PageFontLookupLimits, PageIndexBuildPoll, PageIndexLimits,
+    PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimitConfig,
+    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimitConfig,
+    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
+    PageXObjectLookupLimitConfig, PageXObjectLookupLimits, RevisionAttestationJobContext,
+    RevisionAttestationLimitConfig, RevisionAttestationLimits, RevisionId,
+    SharedAttestedRevisionIndex, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
+    StrictBaseOpenPoll,
 };
-use pdf_rs_object::ObjectLimits;
+use pdf_rs_filters::{DecodeLimitConfig, DecodeLimits};
+use pdf_rs_font::{FontLimitConfig, FontLimits};
+use pdf_rs_object::{ObjectLimitConfig, ObjectLimits};
 use pdf_rs_raster::reference::{
     CanonicalPixelBuffer, ReferenceCapabilityDecision, ReferenceRasterCancellation,
     ReferenceRasterLimitConfig, ReferenceRasterLimits, ReferenceRenderConfig,
     ReferenceRenderErrorCode, ReferenceRenderJob, ReferenceRenderLimitKind, ReferenceRenderPhase,
     ReferenceRenderPoll,
 };
-use pdf_rs_scene::{GraphicsCommand, GraphicsSceneLimits};
-use pdf_rs_syntax::SyntaxLimits;
-use pdf_rs_xref::{XrefJobContext, XrefLimits};
+use pdf_rs_scene::{GraphicsCommand, GraphicsSceneLimitConfig, GraphicsSceneLimits};
+use pdf_rs_syntax::{SyntaxLimitConfig, SyntaxLimits};
+use pdf_rs_xref::{XrefJobContext, XrefLimitConfig, XrefLimits};
 
 mod artifact;
 mod fixture;
 mod pending;
+mod registry;
 
 use artifact::{
     LimitEvidence, NormalizedOutcome, OutcomeInput, RenderEvidence, canonical_pixel, normalize,
     write_outputs,
 };
-use fixture::{Fixture, FixtureSpec, IMAGE_RGB, ImageSpec, PAGE_OBJECT_NUMBER, build_fixture};
+use fixture::{FixtureSpec, IMAGE_RGB, ImageSpec, PAGE_OBJECT_NUMBER, build_fixture};
 use pending::{PendingEvent, complete_pending, source_changed_pending};
+use registry::{CaseContract, load_registry};
 
 const PATH_CLIP_CONTENT: &[u8] = b"q 0 0 50 100 re W n 0 g 0 0 100 100 re f Q \
                                   1 0 0 rg 50 0 50 100 re f";
@@ -56,7 +64,7 @@ const MIXED_CONTENT: &[u8] = b"0.8 g 0 0 100 100 re f \
                                0 g BT /F0 500 Tf 0 0 Td (A) Tj ET";
 const INVALID_CONTENT: &[u8] = b"q";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Case {
     ValidPathClip,
     ValidStroke,
@@ -71,21 +79,6 @@ enum Case {
     ImageDecodedOneLess,
     RasterOutputOneLess,
 }
-
-const CASES: [Case; 12] = [
-    Case::ValidPathClip,
-    Case::ValidStroke,
-    Case::ValidImage,
-    Case::ValidFont,
-    Case::ValidMixed,
-    Case::UnsupportedInterpolatedImage,
-    Case::InvalidContentState,
-    Case::StrictInvalidXref,
-    Case::CancelFinalPublication,
-    Case::SourceChangeAfterPending,
-    Case::ImageDecodedOneLess,
-    Case::RasterOutputOneLess,
-];
 
 impl Case {
     const fn id(self) -> &'static str {
@@ -105,6 +98,26 @@ impl Case {
             Self::ImageDecodedOneLess => "raster/m3-reference/image-decoded-one-less",
             Self::RasterOutputOneLess => "raster/m3-reference/raster-output-one-less",
         }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "raster/m3-reference/valid-path-clip" => Self::ValidPathClip,
+            "raster/m3-reference/valid-stroke" => Self::ValidStroke,
+            "raster/m3-reference/valid-image" => Self::ValidImage,
+            "raster/m3-reference/valid-font" => Self::ValidFont,
+            "raster/m3-reference/valid-mixed" => Self::ValidMixed,
+            "raster/m3-reference/producer-unsupported-interpolated-image" => {
+                Self::UnsupportedInterpolatedImage
+            }
+            "raster/m3-reference/invalid-content-state" => Self::InvalidContentState,
+            "raster/m3-reference/strict-invalid-xref" => Self::StrictInvalidXref,
+            "raster/m3-reference/cancel-final-publication" => Self::CancelFinalPublication,
+            "raster/m3-reference/source-change-after-pending" => Self::SourceChangeAfterPending,
+            "raster/m3-reference/image-decoded-one-less" => Self::ImageDecodedOneLess,
+            "raster/m3-reference/raster-output-one-less" => Self::RasterOutputOneLess,
+            _ => return None,
+        })
     }
 
     const fn salt(self) -> u8 {
@@ -188,23 +201,6 @@ impl Case {
             },
         }
     }
-
-    const fn output_size(self) -> (u32, u32) {
-        match self {
-            Self::ValidPathClip
-            | Self::ValidImage
-            | Self::CancelFinalPublication
-            | Self::RasterOutputOneLess => (2, 1),
-            Self::ValidStroke
-            | Self::ValidFont
-            | Self::ValidMixed
-            | Self::UnsupportedInterpolatedImage
-            | Self::InvalidContentState
-            | Self::StrictInvalidXref
-            | Self::SourceChangeAfterPending
-            | Self::ImageDecodedOneLess => (8, 8),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -253,16 +249,18 @@ enum VmTerminal {
 
 /// Runs the strict full-Native M3 Reference integration gate.
 pub(super) fn run_gate() {
-    let mut outcomes = Vec::with_capacity(CASES.len());
-    for case in CASES {
+    let registry = load_registry();
+    let mut outcomes = Vec::with_capacity(registry.len());
+    for contract in &registry {
+        let case = contract.case;
         let first_ids = RuntimeIds::for_case(case, 0);
         let second_ids = RuntimeIds::for_case(case, 1);
         assert_ne!(first_ids.open, second_ids.open);
         assert_ne!(first_ids.image, second_ids.image);
         assert_ne!(first_ids.font, second_ids.font);
         assert_ne!(first_ids.base, second_ids.base);
-        let first = run_case(case, 0);
-        let second = run_case(case, 1);
+        let first = run_case(contract, 0);
+        let second = run_case(contract, 1);
         assert_eq!(
             first,
             second,
@@ -277,36 +275,38 @@ pub(super) fn run_gate() {
     }
 }
 
-fn run_case(case: Case, replay: u64) -> NormalizedOutcome {
-    let fixture = build_fixture(case.fixture_spec());
-    assert_eq!(fixture.salt, case.salt());
+fn run_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
+    let case = contract.case;
+    let regenerated = build_fixture(case.fixture_spec());
+    assert_eq!(
+        regenerated.bytes,
+        contract.input,
+        "case={} committed input differs from the deterministic fixture self-check",
+        case.id()
+    );
     match case {
         Case::ValidPathClip
         | Case::ValidStroke
         | Case::ValidImage
         | Case::ValidFont
-        | Case::ValidMixed => run_ready_case(case, replay, &fixture),
-        Case::UnsupportedInterpolatedImage => run_unsupported_case(case, replay, &fixture),
-        Case::InvalidContentState => run_invalid_content_case(case, replay, &fixture),
-        Case::StrictInvalidXref => run_invalid_strict_case(case, replay, &fixture),
-        Case::CancelFinalPublication => run_cancel_case(case, replay, &fixture),
-        Case::SourceChangeAfterPending => run_source_change_case(case, replay, &fixture),
-        Case::ImageDecodedOneLess => run_image_one_less_case(case, replay, &fixture),
-        Case::RasterOutputOneLess => run_raster_one_less_case(case, replay, &fixture),
+        | Case::ValidMixed => run_ready_case(contract, replay),
+        Case::UnsupportedInterpolatedImage => run_unsupported_case(contract, replay),
+        Case::InvalidContentState => run_invalid_content_case(contract, replay),
+        Case::StrictInvalidXref => run_invalid_strict_case(contract, replay),
+        Case::CancelFinalPublication => run_cancel_case(contract, replay),
+        Case::SourceChangeAfterPending => run_source_change_case(contract, replay),
+        Case::ImageDecodedOneLess => run_image_one_less_case(contract, replay),
+        Case::RasterOutputOneLess => run_raster_one_less_case(contract, replay),
     }
 }
 
-fn run_ready_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_ready_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
+    let case = contract.case;
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("case={} strict open must succeed: {error}", case.id()));
-    let image_limits = if case == Case::ValidImage {
-        content_image_limits(IMAGE_RGB.len() as u64)
-    } else {
-        ContentImageLimits::default()
-    };
-    let (mut vm, store, expected_jobs) = make_vm(acquired, image_limits);
-    let page = match drive_vm(&mut vm, &store, fixture, &expected_jobs, &mut pending) {
+    let (mut vm, store, expected_jobs) = make_vm(acquired, contract);
+    let page = match drive_vm(&mut vm, &store, contract, &expected_jobs, &mut pending) {
         VmTerminal::Ready(page) => page,
         VmTerminal::Unsupported(error) => {
             panic!(
@@ -324,14 +324,8 @@ fn run_ready_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutco
     let scene_bytes = scene
         .canonical_json_bytes()
         .expect("bounded integrated Scene canonicalizes");
-    let (width, height) = case.output_size();
-    let config =
-        ReferenceRenderConfig::opaque_srgb(width, height).expect("positive output configuration");
-    let limits = if case == Case::ValidPathClip {
-        raster_output_limits(u64::from(width) * u64::from(height) * 4)
-    } else {
-        ReferenceRasterLimits::default()
-    };
+    let config = render_config(contract);
+    let limits = raster_limits(contract);
     let cancellation = RasterCancellation::never();
     let mut renderer = ReferenceRenderJob::new(scene, config, limits);
     let buffer = match renderer.poll(&cancellation) {
@@ -349,7 +343,7 @@ fn run_ready_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutco
     assert_eq!(buffer.binding(), page.scene().binding());
     assert_eq!(buffer.config(), config);
     assert_eq!(buffer.limits(), limits);
-    assert_ready_pixels(case, &buffer);
+    assert_ready_render_stats(case, &buffer);
 
     let cancellation_calls = cancellation.calls();
     let replay = match renderer.poll(&cancellation) {
@@ -368,11 +362,10 @@ fn run_ready_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutco
         phase: "ready",
     };
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "ready",
         stage: "reference-render",
         diagnostic_id: None,
-        input: &fixture.bytes,
         pending: &pending,
         scene: Some(scene_bytes),
         pixel: Some(canonical_pixel(&buffer)),
@@ -381,22 +374,25 @@ fn run_ready_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutco
     })
 }
 
-fn run_unsupported_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_unsupported_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("unsupported fixture must strictly open: {error}"));
-    let (mut vm, store, jobs) = make_vm(acquired, ContentImageLimits::default());
+    let (mut vm, store, jobs) = make_vm(acquired, contract);
     // `/Interpolate true` is outside the registered basic Image producer profile. The proof-bound
     // Content layer therefore returns its own structured capability result before a Scene exists;
     // this case intentionally does not mislabel that strong producer boundary as a raster outcome.
-    let unsupported = match drive_vm(&mut vm, &store, fixture, &jobs, &mut pending) {
+    let unsupported = match drive_vm(&mut vm, &store, contract, &jobs, &mut pending) {
         VmTerminal::Unsupported(unsupported) => unsupported,
         outcome => panic!(
             "interpolated image must be rejected by the Native producer capability boundary: {}",
             vm_label(&outcome)
         ),
     };
-    assert_eq!(unsupported.diagnostic_id(), "RPE-CONTENT-UNSUPPORTED-0009");
+    assert_eq!(
+        Some(unsupported.diagnostic_id()),
+        contract.terminal.diagnostic_id.as_deref()
+    );
     assert_eq!(
         unsupported
             .image_xobject()
@@ -406,11 +402,10 @@ fn run_unsupported_case(case: Case, replay: u64, fixture: &Fixture) -> Normalize
     );
     assert_eq!(vm.image_stats().image_uses(), 0);
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "unsupported",
         stage: "content-image",
         diagnostic_id: Some(unsupported.diagnostic_id()),
-        input: &fixture.bytes,
         pending: &pending,
         scene: None,
         pixel: None,
@@ -419,22 +414,24 @@ fn run_unsupported_case(case: Case, replay: u64, fixture: &Fixture) -> Normalize
     })
 }
 
-fn run_invalid_content_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_invalid_content_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("invalid Content fixture must strictly open: {error}"));
-    let (mut vm, store, jobs) = make_vm(acquired, ContentImageLimits::default());
-    let failure = match drive_vm(&mut vm, &store, fixture, &jobs, &mut pending) {
+    let (mut vm, store, jobs) = make_vm(acquired, contract);
+    let failure = match drive_vm(&mut vm, &store, contract, &jobs, &mut pending) {
         VmTerminal::Failed(error) => error,
         outcome => panic!("unbalanced q must fail Content: {}", vm_label(&outcome)),
     };
-    assert_eq!(failure.diagnostic_id(), "RPE-CONTENT-VM-0007");
+    assert_eq!(
+        Some(failure.diagnostic_id()),
+        contract.terminal.diagnostic_id.as_deref()
+    );
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "failed",
         stage: "content-vm",
         diagnostic_id: Some(failure.diagnostic_id()),
-        input: &fixture.bytes,
         pending: &pending,
         scene: None,
         pixel: None,
@@ -443,21 +440,19 @@ fn run_invalid_content_case(case: Case, replay: u64, fixture: &Fixture) -> Norma
     })
 }
 
-fn run_invalid_strict_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
-    assert_ne!(fixture.startxref, fixture.advertised_startxref);
+fn run_invalid_strict_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
     let mut pending = Vec::new();
-    let error = match acquire_pipeline(case, replay, fixture, &mut pending) {
+    let error = match acquire_pipeline(contract, replay, &mut pending) {
         Ok(_) => panic!("corrupt startxref must not publish strict authority"),
         Err(error) => error,
     };
     let diagnostic = strict_diagnostic(*error);
-    assert_eq!(diagnostic, "RPE-XREF-0011");
+    assert_eq!(Some(diagnostic), contract.terminal.diagnostic_id.as_deref());
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "failed",
         stage: "strict-open",
         diagnostic_id: Some(diagnostic),
-        input: &fixture.bytes,
         pending: &pending,
         scene: None,
         pixel: None,
@@ -466,12 +461,12 @@ fn run_invalid_strict_case(case: Case, replay: u64, fixture: &Fixture) -> Normal
     })
 }
 
-fn run_cancel_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_cancel_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("cancellation fixture must strictly open: {error}"));
-    let (mut vm, store, jobs) = make_vm(acquired, ContentImageLimits::default());
-    let page = match drive_vm(&mut vm, &store, fixture, &jobs, &mut pending) {
+    let (mut vm, store, jobs) = make_vm(acquired, contract);
+    let page = match drive_vm(&mut vm, &store, contract, &jobs, &mut pending) {
         VmTerminal::Ready(page) => page,
         outcome => panic!(
             "cancellation fixture must publish Scene: {}",
@@ -480,9 +475,8 @@ fn run_cancel_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutc
     };
     let scene = page.scene_arc();
     let scene_bytes = scene.canonical_json_bytes().unwrap();
-    let (width, height) = case.output_size();
-    let config = ReferenceRenderConfig::opaque_srgb(width, height).unwrap();
-    let limits = ReferenceRasterLimits::default();
+    let config = render_config(contract);
+    let limits = raster_limits(contract);
 
     let measurement = RasterCancellation::never();
     let mut measured = ReferenceRenderJob::new(scene.clone(), config, limits);
@@ -491,17 +485,23 @@ fn run_cancel_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutc
         outcome => panic!("cancellation measurement must render: {outcome:?}"),
     };
     assert_eq!(baseline.stats().cancellation_checks(), measurement.calls());
-    let cancellation = RasterCancellation::at(measurement.calls());
+    let cancel_at = measurement.calls();
+    drop(baseline);
+    drop(measured);
+    let cancellation = RasterCancellation::at(cancel_at);
     let mut renderer = ReferenceRenderJob::new(scene, config, limits);
     let failure = match renderer.poll(&cancellation) {
         ReferenceRenderPoll::Failed(error) => error,
         outcome => panic!("final publication cancellation must fail: {outcome:?}"),
     };
     assert_eq!(failure.code(), ReferenceRenderErrorCode::Cancelled);
-    assert_eq!(failure.diagnostic_id(), "RPE-RASTER-0004");
+    assert_eq!(
+        Some(failure.diagnostic_id()),
+        contract.terminal.diagnostic_id.as_deref()
+    );
     assert_eq!(
         renderer.stats().final_conversion_pixels(),
-        u64::from(width) * u64::from(height)
+        u64::from(contract.width) * u64::from(contract.height)
     );
     assert_eq!(renderer.stats().retained_bytes(), 0);
     let calls = cancellation.calls();
@@ -511,11 +511,10 @@ fn run_cancel_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutc
     );
     assert_eq!(cancellation.calls(), calls);
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "cancelled",
         stage: "reference-publication",
         diagnostic_id: Some(failure.diagnostic_id()),
-        input: &fixture.bytes,
         pending: &pending,
         scene: Some(scene_bytes),
         pixel: None,
@@ -531,12 +530,13 @@ fn run_cancel_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutc
     })
 }
 
-fn run_source_change_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_source_change_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
+    let case = contract.case;
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("source-change fixture must strictly open: {error}"));
     let original = acquired.snapshot;
-    let (mut vm, store, jobs) = make_vm(acquired, ContentImageLimits::default());
+    let (mut vm, store, jobs) = make_vm(acquired, contract);
     match vm.poll(&store, &NeverCancelled) {
         ContentVmPoll::Pending {
             ticket,
@@ -568,12 +568,15 @@ fn run_source_change_case(case: Case, replay: u64, fixture: &Fixture) -> Normali
     }
     assert_eq!(vm.image_stats().image_uses(), 0);
     assert_eq!(vm.font_stats().font_uses(), 0);
+    assert_eq!(
+        Some(failure.diagnostic_id()),
+        contract.terminal.diagnostic_id.as_deref()
+    );
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "source-changed",
         stage: "content-vm-resume",
         diagnostic_id: Some(failure.diagnostic_id()),
-        input: &fixture.bytes,
         pending: &pending,
         scene: None,
         pixel: None,
@@ -582,13 +585,12 @@ fn run_source_change_case(case: Case, replay: u64, fixture: &Fixture) -> Normali
     })
 }
 
-fn run_image_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_image_one_less_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("one-less image fixture must strictly open: {error}"));
-    let one_less = u64::try_from(IMAGE_RGB.len()).unwrap() - 1;
-    let (mut vm, store, jobs) = make_vm(acquired, content_image_limits(one_less));
-    let failure = match drive_vm(&mut vm, &store, fixture, &jobs, &mut pending) {
+    let (mut vm, store, jobs) = make_vm(acquired, contract);
+    let failure = match drive_vm(&mut vm, &store, contract, &jobs, &mut pending) {
         VmTerminal::Failed(error) => error,
         outcome => panic!(
             "one-less decoded image bytes must fail: {}",
@@ -615,12 +617,15 @@ fn run_image_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> Normal
         other => panic!("one-less decoded image bytes must be VM resource failure: {other:?}"),
     };
     assert_eq!(vm.image_stats().image_uses(), 0);
+    assert_eq!(
+        Some(failure.diagnostic_id()),
+        contract.terminal.diagnostic_id.as_deref()
+    );
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "resource-limited",
         stage: "content-image",
         diagnostic_id: Some(failure.diagnostic_id()),
-        input: &fixture.bytes,
         pending: &pending,
         scene: None,
         pixel: None,
@@ -629,12 +634,12 @@ fn run_image_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> Normal
     })
 }
 
-fn run_raster_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> NormalizedOutcome {
+fn run_raster_one_less_case(contract: &CaseContract, replay: u64) -> NormalizedOutcome {
     let mut pending = Vec::new();
-    let acquired = acquire_pipeline(case, replay, fixture, &mut pending)
+    let acquired = acquire_pipeline(contract, replay, &mut pending)
         .unwrap_or_else(|error| panic!("one-less raster fixture must strictly open: {error}"));
-    let (mut vm, store, jobs) = make_vm(acquired, ContentImageLimits::default());
-    let page = match drive_vm(&mut vm, &store, fixture, &jobs, &mut pending) {
+    let (mut vm, store, jobs) = make_vm(acquired, contract);
+    let page = match drive_vm(&mut vm, &store, contract, &jobs, &mut pending) {
         VmTerminal::Ready(page) => page,
         outcome => panic!(
             "one-less raster fixture must publish Scene: {}",
@@ -643,10 +648,8 @@ fn run_raster_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> Norma
     };
     let scene = page.scene_arc();
     let scene_bytes = scene.canonical_json_bytes().unwrap();
-    let (width, height) = case.output_size();
-    let output_bytes = u64::from(width) * u64::from(height) * 4;
-    let config = ReferenceRenderConfig::opaque_srgb(width, height).unwrap();
-    let limits = raster_output_limits(output_bytes - 1);
+    let config = render_config(contract);
+    let limits = raster_limits(contract);
     let cancellation = RasterCancellation::never();
     let mut renderer = ReferenceRenderJob::new(scene, config, limits);
     let failure = match renderer.poll(&cancellation) {
@@ -656,13 +659,17 @@ fn run_raster_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> Norma
     assert_eq!(failure.code(), ReferenceRenderErrorCode::ResourceLimit);
     let raster_limit = failure.limit().expect("raster failure retains limit");
     assert_eq!(raster_limit.kind(), ReferenceRenderLimitKind::OutputBytes);
+    assert_eq!(raster_limit.limit(), contract.max_raster_output_bytes);
     assert_eq!(renderer.stats().retained_bytes(), 0);
+    assert_eq!(
+        Some(failure.diagnostic_id()),
+        contract.terminal.diagnostic_id.as_deref()
+    );
     normalize(OutcomeInput {
-        case_id: case.id(),
+        contract,
         outcome: "resource-limited",
         stage: "reference-preflight",
         diagnostic_id: Some(failure.diagnostic_id()),
-        input: &fixture.bytes,
         pending: &pending,
         scene: Some(scene_bytes),
         pixel: None,
@@ -684,12 +691,12 @@ fn run_raster_one_less_case(case: Case, replay: u64, fixture: &Fixture) -> Norma
 }
 
 fn acquire_pipeline(
-    case: Case,
+    contract: &CaseContract,
     replay: u64,
-    fixture: &Fixture,
     pending: &mut Vec<PendingEvent>,
 ) -> Result<AcquiredPipeline, Box<StrictBaseOpenError>> {
-    let snapshot = source_snapshot(fixture);
+    let case = contract.case;
+    let snapshot = source_snapshot(contract);
     let ids = RuntimeIds::for_case(case, replay);
     let open_context = StrictBaseOpenContext::new(
         XrefJobContext::new(
@@ -709,16 +716,10 @@ fn acquire_pipeline(
         snapshot,
         RevisionId::new(u32::from(case.salt())),
         open_context,
-        StrictBaseOpenLimits::new(
-            XrefLimits::default(),
-            pdf_rs_document::DocumentLimits::default(),
-            RevisionAttestationLimits::default(),
-            ObjectLimits::default(),
-            SyntaxLimits::default(),
-        ),
+        strict_limits(contract),
     )
     .expect("M3 strict-open contexts and validated profiles are compatible");
-    let open_store = empty_store(snapshot);
+    let open_store = empty_store(snapshot, contract);
     let authority = loop {
         match open.poll(&open_store, &NeverCancelled) {
             StrictBaseOpenPoll::Ready(authority) => break authority,
@@ -730,7 +731,7 @@ fn acquire_pipeline(
                 "strict-open",
                 &open_store,
                 snapshot,
-                &fixture.bytes,
+                &contract.input,
                 &[ids.open],
                 ticket,
                 &missing,
@@ -741,10 +742,9 @@ fn acquire_pipeline(
         }
     };
     assert_eq!(authority.snapshot(), snapshot);
-    assert_eq!(authority.startxref(), fixture.startxref);
     let authority = authority.into_shared();
 
-    let tree_limits = PageTreeLimits::default();
+    let tree_limits = page_tree_limits(contract);
     let mut build = authority
         .build_page_index_owned(
             page_tree_context(ids.build, ids.base + 2_100),
@@ -752,7 +752,7 @@ fn acquire_pipeline(
             PageIndexLimits::default(),
         )
         .expect("strict authority mints an owned cold page-index job");
-    let build_store = empty_store(snapshot);
+    let build_store = empty_store(snapshot, contract);
     let cold_index = loop {
         match build.poll(&build_store, &NeverCancelled) {
             PageIndexBuildPoll::Ready(index) => break index,
@@ -764,7 +764,7 @@ fn acquire_pipeline(
                 "page-index",
                 &build_store,
                 snapshot,
-                &fixture.bytes,
+                &contract.input,
                 &[ids.build],
                 ticket,
                 &missing,
@@ -785,7 +785,7 @@ fn acquire_pipeline(
             tree_limits,
         )
         .expect("strict authority mints an owned exact-page lookup");
-    let lookup_store = empty_store(snapshot);
+    let lookup_store = empty_store(snapshot, contract);
     let lookup = loop {
         match lookup.poll(&lookup_store, &NeverCancelled) {
             PageLookupPoll::Ready(lookup) => break lookup,
@@ -797,7 +797,7 @@ fn acquire_pipeline(
                 "page-lookup",
                 &lookup_store,
                 snapshot,
-                &fixture.bytes,
+                &contract.input,
                 &[ids.lookup],
                 ticket,
                 &missing,
@@ -826,10 +826,10 @@ fn acquire_pipeline(
                 ResumeCheckpoint::new(ids.base + 4_102),
                 RequestPriority::VisiblePage,
             ),
-            PageMaterializationLimits::default(),
+            materialization_limits(contract),
         )
         .expect("strict authority mints owned Page materialization");
-    let materialize_store = empty_store(snapshot);
+    let materialize_store = empty_store(snapshot, contract);
     let page = loop {
         match materialize.poll(&materialize_store, &NeverCancelled) {
             PageMaterializationPoll::Ready(page) => break page,
@@ -841,7 +841,7 @@ fn acquire_pipeline(
                 "page-materialization",
                 &materialize_store,
                 snapshot,
-                &fixture.bytes,
+                &contract.input,
                 &[ids.materialize],
                 ticket,
                 &missing,
@@ -868,10 +868,10 @@ fn acquire_pipeline(
                 ResumeCheckpoint::new(ids.base + 5_103),
                 RequestPriority::VisiblePage,
             ),
-            PageContentLimits::default(),
+            page_content_limits(contract),
         )
         .expect("strict authority mints owned Page-content acquisition");
-    let content_store = empty_store(snapshot);
+    let content_store = empty_store(snapshot, contract);
     let acquired = loop {
         match content.poll(&content_store, &NeverCancelled) {
             PageContentPoll::Ready(acquired) => break acquired,
@@ -883,7 +883,7 @@ fn acquire_pipeline(
                 "page-content",
                 &content_store,
                 snapshot,
-                &fixture.bytes,
+                &contract.input,
                 &[ids.content],
                 ticket,
                 &missing,
@@ -908,12 +908,12 @@ fn acquire_pipeline(
 
 fn make_vm(
     acquired: AcquiredPipeline,
-    image_limits: ContentImageLimits,
+    contract: &CaseContract,
 ) -> (InterpretPageJob, RangeStore, [JobId; 2]) {
     let ids = acquired.ids;
     let image_profile = ContentImageProfile::new(
         acquired.authority.clone(),
-        PageXObjectLookupLimits::default(),
+        page_xobject_lookup_limits(contract),
         ImageXObjectJobContext::new(
             ids.image,
             ResumeCheckpoint::new(ids.base + 6_101),
@@ -921,12 +921,12 @@ fn make_vm(
             ResumeCheckpoint::new(ids.base + 6_103),
             RequestPriority::FirstViewportResource,
         ),
-        ImageXObjectLimits::default(),
-        image_limits,
+        image_xobject_limits(contract),
+        content_image_limits(contract),
     );
     let font_profile = ContentFontProfile::new(
         acquired.authority,
-        PageFontLookupLimits::default(),
+        page_font_lookup_limits(contract),
         FontResourceJobContext::new(
             ids.font,
             ResumeCheckpoint::new(ids.base + 7_101),
@@ -938,26 +938,30 @@ fn make_vm(
             ResumeCheckpoint::new(ids.base + 7_107),
             RequestPriority::FirstViewportResource,
         ),
-        FontResourceLimits::default(),
-        ContentFontLimits::default(),
+        font_resource_limits(contract),
+        content_font_limits(contract),
     );
     let vm = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
         acquired.acquired,
-        ContentLimits::default(),
-        ContentVmLimits::default(),
-        ContentGraphicsLimits::default(),
-        PagePropertyLookupLimits::default(),
+        content_limits(contract),
+        vm_limits(contract),
+        content_graphics_limits(contract),
+        property_limits(contract),
         image_profile,
         font_profile,
-        GraphicsSceneLimits::default(),
+        graphics_scene_limits(contract),
     );
-    (vm, empty_store(acquired.snapshot), [ids.image, ids.font])
+    (
+        vm,
+        empty_store(acquired.snapshot, contract),
+        [ids.image, ids.font],
+    )
 }
 
 fn drive_vm(
     vm: &mut InterpretPageJob,
     store: &RangeStore,
-    fixture: &Fixture,
+    contract: &CaseContract,
     expected_jobs: &[JobId],
     pending: &mut Vec<PendingEvent>,
 ) -> VmTerminal {
@@ -974,7 +978,7 @@ fn drive_vm(
                 "content-vm",
                 store,
                 store.snapshot(),
-                &fixture.bytes,
+                &contract.input,
                 expected_jobs,
                 ticket,
                 &missing,
@@ -994,21 +998,23 @@ fn page_tree_context(job: JobId, seed: u64) -> PageTreeJobContext {
     )
 }
 
-fn empty_store(snapshot: SourceSnapshot) -> RangeStore {
-    RangeStore::new(snapshot, Default::default()).expect("default Range store limits validate")
+fn empty_store(snapshot: SourceSnapshot, contract: &CaseContract) -> RangeStore {
+    RangeStore::new(snapshot, range_limits(contract))
+        .expect("manifest-owned Range store limits validate")
 }
 
-fn source_snapshot(fixture: &Fixture) -> SourceSnapshot {
-    let len = u64::try_from(fixture.bytes.len()).expect("fixture length fits u64");
+fn source_snapshot(contract: &CaseContract) -> SourceSnapshot {
+    let salt = contract.case.salt();
+    let len = u64::try_from(contract.input.len()).expect("case input length fits u64");
     SourceSnapshot::new(
         SourceIdentity::new(
-            SourceStableId::new([fixture.salt; 32]),
-            SourceRevision::new(u64::from(fixture.salt)),
+            SourceStableId::new([salt; 32]),
+            SourceRevision::new(u64::from(salt)),
         ),
         Some(len),
         SourceValidator::new(
             SourceValidatorKind::FrozenResponse,
-            [fixture.salt.wrapping_add(1); 32],
+            [salt.wrapping_add(1); 32],
         ),
     )
 }
@@ -1027,20 +1033,480 @@ fn replacement_snapshot(original: SourceSnapshot, salt: u8) -> SourceSnapshot {
     )
 }
 
-fn content_image_limits(max_decoded_bytes: u64) -> ContentImageLimits {
-    ContentImageLimits::validate(ContentImageLimitConfig {
-        max_decoded_bytes,
-        ..ContentImageLimitConfig::default()
-    })
-    .expect("positive case-owned image limits validate")
+fn checked_product(left: u64, right: u64, label: &str) -> u64 {
+    left.checked_mul(right)
+        .unwrap_or_else(|| panic!("{label} fits u64"))
 }
 
-fn raster_output_limits(max_output_bytes: u64) -> ReferenceRasterLimits {
+fn checked_sum(left: u64, right: u64, label: &str) -> u64 {
+    left.checked_add(right)
+        .unwrap_or_else(|| panic!("{label} fits u64"))
+}
+
+fn object_work_bytes(contract: &CaseContract) -> u64 {
+    checked_product(
+        contract.max_input_bytes,
+        contract.max_objects,
+        "M3 object work",
+    )
+}
+
+fn range_limits(contract: &CaseContract) -> RangeStoreLimits {
+    RangeStoreLimits::validate(RangeStoreLimitConfig {
+        max_input_bytes: contract.max_input_bytes,
+        max_read_bytes: contract.max_input_bytes,
+        max_cached_bytes: contract.max_input_bytes,
+        max_resident_bytes: checked_product(contract.max_input_bytes, 2, "M3 Range residency"),
+        ..RangeStoreLimitConfig::default()
+    })
+    .expect("manifest-owned Range limits validate")
+}
+
+fn strict_limits(contract: &CaseContract) -> StrictBaseOpenLimits {
+    StrictBaseOpenLimits::new(
+        xref_limits(contract),
+        document_limits(contract),
+        attestation_limits(contract),
+        object_limits(contract),
+        syntax_limits(contract),
+    )
+}
+
+fn xref_limits(contract: &CaseContract) -> XrefLimits {
+    let entries = contract
+        .max_objects
+        .checked_add(1)
+        .expect("M3 xref free row fits u64");
+    let source_work = checked_product(contract.max_input_bytes, 2, "M3 xref source work");
+    XrefLimits::validate(XrefLimitConfig {
+        max_source_bytes: contract.max_input_bytes,
+        initial_tail_bytes: contract.max_input_bytes,
+        max_tail_bytes: contract.max_input_bytes,
+        initial_section_bytes: contract.max_input_bytes,
+        max_section_bytes: contract.max_input_bytes,
+        max_total_read_bytes: source_work,
+        max_total_parse_bytes: source_work,
+        max_subsections: entries,
+        max_entries: entries,
+    })
+    .expect("manifest-owned xref limits validate")
+}
+
+fn document_limits(contract: &CaseContract) -> DocumentLimits {
+    let entries = contract
+        .max_objects
+        .checked_add(1)
+        .expect("M3 document free row fits u64");
+    DocumentLimits::validate(DocumentLimitConfig {
+        max_total_entries: entries,
+        max_in_use_entries: contract.max_objects,
+        max_logical_index_bytes: object_work_bytes(contract),
+        max_sort_steps: checked_product(entries, entries, "M3 document sort work"),
+    })
+    .expect("manifest-owned document limits validate")
+}
+
+fn attestation_limits(contract: &CaseContract) -> RevisionAttestationLimits {
+    let object_work = object_work_bytes(contract);
+    RevisionAttestationLimits::validate(RevisionAttestationLimitConfig {
+        max_source_bytes: contract.max_input_bytes,
+        max_objects: contract.max_objects,
+        scan_chunk_bytes: contract.max_input_bytes,
+        max_trivia_bytes: contract.max_input_bytes,
+        max_comment_bytes: contract.max_input_bytes,
+        max_total_object_read_bytes: object_work,
+        max_total_object_parse_bytes: object_work,
+        max_retained_evidence_bytes: object_work,
+    })
+    .expect("manifest-owned attestation limits validate")
+}
+
+fn object_limits(contract: &CaseContract) -> ObjectLimits {
+    let source_work = checked_product(contract.max_input_bytes, 2, "M3 object source work");
+    ObjectLimits::validate(ObjectLimitConfig {
+        max_source_bytes: contract.max_input_bytes,
+        initial_envelope_bytes: contract.max_input_bytes,
+        max_envelope_bytes: contract.max_input_bytes,
+        initial_boundary_bytes: contract.max_input_bytes,
+        max_boundary_bytes: contract.max_input_bytes,
+        max_stream_bytes: contract
+            .max_stream_output_bytes
+            .min(contract.max_input_bytes),
+        max_total_read_bytes: source_work,
+        max_total_parse_bytes: source_work,
+    })
+    .expect("manifest-owned object limits validate")
+}
+
+fn syntax_limits(contract: &CaseContract) -> SyntaxLimits {
+    SyntaxLimits::validate(SyntaxLimitConfig {
+        max_input_bytes: contract.max_input_bytes,
+        max_token_bytes: contract.max_input_bytes,
+        max_comment_bytes: contract.max_input_bytes,
+        max_name_bytes: contract.max_input_bytes,
+        max_string_source_bytes: contract.max_input_bytes,
+        max_string_decoded_bytes: contract.max_stream_output_bytes,
+        max_owned_bytes: contract
+            .max_stream_output_bytes
+            .max(contract.max_input_bytes),
+        max_total_tokens: contract.operator_fuel.min(contract.decode_fuel),
+        max_container_entries: contract.operator_fuel,
+        max_container_bytes: object_work_bytes(contract),
+        max_container_depth: u16::try_from(contract.max_resolve_depth)
+            .expect("M3 resolve depth fits syntax type"),
+    })
+    .expect("manifest-owned syntax limits validate")
+}
+
+fn page_tree_limits(contract: &CaseContract) -> PageTreeLimits {
+    let object_work = object_work_bytes(contract);
+    PageTreeLimits::validate(PageTreeLimitConfig {
+        max_nodes: contract.max_objects,
+        max_depth: contract.max_resolve_depth,
+        max_pages: 1,
+        max_kids_per_node: contract.max_objects,
+        max_total_object_read_bytes: object_work,
+        max_total_object_parse_bytes: object_work,
+        max_retained_traversal_bytes: object_work,
+    })
+    .expect("manifest-owned page-tree limits validate")
+}
+
+fn materialization_limits(contract: &CaseContract) -> PageMaterializationLimits {
+    let object_work = object_work_bytes(contract);
+    PageMaterializationLimits::validate(PageMaterializationLimitConfig {
+        max_ancestor_depth: contract.max_resolve_depth,
+        max_objects: contract.max_objects,
+        max_reference_edges: contract.max_objects,
+        max_total_object_read_bytes: object_work,
+        max_total_object_parse_bytes: object_work,
+        max_retained_state_bytes: object_work,
+    })
+    .expect("manifest-owned materialization limits validate")
+}
+
+fn stream_decode_limits(contract: &CaseContract) -> DecodeLimits {
+    DecodeLimits::validate(DecodeLimitConfig {
+        max_input_bytes: contract.max_input_bytes,
+        max_filters: u16::try_from(contract.max_objects).expect("M3 filter count fits u16"),
+        max_layer_output_bytes: contract.max_stream_output_bytes,
+        max_total_output_bytes: contract.max_stream_output_bytes,
+        max_final_output_bytes: contract.max_stream_output_bytes,
+        max_retained_capacity_bytes: contract.max_stream_output_bytes,
+        max_fuel: contract.decode_fuel,
+        cancellation_check_interval_fuel: contract.decode_fuel.min(256),
+    })
+    .expect("manifest-owned stream decoder limits validate")
+}
+
+fn page_content_limits(contract: &CaseContract) -> PageContentLimits {
+    PageContentLimits::validate(PageContentLimitConfig {
+        max_streams: contract.max_objects,
+        max_array_entries: contract.max_objects,
+        max_objects: contract.max_objects,
+        max_reference_edges: contract.max_objects,
+        max_alias_depth: contract.max_resolve_depth,
+        max_total_object_read_bytes: object_work_bytes(contract),
+        max_total_object_parse_bytes: object_work_bytes(contract),
+        max_total_encoded_bytes: contract.max_input_bytes,
+        // Content-stream decode and Image aggregate decode are separate ownership domains.
+        // The one-less image case intentionally keeps 4 KiB here and applies its 5-byte
+        // max_total_decode_bytes only in ContentImageLimits below.
+        max_total_decoded_bytes: contract.max_stream_output_bytes,
+        max_total_decode_fuel: contract.decode_fuel,
+        max_retained_state_bytes: object_work_bytes(contract),
+        decode_limits: stream_decode_limits(contract),
+    })
+    .expect("manifest-owned Page content limits validate")
+}
+
+fn content_limits(contract: &CaseContract) -> ContentLimits {
+    ContentLimits::validate(ContentLimitConfig {
+        max_streams: u32::try_from(contract.max_objects).expect("M3 stream count fits u32"),
+        max_total_decoded_bytes: contract.max_stream_output_bytes,
+        max_tokens: contract.operator_fuel,
+        max_token_bytes: contract.max_stream_output_bytes,
+        max_operands_per_operator: u32::try_from(contract.max_objects)
+            .expect("M3 operand count fits u32"),
+        max_nesting_depth: u16::try_from(contract.max_resolve_depth)
+            .expect("M3 Content nesting fits u16"),
+        max_operators: contract.operator_fuel,
+        max_fuel: contract.operator_fuel,
+        max_retained_bytes: object_work_bytes(contract),
+    })
+    .expect("manifest-owned Content scanner limits validate")
+}
+
+fn vm_limits(contract: &CaseContract) -> ContentVmLimits {
+    ContentVmLimits::validate(ContentVmLimitConfig {
+        max_operators: contract.operator_fuel,
+        max_fuel: contract.operator_fuel,
+        max_graphics_state_depth: u32::try_from(contract.max_group_depth)
+            .expect("M3 graphics-state depth fits u32"),
+        max_compatibility_depth: u32::try_from(contract.max_group_depth)
+            .expect("M3 compatibility depth fits u32"),
+        max_marked_content_depth: u32::try_from(contract.max_group_depth)
+            .expect("M3 marked-content depth fits u32"),
+        max_property_uses: contract.max_scene_commands,
+        max_retained_bytes: object_work_bytes(contract),
+    })
+    .expect("manifest-owned Content VM limits validate")
+}
+
+fn property_limits(contract: &CaseContract) -> PagePropertyLookupLimits {
+    PagePropertyLookupLimits::validate(PagePropertyLookupLimitConfig {
+        max_lookups: contract.max_scene_commands,
+        max_entry_visits: checked_product(
+            contract.max_objects,
+            contract.max_resolve_depth,
+            "M3 property entry visits",
+        ),
+    })
+    .expect("manifest-owned Page property limits validate")
+}
+
+fn resource_lookup_entry_visits(contract: &CaseContract) -> u64 {
+    checked_product(
+        checked_product(
+            contract.max_objects,
+            contract.max_resolve_depth,
+            "M3 resource lookup object-depth work",
+        ),
+        contract.max_scene_commands,
+        "M3 resource lookup command work",
+    )
+}
+
+fn page_xobject_lookup_limits(contract: &CaseContract) -> PageXObjectLookupLimits {
+    PageXObjectLookupLimits::validate(PageXObjectLookupLimitConfig {
+        max_lookups: contract.max_scene_commands,
+        max_entry_visits: resource_lookup_entry_visits(contract),
+    })
+    .expect("manifest-owned Page XObject lookup limits validate")
+}
+
+fn page_font_lookup_limits(contract: &CaseContract) -> PageFontLookupLimits {
+    PageFontLookupLimits::validate(PageFontLookupLimitConfig {
+        max_lookups: contract.max_scene_commands,
+        max_entry_visits: resource_lookup_entry_visits(contract),
+    })
+    .expect("manifest-owned Page Font lookup limits validate")
+}
+
+fn content_graphics_limits(contract: &CaseContract) -> ContentGraphicsLimits {
+    ContentGraphicsLimits::validate(ContentGraphicsLimitConfig {
+        max_path_segments: contract.max_path_segments,
+        max_dash_entries: u32::try_from(contract.max_path_segments)
+            .expect("M3 dash-entry ceiling fits u32"),
+        ..ContentGraphicsLimitConfig::default()
+    })
+    .expect("manifest-owned Content graphics limits validate")
+}
+
+fn image_xobject_limits(contract: &CaseContract) -> ImageXObjectLimits {
+    ImageXObjectLimits::validate(ImageXObjectLimitConfig {
+        max_pixels: contract.max_image_pixels,
+        max_encoded_bytes: contract.max_stream_output_bytes,
+        max_decoded_bytes: contract.max_stream_output_bytes,
+        max_decode_fuel: contract.decode_fuel,
+        decode_limits: stream_decode_limits(contract),
+        ..ImageXObjectLimitConfig::default()
+    })
+    .expect("manifest-owned Image XObject limits validate")
+}
+
+fn content_image_limits(contract: &CaseContract) -> ContentImageLimits {
+    ContentImageLimits::validate(ContentImageLimitConfig {
+        max_image_uses: contract.max_scene_commands,
+        max_unique_images: contract.max_scene_commands,
+        max_decoded_bytes: contract.max_total_decode_bytes,
+        max_planning_operators: contract.operator_fuel,
+        max_cache_probes: checked_product(
+            contract.max_objects,
+            contract.max_scene_commands,
+            "M3 image cache probes",
+        ),
+        max_acquisition_polls: contract.operator_fuel,
+        ..ContentImageLimitConfig::default()
+    })
+    .expect("manifest-owned aggregate Image limits validate")
+}
+
+fn font_parser_retained_bytes(contract: &CaseContract) -> u64 {
+    checked_product(
+        checked_product(
+            contract.max_stream_output_bytes,
+            contract.max_objects,
+            "M3 font stream-object retention",
+        ),
+        contract.max_group_depth,
+        "M3 font depth retention",
+    )
+}
+
+fn font_resource_retained_bytes(contract: &CaseContract) -> u64 {
+    let decoder_state = checked_product(
+        contract.max_stream_output_bytes,
+        2,
+        "M3 Font resource decoder retention",
+    );
+    checked_sum(
+        checked_sum(
+            font_parser_retained_bytes(contract),
+            object_work_bytes(contract),
+            "M3 Font resource parser-object retention",
+        ),
+        decoder_state,
+        "M3 Font resource aggregate retention",
+    )
+}
+
+fn font_parser_limits(contract: &CaseContract) -> FontLimits {
+    let aggregate_shape = checked_product(
+        contract.max_path_segments,
+        contract.max_scene_commands,
+        "M3 aggregate font shape",
+    );
+    FontLimits::validate(FontLimitConfig {
+        max_input_bytes: contract.max_stream_output_bytes,
+        max_tables: u16::try_from(contract.max_objects).expect("M3 font table count fits u16"),
+        max_glyphs: u32::try_from(contract.max_scene_commands)
+            .expect("M3 font glyph count fits u32"),
+        max_cmap_segments: u32::try_from(contract.max_scene_commands)
+            .expect("M3 cmap segment count fits u32"),
+        max_glyph_data_bytes: contract.max_stream_output_bytes,
+        max_glyph_bytes: contract.max_stream_output_bytes,
+        max_glyph_contours: u32::try_from(contract.max_path_segments)
+            .expect("M3 glyph contour count fits u32"),
+        max_total_contours: aggregate_shape,
+        max_glyph_points: u32::try_from(contract.max_path_segments)
+            .expect("M3 glyph point count fits u32"),
+        max_total_points: aggregate_shape,
+        max_components: aggregate_shape,
+        max_component_depth: u16::try_from(contract.max_group_depth)
+            .expect("M3 compound-glyph depth fits u16"),
+        max_path_segments: aggregate_shape,
+        max_retained_bytes: font_parser_retained_bytes(contract),
+        max_fuel: contract.operator_fuel,
+        cancellation_check_interval_fuel: contract.operator_fuel.min(256),
+    })
+    .expect("manifest-owned TrueType parser limits validate")
+}
+
+fn font_resource_limits(contract: &CaseContract) -> FontResourceLimits {
+    let width_entries = checked_product(
+        contract.max_objects,
+        contract.max_scene_commands,
+        "M3 simple-font Widths entries",
+    );
+    FontResourceLimits::validate(FontResourceLimitConfig {
+        max_polls: contract.operator_fuel,
+        max_objects: contract.max_objects,
+        max_reference_edges: contract.max_objects.min(contract.max_resolve_depth),
+        max_metadata_entries: resource_lookup_entry_visits(contract),
+        max_widths: width_entries,
+        max_object_read_bytes: object_work_bytes(contract),
+        max_object_parse_bytes: object_work_bytes(contract),
+        // FontFile2 is a stream-owned decode. It deliberately does not inherit the aggregate
+        // image budget, so image-decoded-one-less still fails at the Content Image boundary.
+        max_encoded_bytes: contract.max_stream_output_bytes,
+        max_decoded_bytes: contract.max_stream_output_bytes,
+        max_decode_fuel: contract.decode_fuel,
+        // Font acquisition keeps PDF objects and decoder capacity live while reserving the
+        // complete lower TrueType-parser budget, so its ceiling owns all three domains.
+        max_retained_bytes: font_resource_retained_bytes(contract),
+        decode_limits: stream_decode_limits(contract),
+        font_limits: font_parser_limits(contract),
+    })
+    .expect("manifest-owned embedded Font resource limits validate")
+}
+
+fn content_font_limits(contract: &CaseContract) -> ContentFontLimits {
+    let aggregate_shape = checked_product(
+        contract.max_path_segments,
+        contract.max_scene_commands,
+        "M3 aggregate Content Font outline shape",
+    );
+    let resource_retained = checked_product(
+        font_resource_retained_bytes(contract),
+        contract.max_objects,
+        "M3 aggregate Content Font resource retention",
+    );
+    let glyph_retained = checked_product(
+        checked_product(
+            contract.max_stream_output_bytes,
+            contract.max_path_segments,
+            "M3 Content Font glyph-shape retention",
+        ),
+        contract.max_group_depth,
+        "M3 Content Font expanded-glyph retention",
+    );
+    let plan_retained = checked_product(
+        contract.max_stream_output_bytes,
+        contract.max_scene_commands,
+        "M3 Content Font plan retention",
+    );
+    let cache_retained = checked_product(
+        contract.max_stream_output_bytes,
+        contract.max_objects,
+        "M3 Content Font cache retention",
+    );
+    ContentFontLimits::validate(ContentFontLimitConfig {
+        max_font_uses: contract.max_scene_commands,
+        max_unique_fonts: contract.max_objects,
+        max_resource_retained_bytes: resource_retained,
+        max_glyphs: contract.max_scene_commands,
+        max_outline_segments: aggregate_shape,
+        max_glyph_retained_bytes: glyph_retained,
+        max_text_bytes: contract.max_stream_output_bytes,
+        max_text_adjustments: contract.max_scene_commands,
+        max_planning_operators: contract.operator_fuel,
+        max_cache_probes: resource_lookup_entry_visits(contract),
+        max_plan_retained_bytes: plan_retained,
+        max_cache_retained_bytes: cache_retained,
+        max_acquisition_polls: contract.operator_fuel,
+    })
+    .expect("manifest-owned aggregate Content Font limits validate")
+}
+
+fn graphics_scene_limits(contract: &CaseContract) -> GraphicsSceneLimits {
+    GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+        max_commands: u32::try_from(contract.max_scene_commands)
+            .expect("M3 Scene command ceiling fits u32"),
+        max_path_segments: contract.max_path_segments,
+        max_image_bytes: contract.max_total_decode_bytes,
+        max_state_depth: u32::try_from(contract.max_group_depth)
+            .expect("M3 Scene state depth fits u32"),
+        max_group_depth: u32::try_from(contract.max_group_depth)
+            .expect("M3 Scene group depth fits u32"),
+        ..GraphicsSceneLimitConfig::default()
+    })
+    .expect("manifest-owned graphics Scene limits validate")
+}
+
+fn render_config(contract: &CaseContract) -> ReferenceRenderConfig {
+    ReferenceRenderConfig::opaque_srgb(contract.width, contract.height)
+        .expect("positive manifest-owned output configuration")
+}
+
+fn raster_limits(contract: &CaseContract) -> ReferenceRasterLimits {
+    let stride = u64::from(contract.width)
+        .checked_mul(4)
+        .expect("M3 output stride fits u64");
     ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
-        max_output_bytes,
+        max_width: contract.width,
+        max_height: contract.height,
+        max_pixels: contract.max_image_pixels,
+        max_stride_bytes: stride,
+        max_output_bytes: contract.max_raster_output_bytes,
+        max_commands: contract.max_scene_commands,
+        max_image_source_pixels: contract.max_image_pixels,
+        max_image_decoded_bytes: contract.max_total_decode_bytes,
+        max_clip_depth: u32::try_from(contract.max_group_depth)
+            .expect("M3 Reference clip depth fits u32"),
         ..ReferenceRasterLimitConfig::default()
     })
-    .expect("positive case-owned Reference output limits validate")
+    .expect("manifest-owned Reference output limits validate")
 }
 
 fn strict_diagnostic(error: StrictBaseOpenError) -> &'static str {
@@ -1123,64 +1589,37 @@ fn assert_ready_content(case: Case, page: &pdf_rs_content::InterpretedPage) {
     }
 }
 
-fn assert_ready_pixels(case: Case, buffer: &CanonicalPixelBuffer) {
+fn assert_ready_render_stats(case: Case, buffer: &CanonicalPixelBuffer) {
     assert_eq!(
         buffer.rgba().len(),
         usize::try_from(u64::from(buffer.width()) * u64::from(buffer.height()) * 4).unwrap()
     );
     match case {
         Case::ValidPathClip => {
-            assert_eq!(
-                buffer.rgba(),
-                &[0, 0, 0, 255, 255, 0, 0, 255],
-                "clip/fill/source order has a literal two-pixel authority"
-            );
             assert!(buffer.stats().geometry_segments() > 0);
             assert!(buffer.stats().clip_bytes() > 0);
         }
         Case::ValidStroke => {
-            assert!(has_non_white_pixel(buffer.rgba()));
             assert!(buffer.stats().stroke_runs() > 0);
             assert!(buffer.stats().stroke_primitives() > 0);
             assert!(buffer.stats().dash_chunks() > 0);
         }
         Case::ValidImage => {
-            assert_eq!(
-                buffer.rgba(),
-                &[255, 0, 0, 255, 0, 0, 255, 255],
-                "basic image sampling has a literal red/blue authority"
-            );
             assert_eq!(buffer.stats().image_commands(), 1);
             assert_eq!(buffer.stats().image_decoded_bytes(), IMAGE_RGB.len() as u64);
         }
         Case::ValidFont => {
-            assert!(has_non_white_pixel(buffer.rgba()));
             assert_eq!(buffer.stats().glyph_runs(), 1);
             assert_eq!(buffer.stats().glyphs(), 1);
             assert!(buffer.stats().glyph_outline_segments() > 0);
         }
         Case::ValidMixed => {
-            assert!(has_non_white_pixel(buffer.rgba()));
             assert_eq!(buffer.stats().image_commands(), 1);
             assert_eq!(buffer.stats().glyph_runs(), 1);
             assert_eq!(buffer.stats().commands(), 5);
-            let rgba_sha256 = hex_digest(
-                &sha256(buffer.rgba()).expect("bounded mixed RGBA output fits SHA-256 framing"),
-            );
-            // This frozen digest is an implementation-bound Reference regression for the
-            // overlapping path -> image -> glyph order. It is not independent O0/O1 authority.
-            assert_eq!(
-                rgba_sha256,
-                "05c2256f5ef14fc8c0733f273a2827846bf0b854bbaec5027e0278ca7f864a1e"
-            );
         }
         _ => panic!("only successful cases have Ready pixel assertions"),
     }
-}
-
-fn has_non_white_pixel(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4)
-        .any(|pixel| pixel != [255, 255, 255, 255])
 }
 
 struct ChangedSnapshotNoPoll {

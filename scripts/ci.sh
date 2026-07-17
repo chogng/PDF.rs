@@ -79,6 +79,8 @@ diff --recursive --brief \
 
 cargo test --locked -p pdf-rs-quality --test m2_exit
 
+cargo test --locked --package pdf-rs-quality --test m3_reference_oracle_model
+
 m3_reference_gate_root="target/ci-artifacts/m3-reference-gate"
 if [[ "$m3_reference_gate_root" != "target/ci-artifacts/m3-reference-gate" ]]; then
     echo "refusing to clean unexpected M3 Reference gate root: $m3_reference_gate_root" >&2
