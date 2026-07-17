@@ -18,6 +18,7 @@ pub(crate) enum GeometryLimitKind {
     StrokeRuns,
     StrokePrimitives,
     GeometryBytes,
+    WorkingBytes,
     ClipDepth,
     ClipBytes,
     Fuel,
@@ -41,6 +42,7 @@ pub(crate) enum GeometryFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeometryLimits {
+    pub(crate) max_curve_recursion: u8,
     pub(crate) max_segments: u64,
     pub(crate) max_edges: u64,
     pub(crate) max_samples: u64,
@@ -49,6 +51,8 @@ pub(crate) struct GeometryLimits {
     pub(crate) max_stroke_runs: u64,
     pub(crate) max_stroke_primitives: u64,
     pub(crate) max_geometry_bytes: u64,
+    /// Maximum geometry plus operation-local masks or replacement storage.
+    pub(crate) max_working_bytes: u64,
     pub(crate) max_clip_depth: u32,
     pub(crate) max_clip_bytes: u64,
     pub(crate) max_fuel: u64,
@@ -57,6 +61,7 @@ pub(crate) struct GeometryLimits {
 impl Default for GeometryLimits {
     fn default() -> Self {
         Self {
+            max_curve_recursion: 16,
             max_segments: 4_000_000,
             max_edges: 4_000_000,
             max_samples: 1_000_000_000,
@@ -65,6 +70,7 @@ impl Default for GeometryLimits {
             max_stroke_runs: 1_000_000,
             max_stroke_primitives: 8_000_000,
             max_geometry_bytes: 256 * 1024 * 1024,
+            max_working_bytes: u64::MAX,
             max_clip_depth: 256,
             max_clip_bytes: 256 * 1024 * 1024,
             max_fuel: 1_000_000_000,
@@ -97,7 +103,8 @@ impl<'a> GeometryWork<'a> {
         limits: GeometryLimits,
         cancellation: &'a dyn GeometryCancellation,
     ) -> Result<Self, GeometryFailure> {
-        if limits.max_segments == 0
+        if limits.max_curve_recursion == 0
+            || limits.max_segments == 0
             || limits.max_edges == 0
             || limits.max_samples == 0
             || limits.max_coverage_bytes == 0
@@ -170,13 +177,22 @@ impl<'a> GeometryWork<'a> {
         &mut self,
         maximum: u64,
     ) -> Result<(), GeometryFailure> {
-        if maximum == 0
-            || maximum > self.limits.max_geometry_bytes
-            || self.peak_geometry_bytes > maximum
-        {
+        if maximum > self.limits.max_geometry_bytes || self.peak_geometry_bytes > maximum {
             return Err(GeometryFailure::InvalidGeometry);
         }
         self.limits.max_geometry_bytes = maximum;
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "the geometry-only harness compiles this module without the mounted glyph adapter"
+    )]
+    pub(crate) fn tighten_fuel_limit(&mut self, maximum: u64) -> Result<(), GeometryFailure> {
+        if maximum > self.limits.max_fuel || self.fuel > maximum {
+            return Err(GeometryFailure::InvalidGeometry);
+        }
+        self.limits.max_fuel = maximum;
         Ok(())
     }
 
@@ -341,6 +357,7 @@ impl<'a> GeometryWork<'a> {
             target_bytes,
             GeometryLimitKind::GeometryBytes,
         )?;
+        self.ensure_working_bytes(target_bytes)?;
         let move_fuel =
             u64::try_from(values.len()).map_err(|_| GeometryFailure::NumericOverflow)?;
         self.preflight_fuel(move_fuel)?;
@@ -352,6 +369,7 @@ impl<'a> GeometryWork<'a> {
             .map_err(|_| GeometryFailure::NumericOverflow)?
             .checked_mul(item_size)
             .ok_or(GeometryFailure::NumericOverflow)?;
+        self.ensure_working_bytes(new_capacity)?;
         let transient_geometry_bytes = checked_counter(
             self.geometry_bytes,
             self.limits.max_geometry_bytes,
@@ -373,6 +391,15 @@ impl<'a> GeometryWork<'a> {
         self.geometry_bytes = committed_geometry_bytes;
         self.peak_geometry_bytes = self.peak_geometry_bytes.max(transient_geometry_bytes);
         Ok(())
+    }
+
+    pub(crate) fn ensure_working_bytes(&self, additional: u64) -> Result<u64, GeometryFailure> {
+        checked_counter(
+            self.geometry_bytes,
+            self.limits.max_working_bytes,
+            additional,
+            GeometryLimitKind::WorkingBytes,
+        )
     }
 
     pub(crate) fn try_push_geometry<T>(
@@ -841,6 +868,10 @@ impl PageDeviceMap {
         self.affine.checked_concat(Affine::from_scene(transform)?)
     }
 
+    #[allow(
+        dead_code,
+        reason = "the analytic geometry harness validates direct page mapping"
+    )]
     pub(crate) fn map_page_point(self, point: ScenePoint) -> Result<FixedPoint, GeometryFailure> {
         self.affine.apply(FixedPoint::from_scene(point)?)
     }

@@ -4,8 +4,10 @@ use pdf_rs_scene::{
     BlendMode, DeviceColor, ImageColorSpace, ImageResource, Matrix, PageGeometry, SceneUnit,
 };
 
-use super::coverage::{CoverageMask, SAMPLE_GRID_WIDTH, SAMPLES_PER_PIXEL, sample_point};
-use super::geometry::{Fixed, GeometryFailure, PageDeviceMap};
+use super::coverage::{
+    ClipStack, CoverageMask, SAMPLE_GRID_WIDTH, SAMPLES_PER_PIXEL, sample_point,
+};
+use super::geometry::{Fixed, GeometryFailure, GeometryLimitKind, PageDeviceMap};
 use super::{
     NormalizedQ16, PremultipliedRgbaQ16, ReferenceBlendMode, ReferenceColorProfile,
     ReferenceSrgbQ16,
@@ -13,6 +15,10 @@ use super::{
 
 const CANCELLATION_FUEL_INTERVAL: u64 = 256;
 
+#[allow(
+    dead_code,
+    reason = "the standalone image harness retains full-page output admission"
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageLimitKind {
     SourcePixels,
@@ -40,6 +46,12 @@ pub(crate) enum ImageFailure {
         consumed: u64,
         attempted: u64,
     },
+    GeometryLimit {
+        kind: GeometryLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+    },
 }
 
 impl From<GeometryFailure> for ImageFailure {
@@ -49,7 +61,17 @@ impl From<GeometryFailure> for ImageFailure {
             GeometryFailure::InvalidGeometry => Self::InvalidImage,
             GeometryFailure::Cancelled => Self::Cancelled,
             GeometryFailure::Allocation { attempted_bytes } => Self::Allocation { attempted_bytes },
-            GeometryFailure::Limit { .. } => Self::NumericOverflow,
+            GeometryFailure::Limit {
+                kind,
+                limit,
+                consumed,
+                attempted,
+            } => Self::GeometryLimit {
+                kind,
+                limit,
+                consumed,
+                attempted,
+            },
         }
     }
 }
@@ -127,6 +149,10 @@ impl ImageStats {
         self.decoded_bytes
     }
 
+    #[allow(
+        dead_code,
+        reason = "the standalone image harness measures output admission"
+    )]
     pub(crate) const fn output_pixels(self) -> u64 {
         self.output_pixels
     }
@@ -139,6 +165,10 @@ impl ImageStats {
         self.conversions
     }
 
+    #[allow(
+        dead_code,
+        reason = "the standalone image harness measures retained output"
+    )]
     pub(crate) const fn retained_bytes(self) -> u64 {
         self.retained_bytes
     }
@@ -153,6 +183,10 @@ impl ImageStats {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "retained by the standalone analytic image harness"
+)]
 pub(crate) struct ImageRaster {
     width: u32,
     height: u32,
@@ -160,6 +194,10 @@ pub(crate) struct ImageRaster {
     stats: ImageStats,
 }
 
+#[allow(
+    dead_code,
+    reason = "retained by the standalone analytic image harness"
+)]
 impl ImageRaster {
     pub(crate) const PROFILE: &'static str = "reference-image-v1";
 
@@ -290,6 +328,10 @@ impl<'a> ImageWork<'a> {
 #[allow(
     clippy::too_many_arguments,
     reason = "the staged image kernel keeps geometry, paint, backdrop, clip, limits, and cancellation explicit"
+)]
+#[allow(
+    dead_code,
+    reason = "retained by the standalone analytic image harness"
 )]
 pub(crate) fn rasterize_image(
     image: &ImageResource,
@@ -500,6 +542,176 @@ pub(crate) fn rasterize_image(
         pixels,
         stats: work.stats,
     })
+}
+
+/// Paints one basic image directly into a job-private surface.
+///
+/// Unlike the staged standalone harness above, this mounted form never allocates or copies a
+/// second full-page backdrop. A failure can leave the borrowed surface partially modified, but
+/// the surface is owned exclusively by `ReferenceRenderJob` and is discarded on every failure.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the mounted image kernel keeps geometry, paint, surface, clip, limits, and cancellation explicit"
+)]
+pub(crate) fn paint_image(
+    image: &ImageResource,
+    geometry: PageGeometry,
+    transform: Matrix,
+    output_width: u32,
+    output_height: u32,
+    alpha: SceneUnit,
+    blend_mode: BlendMode,
+    pixels: &mut [PremultipliedRgbaQ16],
+    clip: Option<&ClipStack>,
+    limits: ImageLimits,
+    cancellation: &dyn ImageCancellation,
+) -> Result<ImageStats, ImageFailure> {
+    let mut work = ImageWork::new(limits, cancellation)?;
+    if image.bits_per_component() != 8 {
+        return Err(ImageFailure::InvalidImage);
+    }
+    if image.interpolate() {
+        return Err(ImageFailure::UnsupportedInterpolation);
+    }
+    let components = u64::from(image.color_space().components());
+    let source_pixels = u64::from(image.width())
+        .checked_mul(u64::from(image.height()))
+        .ok_or(ImageFailure::NumericOverflow)?;
+    work.stats.source_pixels = work.ensure(
+        ImageLimitKind::SourcePixels,
+        limits.max_source_pixels,
+        0,
+        source_pixels,
+    )?;
+    let stride_bytes = u64::from(image.width())
+        .checked_mul(components)
+        .ok_or(ImageFailure::NumericOverflow)?;
+    work.stats.stride_bytes = work.ensure(
+        ImageLimitKind::StrideBytes,
+        limits.max_stride_bytes,
+        0,
+        stride_bytes,
+    )?;
+    let decoded_bytes = stride_bytes
+        .checked_mul(u64::from(image.height()))
+        .ok_or(ImageFailure::NumericOverflow)?;
+    if decoded_bytes != u64::try_from(image.decoded().len()).unwrap_or(u64::MAX) {
+        return Err(ImageFailure::InvalidImage);
+    }
+    work.stats.decoded_bytes = work.ensure(
+        ImageLimitKind::DecodedBytes,
+        limits.max_decoded_bytes,
+        0,
+        decoded_bytes,
+    )?;
+
+    let output_pixels = u64::from(output_width)
+        .checked_mul(u64::from(output_height))
+        .ok_or(ImageFailure::NumericOverflow)?;
+    work.stats.output_pixels = work.ensure(
+        ImageLimitKind::OutputPixels,
+        limits.max_output_pixels,
+        0,
+        output_pixels,
+    )?;
+    if output_pixels == 0 || u64::try_from(pixels.len()).unwrap_or(u64::MAX) != output_pixels {
+        return Err(ImageFailure::InvalidImage);
+    }
+    if let Some(clip) = clip
+        && (clip.width() != output_width || clip.height() != output_height)
+    {
+        return Err(ImageFailure::InvalidImage);
+    }
+
+    let device_to_image = PageDeviceMap::new(geometry, output_width, output_height)?
+        .combined(transform)?
+        .inverse()?;
+    let admitted_samples = if device_to_image.is_some() {
+        output_pixels
+            .checked_mul(u64::from(SAMPLES_PER_PIXEL))
+            .ok_or(ImageFailure::NumericOverflow)?
+    } else {
+        0
+    };
+    work.ensure(
+        ImageLimitKind::Samples,
+        limits.max_samples,
+        0,
+        admitted_samples,
+    )?;
+    work.ensure(
+        ImageLimitKind::Conversions,
+        limits.max_conversions,
+        0,
+        admitted_samples,
+    )?;
+    let worst_case_fuel = output_pixels
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(admitted_samples.checked_mul(2)?))
+        .ok_or(ImageFailure::NumericOverflow)?;
+    work.ensure(ImageLimitKind::Fuel, limits.max_fuel, 0, worst_case_fuel)?;
+
+    // Preserve the staged kernel's conservative surface-visit charge without retaining or
+    // copying another full-page vector.
+    work.charge_fuel(output_pixels)?;
+    let Some(device_to_image) = device_to_image else {
+        work.check_cancellation()?;
+        return Ok(work.stats);
+    };
+    let alpha = NormalizedQ16::from(alpha);
+    let blend_mode = ReferenceBlendMode::from(blend_mode);
+    for y in 0..output_height {
+        for x in 0..output_width {
+            let index =
+                pixel_index(output_width, output_height, x, y).ok_or(ImageFailure::InvalidImage)?;
+            let backdrop_pixel = pixels[index];
+            let clip_mask = clip
+                .and_then(|mask| mask.sample_mask(x, y))
+                .unwrap_or(u64::MAX);
+            let mut sums = [0_u64; 4];
+            for sample_y in 0..SAMPLE_GRID_WIDTH {
+                for sample_x in 0..SAMPLE_GRID_WIDTH {
+                    let bit = sample_y
+                        .checked_mul(SAMPLE_GRID_WIDTH)
+                        .and_then(|value| value.checked_add(sample_x))
+                        .ok_or(ImageFailure::NumericOverflow)?;
+                    let selected = clip_mask & (1_u64 << bit) != 0;
+                    let sample = sample_point(x, y, sample_x, sample_y)?;
+                    let image_point = device_to_image.apply(sample)?;
+                    let source_index = if selected {
+                        image_sample_index(image, image_point.x, image_point.y)?
+                    } else {
+                        None
+                    };
+                    work.charge_sample(source_index.is_some())?;
+                    let composed = match source_index {
+                        Some(source_index) => {
+                            let source =
+                                source_pixel(image, source_index)?.with_constant_alpha(alpha);
+                            blend_mode.source_over(source, backdrop_pixel)
+                        }
+                        None => backdrop_pixel,
+                    };
+                    sums[0] = sums[0]
+                        .checked_add(u64::from(composed.red().bits()))
+                        .ok_or(ImageFailure::NumericOverflow)?;
+                    sums[1] = sums[1]
+                        .checked_add(u64::from(composed.green().bits()))
+                        .ok_or(ImageFailure::NumericOverflow)?;
+                    sums[2] = sums[2]
+                        .checked_add(u64::from(composed.blue().bits()))
+                        .ok_or(ImageFailure::NumericOverflow)?;
+                    sums[3] = sums[3]
+                        .checked_add(u64::from(composed.alpha().bits()))
+                        .ok_or(ImageFailure::NumericOverflow)?;
+                }
+            }
+            pixels[index] = averaged_pixel(sums)?;
+            work.charge_fuel(1)?;
+        }
+    }
+    work.check_cancellation()?;
+    Ok(work.stats)
 }
 
 fn image_sample_index(

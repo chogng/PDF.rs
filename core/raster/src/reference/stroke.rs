@@ -140,7 +140,7 @@ pub(crate) fn rasterize_stroke(
         path_to_stroke,
         path_to_device,
         Fixed::from_raw(CURVE_TOLERANCE_RAW),
-        MAX_CURVE_RECURSION,
+        MAX_CURVE_RECURSION.min(work.limits().max_curve_recursion),
         work,
     )?;
     let (outline, device_to_outline) = if style.width() == pdf_rs_scene::SceneScalar::ZERO {

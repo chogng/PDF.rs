@@ -1,17 +1,18 @@
 # Scope
 
-`core/raster` is the first pure Native Reference pixel foundation. It consumes one immutable
-`pdf-rs-scene::Scene`, explicitly traverses the current non-painting marked-content command
-subset, and atomically publishes a value-only `CanonicalPixelBuffer`.
+`core/raster` is the pure Native integrated Reference renderer. It consumes one immutable
+`pdf-rs-scene::Scene`, preflights its capability graph and resource table, dispatches the mounted
+graphics-command subset in source order, and atomically publishes a value-only
+`CanonicalPixelBuffer`.
 
 The initial output profile is top-down, opaque `sRGB-reference-v1`, straight-alpha RGBA8.
 M3-05 and M3-06 additionally freeze the project-owned `reference-raster-v1` geometry kernel:
 page-to-device mapping, checked fixed-point path flattening, 8x8 scalar coverage, registered
 stroke construction, and nested clip-mask composition. M3-07 freezes `reference-color-v1` for
 DeviceGray, DeviceRGB, DeviceCMYK, constant alpha, premultiplied arithmetic, Normal, Multiply,
-Screen, and straight-alpha RGBA8 publication. M3-08 adds the staged `reference-image-v1` basic
-unmasked image kernel. M3-09 adds the staged `reference-glyph-v1` embedded-outline kernel. Both
-remain outside `ReferenceRenderJob` until the full visible-command integration in M3-10.
+Screen, and straight-alpha RGBA8 publication. M3-08 adds `reference-image-v1` basic unmasked image
+sampling and M3-09 adds `reference-glyph-v1` embedded-outline painting. M3-10 mounts every one of
+those project-owned kernels behind the versioned `reference-raster-v1` dispatch and identity.
 
 `CanonicalPixelBuffer` is not the worker/session-owned transferable `Surface` lifecycle. It owns
 no `SurfaceId`, generation, epoch, acquire, transfer, release, timeout, shared memory, texture, or
@@ -50,23 +51,25 @@ value contract, current non-painting Scene consumer, resource policy, tests, pro
 closure, and independent implementation review are present.
 
 `m3.reference-geometry-coverage.v1` and `m3.reference-stroke-clip.v1` remain `PLANNED`. Their
-completion means the deterministic kernels, independently derived analytic expectations,
-resource-boundary tests, and review evidence are present. The kernels are compiled through the
-dedicated `reference_geometry_kernel` integration harness until M3-10 connects them to
-`ReferenceRenderJob`.
+deterministic kernels, independently derived analytic expectations, resource-boundary tests, and
+review evidence are present. M3-10 additionally dispatches those kernels through
+`ReferenceRenderJob`; the dedicated `reference_geometry_kernel` harness remains as analytic
+kernel evidence.
 
 `m3.reference-color-compositing.v1` remains `PLANNED`. M3-07 completion means the fixed
 conversion, premultiplication, separable blend, publication-rounding, literal layered-shape,
-capability-rejection, and independent review evidence are present. The color kernel remains
-separate from `ReferenceRenderJob` until M3-10.
+capability-rejection, and independent review evidence are present. M3-10 uses that same profile
+for every mounted path, image, and glyph paint and for final byte publication.
 
-The staged M3-08 and M3-09 kernels likewise do not promote the pixel profile. `reference-image-v1`
+M3-08 and M3-09 likewise do not independently promote the pixel profile. `reference-image-v1`
 accepts only already decoded basic unmasked Scene images. `reference-glyph-v1` accepts only
-already mapped, positioned, project-owned Scene glyph outlines. Neither kernel performs external
-I/O, font lookup, shaping, hinting, codec fallback, platform antialiasing, or partial publication.
+already mapped, positioned, project-owned Scene glyph outlines. M3-10 mounts both without adding
+external I/O, font lookup, shaping, hinting, codec fallback, platform antialiasing, or partial
+publication.
 
-This is not a `REFERENCE` maturity promotion and not an O0/O1 pixel authority. It is not the
-integrated `reference-raster-v1` renderer or the M3 exit gate.
+This is not a `REFERENCE` maturity promotion and not an O0/O1 pixel authority. M3-10 is the
+integrated `reference-raster-v1` renderer, while M3-11 still owns final milestone trace closure,
+independent review, and the M3 exit decision.
 
 # Algorithms and derivations
 
@@ -76,21 +79,29 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
 - One pixel is exactly four bytes in red, green, blue, alpha order. Rows are top-down, stride is
   exactly `width * 4`, and the complete semantic byte count is `stride * height`. Every product is
   checked in `u64`, then checked for host allocation representation.
-- The current Scene schema contains only begin/end marked-content commands. The renderer matches
-  those variants exhaustively and treats them as semantic non-painting operations. No wildcard
-  arm may turn a future visible command into silent blank output.
+- Marked-content variants remain exhaustively matched semantic no-ops. Graphics commands are
+  independently and exhaustively matched as save, restore, clip, fill, stroke, fill-then-stroke,
+  basic image, embedded glyph run, or a structured unsupported group command. No wildcard arm may
+  turn a future command into silent blank output.
 - A complete empty or marked-content-only page is opaque white: every pixel is
-  `[255, 255, 255, 255]`. The builder reserves the complete output before mutation, verifies
-  allocator-reported capacity, fills private storage, checks cancellation immediately before
-  allocation, once per at most 256 command-plus-pixel work units, and again immediately before
-  publication, and only then moves the complete vector into an immutable buffer.
-- Independent limits cover width, height, pixels, stride bytes, semantic output bytes, Scene
-  commands, deterministic fuel, and allocator-reported retained capacity. Allocation failure is
-  reported through a content-redacted resource record.
+  `[255, 255, 255, 255]`. Visible commands mutate one job-private premultiplied Q16 surface in
+  source order. The final RGBA vector is reserved only after successful dispatch, verified against
+  allocator-reported capacity, filled from the private surface, cancellation-checked immediately
+  before publication, and only then moved into an immutable buffer.
+- Independent aggregate limits cover dimensions, pixels, output bytes, commands, resources,
+  requirements and dependency edges; geometry, stroke, clip, image and glyph work; recursion,
+  fuel and cancellation; private surface, operation-local coverage/geometry, clip replacements,
+  simultaneous working bytes, and published retained capacity. Allocation failure is reported
+  through a content-redacted resource record.
 - `ReferenceRenderJob` consumes and releases its input Scene during the first poll, then retains
   either one immutable `Arc<CanonicalPixelBuffer>` or one copyable structured failure. Later polls
   replay that terminal without consulting cancellation or repeating command traversal,
   allocation, or pixel work.
+- Renderer-owned preflight validates canonical requirement/resource identifiers, backward-only
+  dependency order, requirement contexts, resource types, balanced save/restore, every glyph
+  outline lookup, the exact supported capability parameters, and every command family before the
+  private pixel surface is allocated. Producer `Supported` status is never treated as sufficient
+  without the renderer's independent exact-profile decision.
 - Geometry uses signed Q32.32 fixed point. Conversion from Scene billionths, matrix products,
   interpolation, averages, and division use checked integer arithmetic with exact half-way cases
   rounded away from zero. Overflow, singular transforms, and invalid geometry fail closed.
@@ -144,6 +155,9 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
   affine, samples nearest-neighbor texels at the canonical 8x8 positions, converts registered
   DeviceGray/RGB/CMYK bytes through `reference-color-v1`, applies clip/alpha/blend per sample, and
   averages once into a private Q16 result. Singular image transforms are valid no-ops.
+- The mounted image form writes into the job-private Q16 surface without cloning or allocating a
+  second full-page backdrop. Image source pixels, stride, decoded bytes, samples, conversions,
+  fuel, and cancellation are aggregated across commands before final publication.
 - `reference-glyph-v1` resolves every positioned glyph identifier against the immutable Scene
   resource table. Its transform order is page-to-device, glyph-to-page, then design units divided
   by `units_per_em`. The result uses the registered Q32.32 1/256-pixel flattener and nonzero 8x8
@@ -161,9 +175,17 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
   statistics are the greater of coverage plus peak geometry and coverage plus output pixels, so a
   retained-limit failure is never mislabeled as an independent geometry-limit failure. Both the
   glyph and shared geometry work schedules probe cancellation at fixed fuel intervals.
+- The mounted glyph form likewise writes into the private Q16 surface and retains only its union
+  coverage plus transient geometry. Its child retained budget is the exact global working budget
+  remaining after the live surface and clip; the parent records that aggregate once, without
+  double-counting geometry.
+- Path and clip dispatch use the same combined working admission. Geometry growth, coverage-mask
+  allocation, saved-clip copies, incoming masks, and clip replacement storage are checked before
+  allocation against the remaining surface-plus-clip working budget. Exact and one-byte-short
+  profiles therefore share one deterministic boundary.
 - Scene values outside the typed device colors and three blend modes are never coerced into a
   fallback paint. Unsupported color, alpha, blend, mask, or group requirements remain structured
-  capability outcomes before the staged color kernel or pixel publication.
+  capability outcomes before the mounted color kernel or pixel publication.
 
 # Tests
 
@@ -200,6 +222,13 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
   half-alpha Screen green over opaque white with literal final RGBA8 pixels.
 - Structured unsupported outcomes for unsupported device-color, constant-alpha, blend, and group
   requirements before visible command dispatch or pixel publication.
+- Literal integrated pixels for save/clip/fill/restore source order, two-texel image orientation,
+  and embedded glyph runs; mounted stroke/fill-stroke counter coverage; renderer identity and
+  successful capability decisions.
+- Aggregate requirements, dependency edges, resources, image dimensions, and simultaneous
+  working-memory exact/one-less boundaries across mounted path/clip, image, and glyph commands.
+- Cancellation at the final post-conversion publication probe proves late failure never exposes a
+  partial buffer; success and failure terminals replay without additional cancellation or work.
 - Exact one- and two-pixel image orientation, transforms, rotations, texel boundaries, clip,
   alpha/blend, singular transforms, conservative admission, every-budget exact/one-less limits,
   and cancellation fixtures.
@@ -210,19 +239,22 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
 
 # Known deviations and unsupported cases
 
-- No visible Scene command is supported yet by `ReferenceRenderJob`. The path, fill, stroke, clip,
-  color/compositing, basic image, and glyph-outline kernels intentionally remain outside that job
-  until the integrated M3-10 command pipeline. Advanced fonts/text, groups, masks, shadings,
-  patterns, bounds indexes, and integrated renderer capability decisions remain later work.
-- The fixed white output is a value contract for the current non-painting Scene subset, not proof
-  that arbitrary pages render successfully.
+- `ReferenceRenderJob` supports the exact registered path fill/stroke, nested clip, Device
+  Gray/RGB/CMYK, constant alpha, Normal/Multiply/Screen, decoded basic image, and embedded-outline
+  glyph command subset. Advanced fonts/text, isolated groups, soft masks, shadings, patterns, and
+  bounds-index acceleration remain structured unsupported or later work.
 - The profile has no O0/O1 pixel authority, reviewed O3 golden, fuzz target, benchmark, maturity
   promotion, product Session integration, or M3 exit claim.
-- The output label `sRGB-reference-v1` names the canonical byte encoding only. It does not claim
-  ICC conformance or freeze the later Reference raster algorithm and renderer epoch.
+- The output label `sRGB-reference-v1` names the canonical byte encoding only and does not claim
+  ICC conformance. `ReferenceRenderIdentity` separately freezes `reference-raster-v1`,
+  `reference-color-v1`, `reference-image-v1`, and `reference-glyph-v1` ownership.
 
 # History
 
+- 2026-07-16: Mounted the complete M3 visible-command subset behind `reference-raster-v1` with
+  renderer-owned exhaustive preflight, source-order dispatch, one private Q16 surface, in-place
+  image/glyph painting, aggregate limits and statistics, exact combined working-memory admission,
+  late-failure atomic publication, and deterministic terminal replay.
 - 2026-07-16: Added staged `reference-glyph-v1` project-owned outline lookup, font-unit/glyph/page
   transforms, shared nonzero 8x8 sample-mask union, clip and color compositing, independent work,
   aggregate/transient memory, recursion, and cancellation limits, and analytic glyph fixtures

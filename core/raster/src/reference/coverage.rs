@@ -266,14 +266,26 @@ impl CoverageMask {
         })
     }
 
+    #[allow(
+        dead_code,
+        reason = "mounted resource kernels validate clip dimensions"
+    )]
     pub(crate) const fn width(&self) -> u32 {
         self.width
     }
 
+    #[allow(
+        dead_code,
+        reason = "mounted resource kernels validate clip dimensions"
+    )]
     pub(crate) const fn height(&self) -> u32 {
         self.height
     }
 
+    #[allow(
+        dead_code,
+        reason = "the analytic integration harness inspects exact masks"
+    )]
     pub(crate) fn samples(&self) -> &[u64] {
         &self.samples
     }
@@ -292,6 +304,10 @@ impl CoverageMask {
         self.index(x, y).map(|index| self.samples[index])
     }
 
+    #[allow(
+        dead_code,
+        reason = "the analytic integration harness inspects scalar coverage"
+    )]
     pub(crate) fn coverage(&self, x: u32, y: u32) -> Option<u8> {
         self.sample_mask(x, y)
             .map(|mask| u8::try_from(mask.count_ones()).expect("8x8 coverage fits u8"))
@@ -442,6 +458,7 @@ fn ensure_coverage_bytes(
             attempted: additional,
         });
     }
+    work.ensure_working_bytes(attempted)?;
     Ok(())
 }
 
@@ -486,6 +503,7 @@ pub(crate) struct ClipStack {
     saved: Vec<Option<Vec<u64>>>,
     retained_bytes: u64,
     peak_retained_bytes: u64,
+    operation_peak_retained_bytes: u64,
 }
 
 impl ClipStack {
@@ -500,7 +518,32 @@ impl ClipStack {
             saved: Vec::new(),
             retained_bytes: 0,
             peak_retained_bytes: 0,
+            operation_peak_retained_bytes: 0,
         })
+    }
+
+    #[allow(
+        dead_code,
+        reason = "mounted resource kernels validate clip dimensions"
+    )]
+    pub(crate) const fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[allow(
+        dead_code,
+        reason = "mounted resource kernels validate clip dimensions"
+    )]
+    pub(crate) const fn height(&self) -> u32 {
+        self.height
+    }
+
+    #[allow(
+        dead_code,
+        reason = "mounted dispatch accounts for incoming clip replacement masks"
+    )]
+    pub(crate) const fn has_mask(&self) -> bool {
+        self.current.is_some()
     }
 
     pub(crate) fn save(&mut self, work: &mut GeometryWork<'_>) -> Result<(), GeometryFailure> {
@@ -558,6 +601,7 @@ impl ClipStack {
             .checked_add(outer_semantic_bytes)
             .ok_or(GeometryFailure::NumericOverflow)?;
         self.ensure_clip_bytes(retained_before, semantic_additional, work)?;
+        work.ensure_working_bytes(semantic_additional)?;
         let semantic_attempted_total = retained_before
             .checked_add(semantic_additional)
             .ok_or(GeometryFailure::NumericOverflow)?;
@@ -585,6 +629,7 @@ impl ClipStack {
                 })?;
             let copy_bytes = capacity_bytes::<u64>(copy.capacity())?;
             self.ensure_clip_bytes(retained_before, copy_bytes, work)?;
+            work.ensure_working_bytes(copy_bytes)?;
             for chunk in mask.chunks(MASK_INITIALIZATION_CHUNK_PIXELS) {
                 work.charge_fuel(
                     u64::try_from(chunk.len()).map_err(|_| GeometryFailure::NumericOverflow)?,
@@ -616,6 +661,7 @@ impl ClipStack {
                 .checked_add(replacement_bytes)
                 .ok_or(GeometryFailure::NumericOverflow)?;
             self.ensure_clip_bytes(retained_before, transient_additional, work)?;
+            work.ensure_working_bytes(transient_additional)?;
             let transient_retained = retained_before
                 .checked_add(transient_additional)
                 .ok_or(GeometryFailure::NumericOverflow)?;
@@ -637,6 +683,7 @@ impl ClipStack {
                 .peak_retained_bytes
                 .max(transient_retained)
                 .max(committed_retained);
+            self.operation_peak_retained_bytes = transient_retained.max(committed_retained);
         } else {
             let committed_retained = retained_before
                 .checked_add(saved_bytes)
@@ -645,6 +692,7 @@ impl ClipStack {
             self.saved.push(saved);
             self.retained_bytes = committed_retained;
             self.update_peak_retained_bytes();
+            self.operation_peak_retained_bytes = committed_retained;
         }
         Ok(())
     }
@@ -657,6 +705,7 @@ impl ClipStack {
             .current
             .as_ref()
             .map_or(Ok(0), |mask| capacity_bytes::<u64>(mask.capacity()))?;
+        let retained_before = self.retained_bytes;
         let committed_retained = self
             .retained_bytes
             .checked_sub(current_bytes)
@@ -666,6 +715,7 @@ impl ClipStack {
         let saved = self.saved.pop().ok_or(GeometryFailure::InvalidGeometry)?;
         self.current = saved;
         self.retained_bytes = committed_retained;
+        self.operation_peak_retained_bytes = retained_before.max(committed_retained);
         Ok(())
     }
 
@@ -686,9 +736,15 @@ impl ClipStack {
             let semantic_bytes = pixels
                 .checked_mul(8)
                 .ok_or(GeometryFailure::NumericOverflow)?;
+            let incoming_bytes = mask.retained_bytes()?;
             let retained_before = self.retained_bytes;
             let current_bytes = capacity_bytes::<u64>(current.capacity())?;
             self.ensure_clip_bytes(retained_before, semantic_bytes, work)?;
+            work.ensure_working_bytes(
+                incoming_bytes
+                    .checked_add(semantic_bytes)
+                    .ok_or(GeometryFailure::NumericOverflow)?,
+            )?;
             work.preflight_fuel(pixels)?;
             work.check_cancellation()?;
 
@@ -700,6 +756,11 @@ impl ClipStack {
             })?;
             let replacement_bytes = capacity_bytes::<u64>(replacement.capacity())?;
             self.ensure_clip_bytes(retained_before, replacement_bytes, work)?;
+            work.ensure_working_bytes(
+                incoming_bytes
+                    .checked_add(replacement_bytes)
+                    .ok_or(GeometryFailure::NumericOverflow)?,
+            )?;
             for (current_chunk, incoming_chunk) in current
                 .chunks(MASK_INITIALIZATION_CHUNK_PIXELS)
                 .zip(mask.samples.chunks(MASK_INITIALIZATION_CHUNK_PIXELS))
@@ -728,6 +789,7 @@ impl ClipStack {
                 .peak_retained_bytes
                 .max(transient_retained)
                 .max(committed_retained);
+            self.operation_peak_retained_bytes = transient_retained.max(committed_retained);
         } else {
             let consumed = self.retained_bytes;
             let bytes = capacity_bytes::<u64>(mask.samples.capacity())?;
@@ -740,10 +802,15 @@ impl ClipStack {
             self.current = Some(mask.samples);
             self.retained_bytes = committed_retained;
             self.update_peak_retained_bytes();
+            self.operation_peak_retained_bytes = committed_retained;
         }
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "the analytic clip harness tests transactional mask application"
+    )]
     pub(crate) fn apply(
         &mut self,
         mask: &mut CoverageMask,
@@ -824,6 +891,14 @@ impl ClipStack {
 
     pub(crate) const fn peak_retained_bytes(&self) -> u64 {
         self.peak_retained_bytes
+    }
+
+    #[allow(
+        dead_code,
+        reason = "mounted dispatch aggregates operation-local clip peaks"
+    )]
+    pub(crate) const fn operation_peak_retained_bytes(&self) -> u64 {
+        self.operation_peak_retained_bytes
     }
 
     fn ensure_clip_bytes(

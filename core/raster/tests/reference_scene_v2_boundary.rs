@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
 use pdf_rs_raster::reference::{
-    ReferenceRasterCancellation, ReferenceRasterLimitConfig, ReferenceRasterLimits,
-    ReferenceRenderConfig, ReferenceRenderJob, ReferenceRenderLimitKind, ReferenceRenderPhase,
-    ReferenceRenderPoll, ReferenceRenderUnsupportedKind,
+    ReferenceCapabilityDecision, ReferenceRasterAlgorithm, ReferenceRasterCancellation,
+    ReferenceRasterLimitConfig, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
+    ReferenceRenderLimitKind, ReferenceRenderPhase, ReferenceRenderPoll,
+    ReferenceRenderUnsupportedKind,
 };
 use pdf_rs_scene::{
     BlendMode, CapabilityContext, CapabilityStatus, CommandSource, DeviceColor, FillRule,
@@ -105,31 +106,54 @@ fn supported_visible_v2_command_is_not_silently_rendered_as_a_white_page() {
         ReferenceRenderConfig::opaque_srgb(2, 2).unwrap(),
         ReferenceRasterLimits::default(),
     );
-    let unsupported = match job.poll(&cancellation) {
-        ReferenceRenderPoll::Unsupported(value) => value,
-        outcome => panic!("visible v2 must fail closed: {outcome:?}"),
+    let buffer = match job.poll(&cancellation) {
+        ReferenceRenderPoll::Ready(value) => value,
+        outcome => panic!("mounted visible v2 command must render: {outcome:?}"),
     };
-    assert_eq!(
-        unsupported.kind(),
-        ReferenceRenderUnsupportedKind::VisibleGraphicsCommand
+    assert!(
+        buffer
+            .rgba()
+            .chunks_exact(4)
+            .any(|pixel| pixel != [255, 255, 255, 255]),
+        "visible black geometry must not publish a silent white page"
     );
-    assert_eq!(unsupported.index(), 0);
-    assert_eq!(unsupported.diagnostic_id(), "RPE-RASTER-0008");
-    assert_eq!(job.phase(), ReferenceRenderPhase::Unsupported);
+    assert_eq!(
+        buffer.identity().raster(),
+        ReferenceRasterAlgorithm::ReferenceRasterV1
+    );
+    assert_eq!(
+        buffer.capability_decision(),
+        ReferenceCapabilityDecision::Supported
+    );
+    assert_eq!(buffer.stats().commands(), 1);
+    assert_eq!(buffer.stats().resources(), 1);
+    assert_eq!(buffer.stats().requirements(), 2);
+    assert!(buffer.stats().geometry_samples() > 0);
+    assert_eq!(job.phase(), ReferenceRenderPhase::Ready);
     assert!(
         released.upgrade().is_none(),
-        "terminal unsupported output must release the source Scene"
+        "terminal ready output must release the source Scene"
     );
 
     let replay_calls = cancellation.calls();
-    assert_eq!(
-        job.poll(&cancellation),
-        ReferenceRenderPoll::Unsupported(unsupported)
-    );
+    let replay = match job.poll(&cancellation) {
+        ReferenceRenderPoll::Ready(value) => value,
+        outcome => panic!("ready terminal must replay: {outcome:?}"),
+    };
+    assert!(Arc::ptr_eq(&buffer, &replay));
     assert_eq!(cancellation.calls(), replay_calls);
 
+    let mut measured = ReferenceRenderJob::new(
+        visible_scene(),
+        ReferenceRenderConfig::opaque_srgb(16, 16).unwrap(),
+        ReferenceRasterLimits::default(),
+    );
+    let fuel = match measured.poll(&Cancellation::never()) {
+        ReferenceRenderPoll::Ready(value) => value.stats().fuel(),
+        outcome => panic!("measurement render must succeed: {outcome:?}"),
+    };
     let limits = ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
-        max_fuel: 3,
+        max_fuel: fuel - 1,
         ..ReferenceRasterLimitConfig::default()
     })
     .unwrap();
@@ -138,11 +162,13 @@ fn supported_visible_v2_command_is_not_silently_rendered_as_a_white_page() {
         ReferenceRenderConfig::opaque_srgb(16, 16).unwrap(),
         limits,
     );
-    assert!(matches!(
-        pixel_fuel_one_less.poll(&Cancellation::never()),
-        ReferenceRenderPoll::Unsupported(value)
-            if value.kind() == ReferenceRenderUnsupportedKind::VisibleGraphicsCommand
-    ));
+    match pixel_fuel_one_less.poll(&Cancellation::never()) {
+        ReferenceRenderPoll::Failed(error) => assert_eq!(
+            error.limit().unwrap().kind(),
+            ReferenceRenderLimitKind::Fuel
+        ),
+        outcome => panic!("one-less integrated fuel must fail: {outcome:?}"),
+    }
 }
 
 #[test]
@@ -233,6 +259,15 @@ fn unsupported_capability_precedes_pixel_allocation_and_visible_command_dispatch
     );
     assert_eq!(unsupported.index(), 0);
     assert_eq!(unsupported.diagnostic_id(), "RPE-RASTER-0007");
+    assert_eq!(unsupported.requirement_id(), Some(0));
+    assert_eq!(unsupported.capability(), Some(GraphicsCapability::Image));
+    assert_eq!(unsupported.parameter(), Some(8));
+    assert_eq!(unsupported.context(), Some(CapabilityContext::Scene));
+    assert_eq!(
+        unsupported.producer_status(),
+        Some(CapabilityStatus::Unsupported)
+    );
+    assert_eq!(unsupported.command_kind(), None);
 }
 
 #[test]

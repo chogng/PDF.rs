@@ -129,10 +129,18 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
         "self.scene.take()",
         "drop(scene);",
         "SceneCommandKind::BeginMarkedContent | SceneCommandKind::EndMarkedContent => {}",
-        "check_cancellation(cancellation, &mut cancellation_checks)?;\n    let mut rgba = Vec::new();",
+        "preflight_graphics(graphics, &mut work)?",
+        "requirement.id().value() != index",
+        "!valid_requirement_context(graphics, requirement)",
+        "dependency.value() >= requirement.id().value()",
+        "entry.id().value() != u32::try_from(index)",
+        "let mut surface = ReferenceSurface::new_white",
+        "dispatch_graphics(scene, graphics, &mut surface, &mut clips, &mut work)?",
+        "paint_image(",
+        "paint_glyph_run(",
         "rgba.try_reserve_exact(required_capacity)",
         "if rgba.len() != required_capacity",
-        "ReferenceRenderStats::new(\n            commands,\n            requirements,\n            pixels,\n            fuel,\n            retained_bytes,\n            cancellation_checks,",
+        "work.check_cancellation()?;\n\n    Ok(ExecuteTerminal::Ready",
     ] {
         assert!(
             render.contains(required),
@@ -156,10 +164,11 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
         );
     }
     for required in [
-        "It is not the",
+        "pure Native integrated Reference renderer",
         "integrated `reference-raster-v1` renderer",
         "not the worker/session-owned transferable `Surface` lifecycle",
-        "No visible Scene command is supported yet",
+        "job-private premultiplied Q16 surface",
+        "M3-11 still owns final milestone trace closure",
         "no O0/O1 pixel authority",
     ] {
         assert!(
@@ -170,10 +179,10 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
 }
 
 #[test]
-fn staged_glyph_kernel_is_project_owned_bounded_and_not_renderer_mounted() {
+fn mounted_glyph_kernel_is_project_owned_bounded_and_renderer_integrated() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let glyph = fs::read_to_string(crate_root.join("src/reference/glyph.rs"))
-        .expect("staged glyph source must be readable");
+        .expect("glyph source must be readable");
     let coverage = fs::read_to_string(crate_root.join("src/reference/coverage.rs"))
         .expect("coverage source must be readable");
     let module = fs::read_to_string(crate_root.join("src/reference/mod.rs"))
@@ -204,7 +213,7 @@ fn staged_glyph_kernel_is_project_owned_bounded_and_not_renderer_mounted() {
     ] {
         assert!(
             glyph.contains(required),
-            "staged glyph kernel must retain invariant marker {required:?}"
+            "glyph kernel must retain invariant marker {required:?}"
         );
     }
     for required in [
@@ -228,16 +237,16 @@ fn staged_glyph_kernel_is_project_owned_bounded_and_not_renderer_mounted() {
     ] {
         assert!(
             !glyph.to_ascii_lowercase().contains(forbidden),
-            "staged glyph kernel must not use external font/runtime token {forbidden:?}"
+            "glyph kernel must not use external font/runtime token {forbidden:?}"
         );
     }
     assert!(
-        !module.contains("mod glyph;"),
-        "glyph kernel stays outside the product Reference module until M3-10"
+        module.contains("mod glyph;"),
+        "glyph kernel must be mounted in the product Reference module"
     );
     assert!(
-        !render.contains("rasterize_glyph_run"),
-        "glyph kernel stays outside ReferenceRenderJob until M3-10"
+        render.contains("paint_glyph_run("),
+        "glyph kernel must paint in place through ReferenceRenderJob"
     );
     for required in [
         "one_em_square_uses_font_units_then_glyph_and_page_transforms",
@@ -259,7 +268,8 @@ fn staged_glyph_kernel_is_project_owned_bounded_and_not_renderer_mounted() {
         "page-to-device, glyph-to-page, then design units divided",
         "unioned at the 64-bit sample-mask level",
         "coverage plus peak geometry",
-        "No visible Scene command is supported yet by `ReferenceRenderJob`",
+        "The mounted glyph form likewise writes into the private Q16 surface",
+        "remaining after the live surface and clip",
         "without system fonts",
     ] {
         assert!(

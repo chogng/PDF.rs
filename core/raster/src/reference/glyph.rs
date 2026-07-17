@@ -1,9 +1,9 @@
-//! Deterministic staged glyph-outline coverage and paint production.
+//! Deterministic glyph-outline coverage and paint production.
 //!
 //! `reference-glyph-v1` consumes only project-owned Scene glyph outlines and positioned glyph
 //! uses. Font mapping, shaping, hinting, and operating-system font fallback are outside this
-//! kernel. The module remains staged outside `ReferenceRenderJob` until the M3 integrated
-//! renderer connects all visible command kinds in source order.
+//! kernel. The mounted form paints directly into `ReferenceRenderJob`'s private Q16 surface; the
+//! standalone form remains available to the analytic integration harness.
 
 use std::mem::size_of;
 
@@ -11,7 +11,7 @@ use pdf_rs_scene::{
     FillRule, GlyphOutline, GlyphRun, GraphicsResource, GraphicsResourceEntry, Matrix, PageGeometry,
 };
 
-use super::coverage::{CoverageMask, SAMPLES_PER_PIXEL, rasterize_fill_union};
+use super::coverage::{ClipStack, CoverageMask, SAMPLES_PER_PIXEL, rasterize_fill_union};
 use super::geometry::{
     Affine, Fixed, GeometryCancellation, GeometryFailure, GeometryLimitKind, GeometryLimits,
     GeometryWork, PageDeviceMap, flatten_path,
@@ -104,6 +104,7 @@ impl GlyphFailure {
                     GeometryLimitKind::Samples => GlyphLimitKind::Samples,
                     GeometryLimitKind::CoverageBytes => GlyphLimitKind::CoverageBytes,
                     GeometryLimitKind::GeometryBytes => GlyphLimitKind::GeometryBytes,
+                    GeometryLimitKind::WorkingBytes => GlyphLimitKind::RetainedBytes,
                     GeometryLimitKind::Fuel => GlyphLimitKind::GeometryFuel,
                     GeometryLimitKind::DashChunks
                     | GeometryLimitKind::StrokeRuns
@@ -213,6 +214,10 @@ impl GlyphStats {
         self.coverage_bytes
     }
 
+    #[allow(
+        dead_code,
+        reason = "the standalone glyph harness measures output admission"
+    )]
     pub(crate) const fn output_pixels(self) -> u64 {
         self.output_pixels
     }
@@ -247,6 +252,10 @@ impl GlyphStats {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "retained by the standalone analytic glyph harness"
+)]
 pub(crate) struct GlyphRaster {
     width: u32,
     height: u32,
@@ -254,6 +263,10 @@ pub(crate) struct GlyphRaster {
     stats: GlyphStats,
 }
 
+#[allow(
+    dead_code,
+    reason = "retained by the standalone analytic glyph harness"
+)]
 impl GlyphRaster {
     pub(crate) const PROFILE: &'static str = "reference-glyph-v1";
 
@@ -339,6 +352,14 @@ impl<'a> GlyphWork<'a> {
         Ok(next)
     }
 
+    fn tighten_fuel_limit(&mut self, maximum: u64) -> Result<(), GlyphFailure> {
+        if maximum > self.limits.max_fuel || self.stats.fuel > maximum {
+            return Err(GlyphFailure::InvalidGlyph);
+        }
+        self.limits.max_fuel = maximum;
+        Ok(())
+    }
+
     fn admit_glyphs(&mut self, glyphs: u64) -> Result<(), GlyphFailure> {
         self.stats.glyphs =
             self.ensure(GlyphLimitKind::Glyphs, self.limits.max_glyphs, 0, glyphs)?;
@@ -414,6 +435,10 @@ impl GeometryCancellation for GlyphGeometryCancellation<'_> {
     clippy::too_many_arguments,
     reason = "the staged glyph kernel keeps resources, geometry, backdrop, clip, limits, and cancellation explicit"
 )]
+#[allow(
+    dead_code,
+    reason = "retained by the standalone analytic glyph harness"
+)]
 pub(crate) fn rasterize_glyph_run(
     run: &GlyphRun,
     resources: &[GraphicsResourceEntry],
@@ -466,11 +491,13 @@ pub(crate) fn rasterize_glyph_run(
     )?;
 
     let geometry_limits = GeometryLimits {
+        max_curve_recursion: limits.max_curve_recursion,
         max_segments: limits.max_flattened_segments,
         max_edges: limits.max_edges,
         max_samples: limits.max_samples,
         max_coverage_bytes: limits.max_coverage_bytes,
         max_geometry_bytes: limits.max_geometry_bytes,
+        max_working_bytes: limits.max_retained_bytes,
         max_fuel: limits.max_geometry_fuel,
         ..GeometryLimits::default()
     };
@@ -598,6 +625,176 @@ pub(crate) fn rasterize_glyph_run(
         pixels,
         stats: work.stats,
     })
+}
+
+/// Paints one positioned glyph run directly into a job-private surface.
+///
+/// The mounted form retains one union coverage mask and transient geometry but never allocates or
+/// copies a second full-page backdrop. The caller owns atomic publication of the private surface.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the mounted glyph kernel keeps resources, geometry, surface, clip, limits, and cancellation explicit"
+)]
+pub(crate) fn paint_glyph_run(
+    run: &GlyphRun,
+    resources: &[GraphicsResourceEntry],
+    geometry: PageGeometry,
+    output_width: u32,
+    output_height: u32,
+    pixels: &mut [PremultipliedRgbaQ16],
+    clip: Option<&ClipStack>,
+    limits: GlyphLimits,
+    cancellation: &dyn GlyphCancellation,
+) -> Result<GlyphStats, GlyphFailure> {
+    let mut work = GlyphWork::new(limits, cancellation)?;
+    let glyph_count =
+        u64::try_from(run.glyphs().len()).map_err(|_| GlyphFailure::NumericOverflow)?;
+    work.admit_glyphs(glyph_count)?;
+
+    let output_pixels = u64::from(output_width)
+        .checked_mul(u64::from(output_height))
+        .ok_or(GlyphFailure::NumericOverflow)?;
+    work.stats.output_pixels = work.ensure(
+        GlyphLimitKind::OutputPixels,
+        limits.max_output_pixels,
+        0,
+        output_pixels,
+    )?;
+    if output_pixels == 0 || u64::try_from(pixels.len()).unwrap_or(u64::MAX) != output_pixels {
+        return Err(GlyphFailure::InvalidGlyph);
+    }
+    if let Some(clip) = clip
+        && (clip.width() != output_width || clip.height() != output_height)
+    {
+        return Err(GlyphFailure::InvalidGlyph);
+    }
+    let semantic_coverage_bytes = output_pixels
+        .checked_mul(u64::try_from(size_of::<u64>()).unwrap_or(u64::MAX))
+        .ok_or(GlyphFailure::NumericOverflow)?;
+    work.ensure(
+        GlyphLimitKind::RetainedBytes,
+        limits.max_retained_bytes,
+        0,
+        semantic_coverage_bytes,
+    )?;
+
+    let geometry_limits = GeometryLimits {
+        max_curve_recursion: limits.max_curve_recursion,
+        max_segments: limits.max_flattened_segments,
+        max_edges: limits.max_edges,
+        max_samples: limits.max_samples,
+        max_coverage_bytes: limits.max_coverage_bytes,
+        max_geometry_bytes: limits.max_geometry_bytes,
+        max_working_bytes: limits.max_retained_bytes,
+        max_fuel: limits.max_geometry_fuel,
+        ..GeometryLimits::default()
+    };
+    let geometry_cancellation = GlyphGeometryCancellation(cancellation);
+    let mut geometry_work = GeometryWork::new(geometry_limits, &geometry_cancellation)?;
+    let aggregate_fuel_limit = limits.max_fuel;
+    let page_map = PageDeviceMap::new(geometry, output_width, output_height)?;
+    let flatness = Fixed::from_raw(Fixed::ONE.raw() / FLATNESS_TOLERANCE_DENOMINATOR);
+    let mut coverage = CoverageMask::empty(output_width, output_height, &mut geometry_work)?;
+    work.stats.coverage_bytes = coverage.retained_bytes()?;
+    let retained_geometry_bytes = limits
+        .max_retained_bytes
+        .checked_sub(work.stats.coverage_bytes)
+        .ok_or(GlyphFailure::NumericOverflow)?;
+    let retained_geometry_binds = retained_geometry_bytes <= limits.max_geometry_bytes;
+    let effective_geometry_bytes = retained_geometry_bytes.min(limits.max_geometry_bytes);
+    geometry_work.tighten_geometry_bytes_limit(effective_geometry_bytes)?;
+    let retained_geometry = retained_geometry_binds.then_some(RetainedGeometryContext {
+        retained_limit: limits.max_retained_bytes,
+        coverage_bytes: work.stats.coverage_bytes,
+    });
+
+    for glyph in run.glyphs() {
+        work.tighten_fuel_limit(
+            aggregate_fuel_limit
+                .checked_sub(geometry_work.fuel())
+                .ok_or(GlyphFailure::NumericOverflow)?,
+        )?;
+        let outline = resolve_outline(resources, glyph.outline())?;
+        let outline_segments = u64::try_from(outline.outline().segments().len())
+            .map_err(|_| GlyphFailure::NumericOverflow)?;
+        work.charge_outline_segments(outline_segments)?;
+        work.charge_fuel(1)?;
+        geometry_work.tighten_fuel_limit(
+            limits.max_geometry_fuel.min(
+                aggregate_fuel_limit
+                    .checked_sub(work.stats.fuel)
+                    .ok_or(GlyphFailure::NumericOverflow)?,
+            ),
+        )?;
+        let transform =
+            glyph_device_transform(page_map, glyph.transform(), outline.units_per_em())?;
+        let path = flatten_path(
+            outline.outline(),
+            transform,
+            transform,
+            flatness,
+            limits.max_curve_recursion,
+            &mut geometry_work,
+        )
+        .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+        let edges = super::coverage::FillEdges::from_path(&path, &mut geometry_work)
+            .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+        rasterize_fill_union(&edges, FillRule::Nonzero, &mut coverage, &mut geometry_work)
+            .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+    }
+
+    work.stats.flattened_segments = geometry_work.segments();
+    work.stats.edges = geometry_work.edges();
+    work.stats.samples = geometry_work.samples();
+    work.stats.geometry_bytes = geometry_work.geometry_bytes();
+    work.stats.peak_geometry_bytes = geometry_work.peak_geometry_bytes();
+    work.stats.geometry_fuel = geometry_work.fuel();
+    work.stats.cancellation_checks = work
+        .stats
+        .cancellation_checks
+        .checked_add(geometry_work.cancellation_checks())
+        .ok_or(GlyphFailure::NumericOverflow)?;
+    work.tighten_fuel_limit(
+        aggregate_fuel_limit
+            .checked_sub(work.stats.geometry_fuel)
+            .ok_or(GlyphFailure::NumericOverflow)?,
+    )?;
+    work.stats.retained_bytes = work.ensure(
+        GlyphLimitKind::RetainedBytes,
+        limits.max_retained_bytes,
+        0,
+        work.stats
+            .coverage_bytes
+            .checked_add(work.stats.peak_geometry_bytes)
+            .ok_or(GlyphFailure::NumericOverflow)?,
+    )?;
+
+    // Preserve the staged kernel's deterministic surface-visit charge without copying pixels.
+    work.charge_fuel(output_pixels)?;
+    let (source, blend_mode) = ReferenceColorProfile::ReferenceColorV1.prepare_paint(run.paint());
+    work.charge_fuel(1)?;
+    for y in 0..output_height {
+        for x in 0..output_width {
+            let index =
+                pixel_index(output_width, output_height, x, y).ok_or(GlyphFailure::InvalidGlyph)?;
+            let glyph_mask = coverage
+                .sample_mask(x, y)
+                .ok_or(GlyphFailure::InvalidGlyph)?;
+            let clip_mask = clip
+                .and_then(|mask| mask.sample_mask(x, y))
+                .unwrap_or(u64::MAX);
+            let covered = u64::from((glyph_mask & clip_mask).count_ones());
+            if covered != 0 {
+                let backdrop = pixels[index];
+                let painted = blend_mode.source_over(source, backdrop);
+                pixels[index] = coverage_average(backdrop, painted, covered)?;
+            }
+            work.charge_composites(covered)?;
+            work.charge_fuel(1)?;
+        }
+    }
+    work.check_cancellation()?;
+    Ok(work.stats)
 }
 
 fn resolve_outline(

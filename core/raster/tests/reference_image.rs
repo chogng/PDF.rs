@@ -16,7 +16,9 @@ use pdf_rs_scene::{
 use pdf_rs_syntax::ObjectRef;
 
 use reference::coverage::CoverageMask;
-use reference::geometry::{GeometryCancellation, GeometryLimits, GeometryWork};
+use reference::geometry::{
+    GeometryCancellation, GeometryFailure, GeometryLimitKind, GeometryLimits, GeometryWork,
+};
 use reference::image::{
     ImageCancellation, ImageFailure, ImageLimitKind, ImageLimits, ImageRaster, rasterize_image,
     unit_index,
@@ -34,6 +36,25 @@ impl GeometryCancellation for NeverCancel {
     fn is_cancelled(&self) -> bool {
         false
     }
+}
+
+#[test]
+fn geometry_limit_conversion_preserves_the_exact_typed_dimension() {
+    let failure = GeometryFailure::Limit {
+        kind: GeometryLimitKind::Samples,
+        limit: 17,
+        consumed: 16,
+        attempted: 2,
+    };
+    assert_eq!(
+        ImageFailure::from(failure),
+        ImageFailure::GeometryLimit {
+            kind: GeometryLimitKind::Samples,
+            limit: 17,
+            consumed: 16,
+            attempted: 2,
+        }
+    );
 }
 
 struct CancelAtCheck {
