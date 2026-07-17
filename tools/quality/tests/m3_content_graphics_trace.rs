@@ -838,8 +838,17 @@ fn assert_requirement(document: &str, expected: RequirementExpectation<'_>) {
     requirement
         .expect_array("tests", &expected_tests)
         .unwrap_or_else(|error| panic!("{} tests: {error}", expected.id));
+    let expected_status = if expected.id == "RPE-ARCH-001/15.3/M3"
+        && repository_root()
+            .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+            .is_file()
+    {
+        "covered"
+    } else {
+        "partial"
+    };
     requirement
-        .expect_string("status", "partial")
+        .expect_string("status", expected_status)
         .unwrap_or_else(|error| panic!("{} status: {error}", expected.id));
     let notes = requirement
         .string("notes")

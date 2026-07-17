@@ -1,8 +1,9 @@
 schema = 1
 milestone = "M3"
 title = "Reference renderer"
-status = "in_progress"
+status = "complete"
 started_at = 2026-07-16
+completed_at = 2026-07-16
 depends_on = ["M2"]
 exit_gate = "O0/O1 cases validate the registered M3 Reference profiles; independently reviewed O3 goldens cover that bounded Native graphics subset and establish the Reference baseline for later R0 closure."
 max_parallel_work_items = 3

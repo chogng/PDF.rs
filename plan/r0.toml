@@ -152,9 +152,17 @@ deliverables = [
   "reference-raster-v1",
 ]
 exit_gate = "O0/O1 cases validate the registered M3 Reference profiles; independently reviewed O3 goldens cover that bounded Native graphics subset and establish the Reference baseline for later R0 closure."
-status = "in_progress"
+status = "complete"
 started_at = 2026-07-16
+completed_at = 2026-07-16
+reviewed_by_roles = ["quality-corpus", "spec-conformance"]
 execution_plan = "plan/m3.toml"
+evidence = [
+  "12 registered cases with independent O0/O1 authority and reviewed O3 pixels promote only m3.reference-raster-v1.v1 to REFERENCE",
+  "fresh debug/release normative replay: docs/traceability/evidence/m3/reference-raster-gate/normative-replay.toml",
+  "final independent SHIP review: docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml",
+  "repository-only tools/quality::m3_exit closure: cargo test --locked --package pdf-rs-quality --test m3_exit",
+]
 
 [[milestone]]
 id = "M4"

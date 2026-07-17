@@ -257,8 +257,17 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
                 "{id} is missing {test}"
             );
         }
+        let expected_status = if id == "RPE-ARCH-001/15.3/M3"
+            && root
+                .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+                .is_file()
+        {
+            "covered"
+        } else {
+            "partial"
+        };
         record
-            .expect_string("status", "partial")
+            .expect_string("status", expected_status)
             .unwrap_or_else(|error| panic!("{id} status: {error}"));
     }
     let clip_state = table_record(&spec_text, "requirement", "ISO-32000-1:2008/8.4.2");

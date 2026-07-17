@@ -236,6 +236,9 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
     let feature_text = read_text(&root, "docs/traceability/feature-map.toml");
     let spec_text = read_text(&root, "docs/traceability/spec-map.toml");
     let profiles = read_text(&root, "docs/traceability/capability-profiles.toml");
+    let final_review = root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file();
 
     let plan_root = RootToml::parse(&plan_text).expect("M3 plan TOML");
     assert_m3_plan_phase(&root, &plan_root);
@@ -322,6 +325,17 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
         .expect("spec map TOML")
         .expect_string("version", TRACE_VERSION)
         .expect("spec version");
+    if final_review {
+        for stale in [
+            "M3 milestone awaits the final independent SHIP review",
+            "M3 milestone still awaits the final independent SHIP review",
+        ] {
+            assert!(
+                !spec_text.contains(stale),
+                "completed M3 trace notes retain stale closure text {stale:?}"
+            );
+        }
+    }
     for id in GRAPHICS_CLAUSES {
         let requirement = table_record(&spec_text, "requirement", id);
         requirement
@@ -334,8 +348,13 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
                 },
             )
             .unwrap_or_else(|error| panic!("{id} snapshot: {error}"));
+        let expected_status = if id == "RPE-ARCH-001/15.3/M3" && final_review {
+            "covered"
+        } else {
+            "partial"
+        };
         requirement
-            .expect_string("status", "partial")
+            .expect_string("status", expected_status)
             .unwrap_or_else(|error| panic!("{id} status: {error}"));
         assert!(
             requirement
@@ -389,7 +408,7 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
                 "M3-10 closes",
                 "first ten completed work items",
                 "M3-10 itself did not promote the profile",
-                "M3-11 later closes registered formal O0/O1/O3 pixel authority",
+                "registered formal O0/O1/O3 pixel authority",
                 "All eleven work items are complete",
                 "final independent SHIP review",
             ][..],

@@ -483,7 +483,7 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
             &[
                 "M3-08 closes",
                 "M3-10 closes",
-                "M3-11 later closes",
+                "registered formal O0/O1/O3 pixel authority",
                 "final independent SHIP review",
             ][..],
         ),
@@ -596,8 +596,17 @@ fn assert_requirement(
     requirement
         .expect_string("snapshot_hash", snapshot)
         .unwrap_or_else(|error| panic!("{id} snapshot: {error}"));
+    let expected_status = if id == "RPE-ARCH-001/15.3/M3"
+        && repository_root()
+            .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+            .is_file()
+    {
+        "covered"
+    } else {
+        "partial"
+    };
     requirement
-        .expect_string("status", "partial")
+        .expect_string("status", expected_status)
         .unwrap_or_else(|error| panic!("{id} status: {error}"));
     let joined = [
         requirement

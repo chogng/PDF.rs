@@ -319,6 +319,9 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     .expect("M3-09 review evidence must be readable");
     let plan =
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan must be readable");
+    let final_review = repository_root
+        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
+        .is_file();
     let provenance =
         fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance must be readable");
     let ci =
@@ -483,7 +486,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "M3-10 closes the separately reviewed integrated",
         "Independent review evidence for the first ten completed work items reports SHIP",
         "M3-10 itself did not promote the profile",
-        "M3-11 later closes registered formal O0/O1/O3 pixel authority",
+        "registered formal O0/O1/O3 pixel authority",
         "All eleven work items are complete",
         "final independent SHIP review",
         "tools/quality::m3_raster_oracle_contract",
@@ -494,12 +497,16 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "tools/quality::m3_reference_gate",
         "tools/quality::m3_reference_raster_trace",
         "tools/quality::purity",
-        "status = \"partial\"",
     ] {
         assert!(
             milestone.contains(required),
             "M3 requirement must contain {required:?}"
         );
+    }
+    if final_review {
+        assert!(milestone.contains("status = \"covered\""));
+    } else {
+        assert!(milestone.contains("status = \"partial\""));
     }
 
     let color_requirement = record_with_id(&spec_map, "requirement", "ISO-32000-1:2008/8.6")
@@ -544,9 +551,6 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         .split("[[work_item]]")
         .next()
         .expect("M3 plan has a milestone header");
-    let final_review = repository_root
-        .join("docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml")
-        .is_file();
     if final_review {
         assert!(m3_header.contains("status = \"complete\""));
         assert!(m3_header.contains("completed_at = 2026-07-16"));
