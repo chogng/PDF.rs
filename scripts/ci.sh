@@ -40,6 +40,7 @@ cargo test --locked --package pdf-rs-quality --test m3_content_graphics_trace
 cargo test --locked --package pdf-rs-quality --test m3_reference_geometry_trace
 cargo test --locked --package pdf-rs-quality --test m3_reference_color_trace
 cargo test --locked --package pdf-rs-quality --test m3_basic_image_trace
+cargo test --locked --package pdf-rs-quality --test m3_basic_text_trace
 
 m2_scene_gate_root="target/ci-artifacts/m2-scene-gate"
 if [[ "$m2_scene_gate_root" != "target/ci-artifacts/m2-scene-gate" ]]; then

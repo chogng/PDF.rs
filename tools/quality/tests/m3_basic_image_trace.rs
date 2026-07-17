@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.75.0";
+const TRACE_VERSION: &str = "0.76.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "fe379fe1eb2ab5398f627a2db2835bcf41dc3bb0";
 const IMPLEMENTATION_TREE: &str = "8a314214f5abe7c0eca0354ef7c616356966ac77";
@@ -375,7 +375,7 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
         ],
     )
     .expect("acceptance is exact");
-    for index in 9..=11 {
+    for index in 10..=11 {
         let id = format!("M3-{index:02}");
         table_record(&plan_text, "work_item", &id)
             .expect_string("status", "planned")
@@ -461,7 +461,10 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
         (
             "RPE-ARCH-001/6.4-6.7",
             ARCH_SNAPSHOT,
-            &["ImageResource", "outside ReferenceRenderJob"][..],
+            &[
+                "ImageResource",
+                "M3-10 owns integrated ReferenceRenderJob acceptance",
+            ][..],
         ),
         (
             "RPE-ARCH-001/8.1-8.3",
@@ -470,13 +473,13 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
                 "reference-image-v1",
                 "nearest-neighbor sampling",
                 "Interpolate true remains a structured unsupported outcome",
-                "not mounted into ReferenceRenderJob",
+                "M3-10 owns integrated ReferenceRenderJob acceptance",
             ][..],
         ),
         (
             "RPE-ARCH-001/15.3/M3",
             ARCH_SNAPSHOT,
-            &["M3-08 now closes", "M3-09 through M3-11"][..],
+            &["M3-08 now closes", "M3-10 and M3-11"][..],
         ),
     ] {
         assert_requirement(
@@ -513,10 +516,10 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
         "`reference-image-v1`",
         "basic unmasked image",
         "samples nearest-neighbor texels",
-        "separate from `ReferenceRenderJob` until M3-10",
+        "M3-08 and M3-09 likewise do not independently promote the pixel profile",
         "not a `REFERENCE` maturity promotion",
         "not an O0/O1 pixel authority",
-        "M3 exit gate",
+        "M3 exit decision",
     ] {
         assert!(
             raster.contains(marker),

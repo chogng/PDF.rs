@@ -304,6 +304,11 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             .join("docs/traceability/evidence/m3/raster-oracle-contract/independent-review.toml"),
     )
     .expect("M3-02 review evidence must be readable");
+    let text_review = fs::read_to_string(
+        repository_root
+            .join("docs/traceability/evidence/m3/basic-embedded-text/independent-review.toml"),
+    )
+    .expect("M3-09 review evidence must be readable");
     let plan =
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan must be readable");
     let provenance =
@@ -311,8 +316,8 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let ci =
         fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI must be readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.75.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.75.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.76.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.76.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -336,6 +341,24 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         assert!(
             feature.contains(required),
             "Reference pixel feature must contain {required:?}"
+        );
+    }
+
+    let text_feature = record_with_id(&feature_map, "feature", "core.basic-embedded-text")
+        .expect("Basic embedded-text feature must be registered");
+    for required in [
+        "state = \"PLANNED\"",
+        "profile = \"m3.basic-embedded-text.v1\"",
+        "modules = [\"core/font\", \"core/document\", \"core/content\", \"core/scene\", \"core/raster\"]",
+        "core/raster::reference_glyph",
+        "core/raster::repository_policy",
+        "tools/quality::m3_basic_text_trace",
+        "fuzz_targets = []",
+        "benchmarks = []",
+    ] {
+        assert!(
+            text_feature.contains(required),
+            "Basic embedded-text feature must contain {required:?}"
         );
     }
 
@@ -388,17 +411,21 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
         "core.scene-graphics-v2",
         "core.reference-color-compositing",
         "core.basic-image-xobjects",
+        "core.basic-embedded-text",
         "\"core/raster\"",
         "core/raster::reference_foundation",
         "core/raster::reference_color",
         "core/raster::reference_image",
+        "core/raster::reference_glyph",
         "tools/quality::m3_reference_color_trace",
         "tools/quality::m3_basic_image_trace",
+        "tools/quality::m3_basic_text_trace",
         "M3-03 adds the incompatible m3.scene-graphics-v2.v1 schema",
         "M3-04 adds the first bounded producer",
         "M3-05 and M3-06 add independently bounded pure raster kernels",
         "M3-07 adds the allocation-free `reference-color-v1`",
         "named `soft-mask` capability",
+        "M3-08 and M3-09 add proof-bound basic image and glyph Scene resources",
         "status = \"partial\"",
     ] {
         assert!(
@@ -410,14 +437,14 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let reference_requirement = record_with_id(&spec_map, "requirement", "RPE-ARCH-001/8.1-8.3")
         .expect("Reference architecture requirement must be registered");
     for required in [
-        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\", \"core.basic-image-xobjects\"]",
+        "features = [\"core.reference-pixel-foundation\", \"core.reference-geometry-coverage\", \"core.reference-stroke-clip\", \"core.reference-color-compositing\", \"core.basic-image-xobjects\", \"core.basic-embedded-text\"]",
         "implementation = [\"core/raster\"]",
         "sRGB-reference-v1",
         "reference-color-v1",
         "structured unsupported color, blend, soft-mask, and group requirements",
-        "not mounted into ReferenceRenderJob",
-        "register no O0/O1 case authority",
-        "All four features remain PLANNED",
+        "M3-10 owns integrated ReferenceRenderJob acceptance and final dispatch",
+        "register no final O0/O1 case authority",
+        "All six linked feature records remain PLANNED",
         "status = \"partial\"",
     ] {
         assert!(
@@ -431,15 +458,19 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     for required in [
         "core.reference-color-compositing",
         "core.basic-image-xobjects",
+        "core.basic-embedded-text",
         "M3-01 through M3-04 close the bounded pixel foundation",
         "M3-05 and M3-06 close the commit-pinned geometry/coverage and stroke/clip stages",
         "M3-07 closes project-owned DeviceGray/RGB/CMYK conversion",
         "M3-08 now closes the commit-pinned basic unmasked Image XObject slice",
-        "M3-09 through M3-11 still own glyph text",
+        "M3-09 now closes the commit-pinned bounded embedded simple TrueType slice",
+        "Independent review evidence for all nine completed work items reports SHIP",
+        "M3-10 and M3-11 still own integrated reference-raster-v1",
         "tools/quality::m3_raster_oracle_contract",
         "tools/quality::m3_content_graphics_trace",
         "tools/quality::m3_reference_color_trace",
         "tools/quality::m3_basic_image_trace",
+        "tools/quality::m3_basic_text_trace",
         "tools/quality::purity",
         "does not claim integrated visible PDF rendering",
         "status = \"partial\"",
@@ -500,7 +531,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let m3_02 = record_with_id(&plan, "work_item", "M3-02").expect("M3-02 must exist");
     assert!(m3_02.contains("status = \"complete\""));
     assert!(m3_02.contains("completed_at = 2026-07-16"));
-    for index in 3..=7 {
+    for index in 3..=9 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -513,10 +544,7 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
             "{id} must retain its completion date"
         );
     }
-    let image = record_with_id(&plan, "work_item", "M3-08").expect("M3-08 work item must exist");
-    assert!(image.contains("status = \"complete\""));
-    assert!(image.contains("completed_at = 2026-07-16"));
-    for index in 9..=11 {
+    for index in 10..=11 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item must exist"));
@@ -558,6 +586,21 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     }
 
     for required in [
+        "work_item = \"M3-09\"",
+        "profile = \"m3.basic-embedded-text.v1\"",
+        "feature = \"core.basic-embedded-text\"",
+        "reviewer_roles = [\"spec-conformance\", \"parser-security\"]",
+        "maturity_promotion = false",
+        "open_p0_p2 = 0",
+        "verdict = \"SHIP\"",
+    ] {
+        assert!(
+            text_review.contains(required),
+            "M3-09 review evidence must contain {required:?}"
+        );
+    }
+
+    for required in [
         "work_item = \"M3-02\"",
         "profile = \"m3.raster-oracle-contract.v1\"",
         "reviewer_roles = [\"spec-conformance\", \"parser-security\"]",
@@ -586,6 +629,10 @@ fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     assert!(
         ci.contains("cargo test --locked --package pdf-rs-quality --test m3_reference_color_trace"),
         "M3-07 commit-bound evidence must have an explicit CI gate"
+    );
+    assert!(
+        ci.contains("cargo test --locked --package pdf-rs-quality --test m3_basic_text_trace"),
+        "M3-09 commit-bound evidence must have an explicit CI gate"
     );
 
     for required in [

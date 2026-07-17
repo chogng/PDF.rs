@@ -8,7 +8,7 @@ mod evidence;
 
 use evidence::{RootToml, array_table_records, verify_reviewed_subjects};
 
-const TRACE_VERSION: &str = "0.75.0";
+const TRACE_VERSION: &str = "0.76.0";
 const COMPLETED_AT: &str = "2026-07-16";
 const IMPLEMENTATION_COMMIT: &str = "127ee3cac4ab5595abbecd6438e6e309a58b23cb";
 const IMPLEMENTATION_TREE: &str = "c5e3ba0d5cd5e5de7b30845bb177e196ec8655b7";
@@ -293,7 +293,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
     image
         .expect_bare("completed_at", COMPLETED_AT)
         .expect("M3-08 completion is exact");
-    for index in 9..=11 {
+    for index in 10..=11 {
         let id = format!("M3-{index:02}");
         table_record(&plan_text, "work_item", &id)
             .expect_string("status", "planned")
@@ -402,7 +402,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "reference-color-v1",
                 "soft-mask",
-                "outside ReferenceRenderJob until M3-10",
+                "M3-10 still owns integrated ReferenceRenderJob acceptance",
             ][..],
         ),
         (
@@ -410,7 +410,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "m3.reference-color-compositing.v1",
                 "transparent-black canonicalization",
-                "not mounted into ReferenceRenderJob",
+                "M3-10 owns integrated ReferenceRenderJob acceptance",
             ][..],
         ),
         (
@@ -418,7 +418,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             &[
                 "M3-07 closes project-owned",
                 "M3-08 now closes",
-                "M3-09 through M3-11",
+                "M3-10 and M3-11",
             ][..],
         ),
     ] {
@@ -452,11 +452,11 @@ fn m3_color_provenance_and_ci_gate_preserve_scope_and_m1() {
         "Normal, Multiply, and Screen",
         "allocation-free",
         "transparent black",
-        "capability outcomes before the staged color kernel",
-        "separate from `ReferenceRenderJob` until M3-10",
+        "capability outcomes before the mounted color kernel",
+        "M3-10 uses that same profile",
         "not a `REFERENCE` maturity promotion",
         "not an O0/O1 pixel authority",
-        "M3 exit gate",
+        "M3 exit decision",
     ] {
         assert!(
             provenance.contains(marker),

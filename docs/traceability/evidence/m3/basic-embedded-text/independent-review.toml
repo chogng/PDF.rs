@@ -1,0 +1,147 @@
+schema = 1
+type = "work-item-evidence"
+id = "evidence.m3.basic-embedded-text.independent-review"
+milestone = "M3"
+work_item = "M3-09"
+profile = "m3.basic-embedded-text.v1"
+feature = "core.basic-embedded-text"
+role = "independent-review"
+registered = true
+gating = true
+external_observation = false
+maturity_promotion = false
+reviewed_at = 2026-07-16
+implementation_commit = "e54b16e609e8fe3b47bc4a3617cf65da54d168dc"
+reviewed_subject_commit = "e54b16e609e8fe3b47bc4a3617cf65da54d168dc"
+reviewed_subject_tree = "d80008e164bcd2c951d2a093e8c6e098f0009f5d"
+reviewed_subject_resolution = "git-tree-at-reviewed-subject-commit-not-working-tree"
+reviewed_subject_commit_map = [
+  "core/font/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/src/error.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/src/lib.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/src/limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/src/model.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/src/parse.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/tests/support/mod.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/font/tests/truetype.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/src/error.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/src/font_resource.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/src/font_resource_limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/src/lib.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/src/page_font_lookup_limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/src/page_resources.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/tests/font_resource.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/document/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/font_limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/lib.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/model.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/vm.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/vm/font.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/vm/graphics.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/vm_error.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/src/vm_model.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/content/tests/vm_graphics.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/scene/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/scene/src/graphics.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/scene/src/graphics_builder.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/scene/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/scene/tests/scene_v2.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/src/reference/coverage.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/src/reference/geometry.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/src/reference/glyph.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/tests/reference_glyph.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/tests/reference_glyph_support/mod.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "core/raster/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+]
+reviewer_roles = ["spec-conformance", "parser-security"]
+reviewed_surfaces = [
+  "bounded project-owned simple TrueType parsing, character-to-glyph mapping, widths, metrics, and outline extraction",
+  "proof-bound Page Font lookup and embedded FontDescriptor FontFile2 acquisition with exact identity-or-Flate decode evidence",
+  "registered text operators, text state and matrices, PDF width advances, exact resumable font cache, and atomic Scene publication",
+  "immutable GlyphOutline and GlyphRun resources with first-use identity, command provenance, and bounded retained capacity",
+  "staged reference-glyph-v1 mapping, deterministic coverage and color composition, semantic precedence, cancellation, source change, and non-publication outcomes",
+]
+reviewed_subjects = [
+  "core/font/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:71759fd6ba115bd7ba50e9cb60adac83f80020e1ecc009e9a8ec0cc568361b6e",
+  "core/font/src/error.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:6ef52ebf91f3422c803257537e9c21499fff72570c9b8e860633720d485c7701",
+  "core/font/src/lib.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:193b6eddd948abc9a4cb2b3b4a12fb8750ef5c5f477f88c45a1b33660cb4ffe0",
+  "core/font/src/limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:ac9f7c2e563326baf9d7a6c81611d872a9367d0ca094f588735fd6774eb6bad0",
+  "core/font/src/model.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:d1e75045ab15dae0918da7b0ba68d79907240cf35b808a44fa6806388dbb1c9d",
+  "core/font/src/parse.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:adfc6a37445d5b23bdbd66d31aadd2c80d1d71e695834547d87c9d0539903b6d",
+  "core/font/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:2e4aa7c2f7b102803a34419163805ad6e3c4b0df6b954c42df8b400a0e6d095b",
+  "core/font/tests/support/mod.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:28e3fa7c7546fa4bd27f1540a3a61ce98b25d6810c5b94e475f61f9c624ed2e2",
+  "core/font/tests/truetype.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:7bb6e9c9d95852003abbcc33c4e0adfdcdb62ecf4a62560610695daaee067491",
+  "core/document/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:25f977acbfb0cb78b07e1734ec115b9c899588e690d64c7f0d58f1d55f37beb5",
+  "core/document/src/error.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:28fc9bd10fad9377babe684ed7b15a221d5451d09ac934bf7a17561d319663e8",
+  "core/document/src/font_resource.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:944e15954c2ba878aa2f498b65e86eb5bc2c63d440e07fa9ee18d686afc4f82d",
+  "core/document/src/font_resource_limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:6f9ff3a06d1821f40414063468866a865a2aa1d6e72889689e4898275d26a070",
+  "core/document/src/lib.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:620216f628a164a976d591b9f5c08e03c1c9fda6556955ba0632124756b9835c",
+  "core/document/src/page_font_lookup_limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:99e1764e99ecea9f35ca562b1d779a40d50a3d112ea81509eb6a0e5adb4955d5",
+  "core/document/src/page_resources.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:bddc6c0e12157c21b8d0604301557751a1d9d711003f9f67cdeb815a1b1a4eae",
+  "core/document/tests/font_resource.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:a556c30c79246731705c2841889b5f7df22bbc61ba900525e73d29da2058ab78",
+  "core/document/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:43e2e57d2528d4d1011f72554234a47bb4e73ed4606766a2bc74c03b5778eb50",
+  "core/content/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:a406fdee0481301d8a33be1a20384d392fe4ad4096c99decc4d3dfb37002a394",
+  "core/content/src/font_limits.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:0b3d81fd3ba370cf81296f1ebe3681584b403136f2e5999fa087c0946e7a6012",
+  "core/content/src/lib.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:70787aef5749005eeeed4b0a9daa678c906c3f8fb4e4e76bc8a800b1fdc3d60a",
+  "core/content/src/model.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:c428a473b2cc791aad1ffb49f7b1c8da1e048a2d0e0d9f78abf5049294f83f3e",
+  "core/content/src/vm.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:f8cafdb43dea9d545101ea65be89c42c6e0429b1985b6a1d2f1fceba396b85d4",
+  "core/content/src/vm/font.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:fbc484702ee6ef28b2ea88e18de55361460099f27cb9b24004d574fe43b6abe5",
+  "core/content/src/vm/graphics.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:b32417ffaf6640da133ac9d2fffbffb8f63123f6178360e4d01cc89fe55d0f12",
+  "core/content/src/vm_error.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:b6e6210bc29d4f90526ddca7a2e49e9f72213256e28a6d39aa821eef9efb1398",
+  "core/content/src/vm_model.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:5a20f9632688cd2b70d5788fda6ab80ae54eadc615637b253fdee9d598be1482",
+  "core/content/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:01a91aeacbf369955ae70db44e8d9f186102b8516e6debd1ec15cdc48d9993d6",
+  "core/content/tests/vm_graphics.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:de40e5c019ba5f66a0ad5e536b5db57f30335f95b0f7253bbbdeea2accb68df3",
+  "core/scene/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:fdf5e5eaec948e82f7fec138efafc99d7a070efbeca2d3c97a7196980338b402",
+  "core/scene/src/graphics.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:e8dfaed2f3fdb11ad25a7ce966f34b5d4dda86a248dbb560fa91722260709aff",
+  "core/scene/src/graphics_builder.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:5bf83dace4df3418a704819478f7f05d7d89b9f3c4ea43ecceee46155e818af6",
+  "core/scene/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:778732c0fd559599f76b531713df21dd004c4a3b69407acd537444e9329dc772",
+  "core/scene/tests/scene_v2.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:1ebb95c5732e0c65ffa540f1f9b5ec685899bd24848cc6f013ea56ba29e36c42",
+  "core/raster/PROVENANCE.md@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:dac38ef9d983ba489f38edae1164f33128dc6281d17b21a5419a8544c789a2d6",
+  "core/raster/src/reference/coverage.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:c08cc86289a39ac08ab3de867ce1d9b9c1baa4a49ebecdec09beea170dc3898b",
+  "core/raster/src/reference/geometry.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:6789b47aa3bdc21a98a366325865f400eee1b2b592e732a806fc25e8352d900e",
+  "core/raster/src/reference/glyph.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:76a4826268e8663616ac01f1182b0fbb4cbe7e4688bb3c98ddb2218890c1d8bf",
+  "core/raster/tests/reference_glyph.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:0cd00f13222b4663b0915678661762233e5e99fcb1cc94ac735be0903cbaa026",
+  "core/raster/tests/reference_glyph_support/mod.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:58a0638de12a5dda589c7ba89fd2f2b75fe2abba25a9147913a23878c0ffab84",
+  "core/raster/tests/repository_policy.rs@e54b16e609e8fe3b47bc4a3617cf65da54d168dc#sha256:1c7a33103880daf9ce86b8fb969aa6c2aed808b9dec4f84732ba66b0b6852aea",
+]
+commands = [
+  "git show --check --format=fuller --no-ext-diff e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "git diff-tree --check --no-ext-diff e54b16e609e8fe3b47bc4a3617cf65da54d168dc^ e54b16e609e8fe3b47bc4a3617cf65da54d168dc",
+  "cargo test --locked --package pdf-rs-font --all-targets",
+  "cargo test --locked --package pdf-rs-document --test font_resource --test repository_policy",
+  "cargo test --locked --package pdf-rs-content --all-targets",
+  "cargo test --locked --package pdf-rs-scene --test scene_v2 --test repository_policy",
+  "cargo test --locked --package pdf-rs-raster --test reference_glyph --test repository_policy",
+  "cargo test --locked --release --package pdf-rs-font --all-targets",
+  "cargo test --locked --release --package pdf-rs-content --all-targets",
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+]
+verification_summary = "The exact implementation tree passed the component repository-policy and primary Font, Document, Content, Scene, and Raster acceptance suites in debug and release; the independent Content all-target audit passed 99/99 with formatting and Clippy -D warnings clean."
+review_scope = "M3-09 only; includes the bounded embedded simple TrueType subset, proof-bound Font acquisition, text planning and showing, immutable glyph Scene resources, and staged reference-glyph-v1 coverage, but excludes integrated reference-raster-v1 final authority, O0/O1/O3 final pixels, maturity promotion, and M3 exit"
+review_rounds = [
+  "Font table admission, mapping, widths, metrics, outline extraction, limits, and malformed-input review",
+  "Document Page Font lookup, descriptor and FontFile2 acquisition, decode proof, limits, Pending replay, and non-publication review",
+  "Content operator table, text state and matrices, advances, exact cache, semantic precedence, retention, and atomic publication review",
+  "Scene glyph identity, first-use interning, source provenance, shallow outline sharing, bounds, and capacity review",
+  "Raster mapping, coverage, device color, composition, limits, cancellation, exact implementation tree, and immutable M1 review",
+]
+closed_findings = [
+  "P1 retained accounting: rejected lower acquisition peaks and action-owned text payloads are included in atomic aggregate admission before publication.",
+  "P1 guard and fuel precedence: text planning and showing preserve source-change, cancellation, semantic-error, and deterministic work ordering across Pending replay.",
+  "P2 structured capability outcomes: missing Font profiles and unsupported lower font forms remain distinct non-publication outcomes rather than fallback glyphs.",
+  "P2 repository closure: the registered subset, recursion limits, provenance, tests, and exclusions are pinned across every participating component.",
+]
+retracted_findings = [
+  "Retracted review hypothesis: Scene PathResource uses Arc<Vec<PathSegment>>, so GlyphOutline and GlyphUse clones are shallow and unique outline-buffer accounting is correct.",
+]
+open_p0 = 0
+open_p1 = 0
+open_p2 = 0
+open_p0_p2 = 0
+verdict = "SHIP"

@@ -31,12 +31,12 @@ fn selection_for(lane: &str) -> Option<Selection> {
         "local" => Some(Selection {
             lane: "local",
             reason: "pre-submit feedback for code and deterministic T0 infrastructure",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m3-reference-geometry-trace,m3-reference-color-trace,m3-basic-image-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m3-reference-geometry-trace,m3-reference-color-trace,m3-basic-image-trace,m3-basic-text-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle",
         }),
         "pr" => Some(Selection {
             lane: "pr",
             reason: "merge gate for the complete required Rust quality baseline",
-            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m3-reference-geometry-trace,m3-reference-color-trace,m3-basic-image-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
+            checks: "fmt,clippy,test,parser-mutation-smoke,case-manifests,m3-raster-oracle-contract,m3-content-graphics-trace,m3-reference-geometry-trace,m3-reference-color-trace,m3-basic-image-trace,m3-basic-text-trace,m2-scene-gate,m2-exit,m1-maturity,product-purity,product-release-closure,synthetic-failure-bundle,doc",
         }),
         _ => None,
     }
@@ -241,7 +241,7 @@ fn print_selection(selection: Selection) {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>\nlocal/pr checks include the M3 raster-oracle, Content graphics, Reference geometry, Reference color, and basic Image contracts, M2 Scene profile replay, and M2 exit closure"
+        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>\nlocal/pr checks include the M3 raster-oracle, Content graphics, Reference geometry, Reference color, basic Image, and basic Text contracts, M2 Scene profile replay, and M2 exit closure"
     );
     ExitCode::from(2)
 }

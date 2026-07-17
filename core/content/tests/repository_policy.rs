@@ -177,8 +177,8 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         fs::read_to_string(repository_root.join("plan/m3.toml")).expect("M3 plan is readable");
     let ci = fs::read_to_string(repository_root.join("scripts/ci.sh")).expect("CI is readable");
 
-    assert_eq!(top_level_version(&feature_map), Some("0.75.0"));
-    assert_eq!(top_level_version(&spec_map), Some("0.75.0"));
+    assert_eq!(top_level_version(&feature_map), Some("0.76.0"));
+    assert_eq!(top_level_version(&spec_map), Some("0.76.0"));
     assert_eq!(
         top_level_version(&feature_map),
         top_level_version(&spec_map),
@@ -656,13 +656,16 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     let m3_08 = record_with_id(&m3_plan, "work_item", "M3-08").expect("M3-08 work item exists");
     assert!(m3_08.contains("status = \"complete\""));
     assert!(m3_08.contains("completed_at = 2026-07-16"));
-    for index in 9..=11 {
+    let m3_09 = record_with_id(&m3_plan, "work_item", "M3-09").expect("M3-09 work item exists");
+    assert!(m3_09.contains("status = \"complete\""));
+    assert!(m3_09.contains("completed_at = 2026-07-16"));
+    for index in 10..=11 {
         let id = format!("M3-{index:02}");
         let item = record_with_id(&m3_plan, "work_item", &id)
             .unwrap_or_else(|| panic!("{id} work item exists"));
         assert!(
             item.contains("status = \"planned\""),
-            "{id} must remain planned after M3-08"
+            "{id} must remain planned after M3-09"
         );
     }
     assert!(
