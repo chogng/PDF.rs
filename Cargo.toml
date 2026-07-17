@@ -5,6 +5,7 @@ members = [
     "runtime/cache",
     "runtime/policy",
     "runtime/protocol",
+    "runtime/scheduler",
     "runtime/session",
     "tools/*",
 ]

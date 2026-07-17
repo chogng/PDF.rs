@@ -131,6 +131,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         "--package pdf-rs-content",
         "--package pdf-rs-policy",
         "--package pdf-rs-protocol",
+        "--package pdf-rs-scheduler",
         "--package pdf-rs-session",
         "target/ci-artifacts/m0-failure-bundles",
     ] {

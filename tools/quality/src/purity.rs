@@ -19,7 +19,7 @@ struct ProductPackage {
     crate_name: &'static str,
 }
 
-const PRODUCT_PACKAGE_COUNT: usize = 14;
+const PRODUCT_PACKAGE_COUNT: usize = 15;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -85,6 +85,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "runtime/protocol/Cargo.toml",
         package_name: "pdf-rs-protocol",
         crate_name: "pdf_rs_protocol",
+    },
+    ProductPackage {
+        manifest: "runtime/scheduler/Cargo.toml",
+        package_name: "pdf-rs-scheduler",
+        crate_name: "pdf_rs_scheduler",
     },
     ProductPackage {
         manifest: "runtime/session/Cargo.toml",
@@ -1099,6 +1104,11 @@ mod tests {
             manifest: "runtime/protocol/Cargo.toml",
             package_name: "pdf-rs-protocol",
             crate_name: "pdf_rs_protocol",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "runtime/scheduler/Cargo.toml",
+            package_name: "pdf-rs-scheduler",
+            crate_name: "pdf_rs_scheduler",
         }));
         let root = temp_dir("isolated");
         write_product_manifests(&root);

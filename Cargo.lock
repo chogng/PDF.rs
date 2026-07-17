@@ -167,6 +167,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-scheduler"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-session"
 version = "0.1.0"
 dependencies = [
