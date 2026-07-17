@@ -16,7 +16,7 @@ subjects = [
   "tools/quality/tests/m1_document_service_fuzz.rs#sha256:301e3efadce97170313ba2d77ca3d73048ba950d0456fa9bce8dd69aa744466d",
   "tools/quality/fuzz/fuzz_targets/m1_document_services.rs#sha256:f7143f6b47c158fab2caf637674465282f165579ba29e1a95809459837ce183b",
   "tools/quality/fuzz/Cargo.toml#sha256:876aaa03e8b6fecc5bddd32cba51203e8e43c4830b7e63e70263a05dbda564da",
-  "tools/quality/fuzz/Cargo.lock#sha256:e1c1a40a80d8f3388db6e75768cdac130de1ea33527111f0e7dca542b484844f",
+  "tools/quality/fuzz/Cargo.lock#sha256:dd8db45e2c5ae26964826c93307a29a09f663031032eb0771d3398633f4c7d69",
   "docs/traceability/dependency-ledger.toml#sha256:659fd7ad48ae1bf7e0c5c4fb9ece76fee92a9694968176869c9595c6adc64368",
   ".github/workflows/ci.yml#sha256:b0a6450f87a9d0f07155d13ebf0c46a67123f31eaa08159b34a631ad285636ce",
   "tools/quality/fuzz/corpus/m1_document_services/minimal.pdf#sha256:1d9575155aee9da157652b5388796e6819c1f55cfd83e0f3b07dd7cf78e6b446",
