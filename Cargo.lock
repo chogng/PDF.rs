@@ -163,6 +163,7 @@ name = "pdf-rs-raster"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
+ "pdf-rs-policy",
  "pdf-rs-scene",
  "pdf-rs-syntax",
 ]

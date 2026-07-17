@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+pdf-rs-policy = { path = "../../runtime/policy" }
 pdf-rs-scene = { path = "../scene" }
 
 [dev-dependencies]
