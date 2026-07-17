@@ -50,6 +50,8 @@ const REQUIREMENT_KEYS: &[&str] = &[
     "status",
     "notes",
     "component_notes",
+    "m3_image_notes",
+    "m3_text_notes",
     "repair_service_notes",
 ];
 const DATA_KEYS: &[&str] = &[
