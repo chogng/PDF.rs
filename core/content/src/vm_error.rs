@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::fmt;
 
-use pdf_rs_document::{DocumentError, DocumentErrorCode, ImageXObjectUnsupported};
+use pdf_rs_document::{
+    DocumentError, DocumentErrorCode, FontResourceUnsupported, ImageXObjectUnsupported,
+};
 
 use crate::ContentOperatorSource;
 
@@ -64,6 +66,43 @@ pub enum ContentImageLimitKind {
     CacheAllocation,
     /// A decoded Scene-resource copy allocation failed inside an already validated bound.
     DecodedAllocation,
+}
+
+/// Deterministic embedded-font and text-showing budget that rejected aggregate work or state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContentFontLimitKind {
+    /// Executed `Tf` selections retained by the semantic plan.
+    FontUses,
+    /// Distinct proof-bound embedded fonts acquired by the exact cache.
+    UniqueFonts,
+    /// Aggregate retained bytes of proof-bound acquired Font resources in the exact cache.
+    ResourceRetainedBytes,
+    /// Printable character codes expanded into positioned glyphs.
+    Glyphs,
+    /// Outline segments copied into project-owned Scene glyph resources.
+    OutlineSegments,
+    /// Allocator-reported positioned-glyph and outline capacity live before Scene handoff.
+    GlyphRetainedBytes,
+    /// Decoded printable string bytes retained by the immutable semantic plan.
+    TextBytes,
+    /// Numeric adjustments retained from `TJ` arrays.
+    TextAdjustments,
+    /// Operators inspected by the one font/text semantic-planning pass.
+    PlanningOperators,
+    /// Exact font-cache key comparisons.
+    CacheProbes,
+    /// Allocator-reported font/text plan capacity.
+    PlanRetainedBytes,
+    /// A font/text plan allocation failed inside its validated bound.
+    PlanAllocation,
+    /// Allocator-reported exact-font-cache metadata capacity.
+    CacheRetainedBytes,
+    /// An exact-font-cache allocation failed inside its validated bound.
+    CacheAllocation,
+    /// Calls admitted into lower resumable Font resource acquisition jobs.
+    AcquisitionPolls,
+    /// A glyph-outline or positioned-glyph allocation failed inside its retained-byte bound.
+    GlyphAllocation,
 }
 
 /// Structured Content VM resource-limit context without content bytes.
@@ -165,6 +204,51 @@ pub struct ContentImageLimit {
     attempted: u64,
 }
 
+/// Structured Content embedded-font resource context without font or content bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContentFontLimit {
+    kind: ContentFontLimitKind,
+    limit: u64,
+    consumed: u64,
+    attempted: u64,
+}
+
+impl ContentFontLimit {
+    pub(crate) const fn new(
+        kind: ContentFontLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+    ) -> Self {
+        Self {
+            kind,
+            limit,
+            consumed,
+            attempted,
+        }
+    }
+
+    /// Returns the rejected embedded-font budget dimension.
+    pub const fn kind(self) -> ContentFontLimitKind {
+        self.kind
+    }
+
+    /// Returns the configured ceiling.
+    pub const fn limit(self) -> u64 {
+        self.limit
+    }
+
+    /// Returns the amount committed before the rejected work.
+    pub const fn consumed(self) -> u64 {
+        self.consumed
+    }
+
+    /// Returns the additional amount rejected.
+    pub const fn attempted(self) -> u64 {
+        self.attempted
+    }
+}
+
 impl ContentImageLimit {
     pub(crate) const fn new(
         kind: ContentImageLimitKind,
@@ -206,6 +290,7 @@ enum ContentResourceLimit {
     Vm(ContentVmLimit),
     Graphics(ContentGraphicsLimit),
     Image(ContentImageLimit),
+    Font(ContentFontLimit),
 }
 
 /// Stable machine-readable Content VM failure.
@@ -354,6 +439,20 @@ impl ContentVmError {
         }
     }
 
+    pub(crate) const fn font_resource(
+        limit: ContentFontLimit,
+        source: Option<ContentOperatorSource>,
+    ) -> Self {
+        Self {
+            code: ContentVmErrorCode::ResourceLimit,
+            category: ContentVmErrorCategory::Resource,
+            recoverability: ContentVmRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-CONTENT-VM-0012",
+            source,
+            resource_limit: Some(ContentResourceLimit::Font(limit)),
+        }
+    }
+
     pub(crate) const fn with_source(mut self, source: ContentOperatorSource) -> Self {
         self.source = Some(source);
         self
@@ -388,7 +487,12 @@ impl ContentVmError {
     pub const fn limit(self) -> Option<ContentVmLimit> {
         match self.resource_limit {
             Some(ContentResourceLimit::Vm(limit)) => Some(limit),
-            Some(ContentResourceLimit::Graphics(_) | ContentResourceLimit::Image(_)) | None => None,
+            Some(
+                ContentResourceLimit::Graphics(_)
+                | ContentResourceLimit::Image(_)
+                | ContentResourceLimit::Font(_),
+            )
+            | None => None,
         }
     }
 
@@ -396,7 +500,12 @@ impl ContentVmError {
     pub const fn graphics_limit(self) -> Option<ContentGraphicsLimit> {
         match self.resource_limit {
             Some(ContentResourceLimit::Graphics(limit)) => Some(limit),
-            Some(ContentResourceLimit::Vm(_) | ContentResourceLimit::Image(_)) | None => None,
+            Some(
+                ContentResourceLimit::Vm(_)
+                | ContentResourceLimit::Image(_)
+                | ContentResourceLimit::Font(_),
+            )
+            | None => None,
         }
     }
 
@@ -404,7 +513,25 @@ impl ContentVmError {
     pub const fn image_limit(self) -> Option<ContentImageLimit> {
         match self.resource_limit {
             Some(ContentResourceLimit::Image(limit)) => Some(limit),
-            Some(ContentResourceLimit::Vm(_) | ContentResourceLimit::Graphics(_)) | None => None,
+            Some(
+                ContentResourceLimit::Vm(_)
+                | ContentResourceLimit::Graphics(_)
+                | ContentResourceLimit::Font(_),
+            )
+            | None => None,
+        }
+    }
+
+    /// Returns embedded-font resource context when this is a font/text budget failure.
+    pub const fn font_limit(self) -> Option<ContentFontLimit> {
+        match self.resource_limit {
+            Some(ContentResourceLimit::Font(limit)) => Some(limit),
+            Some(
+                ContentResourceLimit::Vm(_)
+                | ContentResourceLimit::Graphics(_)
+                | ContentResourceLimit::Image(_),
+            )
+            | None => None,
         }
     }
 }
@@ -534,6 +661,14 @@ pub enum ContentUnsupportedKind {
     ImageProfileRequired,
     /// The selected Page XObject or Image XObject representation is outside the registered subset.
     ImageXObject,
+    /// A registered text operator requires an explicit proof-bound Content font profile.
+    FontProfileRequired,
+    /// The selected Page Font or embedded program is outside the registered subset.
+    FontResource,
+    /// A decoded text string contains a byte outside printable WinAnsi ASCII.
+    TextEncoding,
+    /// A text rendering mode other than fill mode zero was selected.
+    TextRenderMode,
 }
 
 /// Content-redacted structured unsupported outcome.
@@ -543,6 +678,7 @@ pub struct ContentUnsupported {
     source: ContentOperatorSource,
     document_error: Option<DocumentError>,
     image_xobject: Option<ImageXObjectUnsupported>,
+    font_resource: Option<FontResourceUnsupported>,
 }
 
 impl ContentUnsupported {
@@ -552,6 +688,7 @@ impl ContentUnsupported {
             source,
             document_error: None,
             image_xobject: None,
+            font_resource: None,
         }
     }
 
@@ -573,6 +710,7 @@ impl ContentUnsupported {
             source,
             document_error: Some(error),
             image_xobject: None,
+            font_resource: None,
         })
     }
 
@@ -585,6 +723,20 @@ impl ContentUnsupported {
             source,
             document_error: None,
             image_xobject: Some(unsupported),
+            font_resource: None,
+        }
+    }
+
+    pub(crate) const fn from_font(
+        unsupported: FontResourceUnsupported,
+        source: ContentOperatorSource,
+    ) -> Self {
+        Self {
+            kind: ContentUnsupportedKind::FontResource,
+            source,
+            document_error: None,
+            image_xobject: None,
+            font_resource: Some(unsupported),
         }
     }
 
@@ -608,6 +760,11 @@ impl ContentUnsupported {
         self.image_xobject
     }
 
+    /// Returns the preserved lower embedded-font capability reason.
+    pub const fn font_resource(self) -> Option<FontResourceUnsupported> {
+        self.font_resource
+    }
+
     /// Returns the stable content-layer unsupported diagnostic identifier.
     pub const fn diagnostic_id(self) -> &'static str {
         match self.kind {
@@ -622,6 +779,10 @@ impl ContentUnsupported {
             ContentUnsupportedKind::GraphicsV2Operator => "RPE-CONTENT-UNSUPPORTED-0007",
             ContentUnsupportedKind::ImageProfileRequired => "RPE-CONTENT-UNSUPPORTED-0008",
             ContentUnsupportedKind::ImageXObject => "RPE-CONTENT-UNSUPPORTED-0009",
+            ContentUnsupportedKind::FontProfileRequired => "RPE-CONTENT-UNSUPPORTED-0010",
+            ContentUnsupportedKind::FontResource => "RPE-CONTENT-UNSUPPORTED-0011",
+            ContentUnsupportedKind::TextEncoding => "RPE-CONTENT-UNSUPPORTED-0012",
+            ContentUnsupportedKind::TextRenderMode => "RPE-CONTENT-UNSUPPORTED-0013",
         }
     }
 }
@@ -641,6 +802,12 @@ impl fmt::Debug for ContentUnsupported {
                 &self
                     .image_xobject
                     .map(ImageXObjectUnsupported::diagnostic_id),
+            )
+            .field(
+                "font_diagnostic_id",
+                &self
+                    .font_resource
+                    .map(FontResourceUnsupported::diagnostic_id),
             )
             .field("content", &"[REDACTED]")
             .finish()

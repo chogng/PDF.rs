@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 pdf-rs-bytes = { path = "../bytes" }
 pdf-rs-document = { path = "../document" }
+pdf-rs-font = { path = "../font" }
 pdf-rs-scene = { path = "../scene" }
 pdf-rs-syntax = { path = "../syntax" }
 

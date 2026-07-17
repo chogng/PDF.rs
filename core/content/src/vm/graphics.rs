@@ -987,6 +987,21 @@ impl GraphicsVm {
             | OperatorKind::ConcatMatrix
             | OperatorKind::BeginText
             | OperatorKind::EndText
+            | OperatorKind::SetCharacterSpacing
+            | OperatorKind::SetWordSpacing
+            | OperatorKind::SetHorizontalScaling
+            | OperatorKind::SetTextLeading
+            | OperatorKind::SetTextFont
+            | OperatorKind::SetTextRenderMode
+            | OperatorKind::SetTextRise
+            | OperatorKind::MoveTextPosition
+            | OperatorKind::MoveTextPositionSetLeading
+            | OperatorKind::SetTextMatrix
+            | OperatorKind::MoveToNextTextLine
+            | OperatorKind::ShowText
+            | OperatorKind::ShowTextAdjusted
+            | OperatorKind::MoveNextLineShowText
+            | OperatorKind::SetSpacingMoveNextLineShowText
             | OperatorKind::BeginCompatibility
             | OperatorKind::EndCompatibility
             | OperatorKind::MarkedContentPoint

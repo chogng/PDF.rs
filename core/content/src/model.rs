@@ -403,6 +403,8 @@ pub enum OperatorContext {
     Any,
     /// Opens or closes a text object.
     TextObjectBoundary,
+    /// Changes text state, text positioning, or text showing inside a text object.
+    TextObject,
     /// Opens or closes a compatibility section.
     CompatibilityBoundary,
     /// Operates on the marked-content stack or emits a marked-content point.
@@ -442,6 +444,14 @@ pub enum OperatorOperandShape {
     NumberArrayAndNumber,
     /// One PDF name.
     Name,
+    /// One PDF name followed by one PDF number.
+    NameAndNumber,
+    /// One decoded PDF string.
+    String,
+    /// One direct PDF array whose element shape is validated by the operator.
+    Array,
+    /// Two PDF numbers followed by one decoded PDF string.
+    TwoNumbersAndString,
     /// One PDF name followed by either a name or a direct dictionary.
     NameAndNameOrDictionary,
 }
@@ -451,11 +461,11 @@ impl OperatorOperandShape {
         match self {
             Self::None => 0,
             Self::OneNumber | Self::OneInteger => 1,
-            Self::TwoNumbers | Self::NumberArrayAndNumber => 2,
-            Self::ThreeNumbers => 3,
+            Self::TwoNumbers | Self::NumberArrayAndNumber | Self::NameAndNumber => 2,
+            Self::ThreeNumbers | Self::TwoNumbersAndString => 3,
             Self::FourNumbers => 4,
             Self::SixNumbers => 6,
-            Self::Name => 1,
+            Self::Name | Self::String | Self::Array => 1,
             Self::NameAndNameOrDictionary => 2,
         }
     }
@@ -483,6 +493,36 @@ pub enum OperatorKind {
     BeginText,
     /// End text object (`ET`).
     EndText,
+    /// Set character spacing (`Tc`).
+    SetCharacterSpacing,
+    /// Set word spacing (`Tw`).
+    SetWordSpacing,
+    /// Set horizontal scaling percentage (`Tz`).
+    SetHorizontalScaling,
+    /// Set text leading (`TL`).
+    SetTextLeading,
+    /// Select the text font and size (`Tf`).
+    SetTextFont,
+    /// Set text rendering mode (`Tr`).
+    SetTextRenderMode,
+    /// Set text rise (`Ts`).
+    SetTextRise,
+    /// Move the text line matrix (`Td`).
+    MoveTextPosition,
+    /// Move the text line matrix and set leading (`TD`).
+    MoveTextPositionSetLeading,
+    /// Set the text and text-line matrices (`Tm`).
+    SetTextMatrix,
+    /// Move to the start of the next text line (`T*`).
+    MoveToNextTextLine,
+    /// Show one decoded text string (`Tj`).
+    ShowText,
+    /// Show strings with numeric position adjustments (`TJ`).
+    ShowTextAdjusted,
+    /// Move to the next line and show text (`'`).
+    MoveNextLineShowText,
+    /// Set spacing, move to the next line, and show text (`"`).
+    SetSpacingMoveNextLineShowText,
     /// Begin compatibility section (`BX`).
     BeginCompatibility,
     /// End compatibility section (`EX`).
@@ -618,6 +658,21 @@ impl OperatorKind {
             b"cm" => Some(Self::ConcatMatrix),
             b"BT" => Some(Self::BeginText),
             b"ET" => Some(Self::EndText),
+            b"Tc" => Some(Self::SetCharacterSpacing),
+            b"Tw" => Some(Self::SetWordSpacing),
+            b"Tz" => Some(Self::SetHorizontalScaling),
+            b"TL" => Some(Self::SetTextLeading),
+            b"Tf" => Some(Self::SetTextFont),
+            b"Tr" => Some(Self::SetTextRenderMode),
+            b"Ts" => Some(Self::SetTextRise),
+            b"Td" => Some(Self::MoveTextPosition),
+            b"TD" => Some(Self::MoveTextPositionSetLeading),
+            b"Tm" => Some(Self::SetTextMatrix),
+            b"T*" => Some(Self::MoveToNextTextLine),
+            b"Tj" => Some(Self::ShowText),
+            b"TJ" => Some(Self::ShowTextAdjusted),
+            b"'" => Some(Self::MoveNextLineShowText),
+            b"\"" => Some(Self::SetSpacingMoveNextLineShowText),
             b"BX" => Some(Self::BeginCompatibility),
             b"EX" => Some(Self::EndCompatibility),
             b"MP" => Some(Self::MarkedContentPoint),
@@ -698,6 +753,25 @@ impl OperatorKind {
                 OperatorFailurePolicy::Execute,
                 1,
             ),
+            Self::SetCharacterSpacing => text_spec(b"Tc", OperatorOperandShape::OneNumber, 2),
+            Self::SetWordSpacing => text_spec(b"Tw", OperatorOperandShape::OneNumber, 2),
+            Self::SetHorizontalScaling => text_spec(b"Tz", OperatorOperandShape::OneNumber, 2),
+            Self::SetTextLeading => text_spec(b"TL", OperatorOperandShape::OneNumber, 2),
+            Self::SetTextFont => text_spec(b"Tf", OperatorOperandShape::NameAndNumber, 3),
+            Self::SetTextRenderMode => text_spec(b"Tr", OperatorOperandShape::OneInteger, 2),
+            Self::SetTextRise => text_spec(b"Ts", OperatorOperandShape::OneNumber, 2),
+            Self::MoveTextPosition => text_spec(b"Td", OperatorOperandShape::TwoNumbers, 3),
+            Self::MoveTextPositionSetLeading => {
+                text_spec(b"TD", OperatorOperandShape::TwoNumbers, 4)
+            }
+            Self::SetTextMatrix => text_spec(b"Tm", OperatorOperandShape::SixNumbers, 7),
+            Self::MoveToNextTextLine => text_spec(b"T*", OperatorOperandShape::None, 2),
+            Self::ShowText => text_spec(b"Tj", OperatorOperandShape::String, 2),
+            Self::ShowTextAdjusted => text_spec(b"TJ", OperatorOperandShape::Array, 3),
+            Self::MoveNextLineShowText => text_spec(b"'", OperatorOperandShape::String, 3),
+            Self::SetSpacingMoveNextLineShowText => {
+                text_spec(b"\"", OperatorOperandShape::TwoNumbersAndString, 5)
+            }
             Self::BeginCompatibility => spec(
                 b"BX",
                 OperatorOperandShape::None,
@@ -985,6 +1059,20 @@ const fn spec(
         failure_policy,
         base_fuel,
     }
+}
+
+const fn text_spec(
+    token: &'static [u8],
+    operand_shape: OperatorOperandShape,
+    base_fuel: u16,
+) -> OperatorSpec {
+    spec(
+        token,
+        operand_shape,
+        OperatorContext::TextObject,
+        OperatorFailurePolicy::Execute,
+        base_fuel,
+    )
 }
 
 /// Known or lexically valid unknown content operator.

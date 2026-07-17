@@ -4,31 +4,38 @@ use std::sync::Arc;
 
 use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_document::{
-    AcquiredPageContent, DocumentCancellation, ImageXObjectJobContext, ImageXObjectLimits,
-    PagePropertyLookupLimits, PagePropertyLookupStats, PageXObjectLookupLimits,
-    PageXObjectLookupOutcome, PageXObjectLookupStats, SharedAttestedRevisionIndex,
+    AcquiredPageContent, DocumentCancellation, FontResourceJobContext, FontResourceLimits,
+    ImageXObjectJobContext, ImageXObjectLimits, PageFontLookupLimits, PageFontLookupOutcome,
+    PageFontLookupStats, PagePropertyLookupLimits, PagePropertyLookupStats,
+    PageXObjectLookupLimits, PageXObjectLookupOutcome, PageXObjectLookupStats,
+    SharedAttestedRevisionIndex,
 };
+use pdf_rs_font::{GlyphId, OutlineSegment};
 use pdf_rs_scene::{
-    CommandSource, DashPattern, DashPatternBuilder, FillRule, GraphicsSceneBuilder,
-    GraphicsSceneLimits, LineStyle, Matrix, PageGeometry, PageRotation as ScenePageRotation, Paint,
-    PathResource, Scene, SceneBinding, SceneBounds, SceneBuilder, SceneError, SceneLimits,
-    SceneRect, SceneScalar, SceneUnit,
+    CommandSource, DashPattern, DashPatternBuilder, FillRule, GlyphOutline, GlyphUse,
+    GraphicsSceneBuilder, GraphicsSceneLimits, LineStyle, Matrix, PageGeometry,
+    PageRotation as ScenePageRotation, Paint, PathResource, PathResourceBuilder, PathSegment,
+    Scene, SceneBinding, SceneBounds, SceneBuilder, SceneError, SceneLimits, ScenePoint, SceneRect,
+    SceneScalar, SceneUnit,
 };
 use pdf_rs_syntax::ObjectRef;
 
 use crate::scanner::{ScanTerminal, run_scan};
 use crate::{
-    ContentCancellation, ContentGraphicsLimits, ContentImageLimits, ContentImageStats,
-    ContentLimits, ContentName, ContentNumber, ContentOperand, ContentOperatorSource,
-    ContentProgram, ContentScanStats, ContentUnsupported, ContentUnsupportedKind, ContentVmError,
-    ContentVmErrorCode, ContentVmFailure, ContentVmLimit, ContentVmLimitKind, ContentVmLimits,
-    ContentVmPhase, ContentVmStats, DecodedContentStream, InterpretedPage, LocatedOperand,
-    OperatorContext, OperatorKind, OperatorOperandShape, ResolvedImageUse, ResolvedPropertyUse,
+    ContentCancellation, ContentFontLimits, ContentFontStats, ContentGraphicsLimits,
+    ContentImageLimits, ContentImageStats, ContentLimits, ContentName, ContentNumber,
+    ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
+    ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
+    ContentVmLimitKind, ContentVmLimits, ContentVmPhase, ContentVmStats, DecodedContentStream,
+    InterpretedPage, LocatedOperand, OperatorContext, OperatorKind, OperatorOperandShape,
+    ResolvedFontUse, ResolvedImageUse, ResolvedPropertyUse,
 };
 
+mod font;
 mod graphics;
 mod image;
 
+use font::{FontPlanningPoll, FontRuntime};
 use graphics::{DashRetentionAdmission, GraphicsExecutionError, GraphicsVm, VmRetention};
 use image::{ImagePlanningPoll, ImageRuntime};
 
@@ -41,13 +48,13 @@ pub enum ContentVmPoll {
     Ready(Arc<InterpretedPage>),
     /// Validated feature outside the bounded initial VM profile.
     Unsupported(ContentUnsupported),
-    /// One proof-bound Image XObject object or payload requires absent source bytes.
+    /// One proof-bound Image XObject or embedded Font object/payload requires absent source bytes.
     Pending {
         /// One-shot data-arrival ticket returned by the byte source.
         ticket: DataTicket,
         /// Canonical exact ranges still missing from the request.
         missing: SmallRanges,
-        /// Object-envelope, stream-boundary, or payload checkpoint to retain.
+        /// Image checkpoint or Font/descriptor/program envelope, boundary, or payload checkpoint.
         checkpoint: ResumeCheckpoint,
     },
     /// Terminal lower-layer or VM failure.
@@ -105,6 +112,60 @@ pub struct ContentImageProfile {
     content_limits: ContentImageLimits,
 }
 
+/// Proof authority, child runtime context, and independent limits for embedded-font execution.
+#[derive(Clone, Debug)]
+pub struct ContentFontProfile {
+    authority: SharedAttestedRevisionIndex,
+    lookup_limits: PageFontLookupLimits,
+    context: FontResourceJobContext,
+    acquisition_limits: FontResourceLimits,
+    content_limits: ContentFontLimits,
+}
+
+impl ContentFontProfile {
+    /// Creates an explicit proof-bound embedded simple TrueType profile.
+    pub const fn new(
+        authority: SharedAttestedRevisionIndex,
+        lookup_limits: PageFontLookupLimits,
+        context: FontResourceJobContext,
+        acquisition_limits: FontResourceLimits,
+        content_limits: ContentFontLimits,
+    ) -> Self {
+        Self {
+            authority,
+            lookup_limits,
+            context,
+            acquisition_limits,
+            content_limits,
+        }
+    }
+
+    /// Borrows the strict revision authority used to reopen selected fonts.
+    pub const fn authority(&self) -> &SharedAttestedRevisionIndex {
+        &self.authority
+    }
+
+    /// Returns Page Font name-lookup limits.
+    pub const fn lookup_limits(&self) -> PageFontLookupLimits {
+        self.lookup_limits
+    }
+
+    /// Returns the runtime-owned child acquisition context.
+    pub const fn context(&self) -> FontResourceJobContext {
+        self.context
+    }
+
+    /// Returns per-font proof, decode, parse, and retention limits.
+    pub const fn acquisition_limits(&self) -> FontResourceLimits {
+        self.acquisition_limits
+    }
+
+    /// Returns aggregate Content text, glyph, plan, and cache limits.
+    pub const fn content_limits(&self) -> ContentFontLimits {
+        self.content_limits
+    }
+}
+
 impl ContentImageProfile {
     /// Creates an explicit proof-bound Image XObject profile.
     pub const fn new(
@@ -156,8 +217,10 @@ pub struct InterpretPageJob {
     vm_limits: ContentVmLimits,
     property_limits: PagePropertyLookupLimits,
     xobject_limits: PageXObjectLookupLimits,
+    font_lookup_limits: PageFontLookupLimits,
     profile: ContentVmProfile,
     image_runtime: Option<ImageRuntime>,
+    font_runtime: Option<FontRuntime>,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -167,6 +230,8 @@ pub struct InterpretPageJob {
     property_stats: PagePropertyLookupStats,
     xobject_stats: PageXObjectLookupStats,
     image_stats: ContentImageStats,
+    font_lookup_stats: PageFontLookupStats,
+    font_stats: ContentFontStats,
 }
 
 impl InterpretPageJob {
@@ -184,8 +249,10 @@ impl InterpretPageJob {
             vm_limits,
             property_limits,
             xobject_limits: PageXObjectLookupLimits::default(),
+            font_lookup_limits: PageFontLookupLimits::default(),
             profile: ContentVmProfile::SceneV1 { scene_limits },
             image_runtime: None,
+            font_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -195,6 +262,8 @@ impl InterpretPageJob {
             property_stats: PagePropertyLookupStats::default(),
             xobject_stats: PageXObjectLookupStats::default(),
             image_stats: ContentImageStats::default(),
+            font_lookup_stats: PageFontLookupStats::default(),
+            font_stats: ContentFontStats::default(),
         }
     }
 
@@ -213,11 +282,13 @@ impl InterpretPageJob {
             vm_limits,
             property_limits,
             xobject_limits: PageXObjectLookupLimits::default(),
+            font_lookup_limits: PageFontLookupLimits::default(),
             profile: ContentVmProfile::GraphicsV2 {
                 graphics_limits,
                 scene_limits,
             },
             image_runtime: None,
+            font_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -227,6 +298,8 @@ impl InterpretPageJob {
             property_stats: PagePropertyLookupStats::default(),
             xobject_stats: PageXObjectLookupStats::default(),
             image_stats: ContentImageStats::default(),
+            font_lookup_stats: PageFontLookupStats::default(),
+            font_stats: ContentFontStats::default(),
         }
     }
 
@@ -251,11 +324,13 @@ impl InterpretPageJob {
             vm_limits,
             property_limits,
             xobject_limits,
+            font_lookup_limits: PageFontLookupLimits::default(),
             profile: ContentVmProfile::GraphicsV2 {
                 graphics_limits,
                 scene_limits,
             },
             image_runtime: Some(ImageRuntime::new(image_profile)),
+            font_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -265,6 +340,94 @@ impl InterpretPageJob {
             property_stats: PagePropertyLookupStats::default(),
             xobject_stats: PageXObjectLookupStats::default(),
             image_stats: ContentImageStats::default(),
+            font_lookup_stats: PageFontLookupStats::default(),
+            font_stats: ContentFontStats::default(),
+        }
+    }
+
+    /// Creates a graphics-v2 interpreter with proof-bound embedded simple TrueType execution.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the constructor keeps scanner, VM, graphics, properties, fonts, and Scene limits independently validated"
+    )]
+    pub fn new_graphics_v2_with_fonts(
+        acquired: AcquiredPageContent,
+        scan_limits: ContentLimits,
+        vm_limits: ContentVmLimits,
+        graphics_limits: ContentGraphicsLimits,
+        property_limits: PagePropertyLookupLimits,
+        font_profile: ContentFontProfile,
+        scene_limits: GraphicsSceneLimits,
+    ) -> Self {
+        let font_lookup_limits = font_profile.lookup_limits();
+        Self {
+            acquired: Some(acquired),
+            scan_limits,
+            vm_limits,
+            property_limits,
+            xobject_limits: PageXObjectLookupLimits::default(),
+            font_lookup_limits,
+            profile: ContentVmProfile::GraphicsV2 {
+                graphics_limits,
+                scene_limits,
+            },
+            image_runtime: None,
+            font_runtime: Some(FontRuntime::new(font_profile)),
+            program: None,
+            plan: None,
+            scan_peak_retained: 0,
+            state: JobState::Pending,
+            scan_stats: ContentScanStats::default(),
+            vm_stats: ContentVmStats::default(),
+            property_stats: PagePropertyLookupStats::default(),
+            xobject_stats: PageXObjectLookupStats::default(),
+            image_stats: ContentImageStats::default(),
+            font_lookup_stats: PageFontLookupStats::default(),
+            font_stats: ContentFontStats::default(),
+        }
+    }
+
+    /// Creates a graphics-v2 interpreter with both basic images and embedded simple TrueType.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the combined constructor keeps all proof authorities and independent limits explicit"
+    )]
+    pub fn new_graphics_v2_with_images_and_fonts(
+        acquired: AcquiredPageContent,
+        scan_limits: ContentLimits,
+        vm_limits: ContentVmLimits,
+        graphics_limits: ContentGraphicsLimits,
+        property_limits: PagePropertyLookupLimits,
+        image_profile: ContentImageProfile,
+        font_profile: ContentFontProfile,
+        scene_limits: GraphicsSceneLimits,
+    ) -> Self {
+        let xobject_limits = image_profile.lookup_limits();
+        let font_lookup_limits = font_profile.lookup_limits();
+        Self {
+            acquired: Some(acquired),
+            scan_limits,
+            vm_limits,
+            property_limits,
+            xobject_limits,
+            font_lookup_limits,
+            profile: ContentVmProfile::GraphicsV2 {
+                graphics_limits,
+                scene_limits,
+            },
+            image_runtime: Some(ImageRuntime::new(image_profile)),
+            font_runtime: Some(FontRuntime::new(font_profile)),
+            program: None,
+            plan: None,
+            scan_peak_retained: 0,
+            state: JobState::Pending,
+            scan_stats: ContentScanStats::default(),
+            vm_stats: ContentVmStats::default(),
+            property_stats: PagePropertyLookupStats::default(),
+            xobject_stats: PageXObjectLookupStats::default(),
+            image_stats: ContentImageStats::default(),
+            font_lookup_stats: PageFontLookupStats::default(),
+            font_stats: ContentFontStats::default(),
         }
     }
 
@@ -303,6 +466,16 @@ impl InterpretPageJob {
         self.image_stats
     }
 
+    /// Returns Page Font lookup work from the latest interpretation attempt.
+    pub const fn font_lookup_stats(&self) -> PageFontLookupStats {
+        self.font_lookup_stats
+    }
+
+    /// Returns aggregate embedded-font acquisition, cache, text, and glyph work.
+    pub const fn font_stats(&self) -> ContentFontStats {
+        self.font_stats
+    }
+
     /// Executes once against the current source generation, then replays the exact terminal result.
     pub fn poll(
         &mut self,
@@ -328,8 +501,10 @@ impl InterpretPageJob {
                 self.vm_limits,
                 self.property_limits,
                 self.xobject_limits,
+                self.font_lookup_limits,
                 self.profile,
                 self.image_runtime.as_mut(),
+                self.font_runtime.as_mut(),
                 self.scan_stats,
                 self.xobject_stats,
                 self.scan_peak_retained,
@@ -346,6 +521,14 @@ impl InterpretPageJob {
             .image_runtime
             .as_ref()
             .map_or(ContentImageStats::default(), ImageRuntime::stats);
+        self.font_stats = self
+            .font_runtime
+            .as_ref()
+            .map_or(ContentFontStats::default(), FontRuntime::stats);
+        self.font_lookup_stats = self
+            .font_runtime
+            .as_ref()
+            .map_or(PageFontLookupStats::default(), FontRuntime::lookup_stats);
 
         match report.terminal {
             RunTerminal::Planned(_) => {
@@ -361,14 +544,18 @@ impl InterpretPageJob {
                     execution.scene,
                     execution.property_uses,
                     execution.image_uses,
+                    execution.font_uses,
                     execution.final_ctm,
                     self.scan_stats,
                     self.vm_stats,
                     self.property_stats,
                     self.xobject_stats,
                     self.image_stats,
+                    self.font_lookup_stats,
+                    self.font_stats,
                 ));
                 self.image_runtime.take();
+                self.font_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Ready(Arc::clone(&page));
@@ -377,6 +564,7 @@ impl InterpretPageJob {
             RunTerminal::Unsupported(error) => {
                 self.acquired.take();
                 self.image_runtime.take();
+                self.font_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Unsupported(error);
@@ -385,6 +573,7 @@ impl InterpretPageJob {
             RunTerminal::Failed(error) => {
                 self.acquired.take();
                 self.image_runtime.take();
+                self.font_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Failed(error);
@@ -416,7 +605,9 @@ impl fmt::Debug for InterpretPageJob {
             .field("vm_limits", &self.vm_limits)
             .field("property_limits", &self.property_limits)
             .field("xobject_limits", &self.xobject_limits)
+            .field("font_lookup_limits", &self.font_lookup_limits)
             .field("images_enabled", &self.image_runtime.is_some())
+            .field("fonts_enabled", &self.font_runtime.is_some())
             .field("program_retained", &self.program.is_some())
             .field("plan_retained", &self.plan.is_some())
             .field("profile", &self.profile)
@@ -425,6 +616,8 @@ impl fmt::Debug for InterpretPageJob {
             .field("property_stats", &self.property_stats)
             .field("xobject_stats", &self.xobject_stats)
             .field("image_stats", &self.image_stats)
+            .field("font_lookup_stats", &self.font_lookup_stats)
+            .field("font_stats", &self.font_stats)
             .field("content", &"[REDACTED]")
             .finish()
     }
@@ -434,6 +627,7 @@ struct Execution {
     scene: Scene,
     property_uses: Vec<ResolvedPropertyUse>,
     image_uses: Vec<ResolvedImageUse>,
+    font_uses: Vec<ResolvedFontUse>,
     retained_use_capacity_bytes: u64,
     final_ctm: Matrix,
 }
@@ -441,6 +635,96 @@ struct Execution {
 struct PlannedImageInvocation {
     source: ContentOperatorSource,
     name: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TextPlanningState {
+    font_selected: bool,
+}
+
+enum TextShowItem {
+    Bytes(Vec<u8>),
+    Adjustment(ContentNumber),
+}
+
+enum TextAction {
+    Begin {
+        source: ContentOperatorSource,
+    },
+    End {
+        source: ContentOperatorSource,
+    },
+    SetCharacterSpacing {
+        value: ContentNumber,
+        source: ContentOperatorSource,
+    },
+    SetWordSpacing {
+        value: ContentNumber,
+        source: ContentOperatorSource,
+    },
+    SetHorizontalScaling {
+        value: ContentNumber,
+        source: ContentOperatorSource,
+    },
+    SetLeading {
+        value: ContentNumber,
+        source: ContentOperatorSource,
+    },
+    SetFont {
+        name: Vec<u8>,
+        size: ContentNumber,
+        source: ContentOperatorSource,
+    },
+    SetRenderMode {
+        value: i64,
+        source: ContentOperatorSource,
+    },
+    SetRise {
+        value: ContentNumber,
+        source: ContentOperatorSource,
+    },
+    MovePosition {
+        translation: [ContentNumber; 2],
+        set_leading: bool,
+        source: ContentOperatorSource,
+    },
+    SetMatrix {
+        matrix: [ContentNumber; 6],
+        source: ContentOperatorSource,
+    },
+    NextLine {
+        source: ContentOperatorSource,
+    },
+    Show {
+        items: Vec<TextShowItem>,
+        character_spacing: Option<ContentNumber>,
+        word_spacing: Option<ContentNumber>,
+        next_line: bool,
+        paint: Paint,
+        ctm: Matrix,
+        command_source: CommandSource,
+        source: ContentOperatorSource,
+    },
+}
+
+impl TextAction {
+    const fn source(&self) -> ContentOperatorSource {
+        match self {
+            Self::Begin { source }
+            | Self::End { source }
+            | Self::SetCharacterSpacing { source, .. }
+            | Self::SetWordSpacing { source, .. }
+            | Self::SetHorizontalScaling { source, .. }
+            | Self::SetLeading { source, .. }
+            | Self::SetFont { source, .. }
+            | Self::SetRenderMode { source, .. }
+            | Self::SetRise { source, .. }
+            | Self::MovePosition { source, .. }
+            | Self::SetMatrix { source, .. }
+            | Self::NextLine { source }
+            | Self::Show { source, .. } => *source,
+        }
+    }
 }
 
 enum ExecutionAction {
@@ -501,6 +785,7 @@ enum ExecutionAction {
         blend_mode: pdf_rs_scene::BlendMode,
         bounds: SceneBounds,
     },
+    Text(TextAction),
 }
 
 struct ExecutionPlan {
@@ -510,6 +795,8 @@ struct ExecutionPlan {
     image_invocations: Vec<PlannedImageInvocation>,
     property_uses: Vec<ResolvedPropertyUse>,
     image_uses: Vec<ResolvedImageUse>,
+    font_use_count: usize,
+    first_font_source: Option<ContentOperatorSource>,
     final_ctm: Matrix,
     action_payload_retained_bytes: u64,
     owned_name_retained_bytes: u64,
@@ -518,12 +805,48 @@ struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
+    fn vm_retained_bytes(&self) -> Result<u64, ContentVmError> {
+        execution_plan_capacity_bytes(
+            &self.property_uses,
+            &self.image_uses,
+            &self.image_invocations,
+            &self.actions,
+            self.owned_name_retained_bytes,
+        )?
+        .checked_add(self.action_payload_retained_bytes)
+        .ok_or_else(|| ContentVmError::new(ContentVmErrorCode::InternalState, None))
+    }
+
     fn image_plan_retained_bytes(&self) -> Result<u64, ContentVmError> {
         capacity_bytes(&self.actions)?
             .checked_add(capacity_bytes(&self.image_invocations)?)
             .and_then(|value| value.checked_add(self.owned_name_retained_bytes))
             .and_then(|value| value.checked_add(self.action_payload_retained_bytes))
             .ok_or_else(|| ContentVmError::new(ContentVmErrorCode::InternalState, None))
+    }
+
+    fn font_plan_retained_bytes(&self) -> Result<u64, ContentVmError> {
+        capacity_bytes(&self.actions)?
+            .checked_add(self.action_payload_retained_bytes)
+            .and_then(|value| value.checked_add(self.owned_name_retained_bytes))
+            .ok_or_else(|| ContentVmError::new(ContentVmErrorCode::InternalState, None))
+    }
+}
+
+enum TextPlanningTerminal {
+    Failed(ContentVmFailure),
+    Unsupported(ContentUnsupported),
+}
+
+impl From<ContentVmError> for TextPlanningTerminal {
+    fn from(value: ContentVmError) -> Self {
+        Self::Failed(ContentVmFailure::Vm(value))
+    }
+}
+
+impl From<SceneError> for TextPlanningTerminal {
+    fn from(value: SceneError) -> Self {
+        Self::Failed(ContentVmFailure::Scene(value))
     }
 }
 
@@ -635,6 +958,7 @@ impl Accounting {
 }
 
 #[allow(
+    clippy::result_large_err,
     clippy::too_many_arguments,
     reason = "the sealed interpreter receives each independently validated lower limit profile"
 )]
@@ -646,8 +970,10 @@ fn run_interpretation(
     vm_limits: ContentVmLimits,
     property_limits: PagePropertyLookupLimits,
     xobject_limits: PageXObjectLookupLimits,
+    font_lookup_limits: PageFontLookupLimits,
     profile: ContentVmProfile,
     mut image_runtime: Option<&mut ImageRuntime>,
+    mut font_runtime: Option<&mut FontRuntime>,
     mut scan_stats: ContentScanStats,
     mut xobject_stats: PageXObjectLookupStats,
     mut scan_peak_retained: u64,
@@ -799,6 +1125,7 @@ fn run_interpretation(
             property_limits,
             profile,
             image_runtime.as_deref_mut(),
+            font_runtime.as_deref_mut(),
             source,
             cancellation,
             &mut accounting,
@@ -826,7 +1153,7 @@ fn run_interpretation(
     } else {
         let plan = plan_slot
             .as_ref()
-            .expect("a retained execution plan remains immutable across image Pending");
+            .expect("a retained execution plan remains immutable across resource Pending");
         accounting = plan.accounting;
         property_stats = plan.property_stats;
     }
@@ -835,18 +1162,73 @@ fn run_interpretation(
         .as_ref()
         .expect("semantic planning publishes one immutable execution plan");
 
-    if let Some(runtime) = image_runtime.as_deref_mut() {
-        if !runtime.plan_complete()
-            && let Err(terminal) = plan_image_resources(
-                acquired,
-                plan,
-                xobject_limits,
-                runtime,
+    if let Some(runtime) = image_runtime.as_deref_mut()
+        && !runtime.plan_complete()
+        && let Err(terminal) = plan_image_resources(
+            acquired,
+            plan,
+            xobject_limits,
+            runtime,
+            source,
+            cancellation,
+            &mut xobject_stats,
+        )
+    {
+        return report(
+            terminal,
+            scan_stats,
+            &accounting,
+            property_stats,
+            xobject_stats,
+            scan_peak_retained,
+            0,
+        );
+    }
+    if let Some(runtime) = font_runtime.as_deref_mut()
+        && !runtime.plan_complete()
+        && let Err(terminal) = plan_font_resources(
+            acquired,
+            plan,
+            font_lookup_limits,
+            runtime,
+            source,
+            cancellation,
+        )
+    {
+        return report(
+            terminal,
+            scan_stats,
+            &accounting,
+            property_stats,
+            xobject_stats,
+            scan_peak_retained,
+            0,
+        );
+    }
+    if let Some(runtime) = image_runtime.as_deref_mut()
+        && !runtime.acquisitions_complete()
+    {
+        let terminal = match runtime.poll_acquisitions(source, cancellation) {
+            ImagePlanningPoll::Ready => None,
+            ImagePlanningPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => Some(RunTerminal::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            }),
+            ImagePlanningPoll::Unsupported {
+                unsupported,
                 source,
-                cancellation,
-                &mut xobject_stats,
-            )
-        {
+            } => Some(RunTerminal::Unsupported(ContentUnsupported::from_image(
+                unsupported,
+                source,
+            ))),
+            ImagePlanningPoll::Failed(failure) => Some(RunTerminal::Failed(failure)),
+        };
+        if let Some(terminal) = terminal {
             return report(
                 terminal,
                 scan_stats,
@@ -857,42 +1239,33 @@ fn run_interpretation(
                 0,
             );
         }
-        if !runtime.acquisitions_complete() {
-            let terminal = match runtime.poll_acquisitions(source, cancellation) {
-                ImagePlanningPoll::Ready => None,
-                ImagePlanningPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => Some(RunTerminal::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                }),
-                ImagePlanningPoll::Unsupported {
-                    unsupported,
-                    source,
-                } => Some(RunTerminal::Unsupported(ContentUnsupported::from_image(
-                    unsupported,
-                    source,
-                ))),
-                ImagePlanningPoll::Failed(failure) => Some(RunTerminal::Failed(failure)),
-            };
-            if let Some(terminal) = terminal {
-                return report(
-                    terminal,
-                    scan_stats,
-                    &accounting,
-                    property_stats,
-                    xobject_stats,
-                    scan_peak_retained,
-                    0,
-                );
-            }
-        }
-        if let Err(error) = runtime.begin_execution() {
+    }
+    if let Some(runtime) = font_runtime.as_deref_mut()
+        && !runtime.acquisitions_complete()
+    {
+        let terminal = match runtime.poll_acquisitions(source, cancellation) {
+            FontPlanningPoll::Ready => None,
+            FontPlanningPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => Some(RunTerminal::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            }),
+            FontPlanningPoll::Unsupported {
+                unsupported,
+                source,
+            } => Some(RunTerminal::Unsupported(ContentUnsupported::from_font(
+                unsupported,
+                source,
+            ))),
+            FontPlanningPoll::Failed(failure) => Some(RunTerminal::Failed(failure)),
+        };
+        if let Some(terminal) = terminal {
             return report(
-                prioritize_vm_without_source(snapshot, source, cancellation, error),
+                terminal,
                 scan_stats,
                 &accounting,
                 property_stats,
@@ -902,19 +1275,64 @@ fn run_interpretation(
             );
         }
     }
+    if let Some(runtime) = image_runtime.as_deref_mut()
+        && let Err(error) = runtime.begin_execution()
+    {
+        return report(
+            prioritize_vm_without_source(snapshot, source, cancellation, error),
+            scan_stats,
+            &accounting,
+            property_stats,
+            xobject_stats,
+            scan_peak_retained,
+            0,
+        );
+    }
+    if let Some(runtime) = font_runtime.as_deref_mut()
+        && let Err(error) = runtime.begin_execution()
+    {
+        return report(
+            prioritize_vm_without_source(snapshot, source, cancellation, error),
+            scan_stats,
+            &accounting,
+            property_stats,
+            xobject_stats,
+            scan_peak_retained,
+            0,
+        );
+    }
     let plan = plan_slot
         .take()
         .expect("all resources ready before consuming the immutable execution plan");
+    let mut materialization_peak_retained = 0_u64;
     let terminal = materialize_execution_plan(
         acquired,
         plan,
         profile,
+        vm_limits,
         image_runtime.as_deref_mut(),
+        font_runtime.as_deref_mut(),
         source,
         cancellation,
+        &mut materialization_peak_retained,
     );
+    accounting.observe_retained(materialization_peak_retained);
     if matches!(terminal, RunTerminal::Ready(_))
         && let Some(runtime) = image_runtime.as_deref()
+        && let Err(error) = runtime.finish_execution()
+    {
+        return report(
+            prioritize_vm_without_source(snapshot, source, cancellation, error),
+            scan_stats,
+            &accounting,
+            property_stats,
+            xobject_stats,
+            scan_peak_retained,
+            0,
+        );
+    }
+    if matches!(terminal, RunTerminal::Ready(_))
+        && let Some(runtime) = font_runtime.as_deref()
         && let Err(error) = runtime.finish_execution()
     {
         return report(
@@ -963,12 +1381,9 @@ fn report(
 }
 
 #[allow(
+    clippy::result_large_err,
     clippy::too_many_arguments,
     reason = "image planning keeps each sealed lower limit and runtime authority explicit"
-)]
-#[allow(
-    clippy::result_large_err,
-    reason = "planning preserves typed Unsupported, Document, VM, and source-guard terminals"
 )]
 fn plan_image_resources(
     acquired: &AcquiredPageContent,
@@ -1047,9 +1462,736 @@ fn plan_image_resources(
     result
 }
 
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "font planning keeps proof lookup, runtime authority, and source guards explicit"
+)]
+fn plan_font_resources(
+    acquired: &AcquiredPageContent,
+    plan: &ExecutionPlan,
+    lookup_limits: PageFontLookupLimits,
+    runtime: &mut FontRuntime,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+) -> Result<(), RunTerminal> {
+    let snapshot = acquired.handle().snapshot();
+    let expected = plan.font_use_count;
+    let first_source = plan.first_font_source;
+    runtime
+        .begin_plan(expected, first_source)
+        .map_err(|error| {
+            prioritize(
+                snapshot,
+                byte_source,
+                cancellation,
+                first_source,
+                RunTerminal::Failed(ContentVmFailure::Vm(error)),
+            )
+        })?;
+
+    let mut resolver = acquired.page().resources().font_resolver(lookup_limits);
+    let result = (|| {
+        for action in &plan.actions {
+            let action_source = action_operator_source(action);
+            runtime_guard(snapshot, byte_source, cancellation, Some(action_source))
+                .map_err(RunTerminal::Failed)?;
+            let ExecutionAction::Text(TextAction::SetFont { name, source, .. }) = action else {
+                continue;
+            };
+            runtime.admit_lookup(*source).map_err(|error| {
+                prioritize_vm(snapshot, byte_source, cancellation, *source, error)
+            })?;
+            let proof = match resolver.lookup_font(name, byte_source, cancellation) {
+                Ok(PageFontLookupOutcome::Ready(proof)) => proof,
+                Ok(PageFontLookupOutcome::Unsupported(unsupported)) => {
+                    return Err(prioritize(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        Some(*source),
+                        RunTerminal::Unsupported(ContentUnsupported::from_font(
+                            unsupported,
+                            *source,
+                        )),
+                    ));
+                }
+                Err(error) => {
+                    return Err(prioritize(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        Some(*source),
+                        RunTerminal::Failed(ContentVmFailure::Document(error)),
+                    ));
+                }
+            };
+            runtime_guard(snapshot, byte_source, cancellation, Some(*source))
+                .map_err(RunTerminal::Failed)?;
+            runtime
+                .register_proof(proof, *source, byte_source, cancellation)
+                .map_err(RunTerminal::Failed)?;
+        }
+        runtime.finish_plan().map_err(|error| {
+            prioritize(
+                snapshot,
+                byte_source,
+                cancellation,
+                first_source,
+                RunTerminal::Failed(ContentVmFailure::Vm(error)),
+            )
+        })
+    })();
+    runtime.set_lookup_stats(resolver.stats());
+    result
+}
+
 struct ExecutionReport {
     terminal: RunTerminal,
     property_stats: PagePropertyLookupStats,
+}
+
+fn is_text_operator(kind: OperatorKind) -> bool {
+    matches!(
+        kind,
+        OperatorKind::BeginText
+            | OperatorKind::EndText
+            | OperatorKind::SetCharacterSpacing
+            | OperatorKind::SetWordSpacing
+            | OperatorKind::SetHorizontalScaling
+            | OperatorKind::SetTextLeading
+            | OperatorKind::SetTextFont
+            | OperatorKind::SetTextRenderMode
+            | OperatorKind::SetTextRise
+            | OperatorKind::MoveTextPosition
+            | OperatorKind::MoveTextPositionSetLeading
+            | OperatorKind::SetTextMatrix
+            | OperatorKind::MoveToNextTextLine
+            | OperatorKind::ShowText
+            | OperatorKind::ShowTextAdjusted
+            | OperatorKind::MoveNextLineShowText
+            | OperatorKind::SetSpacingMoveNextLineShowText
+    )
+}
+
+enum TextItemsInput<'a> {
+    String(&'a crate::ContentString),
+    Array(&'a [LocatedOperand]),
+}
+
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "text planning keeps source guards, profile ownership, immutable-plan retention, and provenance explicit"
+)]
+fn plan_text_operator(
+    kind: OperatorKind,
+    operands: &ValidatedOperands<'_>,
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    font_runtime: Option<&mut FontRuntime>,
+    graphics: Option<&GraphicsVm>,
+    text_active: &mut bool,
+    text_state: &mut TextPlanningState,
+    planned_font_uses: &mut u64,
+    actions: &mut Vec<ExecutionAction>,
+    property_uses: &Vec<ResolvedPropertyUse>,
+    image_uses: &Vec<ResolvedImageUse>,
+    planned_images: &Vec<PlannedImageInvocation>,
+    planned_name_bytes: &mut u64,
+    program_bytes: u64,
+    vm_limits: ContentVmLimits,
+    source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<(), TextPlanningTerminal> {
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+
+    if kind == OperatorKind::BeginText {
+        if *text_active {
+            return Err(vm_error(ContentVmErrorCode::InvalidTextObject, source).into());
+        }
+        append_text_action(
+            actions,
+            TextAction::Begin { source },
+            property_uses,
+            image_uses,
+            planned_images,
+            *planned_name_bytes,
+            program_bytes,
+            vm_limits,
+            source,
+            accounting,
+        )?;
+        *text_active = true;
+        return Ok(());
+    }
+    if kind == OperatorKind::EndText {
+        if !*text_active {
+            return Err(vm_error(ContentVmErrorCode::InvalidTextObject, source).into());
+        }
+        append_text_action(
+            actions,
+            TextAction::End { source },
+            property_uses,
+            image_uses,
+            planned_images,
+            *planned_name_bytes,
+            program_bytes,
+            vm_limits,
+            source,
+            accounting,
+        )?;
+        *text_active = false;
+        return Ok(());
+    }
+
+    let Some(runtime) = font_runtime else {
+        return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
+            ContentUnsupportedKind::FontProfileRequired,
+            source,
+        )));
+    };
+    let Some(graphics) = graphics else {
+        return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
+            ContentUnsupportedKind::GraphicsV2Operator,
+            source,
+        )));
+    };
+
+    let action = match kind {
+        OperatorKind::SetCharacterSpacing => {
+            let ValidatedOperands::OneNumber(value) = operands else {
+                unreachable!("validated Tc operands have one-number shape");
+            };
+            TextAction::SetCharacterSpacing {
+                value: *value,
+                source,
+            }
+        }
+        OperatorKind::SetWordSpacing => {
+            let ValidatedOperands::OneNumber(value) = operands else {
+                unreachable!("validated Tw operands have one-number shape");
+            };
+            TextAction::SetWordSpacing {
+                value: *value,
+                source,
+            }
+        }
+        OperatorKind::SetHorizontalScaling => {
+            let ValidatedOperands::OneNumber(value) = operands else {
+                unreachable!("validated Tz operands have one-number shape");
+            };
+            TextAction::SetHorizontalScaling {
+                value: *value,
+                source,
+            }
+        }
+        OperatorKind::SetTextLeading => {
+            let ValidatedOperands::OneNumber(value) = operands else {
+                unreachable!("validated TL operands have one-number shape");
+            };
+            TextAction::SetLeading {
+                value: *value,
+                source,
+            }
+        }
+        OperatorKind::SetTextFont => {
+            let ValidatedOperands::NameAndNumber(name, size) = operands else {
+                unreachable!("validated Tf operands have name-and-number shape");
+            };
+            runtime.admit_planned_use(*planned_font_uses, source)?;
+            let other_capacity = execution_plan_capacity_bytes(
+                property_uses,
+                image_uses,
+                planned_images,
+                actions,
+                *planned_name_bytes,
+            )?;
+            let (name, retained) = copy_text_plan_bytes(
+                name.bytes(),
+                program_bytes,
+                other_capacity,
+                vm_limits,
+                snapshot,
+                byte_source,
+                cancellation,
+                source,
+                accounting,
+            )?;
+            *planned_name_bytes = planned_name_bytes
+                .checked_add(retained)
+                .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+            *planned_font_uses = planned_font_uses
+                .checked_add(1)
+                .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+            text_state.font_selected = true;
+            TextAction::SetFont {
+                name,
+                size: *size,
+                source,
+            }
+        }
+        OperatorKind::SetTextRenderMode => {
+            let ValidatedOperands::OneInteger(value) = operands else {
+                unreachable!("validated Tr operands have integer shape");
+            };
+            if !(0..=7).contains(value) {
+                return Err(vm_error(ContentVmErrorCode::InvalidGraphicsParameter, source).into());
+            }
+            if *value != 0 {
+                return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
+                    ContentUnsupportedKind::TextRenderMode,
+                    source,
+                )));
+            }
+            TextAction::SetRenderMode {
+                value: *value,
+                source,
+            }
+        }
+        OperatorKind::SetTextRise => {
+            let ValidatedOperands::OneNumber(value) = operands else {
+                unreachable!("validated Ts operands have one-number shape");
+            };
+            TextAction::SetRise {
+                value: *value,
+                source,
+            }
+        }
+        OperatorKind::MoveTextPosition | OperatorKind::MoveTextPositionSetLeading => {
+            let ValidatedOperands::TwoNumbers(translation) = operands else {
+                unreachable!("validated Td/TD operands have two-number shape");
+            };
+            TextAction::MovePosition {
+                translation: *translation,
+                set_leading: kind == OperatorKind::MoveTextPositionSetLeading,
+                source,
+            }
+        }
+        OperatorKind::SetTextMatrix => {
+            let ValidatedOperands::SixNumbers(matrix) = operands else {
+                unreachable!("validated Tm operands have six-number shape");
+            };
+            TextAction::SetMatrix {
+                matrix: *matrix,
+                source,
+            }
+        }
+        OperatorKind::MoveToNextTextLine => TextAction::NextLine { source },
+        OperatorKind::ShowText
+        | OperatorKind::ShowTextAdjusted
+        | OperatorKind::MoveNextLineShowText
+        | OperatorKind::SetSpacingMoveNextLineShowText => {
+            if !text_state.font_selected {
+                return Err(vm_error(ContentVmErrorCode::InvalidTextObject, source).into());
+            }
+            let (input, character_spacing, word_spacing, next_line) = match (kind, operands) {
+                (OperatorKind::ShowText, ValidatedOperands::String(value)) => {
+                    (TextItemsInput::String(value), None, None, false)
+                }
+                (OperatorKind::ShowTextAdjusted, ValidatedOperands::Array(values)) => {
+                    (TextItemsInput::Array(values), None, None, false)
+                }
+                (OperatorKind::MoveNextLineShowText, ValidatedOperands::String(value)) => {
+                    (TextItemsInput::String(value), None, None, true)
+                }
+                (
+                    OperatorKind::SetSpacingMoveNextLineShowText,
+                    ValidatedOperands::TwoNumbersAndString(spacing, value),
+                ) => (
+                    TextItemsInput::String(value),
+                    Some(spacing[1]),
+                    Some(spacing[0]),
+                    true,
+                ),
+                _ => unreachable!("validated text-show operands have registered shape"),
+            };
+            let (items, retained) = seal_text_items(
+                input,
+                runtime,
+                snapshot,
+                byte_source,
+                cancellation,
+                actions,
+                property_uses,
+                image_uses,
+                planned_images,
+                *planned_name_bytes,
+                program_bytes,
+                vm_limits,
+                source,
+                accounting,
+            )?;
+            *planned_name_bytes = planned_name_bytes
+                .checked_add(retained)
+                .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+            TextAction::Show {
+                items,
+                character_spacing,
+                word_spacing,
+                next_line,
+                paint: graphics.image_paint(),
+                ctm: graphics.current_ctm(),
+                command_source: command_source(source)?,
+                source,
+            }
+        }
+        OperatorKind::BeginText | OperatorKind::EndText => {
+            unreachable!("text boundaries return before profile dispatch")
+        }
+        _ => unreachable!("only registered text operators reach text planning"),
+    };
+
+    append_text_action(
+        actions,
+        action,
+        property_uses,
+        image_uses,
+        planned_images,
+        *planned_name_bytes,
+        program_bytes,
+        vm_limits,
+        source,
+        accounting,
+    )
+    .map_err(Into::into)
+}
+
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "text item sealing keeps source/cancellation precedence and all live plan capacities explicit"
+)]
+fn seal_text_items(
+    input: TextItemsInput<'_>,
+    runtime: &mut FontRuntime,
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    actions: &Vec<ExecutionAction>,
+    property_uses: &Vec<ResolvedPropertyUse>,
+    image_uses: &Vec<ResolvedImageUse>,
+    planned_images: &Vec<PlannedImageInvocation>,
+    planned_name_bytes: u64,
+    program_bytes: u64,
+    vm_limits: ContentVmLimits,
+    source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<(Vec<TextShowItem>, u64), TextPlanningTerminal> {
+    let (item_count, bytes, adjustments) = match input {
+        TextItemsInput::String(value) => (
+            1_usize,
+            u64::try_from(value.bytes().len())
+                .map_err(|_| vm_error(ContentVmErrorCode::InternalState, source))?,
+            0_u64,
+        ),
+        TextItemsInput::Array(values) => {
+            let mut bytes = 0_u64;
+            let mut adjustments = 0_u64;
+            for (index, value) in values.iter().enumerate() {
+                if index.is_multiple_of(256) {
+                    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+                        .map_err(TextPlanningTerminal::Failed)?;
+                }
+                match value.value() {
+                    ContentOperand::String(value) => {
+                        bytes = bytes
+                            .checked_add(
+                                u64::try_from(value.bytes().len()).map_err(|_| {
+                                    vm_error(ContentVmErrorCode::InternalState, source)
+                                })?,
+                            )
+                            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+                    }
+                    ContentOperand::Integer(_) | ContentOperand::Real(_) => {
+                        adjustments = adjustments
+                            .checked_add(1)
+                            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+                    }
+                    _ => {
+                        return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source).into());
+                    }
+                }
+            }
+            (values.len(), bytes, adjustments)
+        }
+    };
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+    if matches!(input, TextItemsInput::Array(_)) {
+        accounting.charge_fuel(vm_limits, bytes, source)?;
+    }
+    runtime.admit_text(bytes, adjustments, source)?;
+
+    match input {
+        TextItemsInput::String(value) => {
+            validate_printable_text(value.bytes(), snapshot, byte_source, cancellation, source)?;
+        }
+        TextItemsInput::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                if index.is_multiple_of(256) {
+                    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+                        .map_err(TextPlanningTerminal::Failed)?;
+                }
+                match value.value() {
+                    ContentOperand::String(value) => validate_printable_text(
+                        value.bytes(),
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        source,
+                    )?,
+                    ContentOperand::Integer(_) | ContentOperand::Real(_) => {
+                        parse_number(value, source)?;
+                    }
+                    _ => unreachable!("TJ child shape was counted before admission"),
+                }
+            }
+        }
+    }
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+
+    let plan_capacity = execution_plan_capacity_bytes(
+        property_uses,
+        image_uses,
+        planned_images,
+        actions,
+        planned_name_bytes,
+    )?;
+    let consumed = program_bytes
+        .checked_add(plan_capacity)
+        .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+    let mut items = Vec::new();
+    let mut retained = reserve_exact_slots_accounted(
+        &mut items,
+        item_count,
+        consumed,
+        vm_limits,
+        Some(source),
+        accounting,
+    )?;
+
+    match input {
+        TextItemsInput::String(value) => {
+            retained = push_text_string_item(
+                &mut items,
+                value,
+                retained,
+                snapshot,
+                byte_source,
+                cancellation,
+                actions,
+                property_uses,
+                image_uses,
+                planned_images,
+                planned_name_bytes,
+                program_bytes,
+                vm_limits,
+                source,
+                accounting,
+            )?;
+        }
+        TextItemsInput::Array(values) => {
+            for value in values {
+                runtime_guard(snapshot, byte_source, cancellation, Some(source))
+                    .map_err(TextPlanningTerminal::Failed)?;
+                match value.value() {
+                    ContentOperand::String(value) => {
+                        retained = push_text_string_item(
+                            &mut items,
+                            value,
+                            retained,
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            actions,
+                            property_uses,
+                            image_uses,
+                            planned_images,
+                            planned_name_bytes,
+                            program_bytes,
+                            vm_limits,
+                            source,
+                            accounting,
+                        )?;
+                    }
+                    ContentOperand::Integer(_) | ContentOperand::Real(_) => {
+                        items.push(TextShowItem::Adjustment(parse_number(value, source)?));
+                    }
+                    _ => unreachable!("TJ child shape was validated before allocation"),
+                }
+            }
+        }
+    }
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+    Ok((items, retained))
+}
+
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "string ownership admission keeps every live plan component and guard input explicit"
+)]
+fn push_text_string_item(
+    items: &mut Vec<TextShowItem>,
+    value: &crate::ContentString,
+    retained: u64,
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    actions: &Vec<ExecutionAction>,
+    property_uses: &Vec<ResolvedPropertyUse>,
+    image_uses: &Vec<ResolvedImageUse>,
+    planned_images: &Vec<PlannedImageInvocation>,
+    planned_name_bytes: u64,
+    program_bytes: u64,
+    vm_limits: ContentVmLimits,
+    source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<u64, TextPlanningTerminal> {
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+    let nested = planned_name_bytes
+        .checked_add(retained)
+        .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+    let other_capacity =
+        execution_plan_capacity_bytes(property_uses, image_uses, planned_images, actions, nested)?;
+    let (copied, copied_retained) = copy_text_plan_bytes(
+        value.bytes(),
+        program_bytes,
+        other_capacity,
+        vm_limits,
+        snapshot,
+        byte_source,
+        cancellation,
+        source,
+        accounting,
+    )?;
+    items.push(TextShowItem::Bytes(copied));
+    retained
+        .checked_add(copied_retained)
+        .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source).into())
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "text validation preserves structured unsupported and VM guard failures"
+)]
+fn validate_printable_text(
+    bytes: &[u8],
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    source: ContentOperatorSource,
+) -> Result<(), TextPlanningTerminal> {
+    for chunk in bytes.chunks(256) {
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))
+            .map_err(TextPlanningTerminal::Failed)?;
+        if !chunk.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+            return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
+                ContentUnsupportedKind::TextEncoding,
+                source,
+            )));
+        }
+    }
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)
+}
+
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "guarded text copying preserves source-first cancellation precedence during large allocations"
+)]
+fn copy_text_plan_bytes(
+    source_bytes: &[u8],
+    program_bytes: u64,
+    other_capacity_bytes: u64,
+    limits: ContentVmLimits,
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<(Vec<u8>, u64), TextPlanningTerminal> {
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+    let attempted = u64::try_from(source_bytes.len())
+        .map_err(|_| vm_error(ContentVmErrorCode::InternalState, source))?;
+    let consumed = program_bytes
+        .checked_add(other_capacity_bytes)
+        .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+    limits.preflight(
+        ContentVmLimitKind::RetainedBytes,
+        consumed,
+        attempted,
+        Some(source),
+    )?;
+    let mut copied = Vec::new();
+    copied.try_reserve_exact(source_bytes.len()).map_err(|_| {
+        ContentVmError::resource(
+            ContentVmLimit::new(
+                ContentVmLimitKind::Allocation,
+                limits.max_retained_bytes(),
+                consumed,
+                attempted,
+            ),
+            Some(source),
+        )
+    })?;
+    let retained = capacity_bytes(&copied)?;
+    accounting.observe_retained(consumed.saturating_add(retained));
+    limits.preflight(
+        ContentVmLimitKind::RetainedBytes,
+        consumed,
+        retained,
+        Some(source),
+    )?;
+    for chunk in source_bytes.chunks(256) {
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))
+            .map_err(TextPlanningTerminal::Failed)?;
+        copied.extend_from_slice(chunk);
+    }
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))
+        .map_err(TextPlanningTerminal::Failed)?;
+    Ok((copied, retained))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "text action growth accounts every independent retained plan component"
+)]
+fn append_text_action(
+    actions: &mut Vec<ExecutionAction>,
+    action: TextAction,
+    property_uses: &Vec<ResolvedPropertyUse>,
+    image_uses: &Vec<ResolvedImageUse>,
+    planned_images: &Vec<PlannedImageInvocation>,
+    planned_name_bytes: u64,
+    program_bytes: u64,
+    vm_limits: ContentVmLimits,
+    source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<(), ContentVmError> {
+    let other_capacity = plan_value_capacity_bytes(
+        property_uses,
+        image_uses,
+        planned_images,
+        planned_name_bytes,
+    )?;
+    push_execution_action(
+        actions,
+        ExecutionAction::Text(action),
+        program_bytes,
+        other_capacity,
+        vm_limits,
+        source,
+        accounting,
+    )
 }
 
 #[allow(
@@ -1064,6 +2206,7 @@ fn build_execution_plan(
     property_limits: PagePropertyLookupLimits,
     profile: ContentVmProfile,
     mut image_runtime: Option<&mut ImageRuntime>,
+    mut font_runtime: Option<&mut FontRuntime>,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
     accounting: &mut Accounting,
@@ -1077,6 +2220,8 @@ fn build_execution_plan(
     let mut planned_images = Vec::new();
     let mut image_uses = Vec::new();
     let mut planned_name_bytes = 0_u64;
+    let mut planned_font_uses = 0_u64;
+    let mut first_font_source = None;
     let terminal = (|| {
         let (binding, geometry) = match scene_context(acquired) {
             Ok(value) => value,
@@ -1098,6 +2243,8 @@ fn build_execution_plan(
         };
         let mut current_ctm = Matrix::IDENTITY;
         let mut text_active = false;
+        let mut text_state = TextPlanningState::default();
+        let mut saved_text_states = Vec::new();
         let mut compatibility_depth = 0_u32;
         let mut marked_depth = 0_u32;
 
@@ -1109,6 +2256,11 @@ fn build_execution_plan(
                 return RunTerminal::Failed(failure);
             }
             if let Some(runtime) = image_runtime.as_deref_mut()
+                && let Err(error) = runtime.admit_planning_operator(operator_source)
+            {
+                return prioritize_vm(snapshot, byte_source, cancellation, operator_source, error);
+            }
+            if let Some(runtime) = font_runtime.as_deref_mut()
                 && let Err(error) = runtime.admit_planning_operator(operator_source)
             {
                 return prioritize_vm(snapshot, byte_source, cancellation, operator_source, error);
@@ -1319,6 +2471,48 @@ fn build_execution_plan(
                 validated
             };
 
+            if is_text_operator(kind) {
+                if let Err(terminal) = plan_text_operator(
+                    kind,
+                    &validated,
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    font_runtime.as_deref_mut(),
+                    graphics_v2.as_ref(),
+                    &mut text_active,
+                    &mut text_state,
+                    &mut planned_font_uses,
+                    &mut actions,
+                    &property_uses,
+                    &image_uses,
+                    &planned_images,
+                    &mut planned_name_bytes,
+                    program_bytes,
+                    vm_limits,
+                    operator_source,
+                    accounting,
+                ) {
+                    let fallback = match terminal {
+                        TextPlanningTerminal::Failed(failure) => RunTerminal::Failed(failure),
+                        TextPlanningTerminal::Unsupported(unsupported) => {
+                            RunTerminal::Unsupported(unsupported)
+                        }
+                    };
+                    return prioritize(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        Some(operator_source),
+                        fallback,
+                    );
+                }
+                if kind == OperatorKind::SetTextFont && first_font_source.is_none() {
+                    first_font_source = Some(operator_source);
+                }
+                continue;
+            }
+
             match kind {
                 OperatorKind::SaveGraphicsState => {
                     let saved_len = graphics_v2
@@ -1435,6 +2629,53 @@ fn build_execution_plan(
                     } else {
                         graphics.push(current_ctm);
                     }
+                    let graphics_capacity = graphics_v2
+                        .as_ref()
+                        .and_then(|machine| machine.retained_capacity_bytes(operator_source).ok())
+                        .or_else(|| capacity_bytes(&graphics).ok())
+                        .unwrap_or(u64::MAX);
+                    let plan_capacity = execution_plan_capacity_bytes(
+                        &property_uses,
+                        &image_uses,
+                        &planned_images,
+                        &actions,
+                        planned_name_bytes,
+                    )
+                    .unwrap_or(u64::MAX);
+                    let old_text_stack_bytes =
+                        capacity_bytes(&saved_text_states).unwrap_or(u64::MAX);
+                    if let Err(error) = reserve_vm_slot(
+                        &mut saved_text_states,
+                        program_bytes,
+                        graphics_capacity.saturating_add(plan_capacity),
+                        vm_limits,
+                        operator_source,
+                        accounting,
+                    ) {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error,
+                        );
+                    }
+                    let text_stack_bytes = capacity_bytes(&saved_text_states).unwrap_or(u64::MAX);
+                    planned_name_bytes = match planned_name_bytes
+                        .checked_add(text_stack_bytes.saturating_sub(old_text_stack_bytes))
+                    {
+                        Some(value) => value,
+                        None => {
+                            return prioritize_vm(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                operator_source,
+                                vm_error(ContentVmErrorCode::InternalState, operator_source),
+                            );
+                        }
+                    };
+                    saved_text_states.push(text_state);
                     let saved_len = graphics_v2
                         .as_ref()
                         .map_or(graphics.len(), |machine| machine.saved().len());
@@ -1535,6 +2776,16 @@ fn build_execution_plan(
                         };
                         current_ctm = restored;
                     }
+                    let Some(restored_text_state) = saved_text_states.pop() else {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            vm_error(ContentVmErrorCode::InternalState, operator_source),
+                        );
+                    };
+                    text_state = restored_text_state;
                 }
                 OperatorKind::ConcatMatrix => {
                     let ValidatedOperands::SixNumbers(numbers) = validated else {
@@ -1559,29 +2810,24 @@ fn build_execution_plan(
                         machine.set_ctm(current_ctm);
                     }
                 }
-                OperatorKind::BeginText => {
-                    if text_active {
-                        return prioritize_vm(
-                            snapshot,
-                            byte_source,
-                            cancellation,
-                            operator_source,
-                            vm_error(ContentVmErrorCode::InvalidTextObject, operator_source),
-                        );
-                    }
-                    text_active = true;
-                }
-                OperatorKind::EndText => {
-                    if !text_active {
-                        return prioritize_vm(
-                            snapshot,
-                            byte_source,
-                            cancellation,
-                            operator_source,
-                            vm_error(ContentVmErrorCode::InvalidTextObject, operator_source),
-                        );
-                    }
-                    text_active = false;
+                OperatorKind::BeginText
+                | OperatorKind::EndText
+                | OperatorKind::SetCharacterSpacing
+                | OperatorKind::SetWordSpacing
+                | OperatorKind::SetHorizontalScaling
+                | OperatorKind::SetTextLeading
+                | OperatorKind::SetTextFont
+                | OperatorKind::SetTextRenderMode
+                | OperatorKind::SetTextRise
+                | OperatorKind::MoveTextPosition
+                | OperatorKind::MoveTextPositionSetLeading
+                | OperatorKind::SetTextMatrix
+                | OperatorKind::MoveToNextTextLine
+                | OperatorKind::ShowText
+                | OperatorKind::ShowTextAdjusted
+                | OperatorKind::MoveNextLineShowText
+                | OperatorKind::SetSpacingMoveNextLineShowText => {
+                    unreachable!("text operators are sealed by the text planner")
                 }
                 OperatorKind::BeginCompatibility => {
                     if let Err(error) = vm_limits.preflight(
@@ -2413,6 +3659,24 @@ fn build_execution_plan(
                 );
             }
         };
+        let planning_text_stack_bytes = match capacity_bytes(&saved_text_states) {
+            Ok(value) => value,
+            Err(error) => {
+                return prioritize_vm_without_source(snapshot, byte_source, cancellation, error);
+            }
+        };
+        let owned_name_retained_bytes =
+            match planned_name_bytes.checked_sub(planning_text_stack_bytes) {
+                Some(value) => value,
+                None => {
+                    return prioritize_vm_without_source(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        ContentVmError::new(ContentVmErrorCode::InternalState, None),
+                    );
+                }
+            };
         let plan = ExecutionPlan {
             binding,
             geometry,
@@ -2420,15 +3684,50 @@ fn build_execution_plan(
             image_invocations: planned_images,
             property_uses,
             image_uses,
+            font_use_count: match usize::try_from(planned_font_uses) {
+                Ok(value) => value,
+                Err(_) => {
+                    return prioritize_vm_without_source(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        ContentVmError::new(ContentVmErrorCode::InternalState, None),
+                    );
+                }
+            },
+            first_font_source,
             final_ctm,
             action_payload_retained_bytes,
-            owned_name_retained_bytes: planned_name_bytes,
+            owned_name_retained_bytes,
             accounting: *accounting,
             property_stats: resolver.stats(),
         };
         if let Some(runtime) = image_runtime {
             let source = plan.image_invocations.first().map(|image| image.source);
             let retained = match plan.image_plan_retained_bytes() {
+                Ok(value) => value,
+                Err(error) => {
+                    return prioritize_vm_without_source(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        error,
+                    );
+                }
+            };
+            if let Err(error) = runtime.record_execution_plan_retained(retained, source) {
+                return prioritize(
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    source,
+                    RunTerminal::Failed(ContentVmFailure::Vm(error)),
+                );
+            }
+        }
+        if let Some(runtime) = font_runtime {
+            let source = plan.first_font_source;
+            let retained = match plan.font_plan_retained_bytes() {
                 Ok(value) => value,
                 Err(error) => {
                     return prioritize_vm_without_source(
@@ -2458,15 +3757,810 @@ fn build_execution_plan(
     }
 }
 
+#[derive(Clone)]
+struct TextParameters {
+    character_spacing: SceneScalar,
+    word_spacing: SceneScalar,
+    horizontal_scaling: SceneScalar,
+    leading: SceneScalar,
+    font: Option<Arc<pdf_rs_document::AcquiredFontResource>>,
+    font_size: SceneScalar,
+    render_mode: i64,
+    rise: SceneScalar,
+}
+
+impl Default for TextParameters {
+    fn default() -> Self {
+        Self {
+            character_spacing: SceneScalar::ZERO,
+            word_spacing: SceneScalar::ZERO,
+            horizontal_scaling: SceneScalar::ONE,
+            leading: SceneScalar::ZERO,
+            font: None,
+            font_size: SceneScalar::ZERO,
+            render_mode: 0,
+            rise: SceneScalar::ZERO,
+        }
+    }
+}
+
+struct TextExecutor {
+    parameters: TextParameters,
+    saved_parameters: Vec<TextParameters>,
+    text_matrix: Matrix,
+    line_matrix: Matrix,
+    active: bool,
+    vm_limits: ContentVmLimits,
+    materialization_base_retained: u64,
+    peak_glyph_retained: u64,
+}
+
+impl TextExecutor {
+    fn new(
+        saved_slots: usize,
+        vm_limits: ContentVmLimits,
+        consumed: u64,
+        materialization_peak: &mut u64,
+    ) -> Result<Self, ContentVmError> {
+        let mut saved_parameters = Vec::new();
+        reserve_exact_slots_observed(
+            &mut saved_parameters,
+            saved_slots,
+            consumed,
+            vm_limits,
+            None,
+            materialization_peak,
+        )?;
+        let materialization_base_retained = consumed
+            .checked_add(capacity_bytes(&saved_parameters)?)
+            .ok_or_else(|| ContentVmError::new(ContentVmErrorCode::InternalState, None))?;
+        Ok(Self {
+            parameters: TextParameters::default(),
+            saved_parameters,
+            text_matrix: Matrix::IDENTITY,
+            line_matrix: Matrix::IDENTITY,
+            active: false,
+            vm_limits,
+            materialization_base_retained,
+            peak_glyph_retained: 0,
+        })
+    }
+
+    fn save_parameters(&mut self, source: ContentOperatorSource) -> Result<(), ContentVmError> {
+        if self.saved_parameters.len() == self.saved_parameters.capacity() {
+            return Err(vm_error(ContentVmErrorCode::InternalState, source));
+        }
+        self.saved_parameters.push(self.parameters.clone());
+        Ok(())
+    }
+
+    fn peak_retained_bytes(&self) -> u64 {
+        self.materialization_base_retained
+            .saturating_add(self.peak_glyph_retained)
+    }
+
+    fn observe_glyph_retained(&mut self, retained: u64, materialization_peak: &mut u64) {
+        self.peak_glyph_retained = self.peak_glyph_retained.max(retained);
+        *materialization_peak = (*materialization_peak).max(self.peak_retained_bytes());
+    }
+
+    fn preflight_glyph_candidate(
+        &self,
+        runtime: &FontRuntime,
+        consumed: u64,
+        attempted: u64,
+        source: ContentOperatorSource,
+    ) -> Result<(), ContentVmError> {
+        runtime.preflight_glyph_retained(consumed, attempted, source)?;
+        let vm_consumed = self
+            .materialization_base_retained
+            .checked_add(consumed)
+            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+        self.vm_limits.preflight(
+            ContentVmLimitKind::RetainedBytes,
+            vm_consumed,
+            attempted,
+            Some(source),
+        )
+    }
+
+    fn restore_parameters(&mut self, source: ContentOperatorSource) -> Result<(), ContentVmError> {
+        self.parameters = self
+            .saved_parameters
+            .pop()
+            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+        Ok(())
+    }
+
+    fn execute_boundary(&mut self, action: TextAction) -> Result<(), ContentVmError> {
+        match action {
+            TextAction::Begin { source } => {
+                if self.active {
+                    return Err(vm_error(ContentVmErrorCode::InternalState, source));
+                }
+                self.text_matrix = Matrix::IDENTITY;
+                self.line_matrix = Matrix::IDENTITY;
+                self.active = true;
+            }
+            TextAction::End { source } => {
+                if !self.active {
+                    return Err(vm_error(ContentVmErrorCode::InternalState, source));
+                }
+                self.active = false;
+            }
+            _ => unreachable!("only BT/ET reach boundary execution"),
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        clippy::too_many_arguments,
+        reason = "text execution keeps resource proof, Scene publication, and runtime guards explicit"
+    )]
+    fn execute(
+        &mut self,
+        action: TextAction,
+        runtime: &mut FontRuntime,
+        scene: &mut GraphicsSceneBuilder,
+        font_uses: &mut Vec<ResolvedFontUse>,
+        snapshot: SourceSnapshot,
+        byte_source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+        materialization_peak: &mut u64,
+    ) -> Result<(), ContentVmFailure> {
+        let source = action.source();
+        if !self.active {
+            return Err(ContentVmFailure::Vm(vm_error(
+                ContentVmErrorCode::InternalState,
+                source,
+            )));
+        }
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+        match action {
+            TextAction::SetCharacterSpacing { value, .. } => {
+                self.parameters.character_spacing = SceneScalar::from_scaled(value.scaled());
+            }
+            TextAction::SetWordSpacing { value, .. } => {
+                self.parameters.word_spacing = SceneScalar::from_scaled(value.scaled());
+            }
+            TextAction::SetHorizontalScaling { value, .. } => {
+                self.parameters.horizontal_scaling =
+                    divide_scalar(SceneScalar::from_scaled(value.scaled()), 100)
+                        .map_err(ContentVmFailure::Scene)?;
+            }
+            TextAction::SetLeading { value, .. } => {
+                self.parameters.leading = SceneScalar::from_scaled(value.scaled());
+            }
+            TextAction::SetFont { size, .. } => {
+                let (proof, font) = runtime
+                    .resolve_planned(source)
+                    .map_err(ContentVmFailure::Vm)?;
+                font_uses.push(ResolvedFontUse::new(
+                    source,
+                    proof,
+                    font::resource_source(&font),
+                ));
+                runtime
+                    .record_executed_use(source)
+                    .map_err(ContentVmFailure::Vm)?;
+                self.parameters.font = Some(font);
+                self.parameters.font_size = SceneScalar::from_scaled(size.scaled());
+            }
+            TextAction::SetRenderMode { value, .. } => {
+                if value != 0 {
+                    return Err(ContentVmFailure::Vm(vm_error(
+                        ContentVmErrorCode::InternalState,
+                        source,
+                    )));
+                }
+                self.parameters.render_mode = value;
+            }
+            TextAction::SetRise { value, .. } => {
+                self.parameters.rise = SceneScalar::from_scaled(value.scaled());
+            }
+            TextAction::MovePosition {
+                translation,
+                set_leading,
+                ..
+            } => {
+                let [tx, ty] = translation.map(|value| SceneScalar::from_scaled(value.scaled()));
+                if set_leading {
+                    self.parameters.leading = SceneScalar::ZERO
+                        .checked_sub(ty)
+                        .map_err(ContentVmFailure::Scene)?;
+                }
+                self.move_position(tx, ty)
+                    .map_err(ContentVmFailure::Scene)?;
+            }
+            TextAction::SetMatrix { matrix, .. } => {
+                let matrix =
+                    Matrix::new(matrix.map(|value| SceneScalar::from_scaled(value.scaled())));
+                self.text_matrix = matrix;
+                self.line_matrix = matrix;
+            }
+            TextAction::NextLine { .. } => {
+                self.next_line().map_err(ContentVmFailure::Scene)?;
+            }
+            TextAction::Show {
+                items,
+                character_spacing,
+                word_spacing,
+                next_line,
+                paint,
+                ctm,
+                command_source,
+                ..
+            } => {
+                if let Some(value) = word_spacing {
+                    self.parameters.word_spacing = SceneScalar::from_scaled(value.scaled());
+                }
+                if let Some(value) = character_spacing {
+                    self.parameters.character_spacing = SceneScalar::from_scaled(value.scaled());
+                }
+                if next_line {
+                    self.next_line().map_err(ContentVmFailure::Scene)?;
+                }
+                self.show(
+                    &items,
+                    paint,
+                    ctm,
+                    command_source,
+                    source,
+                    runtime,
+                    scene,
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    materialization_peak,
+                )?;
+            }
+            TextAction::Begin { .. } | TextAction::End { .. } => {
+                return Err(ContentVmFailure::Vm(vm_error(
+                    ContentVmErrorCode::InternalState,
+                    source,
+                )));
+            }
+        }
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))
+    }
+
+    fn move_position(&mut self, tx: SceneScalar, ty: SceneScalar) -> Result<(), SceneError> {
+        self.line_matrix = self
+            .line_matrix
+            .checked_multiply(translation_matrix(tx, ty))?;
+        self.text_matrix = self.line_matrix;
+        Ok(())
+    }
+
+    fn next_line(&mut self) -> Result<(), SceneError> {
+        let ty = SceneScalar::ZERO.checked_sub(self.parameters.leading)?;
+        self.move_position(SceneScalar::ZERO, ty)
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        clippy::too_many_arguments,
+        reason = "glyph materialization keeps deterministic text state, resource limits, and guard inputs explicit"
+    )]
+    fn show(
+        &mut self,
+        items: &[TextShowItem],
+        paint: Paint,
+        ctm: Matrix,
+        command_source: CommandSource,
+        source: ContentOperatorSource,
+        runtime: &mut FontRuntime,
+        scene: &mut GraphicsSceneBuilder,
+        snapshot: SourceSnapshot,
+        byte_source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+        materialization_peak: &mut u64,
+    ) -> Result<(), ContentVmFailure> {
+        let font = Arc::clone(self.parameters.font.as_ref().ok_or_else(|| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?);
+        let mut glyph_count = 0_u64;
+        let mut counted_items = 0_u64;
+        for item in items {
+            guarded_text_probe(
+                &mut counted_items,
+                snapshot,
+                byte_source,
+                cancellation,
+                source,
+            )?;
+            if let TextShowItem::Bytes(bytes) = item {
+                glyph_count = glyph_count
+                    .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                        ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                    })?)
+                    .ok_or_else(|| {
+                        ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                    })?;
+            }
+        }
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+        runtime
+            .preflight_glyphs(glyph_count, 0, source)
+            .map_err(ContentVmFailure::Vm)?;
+
+        let mut segment_count = 0_u64;
+        let mut planned_codes = [None::<u16>; 95];
+        let mut planned_outlines = [None::<(u16, u64)>; 95];
+        let mut planned_outline_count = 0_usize;
+        let mut probed = 0_u64;
+        for item in items {
+            guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
+            let TextShowItem::Bytes(bytes) = item else {
+                continue;
+            };
+            for &byte in bytes {
+                guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
+                let code_index = usize::from(byte.checked_sub(0x20).ok_or_else(|| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                })?);
+                if planned_codes[code_index].is_some() {
+                    continue;
+                }
+                let outline = font_outline(&font, byte, source)?;
+                let glyph_id = outline.glyph_id().get();
+                planned_codes[code_index] = Some(glyph_id);
+                if !planned_outlines[..planned_outline_count]
+                    .iter()
+                    .flatten()
+                    .any(|(known, _)| *known == glyph_id)
+                {
+                    let segments = u64::try_from(outline.segments().len()).map_err(|_| {
+                        ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                    })?;
+                    segment_count = segment_count.checked_add(segments).ok_or_else(|| {
+                        ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                    })?;
+                    planned_outlines[planned_outline_count] = Some((glyph_id, segments));
+                    planned_outline_count += 1;
+                }
+            }
+        }
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+        runtime
+            .preflight_glyphs(0, segment_count, source)
+            .map_err(ContentVmFailure::Vm)?;
+
+        let glyph_slots = usize::try_from(glyph_count).map_err(|_| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?;
+        let glyph_nominal = byte_width::<GlyphUse>(glyph_slots).map_err(ContentVmFailure::Vm)?;
+        let path_nominal = segment_count
+            .checked_mul(u64::try_from(size_of::<PathSegment>()).map_err(|_| {
+                ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+            })?)
+            .ok_or_else(|| {
+                ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+            })?;
+        let candidate_nominal = glyph_nominal.checked_add(path_nominal).ok_or_else(|| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?;
+        self.preflight_glyph_candidate(runtime, 0, candidate_nominal, source)
+            .map_err(ContentVmFailure::Vm)?;
+        let mut glyphs = Vec::new();
+        glyphs.try_reserve_exact(glyph_slots).map_err(|_| {
+            ContentVmFailure::Vm(runtime.glyph_allocation_error(0, glyph_nominal, source))
+        })?;
+        let glyph_retained = capacity_bytes(&glyphs).map_err(ContentVmFailure::Vm)?;
+        self.observe_glyph_retained(glyph_retained, materialization_peak);
+        runtime.record_glyph_retained(glyph_retained);
+        self.preflight_glyph_candidate(runtime, 0, glyph_retained, source)
+            .map_err(ContentVmFailure::Vm)?;
+        let mut outline_retained = 0_u64;
+        let mut outline_cache: [Option<(u16, GlyphOutline)>; 95] = std::array::from_fn(|_| None);
+        let mut outline_cache_len = 0_usize;
+        let mut probed = 0_u64;
+        for item in items {
+            guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
+            match item {
+                TextShowItem::Bytes(bytes) => {
+                    for &byte in bytes {
+                        guarded_text_probe(
+                            &mut probed,
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            source,
+                        )?;
+                        let code_index = usize::from(byte.checked_sub(0x20).ok_or_else(|| {
+                            ContentVmFailure::Vm(vm_error(
+                                ContentVmErrorCode::InternalState,
+                                source,
+                            ))
+                        })?);
+                        let glyph_id = planned_codes[code_index].ok_or_else(|| {
+                            ContentVmFailure::Vm(vm_error(
+                                ContentVmErrorCode::InternalState,
+                                source,
+                            ))
+                        })?;
+                        let scene_outline = if let Some((_, cached)) = outline_cache
+                            [..outline_cache_len]
+                            .iter()
+                            .flatten()
+                            .find(|(known, _)| *known == glyph_id)
+                        {
+                            cached.clone()
+                        } else {
+                            let outline = font
+                                .font()
+                                .glyph_outline(GlyphId::new(glyph_id))
+                                .ok_or_else(|| {
+                                    ContentVmFailure::Vm(vm_error(
+                                        ContentVmErrorCode::InternalState,
+                                        source,
+                                    ))
+                                })?;
+                            let nominal = byte_width::<PathSegment>(outline.segments().len())
+                                .map_err(ContentVmFailure::Vm)?;
+                            let consumed = glyph_retained
+                                .checked_add(outline_retained)
+                                .ok_or_else(|| {
+                                    ContentVmFailure::Vm(vm_error(
+                                        ContentVmErrorCode::InternalState,
+                                        source,
+                                    ))
+                                })?;
+                            self.preflight_glyph_candidate(runtime, consumed, nominal, source)
+                                .map_err(ContentVmFailure::Vm)?;
+                            let (built, retained) = build_scene_glyph_outline(
+                                &font,
+                                outline,
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                source,
+                                runtime,
+                                self.vm_limits,
+                                self.materialization_base_retained,
+                                consumed,
+                                nominal,
+                                materialization_peak,
+                            )?;
+                            self.preflight_glyph_candidate(runtime, consumed, retained, source)
+                                .map_err(ContentVmFailure::Vm)?;
+                            outline_retained =
+                                outline_retained.checked_add(retained).ok_or_else(|| {
+                                    ContentVmFailure::Vm(vm_error(
+                                        ContentVmErrorCode::InternalState,
+                                        source,
+                                    ))
+                                })?;
+                            self.observe_glyph_retained(
+                                glyph_retained.saturating_add(outline_retained),
+                                materialization_peak,
+                            );
+                            outline_cache[outline_cache_len] = Some((glyph_id, built.clone()));
+                            outline_cache_len += 1;
+                            built
+                        };
+                        let transform =
+                            self.glyph_transform(ctm).map_err(ContentVmFailure::Scene)?;
+                        glyphs.push(GlyphUse::new(scene_outline, transform, u32::from(byte)));
+                        let width = font.pdf_width_for_winansi(byte).ok_or_else(|| {
+                            ContentVmFailure::Vm(vm_error(
+                                ContentVmErrorCode::InternalState,
+                                source,
+                            ))
+                        })?;
+                        let advance = text_advance(&self.parameters, width, byte)
+                            .map_err(ContentVmFailure::Scene)?;
+                        self.text_matrix = self
+                            .text_matrix
+                            .checked_multiply(translation_matrix(advance, SceneScalar::ZERO))
+                            .map_err(ContentVmFailure::Scene)?;
+                    }
+                }
+                TextShowItem::Adjustment(value) => {
+                    let adjustment = text_adjustment(&self.parameters, *value)
+                        .map_err(ContentVmFailure::Scene)?;
+                    self.text_matrix = self
+                        .text_matrix
+                        .checked_multiply(translation_matrix(adjustment, SceneScalar::ZERO))
+                        .map_err(ContentVmFailure::Scene)?;
+                }
+            }
+        }
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+        let candidate_retained = glyph_retained
+            .checked_add(outline_retained)
+            .ok_or_else(|| {
+                ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+            })?;
+        self.preflight_glyph_candidate(runtime, 0, candidate_retained, source)
+            .map_err(ContentVmFailure::Vm)?;
+        self.peak_glyph_retained = self.peak_glyph_retained.max(candidate_retained);
+        self.observe_glyph_retained(candidate_retained, materialization_peak);
+        runtime.record_glyph_retained(candidate_retained);
+        if !glyphs.is_empty() {
+            scene
+                .draw_glyph_run(glyphs, paint, SceneBounds::Page, command_source)
+                .map_err(ContentVmFailure::Scene)?;
+        }
+        runtime
+            .record_glyphs(glyph_count, segment_count, source)
+            .map_err(ContentVmFailure::Vm)
+    }
+
+    fn glyph_transform(&self, ctm: Matrix) -> Result<Matrix, SceneError> {
+        let horizontal_size = self
+            .parameters
+            .font_size
+            .checked_mul(self.parameters.horizontal_scaling)?;
+        let text_render = Matrix::new([
+            horizontal_size,
+            SceneScalar::ZERO,
+            SceneScalar::ZERO,
+            self.parameters.font_size,
+            SceneScalar::ZERO,
+            self.parameters.rise,
+        ]);
+        ctm.checked_multiply(self.text_matrix)?
+            .checked_multiply(text_render)
+    }
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "glyph lookup preserves the complete copyable VM failure contract"
+)]
+fn font_outline<'a>(
+    font: &'a pdf_rs_document::AcquiredFontResource,
+    byte: u8,
+    source: ContentOperatorSource,
+) -> Result<pdf_rs_font::GlyphOutline<'a>, ContentVmFailure> {
+    let glyph_id = font
+        .font()
+        .glyph_id_for_winansi(byte)
+        .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))?;
+    font.font()
+        .glyph_outline(glyph_id)
+        .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))
+}
+
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "outline handoff keeps proof, guards, independent budgets, and failure peaks explicit"
+)]
+fn build_scene_glyph_outline(
+    font: &pdf_rs_document::AcquiredFontResource,
+    outline: pdf_rs_font::GlyphOutline<'_>,
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    source: ContentOperatorSource,
+    runtime: &mut FontRuntime,
+    vm_limits: ContentVmLimits,
+    materialization_base_retained: u64,
+    candidate_consumed: u64,
+    candidate_nominal: u64,
+    materialization_peak: &mut u64,
+) -> Result<(GlyphOutline, u64), ContentVmFailure> {
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+    let mut path = PathResourceBuilder::new();
+    path.try_reserve_exact(outline.segments().len())
+        .map_err(|_| {
+            ContentVmFailure::Vm(runtime.glyph_allocation_error(
+                candidate_consumed,
+                candidate_nominal,
+                source,
+            ))
+        })?;
+    let actual = path.retained_bytes().map_err(ContentVmFailure::Scene)?;
+    let candidate = candidate_consumed
+        .checked_add(actual)
+        .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))?;
+    runtime.record_glyph_retained(candidate);
+    *materialization_peak =
+        (*materialization_peak).max(materialization_base_retained.saturating_add(candidate));
+    runtime
+        .preflight_glyph_retained(candidate_consumed, actual, source)
+        .map_err(ContentVmFailure::Vm)?;
+    vm_limits
+        .preflight(
+            ContentVmLimitKind::RetainedBytes,
+            materialization_base_retained
+                .checked_add(candidate_consumed)
+                .ok_or_else(|| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                })?,
+            actual,
+            Some(source),
+        )
+        .map_err(ContentVmFailure::Vm)?;
+    for (index, segment) in outline.segments().iter().enumerate() {
+        if index.is_multiple_of(256) {
+            runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+        }
+        match *segment {
+            OutlineSegment::MoveTo(point) => {
+                path.try_push(PathSegment::MoveTo(
+                    scene_font_point(point).map_err(ContentVmFailure::Scene)?,
+                ))
+                .map_err(ContentVmFailure::Scene)?;
+            }
+            OutlineSegment::LineTo(point) => {
+                path.try_push(PathSegment::LineTo(
+                    scene_font_point(point).map_err(ContentVmFailure::Scene)?,
+                ))
+                .map_err(ContentVmFailure::Scene)?;
+            }
+            OutlineSegment::QuadTo { control, end } => {
+                path.try_push_quadratic(
+                    scene_font_point(control).map_err(ContentVmFailure::Scene)?,
+                    scene_font_point(end).map_err(ContentVmFailure::Scene)?,
+                )
+                .map_err(ContentVmFailure::Scene)?;
+            }
+            OutlineSegment::CloseContour => path
+                .try_push(PathSegment::ClosePath)
+                .map_err(ContentVmFailure::Scene)?,
+        }
+    }
+    runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+    let retained = path.retained_bytes().map_err(ContentVmFailure::Scene)?;
+    let outline = GlyphOutline::new(
+        font::resource_source(font),
+        u32::from(outline.glyph_id().get()),
+        font.font().units_per_em(),
+        path.finish(),
+    )
+    .map_err(ContentVmFailure::Scene)?;
+    Ok((outline, retained))
+}
+
+fn scene_font_point(point: pdf_rs_font::FontPoint) -> Result<ScenePoint, SceneError> {
+    let coordinate = |value: pdf_rs_font::FontCoordinate| {
+        SceneScalar::from_scaled(i64::from(value.half_units()) * 500_000_000)
+    };
+    Ok(ScenePoint::new(
+        coordinate(point.x()),
+        coordinate(point.y()),
+    ))
+}
+
+fn translation_matrix(tx: SceneScalar, ty: SceneScalar) -> Matrix {
+    Matrix::new([
+        SceneScalar::ONE,
+        SceneScalar::ZERO,
+        SceneScalar::ZERO,
+        SceneScalar::ONE,
+        tx,
+        ty,
+    ])
+}
+
+fn text_advance(
+    parameters: &TextParameters,
+    width: u32,
+    byte: u8,
+) -> Result<SceneScalar, SceneError> {
+    let width = integer_product_divide(parameters.font_size, u64::from(width), 1_000)?;
+    let mut advance = width.checked_add(parameters.character_spacing)?;
+    if byte == 0x20 {
+        advance = advance.checked_add(parameters.word_spacing)?;
+    }
+    advance.checked_mul(parameters.horizontal_scaling)
+}
+
+fn text_adjustment(
+    parameters: &TextParameters,
+    adjustment: ContentNumber,
+) -> Result<SceneScalar, SceneError> {
+    let adjustment = SceneScalar::from_scaled(adjustment.scaled());
+    let scaled = product_divide(adjustment, parameters.font_size, 1_000)?;
+    SceneScalar::ZERO
+        .checked_sub(scaled)?
+        .checked_mul(parameters.horizontal_scaling)
+}
+
+fn divide_scalar(value: SceneScalar, denominator: i128) -> Result<SceneScalar, SceneError> {
+    rounded_scene_scalar(i128::from(value.scaled()), denominator)
+}
+
+fn integer_product_divide(
+    value: SceneScalar,
+    multiplier: u64,
+    denominator: i128,
+) -> Result<SceneScalar, SceneError> {
+    let numerator = i128::from(value.scaled())
+        .checked_mul(i128::from(multiplier))
+        .ok_or_else(scene_numeric_overflow)?;
+    rounded_scene_scalar(numerator, denominator)
+}
+
+fn product_divide(
+    left: SceneScalar,
+    right: SceneScalar,
+    denominator: i128,
+) -> Result<SceneScalar, SceneError> {
+    let numerator = i128::from(left.scaled())
+        .checked_mul(i128::from(right.scaled()))
+        .ok_or_else(scene_numeric_overflow)?;
+    let divisor = 1_000_000_000_i128
+        .checked_mul(denominator)
+        .ok_or_else(scene_numeric_overflow)?;
+    rounded_scene_scalar(numerator, divisor)
+}
+
+fn rounded_scene_scalar(numerator: i128, denominator: i128) -> Result<SceneScalar, SceneError> {
+    if denominator <= 0 {
+        return Err(scene_numeric_overflow());
+    }
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    let rounded = if remainder
+        .abs()
+        .checked_mul(2)
+        .ok_or_else(scene_numeric_overflow)?
+        >= denominator
+    {
+        quotient
+            .checked_add(if numerator.is_negative() { -1 } else { 1 })
+            .ok_or_else(scene_numeric_overflow)?
+    } else {
+        quotient
+    };
+    i64::try_from(rounded)
+        .map(SceneScalar::from_scaled)
+        .map_err(|_| scene_numeric_overflow())
+}
+
+fn scene_numeric_overflow() -> SceneError {
+    SceneScalar::from_scaled(i64::MAX)
+        .checked_add(SceneScalar::ONE)
+        .expect_err("maximum Scene scalar plus one must overflow")
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "cooperative text probing preserves the complete copyable VM failure"
+)]
+fn guarded_text_probe(
+    probed: &mut u64,
+    snapshot: SourceSnapshot,
+    byte_source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    source: ContentOperatorSource,
+) -> Result<(), ContentVmFailure> {
+    *probed = probed
+        .checked_add(1)
+        .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))?;
+    if probed.is_multiple_of(256) {
+        runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "atomic materialization keeps each runtime, guard, budget, and peak sink explicit"
+)]
 fn materialize_execution_plan(
     acquired: &AcquiredPageContent,
     plan: ExecutionPlan,
     profile: ContentVmProfile,
+    vm_limits: ContentVmLimits,
     mut image_runtime: Option<&mut ImageRuntime>,
+    mut font_runtime: Option<&mut FontRuntime>,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
+    materialization_peak: &mut u64,
 ) -> RunTerminal {
     let snapshot = acquired.handle().snapshot();
+    let live_plan_retained = match plan.vm_retained_bytes() {
+        Ok(value) => value,
+        Err(error) => {
+            return prioritize_vm_without_source(snapshot, byte_source, cancellation, error);
+        }
+    };
     let mut scene = match profile {
         ContentVmProfile::SceneV1 { scene_limits } => {
             SceneSink::V1(SceneBuilder::new(plan.binding, plan.geometry, scene_limits))
@@ -2476,6 +4570,43 @@ fn materialize_execution_plan(
         ),
     };
     let mut image_uses = plan.image_uses;
+    let expected_font_uses = plan.font_use_count;
+    let mut font_uses = Vec::new();
+    if let Err(error) = reserve_exact_slots_observed(
+        &mut font_uses,
+        expected_font_uses,
+        live_plan_retained,
+        vm_limits,
+        None,
+        materialization_peak,
+    ) {
+        return prioritize_vm_without_source(snapshot, byte_source, cancellation, error);
+    }
+    let text_stack_slots = match usize::try_from(plan.accounting.max_graphics_depth) {
+        Ok(value) => value,
+        Err(_) => {
+            return prioritize_vm_without_source(
+                snapshot,
+                byte_source,
+                cancellation,
+                ContentVmError::new(ContentVmErrorCode::InternalState, None),
+            );
+        }
+    };
+    let text_consumed =
+        live_plan_retained.saturating_add(capacity_bytes(&font_uses).unwrap_or(u64::MAX));
+    let mut text = match TextExecutor::new(
+        text_stack_slots,
+        vm_limits,
+        text_consumed,
+        materialization_peak,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return prioritize_vm_without_source(snapshot, byte_source, cancellation, error);
+        }
+    };
+    *materialization_peak = (*materialization_peak).max(text.peak_retained_bytes());
     for action in plan.actions {
         let operator_source = action_operator_source(&action);
         if let Err(failure) =
@@ -2490,14 +4621,36 @@ fn materialize_execution_plan(
                 source,
             } => scene.begin_marked_content(&tag, properties, source),
             ExecutionAction::EndMarkedContent { source } => scene.end_marked_content(source),
-            ExecutionAction::Save { bounds, source } => scene
-                .graphics_mut()
-                .expect("only graphics-v2 plans contain graphics actions")
-                .append_save(bounds, source),
-            ExecutionAction::Restore { bounds, source } => scene
-                .graphics_mut()
-                .expect("only graphics-v2 plans contain graphics actions")
-                .append_restore(bounds, source),
+            ExecutionAction::Save { bounds, source } => {
+                if let Err(error) = text.save_parameters(operator_source) {
+                    return prioritize_vm(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        operator_source,
+                        error,
+                    );
+                }
+                scene
+                    .graphics_mut()
+                    .expect("only graphics-v2 plans contain graphics actions")
+                    .append_save(bounds, source)
+            }
+            ExecutionAction::Restore { bounds, source } => {
+                if let Err(error) = text.restore_parameters(operator_source) {
+                    return prioritize_vm(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        operator_source,
+                        error,
+                    );
+                }
+                scene
+                    .graphics_mut()
+                    .expect("only graphics-v2 plans contain graphics actions")
+                    .append_restore(bounds, source)
+            }
             ExecutionAction::Clip {
                 path,
                 rule,
@@ -2579,6 +4732,57 @@ fn materialize_execution_plan(
                 }
                 result
             }
+            ExecutionAction::Text(action) => {
+                if matches!(action, TextAction::Begin { .. } | TextAction::End { .. }) {
+                    if let Err(error) = text.execute_boundary(action) {
+                        return prioritize_vm(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            operator_source,
+                            error,
+                        );
+                    }
+                    continue;
+                }
+                let Some(runtime) = font_runtime.as_deref_mut() else {
+                    return prioritize_vm(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        operator_source,
+                        vm_error(ContentVmErrorCode::InternalState, operator_source),
+                    );
+                };
+                let Some(builder) = scene.graphics_mut() else {
+                    return prioritize_vm(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        operator_source,
+                        vm_error(ContentVmErrorCode::InternalState, operator_source),
+                    );
+                };
+                if let Err(failure) = text.execute(
+                    action,
+                    runtime,
+                    builder,
+                    &mut font_uses,
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    materialization_peak,
+                ) {
+                    return prioritize(
+                        snapshot,
+                        byte_source,
+                        cancellation,
+                        Some(operator_source),
+                        RunTerminal::Failed(failure),
+                    );
+                }
+                continue;
+            }
         };
         if let Err(error) = result {
             return prioritize_scene(snapshot, byte_source, cancellation, operator_source, error);
@@ -2602,11 +4806,13 @@ fn materialize_execution_plan(
     let retained_use_capacity_bytes = capacity_bytes(&plan.property_uses)
         .ok()
         .and_then(|value| value.checked_add(capacity_bytes(&image_uses).ok()?))
+        .and_then(|value| value.checked_add(capacity_bytes(&font_uses).ok()?))
         .unwrap_or(u64::MAX);
     RunTerminal::Ready(Execution {
         scene,
         property_uses: plan.property_uses,
         image_uses,
+        font_uses,
         retained_use_capacity_bytes,
         final_ctm: plan.final_ctm,
     })
@@ -2623,6 +4829,7 @@ fn action_operator_source(action: &ExecutionAction) -> ContentOperatorSource {
         | ExecutionAction::Stroke { source, .. }
         | ExecutionAction::FillStroke { source, .. } => *source,
         ExecutionAction::DrawImage { source, .. } => return *source,
+        ExecutionAction::Text(action) => return action.source(),
     };
     ContentOperatorSource::new(
         crate::DecodedSpan::new(
@@ -2652,6 +4859,10 @@ enum ValidatedOperands<'a> {
         pattern: DashPattern,
     },
     Name(&'a ContentName),
+    NameAndNumber(&'a ContentName, ContentNumber),
+    String(&'a crate::ContentString),
+    Array(&'a [LocatedOperand]),
+    TwoNumbersAndString([ContentNumber; 2], &'a crate::ContentString),
     NameAndProperty {
         tag: &'a ContentName,
         property: PropertyOperand<'a>,
@@ -2683,6 +4894,15 @@ impl ValidatedOperands<'_> {
             | Self::Dash { .. }
             | Self::Name(_)
             | Self::NameAndProperty { .. } => 0,
+            Self::NameAndNumber(name, _) if kind == OperatorKind::SetTextFont => {
+                u64::try_from(name.bytes().len()).unwrap_or(u64::MAX)
+            }
+            Self::NameAndNumber(_, _) => 0,
+            Self::String(value) => u64::try_from(value.bytes().len()).unwrap_or(u64::MAX),
+            Self::Array(values) => u64::try_from(values.len()).unwrap_or(u64::MAX),
+            Self::TwoNumbersAndString(_, value) => {
+                u64::try_from(value.bytes().len()).unwrap_or(u64::MAX)
+            }
         }
     }
 }
@@ -2712,6 +4932,20 @@ fn validate_operand_structure(
         OperatorOperandShape::Name => {
             matches!(operands[0].value(), ContentOperand::Name(_))
         }
+        OperatorOperandShape::NameAndNumber => {
+            matches!(operands[0].value(), ContentOperand::Name(_)) && is_number(&operands[1])
+        }
+        OperatorOperandShape::String => {
+            matches!(operands[0].value(), ContentOperand::String(_))
+        }
+        OperatorOperandShape::Array => {
+            matches!(operands[0].value(), ContentOperand::Array(_))
+        }
+        OperatorOperandShape::TwoNumbersAndString => {
+            is_number(&operands[0])
+                && is_number(&operands[1])
+                && matches!(operands[2].value(), ContentOperand::String(_))
+        }
         OperatorOperandShape::NameAndNameOrDictionary => {
             matches!(operands[0].value(), ContentOperand::Name(_))
                 && matches!(
@@ -2732,6 +4966,9 @@ fn validate_operator_context(
     text_active: bool,
     source: ContentOperatorSource,
 ) -> Result<(), ContentVmError> {
+    if !text_active && kind.spec().context() == OperatorContext::TextObject {
+        return Err(vm_error(ContentVmErrorCode::InvalidOperatorContext, source));
+    }
     if text_active
         && matches!(
             kind.spec().context(),
@@ -2905,6 +5142,36 @@ fn convert_operands<'a>(
                 return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
             };
             Ok(ValidatedOperands::Name(name))
+        }
+        OperatorOperandShape::NameAndNumber => {
+            let ContentOperand::Name(name) = operands[0].value() else {
+                return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
+            };
+            Ok(ValidatedOperands::NameAndNumber(
+                name,
+                parse_number(&operands[1], source)?,
+            ))
+        }
+        OperatorOperandShape::String => {
+            let ContentOperand::String(value) = operands[0].value() else {
+                return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
+            };
+            Ok(ValidatedOperands::String(value))
+        }
+        OperatorOperandShape::Array => {
+            let ContentOperand::Array(values) = operands[0].value() else {
+                return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
+            };
+            Ok(ValidatedOperands::Array(values))
+        }
+        OperatorOperandShape::TwoNumbersAndString => {
+            let ContentOperand::String(value) = operands[2].value() else {
+                return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source));
+            };
+            Ok(ValidatedOperands::TwoNumbersAndString(
+                parse_numbers(&operands[..2], source)?,
+                value,
+            ))
         }
         OperatorOperandShape::NameAndNameOrDictionary => {
             let ContentOperand::Name(tag) = operands[0].value() else {
@@ -3150,6 +5417,70 @@ fn reserve_exact_slots<T>(
     Ok(actual)
 }
 
+fn reserve_exact_slots_accounted<T>(
+    values: &mut Vec<T>,
+    slots: usize,
+    consumed: u64,
+    limits: ContentVmLimits,
+    source: Option<ContentOperatorSource>,
+    accounting: &mut Accounting,
+) -> Result<u64, ContentVmError> {
+    let attempted = byte_width::<T>(slots)?;
+    limits.preflight(
+        ContentVmLimitKind::RetainedBytes,
+        consumed,
+        attempted,
+        source,
+    )?;
+    values.try_reserve_exact(slots).map_err(|_| {
+        ContentVmError::resource(
+            ContentVmLimit::new(
+                ContentVmLimitKind::Allocation,
+                limits.max_retained_bytes(),
+                consumed,
+                attempted,
+            ),
+            source,
+        )
+    })?;
+    let actual = capacity_bytes(values)?;
+    accounting.observe_retained(consumed.saturating_add(actual));
+    limits.preflight(ContentVmLimitKind::RetainedBytes, consumed, actual, source)?;
+    Ok(actual)
+}
+
+fn reserve_exact_slots_observed<T>(
+    values: &mut Vec<T>,
+    slots: usize,
+    consumed: u64,
+    limits: ContentVmLimits,
+    source: Option<ContentOperatorSource>,
+    peak_retained: &mut u64,
+) -> Result<u64, ContentVmError> {
+    let attempted = byte_width::<T>(slots)?;
+    limits.preflight(
+        ContentVmLimitKind::RetainedBytes,
+        consumed,
+        attempted,
+        source,
+    )?;
+    values.try_reserve_exact(slots).map_err(|_| {
+        ContentVmError::resource(
+            ContentVmLimit::new(
+                ContentVmLimitKind::Allocation,
+                limits.max_retained_bytes(),
+                consumed,
+                attempted,
+            ),
+            source,
+        )
+    })?;
+    let actual = capacity_bytes(values)?;
+    *peak_retained = (*peak_retained).max(consumed.saturating_add(actual));
+    limits.preflight(ContentVmLimitKind::RetainedBytes, consumed, actual, source)?;
+    Ok(actual)
+}
+
 fn reserve_vm_slot<T>(
     values: &mut Vec<T>,
     program_bytes: u64,
@@ -3205,6 +5536,31 @@ fn reserve_vm_slot<T>(
     limits.preflight(ContentVmLimitKind::RetainedBytes, 0, total, Some(source))?;
     accounting.observe_retained(total);
     Ok(total)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "action growth keeps the program, other plan state, limits, source, and accounting explicit"
+)]
+fn push_execution_action(
+    actions: &mut Vec<ExecutionAction>,
+    action: ExecutionAction,
+    program_bytes: u64,
+    other_capacity_bytes: u64,
+    limits: ContentVmLimits,
+    source: ContentOperatorSource,
+    accounting: &mut Accounting,
+) -> Result<(), ContentVmError> {
+    reserve_vm_slot(
+        actions,
+        program_bytes,
+        other_capacity_bytes,
+        limits,
+        source,
+        accounting,
+    )?;
+    actions.push(action);
+    Ok(())
 }
 
 fn geometric_capacity(current_capacity: usize, required_capacity: usize) -> usize {

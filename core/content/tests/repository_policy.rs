@@ -16,6 +16,23 @@ fn record_with_id<'a>(document: &'a str, kind: &str, id: &str) -> Option<&'a str
         .find(|record| record.starts_with(&header) && record.lines().any(|line| line == id_line))
 }
 
+fn rust_sources(root: &Path) -> Vec<PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut sources = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).expect("read product source directory") {
+            let path = entry.expect("source directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                sources.push(path);
+            }
+        }
+    }
+    sources.sort();
+    sources
+}
+
 #[test]
 fn content_crate_has_only_the_approved_layered_dependencies() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -36,6 +53,7 @@ fn content_crate_has_only_the_approved_layered_dependencies() {
         [
             r#"pdf-rs-bytes = { path = "../bytes" }"#,
             r#"pdf-rs-document = { path = "../document" }"#,
+            r#"pdf-rs-font = { path = "../font" }"#,
             r#"pdf-rs-scene = { path = "../scene" }"#,
             r#"pdf-rs-syntax = { path = "../syntax" }"#,
         ]
@@ -83,7 +101,10 @@ fn content_crate_has_only_the_approved_layered_dependencies() {
         fs::read_to_string(root.join("../document/Cargo.toml")).expect("read document manifest");
     let scene_manifest =
         fs::read_to_string(root.join("../scene/Cargo.toml")).expect("read Scene manifest");
+    let font_manifest =
+        fs::read_to_string(root.join("../font/Cargo.toml")).expect("read Font manifest");
     assert!(!document_manifest.contains("pdf-rs-content"));
+    assert!(!font_manifest.contains("pdf-rs-content"));
     assert!(!scene_manifest.contains("pdf-rs-content"));
 }
 
@@ -91,11 +112,7 @@ fn content_crate_has_only_the_approved_layered_dependencies() {
 fn product_sources_exclude_unsafe_and_platform_io() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut joined = String::new();
-    for entry in fs::read_dir(root).expect("read src") {
-        let path = entry.expect("directory entry").path();
-        if path.extension().and_then(|value| value.to_str()) != Some("rs") {
-            continue;
-        }
+    for path in rust_sources(&root) {
         let source = fs::read_to_string(&path).expect("read source");
         joined.push_str(&source);
         joined.push('\n');
@@ -236,7 +253,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
     for required in [
         "pub struct InterpretedPage",
         "acquired: AcquiredPageContent",
-        "scene: Scene",
+        "scene: Arc<Scene>",
         "property_uses: Vec<ResolvedPropertyUse>",
         "final_ctm: Matrix",
     ] {
@@ -280,7 +297,7 @@ fn bounded_content_profiles_remain_planned_after_m2_and_m3_work_items_close() {
         );
     }
     for required in [
-        "pub use vm::{ContentImageProfile, ContentVmPoll, InterpretPageJob};",
+        "pub use vm::{ContentFontProfile, ContentImageProfile, ContentVmPoll, InterpretPageJob};",
         "ContentUnsupported",
         "ContentVmFailure",
         "InterpretedPage",

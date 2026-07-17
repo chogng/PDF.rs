@@ -1,8 +1,10 @@
 use std::fmt;
+use std::sync::Arc;
 
 use pdf_rs_document::{
-    AcquiredPageContent, ImageXObjectStats, MaterializedPage, PagePropertyLookupStats,
-    PagePropertyReference, PageXObjectLookupStats, PageXObjectReference,
+    AcquiredPageContent, FontResourceStats, ImageXObjectStats, MaterializedPage,
+    PageFontLookupStats, PageFontReference, PagePropertyLookupStats, PagePropertyReference,
+    PageXObjectLookupStats, PageXObjectReference,
 };
 use pdf_rs_scene::{GraphicsResourceSource, Matrix, Scene};
 
@@ -29,10 +31,7 @@ pub struct ResolvedPropertyUse {
 }
 
 impl ResolvedPropertyUse {
-    pub(crate) const fn new(
-        source: ContentOperatorSource,
-        property: PagePropertyReference,
-    ) -> Self {
+    pub(crate) fn new(source: ContentOperatorSource, property: PagePropertyReference) -> Self {
         Self { source, property }
     }
 
@@ -81,6 +80,443 @@ impl ResolvedImageUse {
     /// Returns the exact Scene source/decode identity selected for the draw.
     pub const fn resource_source(self) -> GraphicsResourceSource {
         self.resource_source
+    }
+}
+
+/// Exact Page-Font proof and Scene source identity retained for one executed `Tf` selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedFontUse {
+    source: ContentOperatorSource,
+    font: PageFontReference,
+    resource_source: GraphicsResourceSource,
+}
+
+impl ResolvedFontUse {
+    pub(crate) const fn new(
+        source: ContentOperatorSource,
+        font: PageFontReference,
+        resource_source: GraphicsResourceSource,
+    ) -> Self {
+        Self {
+            source,
+            font,
+            resource_source,
+        }
+    }
+
+    /// Returns exact decoded operator-token provenance and page-global ordinal.
+    pub const fn source(self) -> ContentOperatorSource {
+        self.source
+    }
+
+    /// Returns the inherited Page Font resource-name lookup proof.
+    pub const fn font(self) -> PageFontReference {
+        self.font
+    }
+
+    /// Returns the exact Scene source identity selected for glyph outlines.
+    pub const fn resource_source(self) -> GraphicsResourceSource {
+        self.resource_source
+    }
+}
+
+/// Aggregate embedded-font lookup, acquisition, cache, text, and glyph accounting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ContentFontStats {
+    font_uses: u64,
+    lookups: u64,
+    cache_hits: u64,
+    acquisitions: u64,
+    unique_fonts: u64,
+    resource_polls: u64,
+    resource_objects: u64,
+    resource_reference_edges: u64,
+    object_read_bytes: u64,
+    object_parse_bytes: u64,
+    metadata_entries: u64,
+    widths: u64,
+    encoded_bytes: u64,
+    decoded_bytes: u64,
+    decode_fuel: u64,
+    resource_retained_bytes: u64,
+    font_input_bytes: u64,
+    font_tables_visited: u64,
+    font_glyph_descriptions: u64,
+    font_cmap_segments: u64,
+    font_glyph_data_bytes: u64,
+    font_source_contours: u64,
+    font_source_points: u64,
+    font_components: u64,
+    font_path_segments: u64,
+    font_fuel: u64,
+    font_retained_bytes: u64,
+    peak_font_retained_bytes: u64,
+    glyphs: u64,
+    outline_segments: u64,
+    peak_glyph_retained_bytes: u64,
+    text_bytes: u64,
+    text_adjustments: u64,
+    planning_operators: u64,
+    cache_probes: u64,
+    acquisition_polls: u64,
+    peak_acquisition_retained_bytes: u64,
+    plan_retained_bytes: u64,
+    peak_plan_retained_bytes: u64,
+    cache_retained_bytes: u64,
+    peak_cache_retained_bytes: u64,
+    execution_passes: u64,
+}
+
+impl ContentFontStats {
+    /// Returns executed `Tf` selections.
+    pub const fn font_uses(self) -> u64 {
+        self.font_uses
+    }
+
+    /// Returns Page Font lookups.
+    pub const fn lookups(self) -> u64 {
+        self.lookups
+    }
+
+    /// Returns exact-cache hits.
+    pub const fn cache_hits(self) -> u64 {
+        self.cache_hits
+    }
+
+    /// Returns distinct proof-bound Font resources successfully installed in the exact cache.
+    ///
+    /// A lower acquisition that reaches Ready but is rejected by an aggregate Content limit is
+    /// deliberately excluded from this committed count.
+    pub const fn acquisitions(self) -> u64 {
+        self.acquisitions
+    }
+
+    /// Returns distinct proof-bound fonts retained by the cache.
+    pub const fn unique_fonts(self) -> u64 {
+        self.unique_fonts
+    }
+
+    /// Returns lower Font resource poll calls across successful distinct acquisitions.
+    pub const fn resource_polls(self) -> u64 {
+        self.resource_polls
+    }
+
+    /// Returns proof-preserving objects started by successful distinct acquisitions.
+    pub const fn resource_objects(self) -> u64 {
+        self.resource_objects
+    }
+
+    /// Returns exact indirect reference edges followed by successful acquisitions.
+    pub const fn resource_reference_edges(self) -> u64 {
+        self.resource_reference_edges
+    }
+
+    /// Returns exact object-source bytes consumed by successful distinct acquisitions.
+    pub const fn object_read_bytes(self) -> u64 {
+        self.object_read_bytes
+    }
+
+    /// Returns parser-window bytes consumed by successful distinct acquisitions.
+    pub const fn object_parse_bytes(self) -> u64 {
+        self.object_parse_bytes
+    }
+
+    /// Returns Font, descriptor, and FontFile2 metadata entries visited.
+    pub const fn metadata_entries(self) -> u64 {
+        self.metadata_entries
+    }
+
+    /// Returns direct PDF Widths entries visited.
+    pub const fn widths(self) -> u64 {
+        self.widths
+    }
+
+    /// Returns exact encoded FontFile2 bytes acquired.
+    pub const fn encoded_bytes(self) -> u64 {
+        self.encoded_bytes
+    }
+
+    /// Returns exact decoded FontFile2 bytes produced.
+    pub const fn decoded_bytes(self) -> u64 {
+        self.decoded_bytes
+    }
+
+    /// Returns foundational FontFile2 stream-decoder fuel consumed.
+    pub const fn decode_fuel(self) -> u64 {
+        self.decode_fuel
+    }
+
+    /// Returns aggregate retained bytes of successful published Font resources.
+    pub const fn resource_retained_bytes(self) -> u64 {
+        self.resource_retained_bytes
+    }
+
+    /// Returns aggregate exact input bytes supplied to the lower TrueType parser.
+    pub const fn font_input_bytes(self) -> u64 {
+        self.font_input_bytes
+    }
+
+    /// Returns sfnt table records inspected by the lower TrueType parser.
+    pub const fn font_tables_visited(self) -> u64 {
+        self.font_tables_visited
+    }
+
+    /// Returns glyph descriptions measured by the lower TrueType parser.
+    pub const fn font_glyph_descriptions(self) -> u64 {
+        self.font_glyph_descriptions
+    }
+
+    /// Returns selected TrueType format-4 character-map segments.
+    pub const fn font_cmap_segments(self) -> u64 {
+        self.font_cmap_segments
+    }
+
+    /// Returns bytes addressed by validated `glyf`/`loca` pairs.
+    pub const fn font_glyph_data_bytes(self) -> u64 {
+        self.font_glyph_data_bytes
+    }
+
+    /// Returns source contours parsed across successful fonts.
+    pub const fn font_source_contours(self) -> u64 {
+        self.font_source_contours
+    }
+
+    /// Returns source points parsed across successful fonts.
+    pub const fn font_source_points(self) -> u64 {
+        self.font_source_points
+    }
+
+    /// Returns compound-glyph component records followed.
+    pub const fn font_components(self) -> u64 {
+        self.font_components
+    }
+
+    /// Returns project-owned path segments published by the lower font parser.
+    pub const fn font_path_segments(self) -> u64 {
+        self.font_path_segments
+    }
+
+    /// Returns deterministic lower TrueType parsing fuel.
+    pub const fn font_fuel(self) -> u64 {
+        self.font_fuel
+    }
+
+    /// Returns aggregate allocator-visible bytes retained by parsed TrueType fonts.
+    pub const fn font_retained_bytes(self) -> u64 {
+        self.font_retained_bytes
+    }
+
+    /// Returns the greatest lower TrueType parser retention peak.
+    pub const fn peak_font_retained_bytes(self) -> u64 {
+        self.peak_font_retained_bytes
+    }
+
+    /// Returns positioned glyphs emitted during execution.
+    pub const fn glyphs(self) -> u64 {
+        self.glyphs
+    }
+
+    /// Returns outline segments copied into Scene glyph resources.
+    pub const fn outline_segments(self) -> u64 {
+        self.outline_segments
+    }
+
+    /// Returns peak glyph-use and outline capacity live before one Scene handoff.
+    pub const fn peak_glyph_retained_bytes(self) -> u64 {
+        self.peak_glyph_retained_bytes
+    }
+
+    /// Returns decoded printable string bytes retained by the plan.
+    pub const fn text_bytes(self) -> u64 {
+        self.text_bytes
+    }
+
+    /// Returns retained numeric `TJ` adjustments.
+    pub const fn text_adjustments(self) -> u64 {
+        self.text_adjustments
+    }
+
+    /// Returns operators inspected by the single semantic-planning pass.
+    pub const fn planning_operators(self) -> u64 {
+        self.planning_operators
+    }
+
+    /// Returns exact-cache key comparisons.
+    pub const fn cache_probes(self) -> u64 {
+        self.cache_probes
+    }
+
+    /// Returns lower Font acquisition poll calls.
+    pub const fn acquisition_polls(self) -> u64 {
+        self.acquisition_polls
+    }
+
+    /// Returns the greatest lower Font acquisition retention.
+    pub const fn peak_acquisition_retained_bytes(self) -> u64 {
+        self.peak_acquisition_retained_bytes
+    }
+
+    /// Returns current semantic-plan capacity.
+    pub const fn plan_retained_bytes(self) -> u64 {
+        self.plan_retained_bytes
+    }
+
+    /// Returns peak semantic-plan capacity.
+    pub const fn peak_plan_retained_bytes(self) -> u64 {
+        self.peak_plan_retained_bytes
+    }
+
+    /// Returns current exact-cache metadata capacity.
+    pub const fn cache_retained_bytes(self) -> u64 {
+        self.cache_retained_bytes
+    }
+
+    /// Returns peak exact-cache metadata capacity.
+    pub const fn peak_cache_retained_bytes(self) -> u64 {
+        self.peak_cache_retained_bytes
+    }
+
+    /// Returns Scene execution passes, which is at most one.
+    pub const fn execution_passes(self) -> u64 {
+        self.execution_passes
+    }
+
+    pub(crate) fn record_planning_operator(&mut self) -> Option<()> {
+        self.planning_operators = self.planning_operators.checked_add(1)?;
+        Some(())
+    }
+
+    pub(crate) fn record_lookup(&mut self) -> Option<()> {
+        self.lookups = self.lookups.checked_add(1)?;
+        Some(())
+    }
+
+    pub(crate) fn record_cache_probe(&mut self) -> Option<()> {
+        self.cache_probes = self.cache_probes.checked_add(1)?;
+        Some(())
+    }
+
+    pub(crate) fn record_cache_hit(&mut self) -> Option<()> {
+        self.cache_hits = self.cache_hits.checked_add(1)?;
+        Some(())
+    }
+
+    pub(crate) fn record_acquisition_poll(&mut self) -> Option<()> {
+        self.acquisition_polls = self.acquisition_polls.checked_add(1)?;
+        Some(())
+    }
+
+    pub(crate) fn record_acquisition(
+        &mut self,
+        cache_retained_bytes: u64,
+        acquisition: FontResourceStats,
+    ) -> Option<()> {
+        let font = acquisition.font();
+        let mut next = *self;
+        next.acquisitions = next.acquisitions.checked_add(1)?;
+        next.unique_fonts = next.unique_fonts.checked_add(1)?;
+        next.resource_polls = next.resource_polls.checked_add(acquisition.polls())?;
+        next.resource_objects = next.resource_objects.checked_add(acquisition.objects())?;
+        next.resource_reference_edges = next
+            .resource_reference_edges
+            .checked_add(acquisition.reference_edges())?;
+        next.object_read_bytes = next
+            .object_read_bytes
+            .checked_add(acquisition.object_read_bytes())?;
+        next.object_parse_bytes = next
+            .object_parse_bytes
+            .checked_add(acquisition.object_parse_bytes())?;
+        next.metadata_entries = next
+            .metadata_entries
+            .checked_add(acquisition.metadata_entries())?;
+        next.widths = next.widths.checked_add(acquisition.widths())?;
+        next.encoded_bytes = next
+            .encoded_bytes
+            .checked_add(acquisition.encoded_bytes())?;
+        next.decoded_bytes = next
+            .decoded_bytes
+            .checked_add(acquisition.decoded_bytes())?;
+        next.decode_fuel = next.decode_fuel.checked_add(acquisition.decode_fuel())?;
+        next.resource_retained_bytes = next
+            .resource_retained_bytes
+            .checked_add(acquisition.retained_bytes())?;
+        next.font_input_bytes = next.font_input_bytes.checked_add(font.input_bytes())?;
+        next.font_tables_visited = next
+            .font_tables_visited
+            .checked_add(font.tables_visited())?;
+        next.font_glyph_descriptions = next.font_glyph_descriptions.checked_add(font.glyphs())?;
+        next.font_cmap_segments = next.font_cmap_segments.checked_add(font.cmap_segments())?;
+        next.font_glyph_data_bytes = next
+            .font_glyph_data_bytes
+            .checked_add(font.glyph_data_bytes())?;
+        next.font_source_contours = next
+            .font_source_contours
+            .checked_add(font.source_contours())?;
+        next.font_source_points = next.font_source_points.checked_add(font.source_points())?;
+        next.font_components = next.font_components.checked_add(font.components())?;
+        next.font_path_segments = next.font_path_segments.checked_add(font.path_segments())?;
+        next.font_fuel = next.font_fuel.checked_add(font.fuel())?;
+        next.font_retained_bytes = next
+            .font_retained_bytes
+            .checked_add(font.retained_bytes())?;
+        next.peak_font_retained_bytes = next
+            .peak_font_retained_bytes
+            .max(font.peak_retained_bytes());
+        next.peak_acquisition_retained_bytes = next
+            .peak_acquisition_retained_bytes
+            .max(acquisition.peak_retained_bytes());
+        next.cache_retained_bytes = cache_retained_bytes;
+        next.peak_cache_retained_bytes = next.peak_cache_retained_bytes.max(cache_retained_bytes);
+        *self = next;
+        Some(())
+    }
+
+    pub(crate) fn observe_acquisition_peaks(&mut self, acquisition: FontResourceStats) {
+        self.peak_acquisition_retained_bytes = self
+            .peak_acquisition_retained_bytes
+            .max(acquisition.peak_retained_bytes());
+        self.peak_font_retained_bytes = self
+            .peak_font_retained_bytes
+            .max(acquisition.font().peak_retained_bytes());
+    }
+
+    pub(crate) fn record_plan_retained(&mut self, retained: u64) {
+        self.plan_retained_bytes = retained;
+        self.peak_plan_retained_bytes = self.peak_plan_retained_bytes.max(retained);
+    }
+
+    pub(crate) fn observe_plan_retained(&mut self, retained: u64) {
+        self.peak_plan_retained_bytes = self.peak_plan_retained_bytes.max(retained);
+    }
+
+    pub(crate) fn record_cache_retained(&mut self, retained: u64) {
+        self.cache_retained_bytes = retained;
+        self.peak_cache_retained_bytes = self.peak_cache_retained_bytes.max(retained);
+    }
+
+    pub(crate) fn record_execution_pass(&mut self) -> Option<()> {
+        self.execution_passes = self.execution_passes.checked_add(1)?;
+        Some(())
+    }
+
+    pub(crate) fn set_font_uses(&mut self, uses: u64) {
+        self.font_uses = uses;
+    }
+
+    pub(crate) fn add_text(&mut self, bytes: u64, adjustments: u64) -> Option<()> {
+        self.text_bytes = self.text_bytes.checked_add(bytes)?;
+        self.text_adjustments = self.text_adjustments.checked_add(adjustments)?;
+        Some(())
+    }
+
+    pub(crate) fn add_glyphs(&mut self, glyphs: u64, segments: u64) -> Option<()> {
+        self.glyphs = self.glyphs.checked_add(glyphs)?;
+        self.outline_segments = self.outline_segments.checked_add(segments)?;
+        Some(())
+    }
+
+    pub(crate) fn record_glyph_retained(&mut self, retained: u64) {
+        self.peak_glyph_retained_bytes = self.peak_glyph_retained_bytes.max(retained);
     }
 }
 
@@ -392,9 +828,10 @@ impl ContentVmStats {
     ///
     /// This includes decoded stream descriptors, the transient scanned program, current and
     /// planned-action path capacity, unique active or planned-action dash-array capacity,
-    /// graphics-state stack capacity, and retained property and image-use proofs. Acquired Page
-    /// content, the exact image cache, decoded image payloads, and Scene storage remain under their
-    /// independent sealed budgets and are not included.
+    /// graphics-state stack capacity, immutable text/name payloads, final property/image/font-use
+    /// proofs, and the transient complete text-parameter stack used during one Scene materialization.
+    /// Acquired Page content, exact image/font caches, decoded resource payloads, and Scene storage
+    /// remain under their independent sealed budgets and are not included.
     pub const fn peak_retained_bytes(self) -> u64 {
         self.peak_retained_bytes
     }
@@ -408,20 +845,23 @@ impl Default for ContentVmStats {
 
 /// Immutable successful result of one sealed acquired-Page interpretation.
 ///
-/// The value owns the exact proof-bearing acquisition, semantic Scene, and every property lookup
-/// proof. It therefore remains valid after the source and cancellation inputs used by `poll`
-/// have been dropped.
+/// The value owns the exact proof-bearing Page acquisition, semantic Scene, and every resolved
+/// property, Image XObject, and embedded-Font proof. It therefore remains valid after the source
+/// and cancellation inputs used by `poll` have been dropped.
 pub struct InterpretedPage {
     acquired: AcquiredPageContent,
-    scene: Scene,
+    scene: Arc<Scene>,
     property_uses: Vec<ResolvedPropertyUse>,
     image_uses: Vec<ResolvedImageUse>,
+    font_uses: Vec<ResolvedFontUse>,
     final_ctm: Matrix,
     scan_stats: ContentScanStats,
     vm_stats: ContentVmStats,
     property_stats: PagePropertyLookupStats,
     xobject_stats: PageXObjectLookupStats,
     image_stats: ContentImageStats,
+    font_lookup_stats: PageFontLookupStats,
+    font_stats: ContentFontStats,
 }
 
 impl InterpretedPage {
@@ -429,29 +869,35 @@ impl InterpretedPage {
         clippy::too_many_arguments,
         reason = "atomic publication retains each sealed lower result and accounting snapshot"
     )]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         acquired: AcquiredPageContent,
         scene: Scene,
         property_uses: Vec<ResolvedPropertyUse>,
         image_uses: Vec<ResolvedImageUse>,
+        font_uses: Vec<ResolvedFontUse>,
         final_ctm: Matrix,
         scan_stats: ContentScanStats,
         vm_stats: ContentVmStats,
         property_stats: PagePropertyLookupStats,
         xobject_stats: PageXObjectLookupStats,
         image_stats: ContentImageStats,
+        font_lookup_stats: PageFontLookupStats,
+        font_stats: ContentFontStats,
     ) -> Self {
         Self {
             acquired,
-            scene,
+            scene: Arc::new(scene),
             property_uses,
             image_uses,
+            font_uses,
             final_ctm,
             scan_stats,
             vm_stats,
             property_stats,
             xobject_stats,
             image_stats,
+            font_lookup_stats,
+            font_stats,
         }
     }
 
@@ -466,8 +912,13 @@ impl InterpretedPage {
     }
 
     /// Borrows the immutable semantic Scene.
-    pub const fn scene(&self) -> &Scene {
-        &self.scene
+    pub fn scene(&self) -> &Scene {
+        self.scene.as_ref()
+    }
+
+    /// Clones the shared immutable Scene handle for zero-copy renderer handoff.
+    pub fn scene_arc(&self) -> Arc<Scene> {
+        Arc::clone(&self.scene)
     }
 
     /// Returns `BDC` property proofs in exact execution order.
@@ -478,6 +929,11 @@ impl InterpretedPage {
     /// Returns executed Image XObject proofs in exact execution order.
     pub fn image_uses(&self) -> &[ResolvedImageUse] {
         &self.image_uses
+    }
+
+    /// Returns executed Page Font selection proofs in exact execution order.
+    pub fn font_uses(&self) -> &[ResolvedFontUse] {
+        &self.font_uses
     }
 
     /// Returns the current transformation matrix after the final operator.
@@ -509,6 +965,16 @@ impl InterpretedPage {
     pub const fn image_stats(&self) -> ContentImageStats {
         self.image_stats
     }
+
+    /// Returns cumulative inherited Page Font lookup work.
+    pub const fn font_lookup_stats(&self) -> PageFontLookupStats {
+        self.font_lookup_stats
+    }
+
+    /// Returns aggregate embedded-font acquisition, cache, and glyph work.
+    pub const fn font_stats(&self) -> ContentFontStats {
+        self.font_stats
+    }
 }
 
 impl fmt::Debug for InterpretedPage {
@@ -520,11 +986,14 @@ impl fmt::Debug for InterpretedPage {
             .field("scene_resource_count", &self.scene.resources().len())
             .field("property_use_count", &self.property_uses.len())
             .field("image_use_count", &self.image_uses.len())
+            .field("font_use_count", &self.font_uses.len())
             .field("scan_stats", &self.scan_stats)
             .field("vm_stats", &self.vm_stats)
             .field("property_stats", &self.property_stats)
             .field("xobject_stats", &self.xobject_stats)
             .field("image_stats", &self.image_stats)
+            .field("font_lookup_stats", &self.font_lookup_stats)
+            .field("font_stats", &self.font_stats)
             .field("scene", &"[REDACTED]")
             .field("final_ctm", &"[REDACTED]")
             .field("content", &"[REDACTED]")

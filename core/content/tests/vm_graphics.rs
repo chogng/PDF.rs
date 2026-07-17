@@ -1,25 +1,32 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[allow(dead_code)]
+#[path = "../../font/tests/support/mod.rs"]
+mod font_support;
+
 use pdf_rs_bytes::{
     ByteRange, ByteSlice, ByteSource, JobId, RangeResponse, RangeStore, ReadPoll, ReadRequest,
     RequestPriority, ResumeCheckpoint, SourceIdentity, SourceRevision, SourceSnapshot,
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentGraphicsLimitConfig, ContentGraphicsLimitKind, ContentGraphicsLimits,
+    ContentFontLimitConfig, ContentFontLimitKind, ContentFontLimits, ContentFontProfile,
+    ContentFontStats, ContentGraphicsLimitConfig, ContentGraphicsLimitKind, ContentGraphicsLimits,
     ContentImageLimitConfig, ContentImageLimitKind, ContentImageLimits, ContentImageProfile,
     ContentLimits, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure,
     ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
+    FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind,
     ImageXObjectJobContext, ImageXObjectLimits, NeverCancelled as DocumentNeverCancelled,
-    PageContentJobContext, PageContentLimits, PageContentPoll, PageIndexBuildPoll, PageIndexLimits,
-    PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
-    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig,
-    PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
+    PageContentJobContext, PageContentLimits, PageContentPoll, PageFontLookupLimits,
+    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
+    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
+    PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits, PageXObjectLookupLimits,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
@@ -423,6 +430,198 @@ fn default_image_job(content: &[u8], salt: u8) -> (InterpretPageJob, RangeStore)
     )
 }
 
+fn indirect_object(number: u32, value: &[u8]) -> Vec<u8> {
+    let mut object = format!("{number} 0 obj\n").into_bytes();
+    object.extend_from_slice(value);
+    object.extend_from_slice(b"\nendobj\n");
+    object
+}
+
+fn font_program_object(number: u32, program: &[u8]) -> Vec<u8> {
+    let mut object = format!(
+        "{number} 0 obj\n<< /Length {} /Length1 {} >>\nstream\n",
+        program.len(),
+        program.len()
+    )
+    .into_bytes();
+    object.extend_from_slice(program);
+    object.extend_from_slice(b"\nendstream\nendobj\n");
+    object
+}
+
+fn font_widths(ascii_a: u32) -> String {
+    (0x20_u8..=0x7e)
+        .map(|byte| if byte == b'A' { ascii_a } else { 600 })
+        .map(|width| width.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn embedded_font_objects(
+    font_number: u32,
+    descriptor_number: u32,
+    program_number: u32,
+    program: &[u8],
+    ascii_a_width: u32,
+) -> Vec<(u32, Vec<u8>)> {
+    let font = format!(
+        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
+         /FirstChar 32 /LastChar 126 /Widths [{}] /FontDescriptor {descriptor_number} 0 R >>",
+        font_widths(ascii_a_width)
+    );
+    vec![
+        (font_number, indirect_object(font_number, font.as_bytes())),
+        (
+            descriptor_number,
+            indirect_object(
+                descriptor_number,
+                format!("<< /Type /FontDescriptor /FontFile2 {program_number} 0 R >>").as_bytes(),
+            ),
+        ),
+        (program_number, font_program_object(program_number, program)),
+    ]
+}
+
+fn font_context(seed: u64) -> FontResourceJobContext {
+    FontResourceJobContext::new(
+        JobId::new(seed),
+        ResumeCheckpoint::new(seed + 1),
+        ResumeCheckpoint::new(seed + 2),
+        ResumeCheckpoint::new(seed + 3),
+        ResumeCheckpoint::new(seed + 4),
+        ResumeCheckpoint::new(seed + 5),
+        ResumeCheckpoint::new(seed + 6),
+        ResumeCheckpoint::new(seed + 7),
+        RequestPriority::VisiblePage,
+    )
+}
+
+fn font_job_with_limits(
+    content: &[u8],
+    resources: &[u8],
+    objects: &[(u32, Vec<u8>)],
+    salt: u8,
+    vm_limits: ContentVmLimits,
+    font_limits: ContentFontLimits,
+    scene_limits: GraphicsSceneLimits,
+) -> (InterpretPageJob, RangeStore) {
+    let input = acquire_with_objects(content, resources, objects, salt);
+    let profile = ContentFontProfile::new(
+        input.authority,
+        PageFontLookupLimits::default(),
+        font_context(32_001),
+        FontResourceLimits::default(),
+        font_limits,
+    );
+    (
+        InterpretPageJob::new_graphics_v2_with_fonts(
+            input.acquired,
+            ContentLimits::default(),
+            vm_limits,
+            ContentGraphicsLimits::default(),
+            PagePropertyLookupLimits::default(),
+            profile,
+            scene_limits,
+        ),
+        input.store,
+    )
+}
+
+fn default_font_job(content: &[u8], salt: u8) -> (InterpretPageJob, RangeStore) {
+    foundational_font_job(
+        content,
+        salt,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    )
+}
+
+fn foundational_font_job(
+    content: &[u8],
+    salt: u8,
+    vm_limits: ContentVmLimits,
+    font_limits: ContentFontLimits,
+    scene_limits: GraphicsSceneLimits,
+) -> (InterpretPageJob, RangeStore) {
+    let objects = embedded_font_objects(5, 6, 7, &font_support::foundational_font(), 777);
+    font_job_with_limits(
+        content,
+        b"<< /Font << /F0 5 0 R >> >>",
+        &objects,
+        salt,
+        vm_limits,
+        font_limits,
+        scene_limits,
+    )
+}
+
+fn font_ready(content: &[u8], salt: u8) -> Arc<pdf_rs_content::InterpretedPage> {
+    let (mut job, store) = default_font_job(content, salt);
+    match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("font fixture must be ready: {outcome:?}"),
+    }
+}
+
+fn font_limits(mut update: impl FnMut(&mut ContentFontLimitConfig)) -> ContentFontLimits {
+    let mut config = ContentFontLimitConfig::default();
+    update(&mut config);
+    ContentFontLimits::validate(config).expect("test font limits")
+}
+
+fn two_distinct_font_job(
+    salt: u8,
+    vm_limits: ContentVmLimits,
+    font_limits: ContentFontLimits,
+) -> (InterpretPageJob, RangeStore) {
+    let first = font_support::foundational_font();
+    let second =
+        font_support::build_font(vec![Vec::new(), font_support::contour_glyph(&[true; 128])]);
+    let mut objects = embedded_font_objects(5, 6, 7, &first, 777);
+    objects.extend(embedded_font_objects(8, 9, 10, &second, 333));
+    font_job_with_limits(
+        b"BT /F0 10 Tf [(A) 100 200] TJ /Alias 10 Tf (A) Tj /F1 10 Tf (A) Tj ET",
+        b"<< /Font << /F0 5 0 R /Alias 5 0 R /F1 8 0 R >> >>",
+        &objects,
+        salt,
+        vm_limits,
+        font_limits,
+        GraphicsSceneLimits::default(),
+    )
+}
+
+fn one_font_acquisition_stats(
+    font_number: u32,
+    descriptor_number: u32,
+    program_number: u32,
+    program: &[u8],
+    width: u32,
+    salt: u8,
+) -> ContentFontStats {
+    let objects = embedded_font_objects(
+        font_number,
+        descriptor_number,
+        program_number,
+        program,
+        width,
+    );
+    let resources = format!("<< /Font << /F {font_number} 0 R >> >>");
+    let (mut job, store) = font_job_with_limits(
+        b"BT /F 10 Tf (A) Tj ET",
+        resources.as_bytes(),
+        &objects,
+        salt,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.font_stats(),
+        outcome => panic!("single Font acquisition must publish: {outcome:?}"),
+    }
+}
+
 fn three_unique_image_job(
     salt: u8,
     image_limits: ContentImageLimits,
@@ -502,6 +701,28 @@ struct CountingStoreSource<'source> {
     snapshot_calls: AtomicUsize,
 }
 
+struct ChangingStoreSource<'source> {
+    complete: &'source RangeStore,
+    replacement: SourceSnapshot,
+    changed: AtomicBool,
+    snapshot_calls: AtomicUsize,
+}
+
+impl ByteSource for ChangingStoreSource<'_> {
+    fn snapshot(&self) -> SourceSnapshot {
+        self.snapshot_calls.fetch_add(1, Ordering::AcqRel);
+        if self.changed.load(Ordering::Acquire) {
+            self.replacement
+        } else {
+            self.complete.snapshot()
+        }
+    }
+
+    fn poll(&self, request: ReadRequest) -> ReadPoll<ByteSlice> {
+        self.complete.poll(request)
+    }
+}
+
 impl ByteSource for CountingStoreSource<'_> {
     fn snapshot(&self) -> SourceSnapshot {
         self.snapshot_calls.fetch_add(1, Ordering::AcqRel);
@@ -521,6 +742,24 @@ struct CancelAtSnapshotCall<'source> {
 impl DocumentCancellation for CancelAtSnapshotCall<'_> {
     fn is_cancelled(&self) -> bool {
         self.source.snapshot_calls.load(Ordering::Acquire) >= self.trigger
+    }
+}
+
+struct CancelDuringStore<'source> {
+    source: &'source ChangingStoreSource<'source>,
+    trigger_snapshot_call: usize,
+    change_source: bool,
+}
+
+impl DocumentCancellation for CancelDuringStore<'_> {
+    fn is_cancelled(&self) -> bool {
+        if self.source.snapshot_calls.load(Ordering::Acquire) < self.trigger_snapshot_call {
+            return false;
+        }
+        if self.change_source {
+            self.source.changed.store(true, Ordering::Release);
+        }
+        true
     }
 }
 
@@ -2418,4 +2657,1673 @@ fn failed_scene_append_still_reports_implicit_close_path_peak_before_handoff() {
                 .retained_bytes()
                 .saturating_add(minimum_path_bytes)
     );
+}
+
+#[test]
+fn embedded_text_uses_pdf_widths_tj_and_exact_noncommuting_text_matrices() {
+    let page = font_ready(
+        b"2 3 4 5 6 7 cm BT /F0 10 Tf 1 Tc 50 Tz 1 Ts 1 2 3 4 5 6 Tm [(A) 100 (A)] TJ ET",
+        0x81,
+    );
+    let graphics = page.scene().graphics().expect("graphics-v2 scene");
+    assert_eq!(graphics.commands().len(), 1);
+    let GraphicsCommand::DrawGlyphRun(run) = graphics.commands()[0].command() else {
+        panic!("text must publish one glyph run");
+    };
+    assert_eq!(run.glyphs().len(), 2);
+    assert_eq!(
+        run.glyphs()[0].transform(),
+        Matrix::new([
+            SceneScalar::from_scaled(50_000_000_000),
+            SceneScalar::from_scaled(65_000_000_000),
+            SceneScalar::from_scaled(220_000_000_000),
+            SceneScalar::from_scaled(290_000_000_000),
+            SceneScalar::from_scaled(62_000_000_000),
+            SceneScalar::from_scaled(81_000_000_000),
+        ])
+    );
+    // PDF Widths gives 777, not the fixture hmtx advance 501:
+    // ((777/1000*10)+Tc 1)*50% - (TJ 100/1000*10*50%) = 3.885. The second
+    // transform is CTM x (Tm x Translate(3.885, 0)) x the text-render matrix.
+    assert_eq!(
+        run.glyphs()[1].transform(),
+        Matrix::new([
+            SceneScalar::from_scaled(50_000_000_000),
+            SceneScalar::from_scaled(65_000_000_000),
+            SceneScalar::from_scaled(220_000_000_000),
+            SceneScalar::from_scaled(290_000_000_000),
+            SceneScalar::from_scaled(100_850_000_000),
+            SceneScalar::from_scaled(131_505_000_000),
+        ])
+    );
+    assert_eq!(page.font_uses().len(), 1);
+    assert_eq!(page.font_stats().font_uses(), 1);
+    assert_eq!(page.font_stats().lookups(), 1);
+    assert_eq!(page.font_stats().acquisitions(), 1);
+    assert_eq!(page.font_stats().glyphs(), 2);
+    assert!(page.font_stats().outline_segments() > 0);
+    assert!(page.font_stats().object_read_bytes() > 0);
+    assert!(page.font_stats().metadata_entries() > 0);
+    assert_eq!(page.font_stats().widths(), 95);
+    assert!(page.font_stats().font_input_bytes() > 0);
+    assert!(page.font_stats().font_tables_visited() > 0);
+    assert!(page.font_stats().font_path_segments() > 0);
+    let shared = page.scene_arc();
+    assert!(std::ptr::eq(page.scene(), shared.as_ref()));
+
+    let outline_id = run.glyphs()[0].outline();
+    let entry = graphics
+        .resources()
+        .iter()
+        .find(|entry| entry.id() == outline_id)
+        .expect("glyph outline resource");
+    let GraphicsResource::GlyphOutline(outline) = entry.resource() else {
+        panic!("run must reference a glyph outline");
+    };
+    assert_eq!(outline.units_per_em(), 1_000);
+    assert_eq!(outline.source(), page.font_uses()[0].resource_source());
+    assert_eq!(graphics.resources().len(), 1, "repeated A is interned once");
+}
+
+#[test]
+fn q_restores_complete_text_parameters_but_not_text_matrices() {
+    let first = font_support::foundational_font();
+    let second = font_support::build_font(vec![Vec::new(), font_support::quadratic_glyph()]);
+    let mut objects = embedded_font_objects(5, 6, 7, &first, 777);
+    objects.extend(embedded_font_objects(8, 9, 10, &second, 333));
+    let (mut job, store) = font_job_with_limits(
+        b"BT /F0 10 Tf 1 Tc 2 Tw 50 Tz 7 TL 0 Tr 3 Ts 1 0 0 1 4 5 Tm \
+          q /F1 20 Tf 10 Tc 20 Tw 200 Tz 30 TL 0 Tr 40 Ts 2 0 Td Q \
+          ( A) Tj ET BT ( A) Tj T* (A) Tj ET",
+        b"<< /Font << /F0 5 0 R /F1 8 0 R >> >>",
+        &objects,
+        0x82,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("q/Q text fixture must be ready: {outcome:?}"),
+    };
+    assert_eq!(page.font_uses().len(), 2);
+    assert_eq!(page.font_uses()[0].font().target().number(), 5);
+    assert_eq!(page.font_uses()[1].font().target().number(), 8);
+    let graphics = page.scene().graphics().unwrap();
+    assert!(matches!(
+        graphics.commands()[0].command(),
+        GraphicsCommand::Save
+    ));
+    assert!(matches!(
+        graphics.commands()[1].command(),
+        GraphicsCommand::Restore
+    ));
+    let GraphicsCommand::DrawGlyphRun(run) = graphics.commands()[2].command() else {
+        panic!("restored text must draw");
+    };
+    assert_eq!(run.glyphs().len(), 2);
+    assert_eq!(
+        run.glyphs()[0].transform(),
+        Matrix::new([
+            SceneScalar::from_scaled(5_000_000_000),
+            SceneScalar::ZERO,
+            SceneScalar::ZERO,
+            SceneScalar::from_scaled(10_000_000_000),
+            SceneScalar::from_scaled(6_000_000_000),
+            SceneScalar::from_scaled(8_000_000_000),
+        ])
+    );
+    assert_eq!(
+        run.glyphs()[1].transform().components()[4],
+        SceneScalar::from_scaled(10_500_000_000),
+        "restored Tc/Tw/Tz must advance the leading space by 4.5"
+    );
+    let outline = graphics
+        .resources()
+        .iter()
+        .find(|entry| entry.id() == run.glyphs()[0].outline())
+        .unwrap();
+    let GraphicsResource::GlyphOutline(outline) = outline.resource() else {
+        panic!("glyph resource");
+    };
+    assert_eq!(outline.source().object().number(), 5);
+
+    let GraphicsCommand::DrawGlyphRun(second_bt) = graphics.commands()[3].command() else {
+        panic!("second BT must retain parameters")
+    };
+    assert_eq!(second_bt.glyphs().len(), 2);
+    assert_eq!(
+        second_bt.glyphs()[0].transform(),
+        Matrix::new([
+            SceneScalar::from_scaled(5_000_000_000),
+            SceneScalar::ZERO,
+            SceneScalar::ZERO,
+            SceneScalar::from_scaled(10_000_000_000),
+            SceneScalar::ZERO,
+            SceneScalar::from_scaled(3_000_000_000),
+        ])
+    );
+    assert_eq!(
+        second_bt.glyphs()[1].transform().components()[4],
+        SceneScalar::from_scaled(4_500_000_000)
+    );
+    let GraphicsCommand::DrawGlyphRun(next_line) = graphics.commands()[4].command() else {
+        panic!("T* must draw the next line")
+    };
+    assert_eq!(
+        next_line.glyphs()[0].transform().components()[5],
+        SceneScalar::from_scaled(-4_000_000_000),
+        "second BT preserves leading 7 and rise 3 while resetting line matrices"
+    );
+
+    let (mut missing_job, missing_store) = default_font_job(b"BT q /F0 10 Tf Q (A) Tj ET", 0x83);
+    match missing_job.poll(&missing_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            assert_eq!(error.code(), ContentVmErrorCode::InvalidTextObject);
+        }
+        outcome => panic!("restoring no font selection must fail: {outcome:?}"),
+    }
+    assert_eq!(missing_job.font_stats().lookups(), 0);
+    assert_eq!(missing_job.font_stats().acquisitions(), 0);
+}
+
+#[test]
+fn bt_resets_only_text_matrices_and_quadratics_are_canonical_cubics() {
+    let program = font_support::build_font(vec![Vec::new(), font_support::quadratic_glyph()]);
+    let objects = embedded_font_objects(5, 6, 7, &program, 500);
+    let (mut job, store) = font_job_with_limits(
+        b"BT /F0 10 Tf 1 0 0 1 7 9 Tm ET BT (A) Tj ET",
+        b"<< /Font << /F0 5 0 R >> >>",
+        &objects,
+        0x84,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("second BT reuses font but resets matrices: {outcome:?}"),
+    };
+    let graphics = page.scene().graphics().unwrap();
+    let GraphicsCommand::DrawGlyphRun(run) = graphics.commands()[0].command() else {
+        panic!("glyph run");
+    };
+    assert_eq!(
+        run.glyphs()[0].transform().components()[4],
+        SceneScalar::ZERO
+    );
+    assert_eq!(
+        run.glyphs()[0].transform().components()[5],
+        SceneScalar::ZERO
+    );
+    let resource = graphics
+        .resources()
+        .iter()
+        .find(|entry| entry.id() == run.glyphs()[0].outline())
+        .unwrap();
+    let GraphicsResource::GlyphOutline(outline) = resource.resource() else {
+        panic!("outline");
+    };
+    assert!(
+        outline
+            .outline()
+            .segments()
+            .iter()
+            .any(|segment| matches!(segment, PathSegment::CubicTo { .. }))
+    );
+}
+
+#[test]
+fn text_render_mode_distinguishes_malformed_values_from_valid_unsupported_modes() {
+    for (value, expected) in [
+        (-1, ContentVmErrorCode::InvalidGraphicsParameter),
+        (8, ContentVmErrorCode::InvalidGraphicsParameter),
+    ] {
+        let content = format!("BT {value} Tr ET");
+        let (mut job, store) =
+            default_font_job(content.as_bytes(), 0x85_u8.wrapping_add(value as u8));
+        match job.poll(&store, &DocumentNeverCancelled) {
+            ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                assert_eq!(error.code(), expected)
+            }
+            outcome => panic!("out-of-range Tr must be malformed: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats().lookups(), 0);
+    }
+    for value in 1..=7 {
+        let content = format!("BT {value} Tr ET");
+        let (mut job, store) = default_font_job(content.as_bytes(), 0x87 + value as u8);
+        match job.poll(&store, &DocumentNeverCancelled) {
+            ContentVmPoll::Unsupported(error) => {
+                assert_eq!(error.kind(), ContentUnsupportedKind::TextRenderMode);
+            }
+            outcome => panic!("registered non-fill Tr {value} must be unsupported: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats().lookups(), 0);
+    }
+}
+
+#[test]
+fn td_next_line_quotes_empty_adjustments_space_and_ascii_boundaries_are_exact() {
+    let page = font_ready(
+        b"BT /F0 10 Tf 2 TL 3 -4 TD (A) Tj T* (A) Tj (A) ' 1 2 (A) \" \
+          () Tj [] TJ [100] TJ (A) Tj ET",
+        0x91,
+    );
+    let graphics = page.scene().graphics().unwrap();
+    assert_eq!(graphics.commands().len(), 5);
+    assert_eq!(
+        graphics
+            .commands()
+            .iter()
+            .map(|record| record.source().operator_index())
+            .collect::<Vec<_>>(),
+        [4, 6, 7, 8, 12],
+        "empty strings and empty/adjustment-only TJ arrays publish no command"
+    );
+    let positions = graphics
+        .commands()
+        .iter()
+        .map(|record| {
+            let GraphicsCommand::DrawGlyphRun(run) = record.command() else {
+                panic!("text fixture emits glyph runs")
+            };
+            let transform = run.glyphs()[0].transform().components();
+            (transform[4], transform[5])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            (
+                SceneScalar::from_scaled(3_000_000_000),
+                SceneScalar::from_scaled(-4_000_000_000)
+            ),
+            (
+                SceneScalar::from_scaled(3_000_000_000),
+                SceneScalar::from_scaled(-8_000_000_000)
+            ),
+            (
+                SceneScalar::from_scaled(3_000_000_000),
+                SceneScalar::from_scaled(-12_000_000_000)
+            ),
+            (
+                SceneScalar::from_scaled(3_000_000_000),
+                SceneScalar::from_scaled(-16_000_000_000)
+            ),
+            (
+                SceneScalar::from_scaled(11_770_000_000),
+                SceneScalar::from_scaled(-16_000_000_000)
+            ),
+        ]
+    );
+    assert_eq!(page.font_stats().text_bytes(), 5);
+    assert_eq!(page.font_stats().text_adjustments(), 1);
+    assert_eq!(page.font_stats().glyphs(), 5);
+
+    let ascii = font_ready(b"BT /F0 10 Tf ( ~) Tj ET", 0x92);
+    let GraphicsCommand::DrawGlyphRun(run) =
+        ascii.scene().graphics().unwrap().commands()[0].command()
+    else {
+        panic!("ASCII endpoints draw")
+    };
+    assert_eq!(
+        run.glyphs()
+            .iter()
+            .map(|glyph| glyph.character_code())
+            .collect::<Vec<_>>(),
+        [0x20, 0x7e]
+    );
+
+    for (salt, byte) in [(0x93, 0x1f), (0x94, 0x7f)] {
+        let mut content = b"BT /F0 10 Tf (".to_vec();
+        content.push(byte);
+        content.extend_from_slice(b") Tj ET");
+        let (mut job, store) = default_font_job(&content, salt);
+        match job.poll(&store, &DocumentNeverCancelled) {
+            ContentVmPoll::Unsupported(error) => {
+                assert_eq!(error.kind(), ContentUnsupportedKind::TextEncoding)
+            }
+            outcome => panic!("byte {byte:#x} must be unsupported before lookup: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats().lookups(), 0);
+        assert_eq!(job.font_stats().acquisitions(), 0);
+    }
+}
+
+#[test]
+fn font_payload_pending_does_not_replan_lookup_or_publish_partial_scene() {
+    let (mut job, store) = default_font_job(b"BT /F0 10 Tf (A) Tj ET", 0x88);
+    let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+    let source = BlockPayloadAfter {
+        complete: &store,
+        missing: &missing,
+        checkpoint: ResumeCheckpoint::new(32_008),
+        admitted_payload_polls: 0,
+        payload_polls: AtomicUsize::new(0),
+    };
+    match job.poll(&source, &DocumentNeverCancelled) {
+        ContentVmPoll::Pending { checkpoint, .. } => {
+            assert_eq!(checkpoint, ResumeCheckpoint::new(32_008));
+        }
+        outcome => panic!("font payload must suspend: {outcome:?}"),
+    }
+    let planned = job.font_stats();
+    assert_eq!(planned.lookups(), 1);
+    assert_eq!(planned.acquisitions(), 0);
+    assert_eq!(planned.execution_passes(), 0);
+    assert_eq!(planned.font_uses(), 0);
+
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("complete source resumes one atomic publication: {outcome:?}"),
+    };
+    assert_eq!(page.font_stats().lookups(), 1);
+    assert_eq!(
+        page.font_stats().planning_operators(),
+        planned.planning_operators()
+    );
+    assert_eq!(page.font_stats().acquisitions(), 1);
+    assert_eq!(page.font_stats().execution_passes(), 1);
+    assert_eq!(page.font_uses().len(), 1);
+    match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(replay) => assert!(Arc::ptr_eq(&page, &replay)),
+        outcome => panic!("ready must replay: {outcome:?}"),
+    }
+}
+
+#[test]
+fn every_font_checkpoint_resumes_the_same_plan_lookup_and_terminal_arc() {
+    let mut program = font_support::foundational_font();
+    program.resize(5_000, 0);
+    for (offset, checkpoint_value) in (32_002_u64..=32_008).enumerate() {
+        let mut objects = embedded_font_objects(5, 6, 7, &program, 777);
+        let resumes_ready = match checkpoint_value {
+            32_003 => {
+                objects = vec![(5, font_program_object(5, &vec![0; 5_000]))];
+                false
+            }
+            32_005 => {
+                let descriptor = objects.iter_mut().find(|(number, _)| *number == 6).unwrap();
+                descriptor.1 = font_program_object(6, &vec![0; 5_000]);
+                false
+            }
+            _ => true,
+        };
+        let (mut job, store) = font_job_with_limits(
+            b"BT /F0 10 Tf (A) Tj ET",
+            b"<< /Font << /F0 5 0 R >> >>",
+            &objects,
+            0xb2_u8.wrapping_add(offset as u8),
+            ContentVmLimits::default(),
+            ContentFontLimits::default(),
+            GraphicsSceneLimits::default(),
+        );
+        let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+        let checkpoint = ResumeCheckpoint::new(checkpoint_value);
+        let source = BlockPayloadAfter {
+            complete: &store,
+            missing: &missing,
+            checkpoint,
+            admitted_payload_polls: 0,
+            payload_polls: AtomicUsize::new(0),
+        };
+        match job.poll(&source, &DocumentNeverCancelled) {
+            ContentVmPoll::Pending {
+                checkpoint: actual, ..
+            } => assert_eq!(actual, checkpoint),
+            outcome => panic!("Font checkpoint {checkpoint_value} must suspend: {outcome:?}"),
+        }
+        let pending = job.font_stats();
+        assert_eq!(pending.lookups(), 1);
+        assert_eq!(pending.acquisitions(), 0);
+        assert_eq!(pending.execution_passes(), 0);
+        assert_eq!(job.font_lookup_stats().lookups(), 1);
+
+        if resumes_ready {
+            let page = match job.poll(&store, &DocumentNeverCancelled) {
+                ContentVmPoll::Ready(page) => page,
+                outcome => panic!("Font checkpoint {checkpoint_value} must resume: {outcome:?}"),
+            };
+            assert_eq!(
+                page.font_stats().planning_operators(),
+                pending.planning_operators()
+            );
+            assert_eq!(page.font_stats().lookups(), 1);
+            assert_eq!(page.font_stats().acquisitions(), 1);
+            assert_eq!(page.font_stats().execution_passes(), 1);
+            assert_eq!(page.font_lookup_stats().lookups(), 1);
+            match job.poll(&missing, &AlwaysCancelled) {
+                ContentVmPoll::Ready(replay) => assert!(Arc::ptr_eq(&page, &replay)),
+                outcome => panic!("terminal Font replay must do no source work: {outcome:?}"),
+            }
+        } else {
+            assert!(matches!(
+                job.poll(&store, &DocumentNeverCancelled),
+                ContentVmPoll::Failed(ContentVmFailure::Document(_))
+            ));
+            let failed = job.font_stats();
+            assert_eq!(failed.planning_operators(), pending.planning_operators());
+            assert_eq!(failed.lookups(), 1);
+            assert_eq!(failed.acquisitions(), 0);
+            assert_eq!(failed.execution_passes(), 0);
+            assert!(matches!(
+                job.poll(&missing, &AlwaysCancelled),
+                ContentVmPoll::Failed(ContentVmFailure::Document(_))
+            ));
+            assert_eq!(job.font_stats(), failed);
+        }
+    }
+}
+
+#[test]
+fn two_font_alias_cache_aggregates_every_lower_stat_and_resource_atomically() {
+    let first_program = font_support::foundational_font();
+    let second_program =
+        font_support::build_font(vec![Vec::new(), font_support::contour_glyph(&[true; 128])]);
+    let first = one_font_acquisition_stats(5, 6, 7, &first_program, 777, 0xa0);
+    let second = one_font_acquisition_stats(8, 9, 10, &second_program, 333, 0xa1);
+
+    let (mut job, store) = two_distinct_font_job(
+        0xa2,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("two distinct Fonts and one alias must publish: {outcome:?}"),
+    };
+    let stats = page.font_stats();
+    assert_eq!(stats.font_uses(), 3);
+    assert_eq!(stats.lookups(), 3);
+    assert_eq!(stats.cache_hits(), 1);
+    assert_eq!(stats.acquisitions(), 2);
+    assert_eq!(stats.unique_fonts(), 2);
+    assert_eq!(
+        page.font_uses()
+            .iter()
+            .map(|usage| usage.font().target().number())
+            .collect::<Vec<_>>(),
+        [5, 5, 8]
+    );
+    assert_eq!(page.scene().graphics().unwrap().resources().len(), 2);
+
+    macro_rules! assert_sum {
+        ($($getter:ident),+ $(,)?) => {$ (
+            assert_eq!(
+                stats.$getter(),
+                first.$getter().checked_add(second.$getter()).unwrap(),
+                concat!("aggregate ", stringify!($getter))
+            );
+        )+ };
+    }
+    assert_sum!(
+        resource_polls,
+        resource_objects,
+        resource_reference_edges,
+        object_read_bytes,
+        object_parse_bytes,
+        metadata_entries,
+        widths,
+        encoded_bytes,
+        decoded_bytes,
+        decode_fuel,
+        resource_retained_bytes,
+        font_input_bytes,
+        font_tables_visited,
+        font_glyph_descriptions,
+        font_cmap_segments,
+        font_glyph_data_bytes,
+        font_source_contours,
+        font_source_points,
+        font_components,
+        font_path_segments,
+        font_fuel,
+        font_retained_bytes,
+    );
+    assert_eq!(
+        stats.peak_font_retained_bytes(),
+        first
+            .peak_font_retained_bytes()
+            .max(second.peak_font_retained_bytes())
+    );
+    assert_eq!(
+        stats.peak_acquisition_retained_bytes(),
+        first
+            .peak_acquisition_retained_bytes()
+            .max(second.peak_acquisition_retained_bytes())
+    );
+}
+
+#[test]
+fn every_content_font_budget_accepts_exact_and_rejects_one_less_with_failure_peaks() {
+    let first_program = font_support::foundational_font();
+    let second_program =
+        font_support::build_font(vec![Vec::new(), font_support::contour_glyph(&[true; 128])]);
+    let first_resource = one_font_acquisition_stats(5, 6, 7, &first_program, 777, 0xc0);
+    let second_resource = one_font_acquisition_stats(8, 9, 10, &second_program, 333, 0xc1);
+    assert!(
+        second_resource.peak_acquisition_retained_bytes()
+            > first_resource.peak_acquisition_retained_bytes()
+    );
+    assert!(second_resource.peak_font_retained_bytes() > first_resource.peak_font_retained_bytes());
+    let (mut measured_job, measured_store) = two_distinct_font_job(
+        0xa3,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let measured = match measured_job.poll(&measured_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.font_stats(),
+        outcome => panic!("Font budget measurement must publish: {outcome:?}"),
+    };
+    for value in [
+        measured.font_uses(),
+        measured.unique_fonts(),
+        measured.resource_retained_bytes(),
+        measured.glyphs(),
+        measured.outline_segments(),
+        measured.peak_glyph_retained_bytes(),
+        measured.text_bytes(),
+        measured.text_adjustments(),
+        measured.planning_operators(),
+        measured.cache_probes(),
+        measured.peak_plan_retained_bytes(),
+        measured.peak_cache_retained_bytes(),
+        measured.acquisition_polls(),
+    ] {
+        assert!(value > 1, "one-less runtime limit must remain valid");
+    }
+    let exact = ContentFontLimits::validate(ContentFontLimitConfig {
+        max_font_uses: measured.font_uses(),
+        max_unique_fonts: measured.unique_fonts(),
+        max_resource_retained_bytes: measured.resource_retained_bytes(),
+        max_glyphs: measured.glyphs(),
+        max_outline_segments: measured.outline_segments(),
+        max_glyph_retained_bytes: measured.peak_glyph_retained_bytes(),
+        max_text_bytes: measured.text_bytes(),
+        max_text_adjustments: measured.text_adjustments(),
+        max_planning_operators: measured.planning_operators(),
+        max_cache_probes: measured.cache_probes(),
+        max_plan_retained_bytes: measured.peak_plan_retained_bytes(),
+        max_cache_retained_bytes: measured.peak_cache_retained_bytes(),
+        max_acquisition_polls: measured.acquisition_polls(),
+    })
+    .unwrap();
+    let (mut exact_job, exact_store) =
+        two_distinct_font_job(0xa4, ContentVmLimits::default(), exact);
+    match exact_job.poll(&exact_store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => assert_eq!(page.font_stats(), measured),
+        outcome => panic!("all exact Content Font budgets must publish: {outcome:?}"),
+    }
+
+    macro_rules! reject_one_less {
+        ($salt:expr, $field:ident, $value:expr, $kind:expr) => {{
+            let limits = font_limits(|config| config.$field = $value - 1);
+            let (mut job, store) = two_distinct_font_job($salt, ContentVmLimits::default(), limits);
+            match job.poll(&store, &DocumentNeverCancelled) {
+                ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                    let limit = error.font_limit().expect("Content Font limit context");
+                    assert_eq!(limit.kind(), $kind);
+                    assert_eq!(limit.limit(), $value - 1);
+                }
+                outcome => panic!("one-less Content Font budget must fail: {outcome:?}"),
+            }
+            job
+        }};
+    }
+
+    let uses = reject_one_less!(
+        0xa5,
+        max_font_uses,
+        measured.font_uses(),
+        ContentFontLimitKind::FontUses
+    );
+    assert_eq!(uses.font_stats().lookups(), 0);
+    let unique = reject_one_less!(
+        0xa6,
+        max_unique_fonts,
+        measured.unique_fonts(),
+        ContentFontLimitKind::UniqueFonts
+    );
+    assert_eq!(unique.font_stats().acquisitions(), 0);
+    let resource = reject_one_less!(
+        0xa7,
+        max_resource_retained_bytes,
+        measured.resource_retained_bytes(),
+        ContentFontLimitKind::ResourceRetainedBytes
+    );
+    assert_eq!(resource.font_stats().acquisitions(), 1);
+    assert_eq!(resource.font_stats().unique_fonts(), 1);
+    macro_rules! assert_first_resource_sum {
+        ($($getter:ident),+ $(,)?) => {$ (
+            assert_eq!(
+                resource.font_stats().$getter(),
+                first_resource.$getter(),
+                concat!("failed second resource must not publish ", stringify!($getter))
+            );
+        )+ };
+    }
+    assert_first_resource_sum!(
+        resource_polls,
+        resource_objects,
+        resource_reference_edges,
+        object_read_bytes,
+        object_parse_bytes,
+        metadata_entries,
+        widths,
+        encoded_bytes,
+        decoded_bytes,
+        decode_fuel,
+        resource_retained_bytes,
+        font_input_bytes,
+        font_tables_visited,
+        font_glyph_descriptions,
+        font_cmap_segments,
+        font_glyph_data_bytes,
+        font_source_contours,
+        font_source_points,
+        font_components,
+        font_path_segments,
+        font_fuel,
+        font_retained_bytes,
+    );
+    assert_eq!(
+        resource.font_stats().peak_acquisition_retained_bytes(),
+        second_resource.peak_acquisition_retained_bytes(),
+        "failed acquired resource contributes its lower acquisition peak"
+    );
+    assert_eq!(
+        resource.font_stats().peak_font_retained_bytes(),
+        second_resource.peak_font_retained_bytes(),
+        "failed acquired resource contributes its lower parser peak"
+    );
+    let before_replay = resource.font_stats();
+    let mut resource = resource;
+    let replay_store = RangeStore::new(measured_store.snapshot(), Default::default()).unwrap();
+    assert!(matches!(
+        resource.poll(&replay_store, &AlwaysCancelled),
+        ContentVmPoll::Failed(_)
+    ));
+    assert_eq!(resource.font_stats(), before_replay);
+
+    let glyphs = reject_one_less!(
+        0xa8,
+        max_glyphs,
+        measured.glyphs(),
+        ContentFontLimitKind::Glyphs
+    );
+    assert_eq!(glyphs.font_stats().glyphs(), 2);
+    let segments = reject_one_less!(
+        0xa9,
+        max_outline_segments,
+        measured.outline_segments(),
+        ContentFontLimitKind::OutlineSegments
+    );
+    assert!(segments.font_stats().outline_segments() < measured.outline_segments());
+    let glyph_retained = reject_one_less!(
+        0xaa,
+        max_glyph_retained_bytes,
+        measured.peak_glyph_retained_bytes(),
+        ContentFontLimitKind::GlyphRetainedBytes
+    );
+    assert!(glyph_retained.font_stats().peak_glyph_retained_bytes() > 0);
+    assert!(
+        glyph_retained.font_stats().peak_glyph_retained_bytes()
+            < measured.peak_glyph_retained_bytes(),
+        "the rejected second candidate cannot erase the first published failure peak"
+    );
+    let text = reject_one_less!(
+        0xab,
+        max_text_bytes,
+        measured.text_bytes(),
+        ContentFontLimitKind::TextBytes
+    );
+    assert_eq!(text.font_stats().lookups(), 0);
+    let adjustments = reject_one_less!(
+        0xac,
+        max_text_adjustments,
+        measured.text_adjustments(),
+        ContentFontLimitKind::TextAdjustments
+    );
+    assert_eq!(adjustments.font_stats().lookups(), 0);
+    let planning = reject_one_less!(
+        0xad,
+        max_planning_operators,
+        measured.planning_operators(),
+        ContentFontLimitKind::PlanningOperators
+    );
+    assert_eq!(planning.font_stats().lookups(), 0);
+    let probes = reject_one_less!(
+        0xae,
+        max_cache_probes,
+        measured.cache_probes(),
+        ContentFontLimitKind::CacheProbes
+    );
+    assert_eq!(probes.font_stats().acquisitions(), 0);
+    let plan = reject_one_less!(
+        0xaf,
+        max_plan_retained_bytes,
+        measured.peak_plan_retained_bytes(),
+        ContentFontLimitKind::PlanRetainedBytes
+    );
+    assert_eq!(plan.font_stats().lookups(), 0);
+    let cache = reject_one_less!(
+        0xb0,
+        max_cache_retained_bytes,
+        measured.peak_cache_retained_bytes(),
+        ContentFontLimitKind::CacheRetainedBytes
+    );
+    assert_eq!(cache.font_stats().acquisitions(), 0);
+    let polls = reject_one_less!(
+        0xb1,
+        max_acquisition_polls,
+        measured.acquisition_polls(),
+        ContentFontLimitKind::AcquisitionPolls
+    );
+    assert_eq!(polls.font_stats().acquisitions(), 1);
+    assert_eq!(polls.font_stats().execution_passes(), 0);
+}
+
+#[test]
+fn tf_names_and_nested_tj_strings_have_exact_byte_fuel_boundaries() {
+    let text = vec![b'A'; 2_048];
+    let mut tj_content = b"BT /F0 10 Tf [(".to_vec();
+    tj_content.extend_from_slice(&text);
+    tj_content.extend_from_slice(b")] TJ ET");
+    let (mut measured_tj, store) = default_font_job(&tj_content, 0xc2);
+    let tj_total_fuel = match measured_tj.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.vm_stats().fuel(),
+        outcome => panic!("large nested TJ string must publish: {outcome:?}"),
+    };
+    let tj_through_show = tj_total_fuel - 1;
+
+    let (mut exact_tj, store) = foundational_font_job(
+        &tj_content,
+        0xc3,
+        vm_limits(|config| config.max_fuel = tj_through_show),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match exact_tj.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.limit().expect("ET fuel limit");
+            assert_eq!(limit.kind(), ContentVmLimitKind::Fuel);
+            assert_eq!(limit.consumed(), tj_through_show);
+            assert_eq!(limit.attempted(), 1);
+        }
+        outcome => panic!("exact TJ byte fuel must reach the following ET: {outcome:?}"),
+    }
+    assert_eq!(exact_tj.font_stats().text_bytes(), 2_048);
+    assert_eq!(exact_tj.font_stats().lookups(), 0);
+
+    let (mut short_tj, store) = default_font_job(b"BT /F0 10 Tf [(A)] TJ ET", 0xc4);
+    let short_tj_fuel = match short_tj.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.vm_stats().fuel(),
+        outcome => panic!("short TJ must publish: {outcome:?}"),
+    };
+    assert_eq!(tj_total_fuel - short_tj_fuel, 2_047);
+
+    let (mut one_less_tj, store) = foundational_font_job(
+        &tj_content,
+        0xc5,
+        vm_limits(|config| config.max_fuel = tj_through_show - 1),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match one_less_tj.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.limit().expect("TJ byte fuel limit");
+            assert_eq!(limit.kind(), ContentVmLimitKind::Fuel);
+            assert_eq!(limit.limit(), tj_through_show - 1);
+            assert_eq!(limit.attempted(), 2_048);
+        }
+        outcome => panic!("one-less nested TJ byte fuel must reject: {outcome:?}"),
+    }
+    assert_eq!(one_less_tj.font_stats().text_bytes(), 0);
+    assert_eq!(one_less_tj.font_stats().lookups(), 0);
+
+    let long_name = vec![b'N'; 2_048];
+    let mut tf_content = b"BT /".to_vec();
+    tf_content.extend_from_slice(&long_name);
+    tf_content.extend_from_slice(b" 10 Tf ET");
+    let resources = {
+        let mut value = b"<< /Font << /".to_vec();
+        value.extend_from_slice(&long_name);
+        value.extend_from_slice(b" 5 0 R >> >>");
+        value
+    };
+    let objects = embedded_font_objects(5, 6, 7, &font_support::foundational_font(), 777);
+    let (mut measured_tf, store) = font_job_with_limits(
+        &tf_content,
+        &resources,
+        &objects,
+        0xc6,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let tf_total_fuel = match measured_tf.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.vm_stats().fuel(),
+        outcome => panic!("large Tf name must publish: {outcome:?}"),
+    };
+    let tf_through_select = tf_total_fuel - 1;
+    let mut short_resources = b"<< /Font << /F 5 0 R >> >>".to_vec();
+    let (mut short_tf, store) = font_job_with_limits(
+        b"BT /F 10 Tf ET",
+        &short_resources,
+        &objects,
+        0xc7,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let short_tf_fuel = match short_tf.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.vm_stats().fuel(),
+        outcome => panic!("short Tf name must publish: {outcome:?}"),
+    };
+    assert_eq!(tf_total_fuel - short_tf_fuel, 2_047);
+    short_resources.clear();
+
+    for (salt, limit, exact) in [
+        (0xc8, tf_through_select, true),
+        (0xc9, tf_through_select - 1, false),
+    ] {
+        let (mut job, store) = font_job_with_limits(
+            &tf_content,
+            &resources,
+            &objects,
+            salt,
+            vm_limits(|config| config.max_fuel = limit),
+            ContentFontLimits::default(),
+            GraphicsSceneLimits::default(),
+        );
+        match job.poll(&store, &DocumentNeverCancelled) {
+            ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                let fuel = error.limit().expect("Tf/ET fuel limit");
+                assert_eq!(fuel.kind(), ContentVmLimitKind::Fuel);
+                if exact {
+                    assert_eq!(fuel.consumed(), tf_through_select);
+                    assert_eq!(fuel.attempted(), 1);
+                } else {
+                    assert_eq!(fuel.limit(), tf_through_select - 1);
+                    assert_eq!(fuel.consumed(), 1);
+                    assert_eq!(fuel.attempted(), 2_051);
+                }
+            }
+            outcome => panic!("Tf byte-fuel boundary must reject deterministically: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats().lookups(), 0);
+    }
+}
+
+#[test]
+fn combined_text_plan_font_use_and_saved_parameter_stack_retention_is_exact() {
+    let mut deep = b"BT /F0 10 Tf ".to_vec();
+    for _ in 0..64 {
+        deep.extend_from_slice(b"q ");
+    }
+    for _ in 0..64 {
+        deep.extend_from_slice(b"Q ");
+    }
+    deep.extend_from_slice(b"ET");
+
+    let flat = b"BT /F0 10 Tf ET".to_vec();
+    let (mut flat_job, store) = default_font_job(&flat, 0xca);
+    let flat_peak = match flat_job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.vm_stats().peak_retained_bytes(),
+        outcome => panic!("flat text must publish: {outcome:?}"),
+    };
+
+    let (mut measured, store) = default_font_job(&deep, 0xcb);
+    let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+    let blocker = BlockPayloadAfter {
+        complete: &store,
+        missing: &missing,
+        checkpoint: ResumeCheckpoint::new(32_008),
+        admitted_payload_polls: 0,
+        payload_polls: AtomicUsize::new(0),
+    };
+    assert!(matches!(
+        measured.poll(&blocker, &DocumentNeverCancelled),
+        ContentVmPoll::Pending { .. }
+    ));
+    let plan_only_peak = measured.vm_stats().peak_retained_bytes();
+    let peak = match measured.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => {
+            assert_eq!(page.vm_stats().max_graphics_state_depth(), 64);
+            assert_eq!(page.font_stats().glyphs(), 0);
+            page.vm_stats().peak_retained_bytes()
+        }
+        outcome => panic!("deep saved text stack must publish: {outcome:?}"),
+    };
+    assert!(
+        peak > flat_peak,
+        "saved text parameters remain live with the text plan"
+    );
+    assert_eq!(
+        peak, plan_only_peak,
+        "planning and materialization independently reserve the same measured saved-state peak"
+    );
+
+    let (mut exact, store) = foundational_font_job(
+        &deep,
+        0xcc,
+        vm_limits(|config| config.max_retained_bytes = peak),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match exact.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => assert_eq!(page.vm_stats().peak_retained_bytes(), peak),
+        outcome => panic!("exact combined VM retained budget must publish: {outcome:?}"),
+    }
+
+    let (mut one_less, store) = foundational_font_job(
+        &deep,
+        0xcd,
+        vm_limits(|config| config.max_retained_bytes = peak - 1),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match one_less.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.limit().expect("combined retained limit");
+            assert_eq!(limit.kind(), ContentVmLimitKind::RetainedBytes);
+            assert_eq!(limit.limit(), peak - 1);
+        }
+        outcome => panic!("one-less combined VM retained budget must fail: {outcome:?}"),
+    }
+    assert_eq!(one_less.font_stats().acquisitions(), 0);
+    assert_eq!(one_less.font_stats().execution_passes(), 0);
+    assert!(one_less.vm_stats().peak_retained_bytes() < peak);
+
+    let scene_limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+        max_state_depth: 63,
+        ..GraphicsSceneLimitConfig::default()
+    })
+    .unwrap();
+    let (mut scene_failed, store) = foundational_font_job(
+        &deep,
+        0xe3,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        scene_limits,
+    );
+    assert!(matches!(
+        scene_failed.poll(&store, &DocumentNeverCancelled),
+        ContentVmPoll::Failed(ContentVmFailure::Scene(_))
+    ));
+    assert_eq!(scene_failed.font_stats().acquisitions(), 1);
+    assert_eq!(scene_failed.font_stats().execution_passes(), 1);
+    assert_eq!(
+        scene_failed.vm_stats().peak_retained_bytes(),
+        peak,
+        "a later Scene failure preserves actual materialization font-use and saved-stack capacity"
+    );
+}
+
+#[test]
+fn known_text_glyph_outline_and_scene_limits_precede_expensive_work_but_keep_failure_peaks() {
+    let mut malformed = b"BT /F0 10 Tf (".to_vec();
+    malformed.extend(std::iter::repeat_n(b'A', 2_048));
+    malformed.push(0x7f);
+    malformed.extend_from_slice(b") Tj ET");
+    let (mut text_limited, store) = foundational_font_job(
+        &malformed,
+        0xce,
+        ContentVmLimits::default(),
+        font_limits(|config| config.max_text_bytes = 2_048),
+        GraphicsSceneLimits::default(),
+    );
+    match text_limited.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => assert_eq!(
+            error.font_limit().expect("text limit").kind(),
+            ContentFontLimitKind::TextBytes
+        ),
+        outcome => panic!("known text count must reject before encoding validation: {outcome:?}"),
+    }
+    assert_eq!(text_limited.font_stats().lookups(), 0);
+    assert_eq!(text_limited.font_stats().acquisitions(), 0);
+
+    let mut huge_text = b"BT /F0 10 Tf (".to_vec();
+    huge_text.extend(std::iter::repeat_n(b'A', 2_048));
+    huge_text.extend_from_slice(b") Tj ET");
+    let (mut glyph_limited, store) = foundational_font_job(
+        &huge_text,
+        0xcf,
+        ContentVmLimits::default(),
+        font_limits(|config| config.max_glyphs = 1),
+        GraphicsSceneLimits::default(),
+    );
+    match glyph_limited.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => assert_eq!(
+            error.font_limit().expect("glyph limit").kind(),
+            ContentFontLimitKind::Glyphs
+        ),
+        outcome => panic!("known glyph count must reject before mapping: {outcome:?}"),
+    }
+    assert_eq!(glyph_limited.font_stats().acquisitions(), 1);
+    assert_eq!(glyph_limited.font_stats().execution_passes(), 1);
+    assert_eq!(glyph_limited.font_stats().glyphs(), 0);
+    assert_eq!(glyph_limited.font_stats().peak_glyph_retained_bytes(), 0);
+
+    let large_program = font_support::build_font(vec![
+        Vec::new(),
+        font_support::contour_glyph(&[true; 1_024]),
+    ]);
+    let large_objects = embedded_font_objects(5, 6, 7, &large_program, 777);
+    let (mut measured_outline, store) = font_job_with_limits(
+        b"BT /F0 10 Tf (A) Tj ET",
+        b"<< /Font << /F0 5 0 R >> >>",
+        &large_objects,
+        0xd0,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let outline_segments = match measured_outline.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page.font_stats().outline_segments(),
+        outcome => panic!("large outline measurement must publish: {outcome:?}"),
+    };
+    let (mut outline_limited, store) = font_job_with_limits(
+        b"BT /F0 10 Tf (A) Tj ET",
+        b"<< /Font << /F0 5 0 R >> >>",
+        &large_objects,
+        0xd1,
+        ContentVmLimits::default(),
+        font_limits(|config| config.max_outline_segments = outline_segments - 1),
+        GraphicsSceneLimits::default(),
+    );
+    match outline_limited.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => assert_eq!(
+            error.font_limit().expect("outline limit").kind(),
+            ContentFontLimitKind::OutlineSegments
+        ),
+        outcome => panic!("known outline count must reject before copying: {outcome:?}"),
+    }
+    assert_eq!(outline_limited.font_stats().outline_segments(), 0);
+    assert_eq!(outline_limited.font_stats().peak_glyph_retained_bytes(), 0);
+
+    let scene_limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+        max_glyphs: 1,
+        ..GraphicsSceneLimitConfig::default()
+    })
+    .unwrap();
+    let (mut scene_failed, store) = foundational_font_job(
+        b"BT /F0 10 Tf (AA) Tj ET",
+        0xd2,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        scene_limits,
+    );
+    assert!(matches!(
+        scene_failed.poll(&store, &DocumentNeverCancelled),
+        ContentVmPoll::Failed(ContentVmFailure::Scene(_))
+    ));
+    assert_eq!(scene_failed.font_stats().glyphs(), 0);
+    assert!(scene_failed.font_stats().peak_glyph_retained_bytes() > 0);
+    assert!(
+        scene_failed.vm_stats().peak_retained_bytes()
+            >= scene_failed
+                .scan_stats()
+                .retained_bytes()
+                .saturating_add(scene_failed.font_stats().peak_glyph_retained_bytes())
+    );
+
+    let unsupported_objects = embedded_font_objects(5, 6, 7, &[0; 512], 777);
+    let (mut unsupported_font, store) = font_job_with_limits(
+        b"BT /F0 10 Tf (A) Tj ET",
+        b"<< /Font << /F0 5 0 R >> >>",
+        &unsupported_objects,
+        0xd3,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    match unsupported_font.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Unsupported(error) => {
+            assert_eq!(error.kind(), ContentUnsupportedKind::FontResource);
+            let lower = error.font_resource().expect("lower Font capability");
+            assert_eq!(lower.kind(), FontResourceUnsupportedKind::TrueTypeProgram);
+            assert_eq!(
+                lower
+                    .font_unsupported()
+                    .expect("lower sfnt capability")
+                    .kind(),
+                pdf_rs_font::FontUnsupportedKind::SfntFlavor
+            );
+        }
+        outcome => {
+            panic!("unsupported sfnt must terminate after plan/cache allocation: {outcome:?}")
+        }
+    }
+    assert!(unsupported_font.font_stats().peak_plan_retained_bytes() > 0);
+    assert!(unsupported_font.font_stats().peak_cache_retained_bytes() > 0);
+    assert_eq!(unsupported_font.font_stats().acquisitions(), 0);
+}
+
+#[test]
+fn huge_tf_and_tj_copy_guards_publish_vm_peaks_and_prioritize_source_change() {
+    let objects = embedded_font_objects(5, 6, 7, &font_support::foundational_font(), 777);
+    let large_text = vec![b'A'; 2_048];
+    let mut tj_content = b"BT /F0 10 Tf (".to_vec();
+    tj_content.extend_from_slice(&large_text);
+    tj_content.extend_from_slice(b") Tj ET");
+
+    let large_name = vec![b'N'; 2_048];
+    let mut tf_content = b"BT /".to_vec();
+    tf_content.extend_from_slice(&large_name);
+    tf_content.extend_from_slice(b" 10 Tf ET");
+    let mut tf_resources = b"<< /Font << /".to_vec();
+    tf_resources.extend_from_slice(&large_name);
+    tf_resources.extend_from_slice(b" 5 0 R >> >>");
+
+    for (fixture_index, (label, content, resources, copied_bytes)) in [
+        (
+            "Tj",
+            tj_content,
+            b"<< /Font << /F0 5 0 R >> >>".to_vec(),
+            2_048_u64,
+        ),
+        ("Tf", tf_content, tf_resources, 2_048_u64),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let expected_ordinal = if label == "Tj" { 2 } else { 1 };
+        for (case_index, (change_source, expected)) in [
+            (false, ContentVmErrorCode::Cancelled),
+            (true, ContentVmErrorCode::SourceSnapshotMismatch),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut observed = false;
+            for trigger in 1..256 {
+                let salt = 0xd4_u8.wrapping_add((fixture_index * 2 + case_index) as u8);
+                let (mut job, store) = font_job_with_limits(
+                    &content,
+                    &resources,
+                    &objects,
+                    salt,
+                    ContentVmLimits::default(),
+                    ContentFontLimits::default(),
+                    GraphicsSceneLimits::default(),
+                );
+                let original = store.snapshot();
+                let source = ChangingStoreSource {
+                    complete: &store,
+                    replacement: snapshot(
+                        original.len().expect("fixture length"),
+                        salt.wrapping_add(0x40),
+                    ),
+                    changed: AtomicBool::new(false),
+                    snapshot_calls: AtomicUsize::new(0),
+                };
+                let cancellation = CancelDuringStore {
+                    source: &source,
+                    trigger_snapshot_call: trigger,
+                    change_source,
+                };
+                let outcome = job.poll(&source, &cancellation);
+                let copied_peak = job.vm_stats().peak_retained_bytes()
+                    >= job
+                        .scan_stats()
+                        .retained_bytes()
+                        .saturating_add(copied_bytes);
+                if matches!(
+                    outcome,
+                    ContentVmPoll::Failed(ContentVmFailure::Vm(error))
+                        if error.code() == expected
+                            && error.source().is_some_and(|source| {
+                                source.page_operator_ordinal() == expected_ordinal
+                            })
+                ) && copied_peak
+                    && job.font_stats().lookups() == 0
+                    && job.font_stats().acquisitions() == 0
+                {
+                    let terminal_vm = job.vm_stats();
+                    let terminal_font = job.font_stats();
+                    let missing = RangeStore::new(original, Default::default()).unwrap();
+                    match job.poll(&missing, &AlwaysCancelled) {
+                        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                            assert_eq!(error.code(), expected, "terminal {label} replay")
+                        }
+                        replay => panic!("terminal {label} replay must do no work: {replay:?}"),
+                    }
+                    assert_eq!(job.vm_stats(), terminal_vm);
+                    assert_eq!(job.font_stats(), terminal_font);
+                    observed = true;
+                    break;
+                }
+            }
+            assert!(
+                observed,
+                "large {label} copy must expose a guarded post-allocation {expected:?} boundary"
+            );
+        }
+    }
+}
+
+#[test]
+fn huge_adjustment_only_tj_guards_execution_and_prioritizes_source_change() {
+    let mut large = b"BT /F0 10 Tf [".to_vec();
+    for _ in 0..1_024 {
+        large.extend_from_slice(b"0 ");
+    }
+    large.extend_from_slice(b"] TJ ET");
+
+    let resume_baseline = {
+        let (mut job, store) = default_font_job(b"BT /F0 10 Tf [0] TJ ET", 0xd8);
+        let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+        let blocker = BlockPayloadAfter {
+            complete: &store,
+            missing: &missing,
+            checkpoint: ResumeCheckpoint::new(32_008),
+            admitted_payload_polls: 0,
+            payload_polls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            job.poll(&blocker, &DocumentNeverCancelled),
+            ContentVmPoll::Pending { .. }
+        ));
+        let source = CountingStoreSource {
+            complete: &store,
+            snapshot_calls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            job.poll(&source, &DocumentNeverCancelled),
+            ContentVmPoll::Ready(_)
+        ));
+        source.snapshot_calls.load(Ordering::Acquire)
+    };
+
+    for (case_index, (change_source, expected)) in [
+        (false, ContentVmErrorCode::Cancelled),
+        (true, ContentVmErrorCode::SourceSnapshotMismatch),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (mut job, store) = default_font_job(&large, 0xd9 + case_index as u8);
+        let original = store.snapshot();
+        let missing = RangeStore::new(original, Default::default()).unwrap();
+        let blocker = BlockPayloadAfter {
+            complete: &store,
+            missing: &missing,
+            checkpoint: ResumeCheckpoint::new(32_008),
+            admitted_payload_polls: 0,
+            payload_polls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            job.poll(&blocker, &DocumentNeverCancelled),
+            ContentVmPoll::Pending { .. }
+        ));
+        let source = ChangingStoreSource {
+            complete: &store,
+            replacement: snapshot(
+                original.len().expect("fixture length"),
+                0xe8 + case_index as u8,
+            ),
+            changed: AtomicBool::new(false),
+            snapshot_calls: AtomicUsize::new(0),
+        };
+        let cancellation = CancelDuringStore {
+            source: &source,
+            trigger_snapshot_call: resume_baseline + 2,
+            change_source,
+        };
+        match job.poll(&source, &cancellation) {
+            ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                assert_eq!(error.code(), expected);
+                assert_eq!(
+                    error
+                        .source()
+                        .expect("TJ guard source")
+                        .page_operator_ordinal(),
+                    2
+                );
+            }
+            outcome => panic!("large adjustment-only TJ must stop in execution: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats().text_adjustments(), 1_024);
+        assert_eq!(job.font_stats().acquisitions(), 1);
+        assert_eq!(job.font_stats().execution_passes(), 1);
+        assert_eq!(job.font_stats().glyphs(), 0);
+        let terminal = job.font_stats();
+        match job.poll(&missing, &AlwaysCancelled) {
+            ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                assert_eq!(error.code(), expected)
+            }
+            outcome => panic!("terminal adjustment TJ must replay: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats(), terminal);
+    }
+}
+
+#[test]
+fn huge_outline_guards_after_allocation_and_prioritizes_source_change() {
+    let program = font_support::build_font(vec![
+        Vec::new(),
+        font_support::contour_glyph(&[true; 1_024]),
+    ]);
+    let objects = embedded_font_objects(5, 6, 7, &program, 777);
+    let resources = b"<< /Font << /F0 5 0 R >> >>";
+
+    let resume_without_show = {
+        let (mut job, store) = font_job_with_limits(
+            b"BT /F0 10 Tf ET",
+            resources,
+            &objects,
+            0xdb,
+            ContentVmLimits::default(),
+            ContentFontLimits::default(),
+            GraphicsSceneLimits::default(),
+        );
+        let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+        let blocker = BlockPayloadAfter {
+            complete: &store,
+            missing: &missing,
+            checkpoint: ResumeCheckpoint::new(32_008),
+            admitted_payload_polls: 0,
+            payload_polls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            job.poll(&blocker, &DocumentNeverCancelled),
+            ContentVmPoll::Pending { .. }
+        ));
+        let source = CountingStoreSource {
+            complete: &store,
+            snapshot_calls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            job.poll(&source, &DocumentNeverCancelled),
+            ContentVmPoll::Ready(_)
+        ));
+        source.snapshot_calls.load(Ordering::Acquire)
+    };
+    let measured_peak = {
+        let (mut job, store) = font_job_with_limits(
+            b"BT /F0 10 Tf (A) Tj ET",
+            resources,
+            &objects,
+            0xdc,
+            ContentVmLimits::default(),
+            ContentFontLimits::default(),
+            GraphicsSceneLimits::default(),
+        );
+        match job.poll(&store, &DocumentNeverCancelled) {
+            ContentVmPoll::Ready(page) => page.font_stats().peak_glyph_retained_bytes(),
+            outcome => panic!("large outline measurement must publish: {outcome:?}"),
+        }
+    };
+
+    for (case_index, (change_source, expected)) in [
+        (false, ContentVmErrorCode::Cancelled),
+        (true, ContentVmErrorCode::SourceSnapshotMismatch),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut observed = false;
+        for offset in (4..64).step_by(2) {
+            let (mut job, store) = font_job_with_limits(
+                b"BT /F0 10 Tf (A) Tj ET",
+                resources,
+                &objects,
+                0xdd + case_index as u8,
+                ContentVmLimits::default(),
+                ContentFontLimits::default(),
+                GraphicsSceneLimits::default(),
+            );
+            let original = store.snapshot();
+            let missing = RangeStore::new(original, Default::default()).unwrap();
+            let blocker = BlockPayloadAfter {
+                complete: &store,
+                missing: &missing,
+                checkpoint: ResumeCheckpoint::new(32_008),
+                admitted_payload_polls: 0,
+                payload_polls: AtomicUsize::new(0),
+            };
+            assert!(matches!(
+                job.poll(&blocker, &DocumentNeverCancelled),
+                ContentVmPoll::Pending { .. }
+            ));
+            let source = ChangingStoreSource {
+                complete: &store,
+                replacement: snapshot(
+                    original.len().expect("fixture length"),
+                    0xed + case_index as u8,
+                ),
+                changed: AtomicBool::new(false),
+                snapshot_calls: AtomicUsize::new(0),
+            };
+            let cancellation = CancelDuringStore {
+                source: &source,
+                trigger_snapshot_call: resume_without_show + offset,
+                change_source,
+            };
+            let outcome = job.poll(&source, &cancellation);
+            if matches!(
+                outcome,
+                ContentVmPoll::Failed(ContentVmFailure::Vm(error))
+                    if error.code() == expected
+                        && error.source().is_some_and(|source| source.page_operator_ordinal() == 2)
+            ) && job.font_stats().execution_passes() == 1
+                && job.font_stats().peak_glyph_retained_bytes() == measured_peak
+                && job.font_stats().glyphs() == 0
+            {
+                assert!(
+                    job.vm_stats().peak_retained_bytes()
+                        >= job
+                            .scan_stats()
+                            .retained_bytes()
+                            .saturating_add(measured_peak)
+                );
+                let terminal_vm = job.vm_stats();
+                let terminal_font = job.font_stats();
+                match job.poll(&missing, &AlwaysCancelled) {
+                    ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                        assert_eq!(error.code(), expected)
+                    }
+                    replay => panic!("terminal outline failure must replay: {replay:?}"),
+                }
+                assert_eq!(job.vm_stats(), terminal_vm);
+                assert_eq!(job.font_stats(), terminal_font);
+                observed = true;
+                break;
+            }
+        }
+        assert!(
+            observed,
+            "large outline must expose guarded {expected:?} after reserve"
+        );
+    }
+}
+
+#[test]
+fn long_non_font_prefix_is_guarded_again_before_tf_lookup() {
+    let mut content = Vec::new();
+    for _ in 0..300 {
+        content.extend_from_slice(b"q Q ");
+    }
+    content.extend_from_slice(b"BT /F0 10 Tf (A) Tj ET");
+
+    let planning_end_calls = {
+        let (mut job, store) = foundational_font_job(
+            &content,
+            0xdf,
+            ContentVmLimits::default(),
+            font_limits(|config| config.max_plan_retained_bytes = 1),
+            GraphicsSceneLimits::default(),
+        );
+        let source = CountingStoreSource {
+            complete: &store,
+            snapshot_calls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            job.poll(&source, &DocumentNeverCancelled),
+            ContentVmPoll::Failed(ContentVmFailure::Vm(_))
+        ));
+        assert_eq!(job.font_stats().planning_operators(), 604);
+        source.snapshot_calls.load(Ordering::Acquire)
+    };
+
+    for (case_index, (change_source, expected)) in [
+        (false, ContentVmErrorCode::Cancelled),
+        (true, ContentVmErrorCode::SourceSnapshotMismatch),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut observed = false;
+        for trigger in planning_end_calls + 500..planning_end_calls + 540 {
+            let (mut job, store) = default_font_job(&content, 0xe1 + case_index as u8);
+            let original = store.snapshot();
+            let source = ChangingStoreSource {
+                complete: &store,
+                replacement: snapshot(
+                    original.len().expect("fixture length"),
+                    0xf1 + case_index as u8,
+                ),
+                changed: AtomicBool::new(false),
+                snapshot_calls: AtomicUsize::new(0),
+            };
+            let cancellation = CancelDuringStore {
+                source: &source,
+                trigger_snapshot_call: trigger,
+                change_source,
+            };
+            let outcome = job.poll(&source, &cancellation);
+            if matches!(
+                outcome,
+                ContentVmPoll::Failed(ContentVmFailure::Vm(error))
+                    if error.code() == expected
+                        && error.source().is_some_and(|source| {
+                            (256..600).contains(&source.page_operator_ordinal())
+                        })
+            ) && job.font_stats().planning_operators() == 604
+                && job.font_stats().lookups() == 0
+                && job.font_stats().acquisition_polls() == 0
+            {
+                let terminal_vm = job.vm_stats();
+                let terminal_font = job.font_stats();
+                let missing = RangeStore::new(original, Default::default()).unwrap();
+                match job.poll(&missing, &AlwaysCancelled) {
+                    ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+                        assert_eq!(error.code(), expected);
+                        assert!(error.source().is_some_and(|source| {
+                            (256..600).contains(&source.page_operator_ordinal())
+                        }));
+                    }
+                    replay => panic!("terminal non-font scan failure must replay: {replay:?}"),
+                }
+                assert_eq!(job.vm_stats(), terminal_vm);
+                assert_eq!(job.font_stats(), terminal_font);
+                observed = true;
+                break;
+            }
+        }
+        assert!(
+            observed,
+            "second Font scan must guard a non-font prefix before Tf ({expected:?})"
+        );
+    }
+}
+
+#[test]
+fn text_without_font_profile_is_exact_unsupported_and_terminal() {
+    let (mut job, store) = graphics_job(b"BT 1 Tc ET", 0xf3, ContentGraphicsLimits::default());
+    match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Unsupported(error) => {
+            assert_eq!(error.kind(), ContentUnsupportedKind::FontProfileRequired);
+            assert_eq!(error.source().page_operator_ordinal(), 1);
+            assert!(error.font_resource().is_none());
+        }
+        outcome => {
+            panic!("registered text semantics require an explicit Font profile: {outcome:?}")
+        }
+    }
+    let terminal_vm = job.vm_stats();
+    let missing = RangeStore::new(store.snapshot(), Default::default()).unwrap();
+    match job.poll(&missing, &AlwaysCancelled) {
+        ContentVmPoll::Unsupported(error) => {
+            assert_eq!(error.kind(), ContentUnsupportedKind::FontProfileRequired);
+            assert_eq!(error.source().page_operator_ordinal(), 1);
+        }
+        outcome => panic!("FontProfileRequired must replay without source work: {outcome:?}"),
+    }
+    assert_eq!(job.vm_stats(), terminal_vm);
+    assert_eq!(job.font_stats(), ContentFontStats::default());
+}
+
+#[test]
+fn one_page_publishes_images_and_embedded_text_through_combined_profiles() {
+    let mut objects = vec![(5, image_object(5, b"", &[10, 20, 30, 40, 50, 60]))];
+    objects.extend(embedded_font_objects(
+        8,
+        9,
+        10,
+        &font_support::foundational_font(),
+        777,
+    ));
+    let input = acquire_with_objects(
+        b"/Im0 Do BT /F0 10 Tf (A) Tj ET",
+        b"<< /XObject << /Im0 5 0 R >> /Font << /F0 8 0 R >> >>",
+        &objects,
+        0xf4,
+    );
+    let VmInput {
+        acquired,
+        authority,
+        store,
+    } = input;
+    let image_profile = ContentImageProfile::new(
+        authority.clone(),
+        PageXObjectLookupLimits::default(),
+        ImageXObjectJobContext::new(
+            JobId::new(33_001),
+            ResumeCheckpoint::new(33_002),
+            ResumeCheckpoint::new(33_003),
+            ResumeCheckpoint::new(33_004),
+            RequestPriority::VisiblePage,
+        ),
+        ImageXObjectLimits::default(),
+        ContentImageLimits::default(),
+    );
+    let font_profile = ContentFontProfile::new(
+        authority,
+        PageFontLookupLimits::default(),
+        font_context(34_001),
+        FontResourceLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let mut job = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
+        acquired,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile,
+        font_profile,
+        GraphicsSceneLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("combined Image and Font profiles must publish one page: {outcome:?}"),
+    };
+    assert_eq!(page.image_stats().acquisitions(), 1);
+    assert_eq!(page.font_stats().acquisitions(), 1);
+    assert_eq!(page.image_uses().len(), 1);
+    assert_eq!(page.font_uses().len(), 1);
+    let graphics = page.scene().graphics().unwrap();
+    assert_eq!(graphics.commands().len(), 2);
+    assert!(matches!(
+        graphics.commands()[0].command(),
+        GraphicsCommand::DrawImage { .. }
+    ));
+    assert!(matches!(
+        graphics.commands()[1].command(),
+        GraphicsCommand::DrawGlyphRun(_)
+    ));
+    assert_eq!(graphics.resources().len(), 2);
 }

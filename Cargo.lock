@@ -49,6 +49,7 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-document",
+ "pdf-rs-font",
  "pdf-rs-object",
  "pdf-rs-scene",
  "pdf-rs-syntax",

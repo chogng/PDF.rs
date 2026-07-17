@@ -12,6 +12,7 @@
 #![deny(missing_docs)]
 
 mod error;
+mod font_limits;
 mod graphics_limits;
 mod image_limits;
 mod limits;
@@ -27,6 +28,7 @@ pub use error::{
     ContentError, ContentErrorCategory, ContentErrorCode, ContentLimit, ContentLimitKind,
     ContentRecoverability,
 };
+pub use font_limits::{ContentFontLimitConfig, ContentFontLimits};
 pub use graphics_limits::{ContentGraphicsLimitConfig, ContentGraphicsLimits};
 pub use image_limits::{ContentImageLimitConfig, ContentImageLimits};
 pub use limits::{ContentLimitConfig, ContentLimits};
@@ -42,15 +44,15 @@ pub use scanner::{
     ContentCancellation, ContentScanJob, ContentScanPhase, ContentScanPoll, NeverCancelled,
     scan_content_streams,
 };
-pub use vm::{ContentImageProfile, ContentVmPoll, InterpretPageJob};
+pub use vm::{ContentFontProfile, ContentImageProfile, ContentVmPoll, InterpretPageJob};
 pub use vm_error::{
-    ContentGraphicsLimit, ContentGraphicsLimitKind, ContentImageLimit, ContentImageLimitKind,
-    ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCategory,
-    ContentVmErrorCode, ContentVmFailure, ContentVmLimit, ContentVmLimitKind,
-    ContentVmRecoverability,
+    ContentFontLimit, ContentFontLimitKind, ContentGraphicsLimit, ContentGraphicsLimitKind,
+    ContentImageLimit, ContentImageLimitKind, ContentUnsupported, ContentUnsupportedKind,
+    ContentVmError, ContentVmErrorCategory, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
+    ContentVmLimitKind, ContentVmRecoverability,
 };
 pub use vm_limits::{ContentVmLimitConfig, ContentVmLimits};
 pub use vm_model::{
-    ContentImageStats, ContentVmPhase, ContentVmStats, InterpretedPage, ResolvedImageUse,
-    ResolvedPropertyUse,
+    ContentFontStats, ContentImageStats, ContentVmPhase, ContentVmStats, InterpretedPage,
+    ResolvedFontUse, ResolvedImageUse, ResolvedPropertyUse,
 };
