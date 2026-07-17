@@ -1,0 +1,28 @@
+{
+  "name": "@pdf-rs/browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.18.0",
+    "npm": "11.16.0"
+  },
+  "packageManager": "npm@11.16.0",
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "toolchain:check": "node scripts/check-toolchain.mjs",
+    "protocol:check": "cargo run --quiet --manifest-path ../../Cargo.toml --package pdf-rs-protocol-codegen -- --check ../..",
+    "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project tsconfig.test.json --noEmit",
+    "test:build": "npm run clean && tsc --project tsconfig.test.json",
+    "test:unit": "npm run test:build && node --test .test-dist/test/*.test.js",
+    "worker:test": "cargo test --locked --manifest-path ../../Cargo.toml --package pdf-rs-browser-worker",
+    "wasm:check": "cargo check --locked --manifest-path ../../Cargo.toml --package pdf-rs-browser-worker --target wasm32-unknown-unknown",
+    "wasm:build": "cargo build --locked --manifest-path ../../Cargo.toml --package pdf-rs-browser-worker --bin pdf-rs-browser-worker --target wasm32-unknown-unknown",
+    "test": "npm run protocol:check && npm run typecheck && npm run test:unit && npm run worker:test",
+    "check": "npm run toolchain:check && npm test && npm run wasm:build"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "5.9.3"
+  }
+}

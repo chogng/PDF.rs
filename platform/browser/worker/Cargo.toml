@@ -1,0 +1,19 @@
+[package]
+name = "pdf-rs-browser-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "pdf-rs-browser-worker"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+pdf-rs-protocol = { path = "../../../runtime/protocol" }

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "core/*",
+    "platform/browser/worker",
     "runtime/cache",
     "runtime/policy",
     "runtime/protocol",

@@ -19,7 +19,7 @@ struct ProductPackage {
     crate_name: &'static str,
 }
 
-const PRODUCT_PACKAGE_COUNT: usize = 15;
+const PRODUCT_PACKAGE_COUNT: usize = 16;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -70,6 +70,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "core/xref/Cargo.toml",
         package_name: "pdf-rs-xref",
         crate_name: "pdf_rs_xref",
+    },
+    ProductPackage {
+        manifest: "platform/browser/worker/Cargo.toml",
+        package_name: "pdf-rs-browser-worker",
+        crate_name: "pdf_rs_browser_worker",
     },
     ProductPackage {
         manifest: "runtime/cache/Cargo.toml",
@@ -1094,6 +1099,11 @@ mod tests {
             manifest: "core/font/Cargo.toml",
             package_name: "pdf-rs-font",
             crate_name: "pdf_rs_font",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "platform/browser/worker/Cargo.toml",
+            package_name: "pdf-rs-browser-worker",
+            crate_name: "pdf_rs_browser_worker",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "runtime/policy/Cargo.toml",

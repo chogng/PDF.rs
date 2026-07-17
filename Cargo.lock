@@ -25,6 +25,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-browser-worker"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-protocol",
+]
+
+[[package]]
 name = "pdf-rs-bytes"
 version = "0.1.0"
 

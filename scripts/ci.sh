@@ -148,6 +148,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-font \
     --package pdf-rs-raster \
     --package pdf-rs-scene \
+    --package pdf-rs-browser-worker \
     --package pdf-rs-cache \
     --package pdf-rs-policy \
     --package pdf-rs-protocol \
