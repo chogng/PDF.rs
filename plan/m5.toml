@@ -1,7 +1,8 @@
 schema = 1
 milestone = "M5"
 title = "Browser vertical slice"
-status = "planned"
+status = "in_progress"
+started_at = 2026-07-17
 depends_on = ["M2"]
 start_gates = ["M4-01"]
 exit_dependencies = ["M4-02", "M4-03", "M4"]
@@ -12,8 +13,8 @@ principles = [
   "Start implementation only after M4-01 freezes the canonical protocol and Surface schema; consume M4-02 CapabilityDecision and M4-03 Native RenderPlan without a browser-specific fork.",
   "Create at most one live Dedicated Native Engine Worker per viewer and keep all PDF parsing, Scene construction, capability evaluation, scheduling, caching, and raster work off the main thread.",
   "Keep TypeScript limited to host lifecycle, immutable-source transport, viewport virtualization, DOM, Canvas, input, transfer lists, and generated protocol validation; it owns no PDF semantics.",
-  "Prefer OffscreenCanvas or transferable ImageBitmap, retain transferable ArrayBuffer as the compatibility path, and enable SharedArrayBuffer only after explicit capability negotiation and cross-origin isolation.",
-  "Treat every structured-clone message and transfer list as untrusted input and validate it before allocation, Wasm-memory access, DOM mutation, or handle adoption.",
+  "Present only through Host-mediated transferable ImageBitmap, ArrayBuffer, or fenced SharedArrayBuffer; OffscreenCanvas is an optional Worker-private staging optimization and is never a DOM-bound wire Surface.",
+  "Carry control traffic in the canonical fixed_le_v1 binary frame and treat every frame plus out-of-band resource table as untrusted before typed allocation, Wasm-memory access, DOM mutation, or resource adoption.",
   "Release event listeners, ports, workers, observers, bitmaps, buffers, fetches, and surfaces on replacement, unmount, session close, Worker fault, and viewer shutdown.",
   "Keep PDFium, PDF.js, MuPDF, browser extensions, remote rendering services, and every other external PDF engine outside the product resource graph and recovery policy.",
   "Use real Chromium, Firefox, and WebKit runs for the exit gate; capability absence is tested as an explicit negotiated path rather than hidden by browser-specific mocks.",
@@ -23,7 +24,7 @@ registered_scope = [
   "Generated TypeScript protocol types and runtime validators for the bounded M4/M5 handshake, open, Range, viewport, capability, Surface, release, close, fault, and shutdown flow.",
   "A single Dedicated Worker supervisor that owns one Native engine epoch, validates messages, bounds queues, and replaces a failed Worker only after the old epoch is terminal.",
   "Local-file and immutable HTTP source opening with Range, no-Range, strong validators, source-change detection, cancellation, and transferable ProvideData segments.",
-  "Negotiated OffscreenCanvas, ImageBitmap, transferable ArrayBuffer, and optional SharedArrayBuffer Surface presentation with generation and lifecycle checks.",
+  "Negotiated ImageBitmap, transferable ArrayBuffer, and optional fenced SharedArrayBuffer Surface presentation, plus independently advertised Worker-private OffscreenCanvas staging.",
   "A thin page-virtualizing viewer that completes first viewport, continuous scroll, zoom, rotation, DPR, resize, stale-result suppression, structured failure display, and clean close.",
   "Real Chromium, Firefox, and WebKit coverage plus resource, Wasm import, worker graph, CSP, service-worker, dependency, source-map, and network scans proving a Native-only product graph.",
 ]
@@ -39,14 +40,15 @@ excluded_scope = [
 id = "M5-01"
 title = "Generated browser contract and build baseline"
 lane = "browser-contract"
-status = "planned"
+status = "complete"
+completed_at = 2026-07-17
 depends_on = ["M4-01"]
 outcome = "A reproducible browser package and Wasm build consume the frozen schema as generated TypeScript types, validators, message IDs, schema hash, and compatibility vectors."
 acceptance = [
   "The browser package, locked Node toolchain, TypeScript configuration, Wasm target, build outputs, and check commands are explicit and reproducible.",
   "No command, event, correlation, capability, error, or Surface field is independently handwritten in TypeScript, and the protocol boundary exposes no unbounded any type.",
-  "Validators check object shape, integer range, enum, payload length, sequence, Worker/session/request/generation correlation, transfer-slot count, and mandatory capability before use.",
-  "Validation errors are content-redacted and bounded; unknown optional fields follow negotiated minor-version rules.",
+  "Bounded decoders check binary framing, integer range, enum, payload length, sequence, Worker/session/request/generation correlation, resource-slot count, and mandatory capability before use.",
+  "Validation errors are content-redacted and bounded; fixed_le_v1 rejects unknown or trailing fields and accepts only the exact negotiated schema layout until a future length-delimited extension is explicitly registered.",
   "Generator check mode proves committed TypeScript and Rust bindings match the same canonical schema and exact schema hash.",
   "Node-side tests replay valid, truncated, oversized, stale-epoch, duplicate-sequence, unknown-variant, and transfer-slot mismatch vectors.",
   "The browser and Wasm product packages never depend on tools, baseline, ../pdfium, or an external PDF engine.",
@@ -61,8 +63,8 @@ depends_on = ["M5-01"]
 outcome = "One host-side supervisor owns the Dedicated Worker lifecycle, negotiated protocol epoch, bounded command and event queues, and deterministic fault replacement."
 acceptance = [
   "The supervisor models NotStarted, Starting, Ready, Draining, Stopped, and Failed and never has more than one live product PDF Worker.",
-  "Handshake negotiates protocol/schema, OffscreenCanvas, ImageBitmap, transferable buffers, optional shared memory, maximum message bytes, and transfer slots before Open.",
-  "Worker ingress validates structured-clone data before touching transfers or Wasm, and host completion only queues protocol work rather than invoking engine logic inline.",
+  "Handshake negotiates protocol/schema, ImageBitmap, transferable buffers, optional shared memory, maximum message bytes, and resource slots before Open; EngineHello separately advertises Worker-private OffscreenCanvas staging.",
+  "Worker ingress validates the fixed binary control frame and separate resource table before touching transferred resources or Wasm, and host completion only queues protocol work rather than invoking engine logic inline.",
   "Critical release, close, fault, and terminal traffic remains deliverable under bounded queue pressure while replaceable viewport and progress traffic can coalesce.",
   "Worker messageerror, error, termination, and restart map to bounded WorkerFault and a new epoch that invalidates every old session, request, and Surface.",
   "A fake MessagePort and virtual clock cover disorder, duplication, schema mismatch, queue saturation, close, fault, late old-epoch traffic, restart, and terminal cleanup without wall-clock sleeps.",
@@ -102,14 +104,14 @@ acceptance = [
 
 [[work_item]]
 id = "M5-05"
-title = "Transferable browser Surface paths"
+title = "Host-mediated browser Surface paths"
 lane = "browser-surface"
 status = "planned"
 depends_on = ["M4-01", "M4-02", "M4-03", "M5-02"]
-outcome = "The Worker and viewer negotiate and safely present Native surfaces through OffscreenCanvas, ImageBitmap, transferable ArrayBuffer, or optional shared memory."
+outcome = "The Worker and viewer negotiate and safely present Native surfaces through ImageBitmap, transferable ArrayBuffer, or optional fenced shared memory."
 acceptance = [
   "Every path validates Surface owner, Worker epoch, session, generation, renderer epoch, config hash, dimensions, stride, format, alpha, byte range, and transfer slot on both sides.",
-  "OffscreenCanvas is preferred when supported; ImageBitmap and ArrayBuffer are explicit degradations that preserve identical Native RenderPlan and capability semantics.",
+  "ImageBitmap is preferred when supported and ArrayBuffer is the explicit compatibility path; OffscreenCanvas may accelerate Worker-private staging but never commits directly to a DOM-bound canvas.",
   "SharedArrayBuffer is unreachable without cross-origin isolation and negotiated support; ordinary Wasm pointers never cross Worker or realm boundaries.",
   "Stale surfaces are never displayed but are always released or acknowledged; replacement, duplicate release, ImageBitmap close, lease reclaim, session close, and Worker fault are idempotent.",
   "Wasm-local views require the same Worker and memory epoch and are rebuilt or rejected after memory growth.",
@@ -171,8 +173,8 @@ depends_on = ["M5-07", "M5-08"]
 outcome = "Real Chromium, Firefox, and WebKit runs complete the bounded Native-only reading loop across the declared transport and device matrix."
 acceptance = [
   "Each engine completes Worker startup, Native open, Range and no-Range acquisition, first preview, first full viewport, continuous scroll, zoom, rotation, DPR, resize, stale-generation suppression, close, and shutdown.",
-  "The matrix records locked runner and browser versions, CI image, OS, architecture, DPR, viewport, OffscreenCanvas, ImageBitmap, shared-memory isolation, Wasm identity, schema hash, and renderer epoch.",
-  "Every engine runs a forced transferable fallback, while engines that actually support OffscreenCanvas additionally prove the real Offscreen path; WebKit is not required to claim an unavailable capability.",
+  "The matrix records locked runner and browser versions, CI image, OS, architecture, DPR, viewport, private OffscreenCanvas staging, ImageBitmap, shared-memory isolation, Wasm identity, schema hash, and renderer epoch.",
+  "Every engine runs the ArrayBuffer compatibility path, while engines that actually support ImageBitmap and private OffscreenCanvas staging additionally prove those real paths; WebKit is not required to claim an unavailable execution capability.",
   "ETag change, message disorder, Worker restart, duplicate release, shared-memory negotiation failure, and lifecycle cleanup use controllable events or barriers rather than correctness sleeps.",
   "Screenshots, protocol traces, Surface accounting, network logs, console diagnostics, and timing summaries are content-redacted and reproducible.",
   "No panic, hang, messageerror, unhandled rejection, stale display, leaked resource, unexpected unsupported, or undeclared network request remains open.",

@@ -39,14 +39,15 @@ excluded_scope = [
 id = "M4-01"
 title = "Canonical Engine protocol and Surface schema freeze"
 lane = "shared-contract"
-status = "in_progress"
+status = "complete"
+completed_at = 2026-07-17
 depends_on = []
 outcome = "One bounded canonical schema generates compatible Rust, TypeScript, and desktop-codec contracts for the M4/M5 reading flow and records an immutable schema identity."
 acceptance = [
   "The schema owns protocol version, message IDs, envelopes, endpoint capabilities, correlation identities, state preconditions, payload limits, transfer slots, and sensitive-field metadata.",
   "Surface metadata and mutually exclusive browser, shared-memory, and local-worker transports define checked dimensions, stride, offset, length, generation, config hash, renderer epoch, and owner identities.",
   "Generated Rust and TypeScript validators reject malformed envelopes before payload allocation or handle access; the desktop codec uses the same field registry and compatibility vectors.",
-  "Old/new minor compatibility, major mismatch, unknown mandatory capability, duplicate sequence, transfer-slot mismatch, and checked-arithmetic boundaries have deterministic tests.",
+  "The current fixed_le_v1 layout accepts only the exact registered minor and schema hash; older/future layouts, major mismatch, unknown mandatory capability, duplicate sequence, resource-slot mismatch, and checked-arithmetic boundaries have deterministic tests.",
   "The generator is reproducible, generated files are checked rather than rewritten by CI, and the schema hash is bound into build and test evidence.",
   "Completion satisfies the r0-development-plan start gate named protocol-and-surface-schema-frozen and unblocks M5-01.",
 ]
@@ -55,7 +56,8 @@ acceptance = [
 id = "M4-02"
 title = "Versioned product CapabilityDecision"
 lane = "runtime-policy"
-status = "planned"
+status = "complete"
+completed_at = 2026-07-17
 depends_on = ["M4-01"]
 outcome = "One product capability policy evaluates the complete Scene requirement graph before expensive rendering and publishes a bounded auditable decision."
 acceptance = [
@@ -72,7 +74,8 @@ acceptance = [
 id = "M4-03"
 title = "Native RenderPlan and complete render identities"
 lane = "runtime-policy"
-status = "planned"
+status = "complete"
+completed_at = 2026-07-17
 depends_on = ["M4-02"]
 outcome = "A backend-neutral immutable RenderPlan fixes every semantic, viewport, tile, output, policy, and renderer identity needed to produce Native surfaces."
 acceptance = [
@@ -121,7 +124,8 @@ acceptance = [
 id = "M4-06"
 title = "Viewport scheduler and generation arbitration"
 lane = "runtime-scheduler"
-status = "planned"
+status = "complete"
+completed_at = 2026-07-17
 depends_on = ["M4-03"]
 outcome = "One deterministic bounded scheduler prioritizes visible tiles, prevents starvation, coalesces replaceable viewport work, and suppresses stale generations."
 acceptance = [
@@ -168,9 +172,9 @@ title = "Authenticated desktop IPC and worker process"
 lane = "desktop"
 status = "planned"
 depends_on = ["M4-01", "M4-07", "M4-08"]
-outcome = "An authenticated length-bounded desktop transport starts an isolated Native worker, transfers source and shared-memory capabilities, and contains disconnects and faults."
+outcome = "An authenticated length-bounded desktop transport starts an isolated Native worker, serves immutable source bytes through the canonical Host-owned Range bridge, transfers shared-memory capabilities, and contains disconnects and faults."
 acceptance = [
-  "The host grants only an immutable local-source capability and shared-memory handles; the worker owns no arbitrary filesystem or network access.",
+  "The host retains the immutable local source and serves exact NeedData tickets through bounded ProvideData resource slots; the worker receives no source file descriptor and owns no arbitrary filesystem or network access.",
   "The authenticated length-bounded desktop codec transfers the same logical messages and Surface metadata as the canonical schema, including an exact out-of-band handle table.",
   "Peer identity, frame length, sequence, handle count, handle rights, session owner, Worker epoch, and disconnect are validated before payload or shared-memory access.",
   "Codec and worker panic cannot unwind across the process boundary; fault and restart create a new epoch and invalidate every old session, request, and Surface.",
