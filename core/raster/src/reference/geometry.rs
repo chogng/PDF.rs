@@ -86,6 +86,7 @@ pub(crate) struct GeometryWork<'a> {
     stroke_runs: u64,
     stroke_primitives: u64,
     geometry_bytes: u64,
+    peak_geometry_bytes: u64,
     fuel: u64,
     cancellation_checks: u64,
     fuel_since_cancellation: u64,
@@ -120,6 +121,7 @@ impl<'a> GeometryWork<'a> {
             stroke_runs: 0,
             stroke_primitives: 0,
             geometry_bytes: 0,
+            peak_geometry_bytes: 0,
             fuel: 0,
             cancellation_checks: 0,
             fuel_since_cancellation: 0,
@@ -158,6 +160,24 @@ impl<'a> GeometryWork<'a> {
 
     pub(crate) const fn geometry_bytes(&self) -> u64 {
         self.geometry_bytes
+    }
+
+    pub(crate) const fn peak_geometry_bytes(&self) -> u64 {
+        self.peak_geometry_bytes
+    }
+
+    pub(crate) fn tighten_geometry_bytes_limit(
+        &mut self,
+        maximum: u64,
+    ) -> Result<(), GeometryFailure> {
+        if maximum == 0
+            || maximum > self.limits.max_geometry_bytes
+            || self.peak_geometry_bytes > maximum
+        {
+            return Err(GeometryFailure::InvalidGeometry);
+        }
+        self.limits.max_geometry_bytes = maximum;
+        Ok(())
     }
 
     pub(crate) const fn fuel(&self) -> u64 {
@@ -332,7 +352,7 @@ impl<'a> GeometryWork<'a> {
             .map_err(|_| GeometryFailure::NumericOverflow)?
             .checked_mul(item_size)
             .ok_or(GeometryFailure::NumericOverflow)?;
-        checked_counter(
+        let transient_geometry_bytes = checked_counter(
             self.geometry_bytes,
             self.limits.max_geometry_bytes,
             new_capacity,
@@ -351,6 +371,7 @@ impl<'a> GeometryWork<'a> {
         replacement.append(values);
         *values = replacement;
         self.geometry_bytes = committed_geometry_bytes;
+        self.peak_geometry_bytes = self.peak_geometry_bytes.max(transient_geometry_bytes);
         Ok(())
     }
 
@@ -1488,6 +1509,7 @@ mod tests {
         assert_eq!(values, original);
         assert_eq!(values.capacity(), original_capacity);
         assert_eq!(work.geometry_bytes(), original_geometry_bytes);
+        assert_eq!(work.peak_geometry_bytes(), original_geometry_bytes);
 
         work.limits.max_geometry_bytes = GeometryLimits::default().max_geometry_bytes;
         work.try_push_geometry(&mut values, 30_u64).unwrap();
@@ -1496,6 +1518,7 @@ mod tests {
             work.geometry_bytes(),
             u64::try_from(values.capacity()).unwrap() * 8
         );
+        assert_eq!(work.peak_geometry_bytes(), exact_transient_bytes);
     }
 
     #[test]
@@ -1531,6 +1554,28 @@ mod tests {
         assert_eq!(values, original);
         assert_eq!(values.capacity(), original_capacity);
         assert_eq!(work.geometry_bytes(), original_geometry_bytes);
+        assert_eq!(work.peak_geometry_bytes(), original_geometry_bytes);
+    }
+
+    #[test]
+    fn geometry_limit_can_only_tighten_without_hiding_an_observed_peak() {
+        let cancellation = Cancellation::never();
+        let mut work = GeometryWork::new(GeometryLimits::default(), &cancellation).unwrap();
+        let mut values = Vec::new();
+        work.try_push_geometry(&mut values, 10_u64).unwrap();
+        let observed_peak = work.peak_geometry_bytes();
+        assert!(observed_peak > 0);
+
+        assert_eq!(
+            work.tighten_geometry_bytes_limit(observed_peak - 1),
+            Err(GeometryFailure::InvalidGeometry)
+        );
+        assert_eq!(
+            work.tighten_geometry_bytes_limit(GeometryLimits::default().max_geometry_bytes + 1),
+            Err(GeometryFailure::InvalidGeometry)
+        );
+        work.tighten_geometry_bytes_limit(observed_peak).unwrap();
+        assert_eq!(work.limits().max_geometry_bytes, observed_peak);
     }
 
     #[test]

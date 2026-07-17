@@ -9,8 +9,9 @@ M3-05 and M3-06 additionally freeze the project-owned `reference-raster-v1` geom
 page-to-device mapping, checked fixed-point path flattening, 8x8 scalar coverage, registered
 stroke construction, and nested clip-mask composition. M3-07 freezes `reference-color-v1` for
 DeviceGray, DeviceRGB, DeviceCMYK, constant alpha, premultiplied arithmetic, Normal, Multiply,
-Screen, and straight-alpha RGBA8 publication. Glyph, image, and full renderer integration remain
-later M3 work.
+Screen, and straight-alpha RGBA8 publication. M3-08 adds the staged `reference-image-v1` basic
+unmasked image kernel. M3-09 adds the staged `reference-glyph-v1` embedded-outline kernel. Both
+remain outside `ReferenceRenderJob` until the full visible-command integration in M3-10.
 
 `CanonicalPixelBuffer` is not the worker/session-owned transferable `Surface` lifecycle. It owns
 no `SurfaceId`, generation, epoch, acquire, transfer, release, timeout, shared memory, texture, or
@@ -58,6 +59,11 @@ dedicated `reference_geometry_kernel` integration harness until M3-10 connects t
 conversion, premultiplication, separable blend, publication-rounding, literal layered-shape,
 capability-rejection, and independent review evidence are present. The color kernel remains
 separate from `ReferenceRenderJob` until M3-10.
+
+The staged M3-08 and M3-09 kernels likewise do not promote the pixel profile. `reference-image-v1`
+accepts only already decoded basic unmasked Scene images. `reference-glyph-v1` accepts only
+already mapped, positioned, project-owned Scene glyph outlines. Neither kernel performs external
+I/O, font lookup, shaping, hinting, codec fallback, platform antialiasing, or partial publication.
 
 This is not a `REFERENCE` maturity promotion and not an O0/O1 pixel authority. It is not the
 integrated `reference-raster-v1` renderer or the M3 exit gate.
@@ -117,7 +123,8 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
   `GeometryWork::geometry_bytes` is deliberately a conservative retained upper bound: capacities
   from dropped temporary geometry remain charged for the rest of that render attempt. This can
   reject early but cannot undercount live geometry; coverage and clip masks additionally maintain
-  their own exact allocator-capacity and peak-retained limits.
+  their own exact allocator-capacity and peak-retained limits. `peak_geometry_bytes` records the
+  greatest old-plus-replacement capacity observed before each transactional handoff.
 - `reference-color-v1` represents normalized channels as endpoint-inclusive Q16 integers in
   `[0, 65_536]`. Scene `u16` endpoints are converted with nearest rounding; exact half-way
   products and publication conversions round toward positive infinity.
@@ -133,6 +140,27 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
 - Publication first unpremultiplies nonzero-alpha channels to Q16, then rounds each channel to
   RGBA8. Alpha zero publishes `[0, 0, 0, 0]`; the exact half-intensity Q16 boundary publishes
   eight-bit 128.
+- `reference-image-v1` maps the transformed image unit square through the same Q32.32 page/device
+  affine, samples nearest-neighbor texels at the canonical 8x8 positions, converts registered
+  DeviceGray/RGB/CMYK bytes through `reference-color-v1`, applies clip/alpha/blend per sample, and
+  averages once into a private Q16 result. Singular image transforms are valid no-ops.
+- `reference-glyph-v1` resolves every positioned glyph identifier against the immutable Scene
+  resource table. Its transform order is page-to-device, glyph-to-page, then design units divided
+  by `units_per_em`. The result uses the registered Q32.32 1/256-pixel flattener and nonzero 8x8
+  fill coverage.
+- Glyph outlines in one `GlyphRun` are unioned at the 64-bit sample-mask level before applying the
+  run's single paint. This avoids hidden per-glyph alpha accumulation and allocates no temporary
+  full-page mask per outline. Clip masks use bitwise intersection with the same sample positions;
+  constant paint and Normal/Multiply/Screen compositing use `reference-color-v1`.
+- Glyph limits independently admit positioned glyphs, resource lookups, source outline segments,
+  flattened segments, edges, samples, mask bytes, output pixels, covered-sample composites,
+  geometry bytes, aggregate live retained bytes, curve recursion, geometry fuel, and orchestration
+  fuel. After the allocator reports the coverage capacity, the glyph kernel tightens geometry to
+  the lesser of its independent limit and the aggregate retained budget remaining after coverage.
+  Geometry replacement capacity is admitted and recorded at its transient peak. Aggregate retained
+  statistics are the greater of coverage plus peak geometry and coverage plus output pixels, so a
+  retained-limit failure is never mislabeled as an independent geometry-limit failure. Both the
+  glyph and shared geometry work schedules probe cancellation at fixed fuel intervals.
 - Scene values outside the typed device colors and three blend modes are never coerced into a
   fallback paint. Unsupported color, alpha, blend, mask, or group requirements remain structured
   capability outcomes before the staged color kernel or pixel publication.
@@ -172,13 +200,20 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
   half-alpha Screen green over opaque white with literal final RGBA8 pixels.
 - Structured unsupported outcomes for unsupported device-color, constant-alpha, blend, and group
   requirements before visible command dispatch or pixel publication.
+- Exact one- and two-pixel image orientation, transforms, rotations, texel boundaries, clip,
+  alpha/blend, singular transforms, conservative admission, every-budget exact/one-less limits,
+  and cancellation fixtures.
+- Analytic one-em square, half-width, quarter-em, half-sample triangle, two-by-two translation, all
+  page rotations, clip, alpha/blend, overlapping-run union, empty-outline, singular-transform,
+  invalid-resource, curve-recursion, every-budget exact/one-less, coverage-plus-transient-geometry
+  aggregate retention, independent geometry retention, and cancellation glyph fixtures.
 
 # Known deviations and unsupported cases
 
-- No visible Scene command is supported yet by `ReferenceRenderJob`. The path, fill, stroke, and
-  clip and color/compositing kernels are frozen and reviewed but intentionally remain outside that
-  job until the integrated M3-10 command pipeline. Text, glyphs, images, groups, masks, shadings,
-  patterns, bounds indexes, and integrated renderer capability decisions remain later M3 work.
+- No visible Scene command is supported yet by `ReferenceRenderJob`. The path, fill, stroke, clip,
+  color/compositing, basic image, and glyph-outline kernels intentionally remain outside that job
+  until the integrated M3-10 command pipeline. Advanced fonts/text, groups, masks, shadings,
+  patterns, bounds indexes, and integrated renderer capability decisions remain later work.
 - The fixed white output is a value contract for the current non-painting Scene subset, not proof
   that arbitrary pages render successfully.
 - The profile has no O0/O1 pixel authority, reviewed O3 golden, fuzz target, benchmark, maturity
@@ -188,6 +223,12 @@ integrated `reference-raster-v1` renderer or the M3 exit gate.
 
 # History
 
+- 2026-07-16: Added staged `reference-glyph-v1` project-owned outline lookup, font-unit/glyph/page
+  transforms, shared nonzero 8x8 sample-mask union, clip and color compositing, independent work,
+  aggregate/transient memory, recursion, and cancellation limits, and analytic glyph fixtures
+  without system fonts.
+- 2026-07-16: Added staged `reference-image-v1` basic unmasked image mapping, nearest-neighbor 8x8
+  sampling, DeviceGray/RGB/CMYK conversion, clip/alpha/blend compositing, and bounded exact tests.
 - 2026-07-16: Added staged `reference-color-v1` DeviceGray/RGB/CMYK conversion,
   premultiplied constant alpha, Normal/Multiply/Screen source-over, exact straight RGBA8
   publication, literal layered-shape expectations, and structured unsupported capability tests.

@@ -170,6 +170,106 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
 }
 
 #[test]
+fn staged_glyph_kernel_is_project_owned_bounded_and_not_renderer_mounted() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let glyph = fs::read_to_string(crate_root.join("src/reference/glyph.rs"))
+        .expect("staged glyph source must be readable");
+    let coverage = fs::read_to_string(crate_root.join("src/reference/coverage.rs"))
+        .expect("coverage source must be readable");
+    let module = fs::read_to_string(crate_root.join("src/reference/mod.rs"))
+        .expect("Reference module source must be readable");
+    let render = fs::read_to_string(crate_root.join("src/reference/render.rs"))
+        .expect("Reference renderer source must be readable");
+    let tests = fs::read_to_string(crate_root.join("tests/reference_glyph.rs"))
+        .expect("glyph tests must be readable");
+    let provenance =
+        fs::read_to_string(crate_root.join("PROVENANCE.md")).expect("provenance must be readable");
+
+    for required in [
+        "pub(crate) const PROFILE: &'static str = \"reference-glyph-v1\"",
+        "resources: &[GraphicsResourceEntry]",
+        "resolve_outline(resources, glyph.outline())?",
+        "page_map\n        .combined(glyph_to_page)?\n        .checked_concat(font_units_to_em)?",
+        "rasterize_fill_union(",
+        "FillRule::Nonzero",
+        "ReferenceColorProfile::ReferenceColorV1.prepare_paint(run.paint())",
+        "max_curve_recursion",
+        "max_retained_bytes",
+        "max_geometry_fuel",
+        "tighten_geometry_bytes_limit(effective_geometry_bytes)",
+        "coverage_geometry_peak",
+        "peak_geometry_bytes",
+        "GlyphLimitKind::RetainedBytes",
+        "CANCELLATION_FUEL_INTERVAL: u64 = 256",
+    ] {
+        assert!(
+            glyph.contains(required),
+            "staged glyph kernel must retain invariant marker {required:?}"
+        );
+    }
+    for required in [
+        "pub(crate) fn rasterize_fill_union(",
+        "mask.samples[index] | pixel_mask",
+    ] {
+        assert!(
+            coverage.contains(required),
+            "coverage union must retain invariant marker {required:?}"
+        );
+    }
+    for forbidden in [
+        "std::fs",
+        "std::process",
+        "fontconfig",
+        "font-kit",
+        "freetype",
+        "harfbuzz",
+        "core_text",
+        "directwrite",
+    ] {
+        assert!(
+            !glyph.to_ascii_lowercase().contains(forbidden),
+            "staged glyph kernel must not use external font/runtime token {forbidden:?}"
+        );
+    }
+    assert!(
+        !module.contains("mod glyph;"),
+        "glyph kernel stays outside the product Reference module until M3-10"
+    );
+    assert!(
+        !render.contains("rasterize_glyph_run"),
+        "glyph kernel stays outside ReferenceRenderJob until M3-10"
+    );
+    for required in [
+        "one_em_square_uses_font_units_then_glyph_and_page_transforms",
+        "page_rotations_apply_after_font_unit_and_glyph_transforms",
+        "run_outlines_union_before_one_alpha_and_blend_application",
+        "nonzero_glyph_resource_identifier_resolves_in_mixed_first_use_order",
+        "every_glyph_budget_has_an_exact_and_one_less_boundary",
+        "aggregate_retention_counts_coverage_plus_transient_geometry",
+        "glyph_curve_recursion_is_bounded_and_singular_transforms_are_no_ops",
+        "cancellation_is_observed_before_allocations_during_geometry_and_before_return",
+    ] {
+        assert!(
+            tests.contains(required),
+            "glyph harness must retain analytic/boundary test {required:?}"
+        );
+    }
+    for required in [
+        "`reference-glyph-v1`",
+        "page-to-device, glyph-to-page, then design units divided",
+        "unioned at the 64-bit sample-mask level",
+        "coverage plus peak geometry",
+        "No visible Scene command is supported yet by `ReferenceRenderJob`",
+        "without system fonts",
+    ] {
+        assert!(
+            provenance.contains(required),
+            "glyph provenance must state {required:?}"
+        );
+    }
+}
+
+#[test]
 fn m3_reference_pixel_foundation_is_traceable_without_maturity_overclaim() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root

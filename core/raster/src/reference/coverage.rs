@@ -326,6 +326,49 @@ pub(crate) fn rasterize_fill(
     height: u32,
     work: &mut GeometryWork<'_>,
 ) -> Result<CoverageMask, GeometryFailure> {
+    let requirements = fill_requirements(edges, width, height, work)?;
+    let initialization_fuel = CoverageMask::initialization_fuel(width, height)?;
+    let total_fuel = initialization_fuel
+        .checked_add(requirements.raster_fuel)
+        .ok_or(GeometryFailure::NumericOverflow)?;
+    work.preflight_fuel(total_fuel)?;
+    let mut mask = CoverageMask::empty(width, height, work)?;
+    rasterize_fill_pixels(edges, rule, requirements.bounds, &mut mask, false, work)?;
+    Ok(mask)
+}
+
+/// Rasterizes another fill into an existing mask using sample-wise union.
+///
+/// This preserves the canonical 8x8 sample positions while allowing one paint operation, such as
+/// a glyph run, to merge multiple independently transformed outlines without allocating a full
+/// temporary mask for every outline.
+#[allow(
+    dead_code,
+    reason = "the staged geometry-only harness compiles coverage without the staged glyph adapter"
+)]
+pub(crate) fn rasterize_fill_union(
+    edges: &FillEdges,
+    rule: FillRule,
+    mask: &mut CoverageMask,
+    work: &mut GeometryWork<'_>,
+) -> Result<(), GeometryFailure> {
+    let requirements = fill_requirements(edges, mask.width, mask.height, work)?;
+    work.preflight_fuel(requirements.raster_fuel)?;
+    rasterize_fill_pixels(edges, rule, requirements.bounds, mask, true, work)
+}
+
+#[derive(Clone, Copy)]
+struct FillRequirements {
+    bounds: PixelBounds,
+    raster_fuel: u64,
+}
+
+fn fill_requirements(
+    edges: &FillEdges,
+    width: u32,
+    height: u32,
+    work: &GeometryWork<'_>,
+) -> Result<FillRequirements, GeometryFailure> {
     let bounds = edges.pixel_bounds(width, height)?;
     let bounded_pixels = u64::from(bounds.end_x.saturating_sub(bounds.start_x))
         .checked_mul(u64::from(bounds.end_y.saturating_sub(bounds.start_y)))
@@ -337,13 +380,23 @@ pub(crate) fn rasterize_fill(
     let comparison_fuel = samples
         .checked_mul(edges.comparison_bound()?)
         .ok_or(GeometryFailure::NumericOverflow)?;
-    let initialization_fuel = CoverageMask::initialization_fuel(width, height)?;
-    let total_fuel = initialization_fuel
-        .checked_add(samples)
-        .and_then(|value| value.checked_add(comparison_fuel))
+    let raster_fuel = samples
+        .checked_add(comparison_fuel)
         .ok_or(GeometryFailure::NumericOverflow)?;
-    work.preflight_fuel(total_fuel)?;
-    let mut mask = CoverageMask::empty(width, height, work)?;
+    Ok(FillRequirements {
+        bounds,
+        raster_fuel,
+    })
+}
+
+fn rasterize_fill_pixels(
+    edges: &FillEdges,
+    rule: FillRule,
+    bounds: PixelBounds,
+    mask: &mut CoverageMask,
+    union: bool,
+    work: &mut GeometryWork<'_>,
+) -> Result<(), GeometryFailure> {
     for y in bounds.start_y..bounds.end_y {
         for x in bounds.start_x..bounds.end_x {
             work.charge_samples(u64::from(SAMPLES_PER_PIXEL))?;
@@ -363,10 +416,14 @@ pub(crate) fn rasterize_fill(
                 }
             }
             let index = mask.index(x, y).ok_or(GeometryFailure::InvalidGeometry)?;
-            mask.samples[index] = pixel_mask;
+            mask.samples[index] = if union {
+                mask.samples[index] | pixel_mask
+            } else {
+                pixel_mask
+            };
         }
     }
-    Ok(mask)
+    Ok(())
 }
 
 fn ensure_coverage_bytes(
