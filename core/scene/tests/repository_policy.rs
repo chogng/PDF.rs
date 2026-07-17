@@ -101,8 +101,8 @@ fn canonical_scene_omits_runtime_source_identity_and_float_formatting() {
     assert!(!canonical.contains("f64"));
     assert!(canonical.contains("push_i64(value.scaled())"));
     assert!(canonical.contains("push_hex(tag.bytes())"));
-    assert!(canonical.contains("reserve_output(encoded_len)?"));
-    assert!(!canonical.contains("self.push(&encoded)?"));
+    assert!(canonical.contains("bytes.chunks(INPUT_CHUNK_BYTES)"));
+    assert!(canonical.contains("self.push(&encoded[..chunk_encoded_len])?"));
     assert!(builder.contains("preflight_append("));
     assert!(builder.contains("capacity_after_one("));
     assert!(!builder.contains("try_reserve_exact(1)"));

@@ -1,0 +1,14 @@
+[package]
+name = "pdf-rs-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-protocol = { path = "../protocol" }
+pdf-rs-scene = { path = "../../core/scene" }
+
+[dev-dependencies]
+pdf-rs-syntax = { path = "../../core/syntax" }

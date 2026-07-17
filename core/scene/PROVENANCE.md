@@ -119,9 +119,11 @@ separate M2 normative Scene gate.
   anchor. No platform floating formatter, environment path, timestamp, thread identity, pointer,
   or allocator order enters the output.
 - Canonical bytes have an independent checked output ceiling and fallible allocation policy.
-  The writer grows in bounded geometric steps and reserves an entire hexadecimal name encoding
-  before writing it, avoiding fragment-by-fragment or byte-by-byte reallocation. Canonical
-  serialization never mutates the Scene.
+  The writer grows in bounded geometric steps and emits hexadecimal payloads in fixed 256-byte
+  input chunks, avoiding byte-by-byte reallocation. The observed canonical API invokes a
+  caller-owned observer before each bounded output fragment and publishes no byte vector if the
+  observer interrupts; the original API uses the same writer without an observer and remains
+  byte-identical. Canonical serialization never mutates the Scene.
 - `compare_scenes` ignores only runtime `SourceIdentity`; it compares schema major/minor, page
   index, exact Page object, revision anchor, geometry, feature decision and ordered tags, stable
   resources, semantic commands, and their paired provenance. Scalar fields are visited in fixed
@@ -142,6 +144,8 @@ separate M2 normative Scene gate.
 - Exact populated-Scene canonical JSON covering command, resource, feature, provenance, and nested
   object field order.
 - Canonical equality across distinct runtime source identities.
+- Byte-identical observed/unobserved canonical output and observer interruption without
+  publication.
 - Stable first-use resource IDs, duplicate reuse, feature tags, raw-name hexadecimal encoding,
   and repeat-build determinism.
 - Negative-zero normalization, exact extrema, precision rejection, syntax rejection,
@@ -186,6 +190,8 @@ separate M2 normative Scene gate.
 
 # History
 
+- 2026-07-17: Added bounded canonical-output observation so upper product layers can cooperatively
+  interrupt long Scene serialization without changing canonical bytes or dependency direction.
 - 2026-07-16: Added the Scene-v2 glyph handoff with deterministic quadratic-to-cubic conversion,
   first-use outline interning, positioned glyph runs, combined transient/final retained admission,
   and exact one-less atomicity coverage for shared and distinct outline backing.

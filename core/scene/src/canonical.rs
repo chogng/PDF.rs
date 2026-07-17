@@ -4,9 +4,9 @@ use crate::{
     BlendMode, CapabilityContext, CapabilityDecision, CapabilityStatus, CommandSource, DeviceColor,
     FillRule, GraphicsCapability, GraphicsCommand, GraphicsCommandRecord, GraphicsResource,
     GraphicsResourceSource, GraphicsScene, ImageColorSpace, LineCap, LineJoin, LineStyle, Matrix,
-    PageGeometry, PathResource, PathSegment, Scene, SceneBounds, SceneCommand, SceneCommandKind,
-    SceneError, SceneErrorCode, SceneFeature, SceneLimitKind, ScenePoint, SceneRect, SceneResource,
-    SceneResourceKind,
+    PageGeometry, PathResource, PathSegment, Scene, SceneBounds, SceneCanonicalObserver,
+    SceneCommand, SceneCommandKind, SceneError, SceneErrorCode, SceneFeature, SceneLimitKind,
+    ScenePoint, SceneRect, SceneResource, SceneResourceKind,
 };
 
 impl Scene {
@@ -16,8 +16,26 @@ impl Scene {
     /// name bytes use lowercase hexadecimal, and numeric values use scaled integers. Runtime
     /// [`pdf_rs_bytes::SourceIdentity`] is deliberately omitted.
     pub fn canonical_json_bytes(&self) -> Result<Vec<u8>, SceneError> {
+        self.canonical_json_bytes_impl(None)
+    }
+
+    /// Serializes canonical JSON while allowing a caller-owned observer to interrupt bounded work.
+    ///
+    /// Successful output is byte-identical to [`Self::canonical_json_bytes`]. If the observer
+    /// returns `false`, no byte vector is published.
+    pub fn canonical_json_bytes_observed(
+        &self,
+        observer: &mut dyn SceneCanonicalObserver,
+    ) -> Result<Vec<u8>, SceneError> {
+        self.canonical_json_bytes_impl(Some(observer))
+    }
+
+    fn canonical_json_bytes_impl(
+        &self,
+        observer: Option<&mut dyn SceneCanonicalObserver>,
+    ) -> Result<Vec<u8>, SceneError> {
         if let Some(graphics) = self.graphics() {
-            return canonical_graphics_json_bytes(self, graphics);
+            return canonical_graphics_json_bytes(self, graphics, observer);
         }
         if self.commands().len() != self.provenance().len() {
             return Err(SceneError::for_code(
@@ -28,6 +46,7 @@ impl Scene {
         let mut writer = CanonicalWriter::new(
             self.limits().max_canonical_bytes(),
             SceneLimitKind::CanonicalBytes,
+            observer,
         );
         writer.push(b"{\"binding\":{\"page_index\":")?;
         writer.push_u32(self.binding().page_index())?;
@@ -77,10 +96,12 @@ impl Scene {
 fn canonical_graphics_json_bytes(
     scene: &Scene,
     graphics: &GraphicsScene,
+    observer: Option<&mut dyn SceneCanonicalObserver>,
 ) -> Result<Vec<u8>, SceneError> {
     let mut writer = CanonicalWriter::new(
         graphics.limits().max_canonical_bytes(),
         SceneLimitKind::CanonicalBytes,
+        observer,
     );
     writer.push(b"{\"binding\":{\"page_index\":")?;
     writer.push_u32(scene.binding().page_index())?;
@@ -136,7 +157,7 @@ fn canonical_graphics_json_bytes(
 }
 
 fn write_graphics_command_record(
-    writer: &mut CanonicalWriter,
+    writer: &mut CanonicalWriter<'_>,
     record: &GraphicsCommandRecord,
 ) -> Result<(), SceneError> {
     writer.push(b"{\"bounds\":")?;
@@ -149,7 +170,7 @@ fn write_graphics_command_record(
 }
 
 fn write_graphics_command(
-    writer: &mut CanonicalWriter,
+    writer: &mut CanonicalWriter<'_>,
     command: &GraphicsCommand,
 ) -> Result<(), SceneError> {
     match command {
@@ -266,7 +287,7 @@ fn write_graphics_command(
 }
 
 fn write_graphics_resource(
-    writer: &mut CanonicalWriter,
+    writer: &mut CanonicalWriter<'_>,
     resource: &GraphicsResource,
 ) -> Result<(), SceneError> {
     match resource {
@@ -311,7 +332,7 @@ fn write_graphics_resource(
 }
 
 fn write_graphics_resource_source(
-    writer: &mut CanonicalWriter,
+    writer: &mut CanonicalWriter<'_>,
     source: GraphicsResourceSource,
 ) -> Result<(), SceneError> {
     writer.push(b"{\"decode_context\":")?;
@@ -323,7 +344,7 @@ fn write_graphics_resource_source(
     writer.push(b"}")
 }
 
-fn write_path(writer: &mut CanonicalWriter, path: &PathResource) -> Result<(), SceneError> {
+fn write_path(writer: &mut CanonicalWriter<'_>, path: &PathResource) -> Result<(), SceneError> {
     writer.push(b"[")?;
     for (index, segment) in path.segments().iter().enumerate() {
         writer.separator(index)?;
@@ -357,7 +378,7 @@ fn write_path(writer: &mut CanonicalWriter, path: &PathResource) -> Result<(), S
     writer.push(b"]")
 }
 
-fn write_bounds(writer: &mut CanonicalWriter, bounds: SceneBounds) -> Result<(), SceneError> {
+fn write_bounds(writer: &mut CanonicalWriter<'_>, bounds: SceneBounds) -> Result<(), SceneError> {
     match bounds {
         SceneBounds::Empty => writer.push(b"\"empty\""),
         SceneBounds::Page => writer.push(b"\"page\""),
@@ -375,7 +396,7 @@ fn write_bounds(writer: &mut CanonicalWriter, bounds: SceneBounds) -> Result<(),
     }
 }
 
-fn write_point(writer: &mut CanonicalWriter, point: ScenePoint) -> Result<(), SceneError> {
+fn write_point(writer: &mut CanonicalWriter<'_>, point: ScenePoint) -> Result<(), SceneError> {
     writer.push(b"[")?;
     writer.push_i64(point.x().scaled())?;
     writer.push(b",")?;
@@ -383,7 +404,7 @@ fn write_point(writer: &mut CanonicalWriter, point: ScenePoint) -> Result<(), Sc
     writer.push(b"]")
 }
 
-fn write_matrix(writer: &mut CanonicalWriter, matrix: Matrix) -> Result<(), SceneError> {
+fn write_matrix(writer: &mut CanonicalWriter<'_>, matrix: Matrix) -> Result<(), SceneError> {
     writer.push(b"[")?;
     for (index, value) in matrix.components().iter().copied().enumerate() {
         writer.separator(index)?;
@@ -392,7 +413,7 @@ fn write_matrix(writer: &mut CanonicalWriter, matrix: Matrix) -> Result<(), Scen
     writer.push(b"]")
 }
 
-fn write_paint(writer: &mut CanonicalWriter, paint: crate::Paint) -> Result<(), SceneError> {
+fn write_paint(writer: &mut CanonicalWriter<'_>, paint: crate::Paint) -> Result<(), SceneError> {
     writer.push(b"{\"alpha\":")?;
     writer.push_u16(paint.alpha().get())?;
     writer.push(b",\"blend_mode\":")?;
@@ -433,7 +454,7 @@ fn write_paint(writer: &mut CanonicalWriter, paint: crate::Paint) -> Result<(), 
     writer.push(b"}")
 }
 
-fn write_line_style(writer: &mut CanonicalWriter, style: &LineStyle) -> Result<(), SceneError> {
+fn write_line_style(writer: &mut CanonicalWriter<'_>, style: &LineStyle) -> Result<(), SceneError> {
     writer.push(b"{\"cap\":")?;
     writer.push(match style.cap() {
         LineCap::Butt => b"\"butt\"",
@@ -463,7 +484,7 @@ fn write_line_style(writer: &mut CanonicalWriter, style: &LineStyle) -> Result<(
 }
 
 fn write_capability_context(
-    writer: &mut CanonicalWriter,
+    writer: &mut CanonicalWriter<'_>,
     context: CapabilityContext,
 ) -> Result<(), SceneError> {
     match context {
@@ -511,11 +532,14 @@ fn blend_mode_label(mode: BlendMode) -> &'static [u8] {
     }
 }
 
-fn write_bool(writer: &mut CanonicalWriter, value: bool) -> Result<(), SceneError> {
+fn write_bool(writer: &mut CanonicalWriter<'_>, value: bool) -> Result<(), SceneError> {
     writer.push(if value { b"true" } else { b"false" })
 }
 
-fn write_command(writer: &mut CanonicalWriter, command: &SceneCommand) -> Result<(), SceneError> {
+fn write_command(
+    writer: &mut CanonicalWriter<'_>,
+    command: &SceneCommand,
+) -> Result<(), SceneError> {
     match command.kind() {
         SceneCommandKind::BeginMarkedContent => {
             let tag = command
@@ -535,7 +559,10 @@ fn write_command(writer: &mut CanonicalWriter, command: &SceneCommand) -> Result
     }
 }
 
-fn write_geometry(writer: &mut CanonicalWriter, geometry: PageGeometry) -> Result<(), SceneError> {
+fn write_geometry(
+    writer: &mut CanonicalWriter<'_>,
+    geometry: PageGeometry,
+) -> Result<(), SceneError> {
     writer.push(b"{\"crop_box\":")?;
     write_rect(writer, geometry.crop_box())?;
     writer.push(b",\"media_box\":")?;
@@ -545,7 +572,7 @@ fn write_geometry(writer: &mut CanonicalWriter, geometry: PageGeometry) -> Resul
     writer.push(b"}")
 }
 
-fn write_rect(writer: &mut CanonicalWriter, rect: SceneRect) -> Result<(), SceneError> {
+fn write_rect(writer: &mut CanonicalWriter<'_>, rect: SceneRect) -> Result<(), SceneError> {
     writer.push(b"[")?;
     for (index, value) in rect.coordinates().iter().copied().enumerate() {
         writer.separator(index)?;
@@ -554,7 +581,7 @@ fn write_rect(writer: &mut CanonicalWriter, rect: SceneRect) -> Result<(), Scene
     writer.push(b"]")
 }
 
-fn write_source(writer: &mut CanonicalWriter, source: CommandSource) -> Result<(), SceneError> {
+fn write_source(writer: &mut CanonicalWriter<'_>, source: CommandSource) -> Result<(), SceneError> {
     writer.push(b"{\"decoded_length\":")?;
     writer.push_u64(source.decoded_length())?;
     writer.push(b",\"decoded_start\":")?;
@@ -568,7 +595,10 @@ fn write_source(writer: &mut CanonicalWriter, source: CommandSource) -> Result<(
     writer.push(b"}")
 }
 
-fn write_resource(writer: &mut CanonicalWriter, resource: SceneResource) -> Result<(), SceneError> {
+fn write_resource(
+    writer: &mut CanonicalWriter<'_>,
+    resource: SceneResource,
+) -> Result<(), SceneError> {
     writer.push(b"{\"id\":")?;
     writer.push_u32(resource.id().value())?;
     writer.push(b",\"kind\":")?;
@@ -582,7 +612,10 @@ fn write_resource(writer: &mut CanonicalWriter, resource: SceneResource) -> Resu
     writer.push(b"}")
 }
 
-fn write_object_ref(writer: &mut CanonicalWriter, reference: ObjectRef) -> Result<(), SceneError> {
+fn write_object_ref(
+    writer: &mut CanonicalWriter<'_>,
+    reference: ObjectRef,
+) -> Result<(), SceneError> {
     writer.push(b"{\"generation\":")?;
     writer.push_u16(reference.generation())?;
     writer.push(b",\"number\":")?;
@@ -590,43 +623,50 @@ fn write_object_ref(writer: &mut CanonicalWriter, reference: ObjectRef) -> Resul
     writer.push(b"}")
 }
 
-pub(crate) struct CanonicalWriter {
+pub(crate) struct CanonicalWriter<'a> {
     bytes: Vec<u8>,
     limit: u64,
     limit_kind: SceneLimitKind,
+    observer: Option<&'a mut dyn SceneCanonicalObserver>,
 }
 
-impl CanonicalWriter {
-    pub(crate) const fn new(limit: u64, limit_kind: SceneLimitKind) -> Self {
+impl<'a> CanonicalWriter<'a> {
+    pub(crate) const fn new(
+        limit: u64,
+        limit_kind: SceneLimitKind,
+        observer: Option<&'a mut dyn SceneCanonicalObserver>,
+    ) -> Self {
         Self {
             bytes: Vec::new(),
             limit,
             limit_kind,
+            observer,
         }
     }
 
     pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<(), SceneError> {
+        self.observe(bytes)?;
         self.reserve_output(bytes.len())?;
         self.bytes.extend_from_slice(bytes);
         Ok(())
     }
 
-    fn reserve_output(&mut self, additional: usize) -> Result<(), SceneError> {
-        let consumed = u64::try_from(self.bytes.len())
-            .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?;
-        let attempted = u64::try_from(additional).unwrap_or(u64::MAX);
-        let next = consumed.checked_add(attempted).ok_or_else(|| {
-            SceneError::resource(self.limit_kind, self.limit, consumed, attempted, None)
-        })?;
-        if next > self.limit {
-            return Err(SceneError::resource(
-                self.limit_kind,
-                self.limit,
-                consumed,
-                attempted,
+    fn observe(&mut self, bytes: &[u8]) -> Result<(), SceneError> {
+        if self
+            .observer
+            .as_deref_mut()
+            .is_some_and(|observer| !observer.observe(bytes))
+        {
+            return Err(SceneError::for_code(
+                SceneErrorCode::CanonicalizationInterrupted,
                 None,
             ));
         }
+        Ok(())
+    }
+
+    fn reserve_output(&mut self, additional: usize) -> Result<(), SceneError> {
+        let (consumed, attempted) = self.ensure_output_limit(additional)?;
         let required = self
             .bytes
             .len()
@@ -656,6 +696,25 @@ impl CanonicalWriter {
             )
         })?;
         Ok(())
+    }
+
+    fn ensure_output_limit(&self, additional: usize) -> Result<(u64, u64), SceneError> {
+        let consumed = u64::try_from(self.bytes.len())
+            .map_err(|_| SceneError::for_code(SceneErrorCode::InternalState, None))?;
+        let attempted = u64::try_from(additional).unwrap_or(u64::MAX);
+        let next = consumed.checked_add(attempted).ok_or_else(|| {
+            SceneError::resource(self.limit_kind, self.limit, consumed, attempted, None)
+        })?;
+        if next > self.limit {
+            return Err(SceneError::resource(
+                self.limit_kind,
+                self.limit,
+                consumed,
+                attempted,
+                None,
+            ));
+        }
+        Ok((consumed, attempted))
     }
 
     pub(crate) fn separator(&mut self, index: usize) -> Result<(), SceneError> {
@@ -697,6 +756,7 @@ impl CanonicalWriter {
 
     fn push_hex(&mut self, bytes: &[u8]) -> Result<(), SceneError> {
         const HEX: &[u8; 16] = b"0123456789abcdef";
+        const INPUT_CHUNK_BYTES: usize = 256;
         let encoded_len = bytes.len().checked_mul(2).ok_or_else(|| {
             SceneError::resource(
                 self.limit_kind,
@@ -706,10 +766,18 @@ impl CanonicalWriter {
                 None,
             )
         })?;
-        self.reserve_output(encoded_len)?;
-        for byte in bytes {
-            let encoded = [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0x0f)]];
-            self.bytes.extend_from_slice(&encoded);
+        self.ensure_output_limit(encoded_len)?;
+        for chunk in bytes.chunks(INPUT_CHUNK_BYTES) {
+            let mut encoded = [0_u8; INPUT_CHUNK_BYTES * 2];
+            for (target, byte) in encoded.chunks_exact_mut(2).zip(chunk) {
+                target[0] = HEX[usize::from(byte >> 4)];
+                target[1] = HEX[usize::from(byte & 0x0f)];
+            }
+            let chunk_encoded_len = chunk
+                .len()
+                .checked_mul(2)
+                .ok_or_else(|| SceneError::for_code(SceneErrorCode::InternalState, None))?;
+            self.push(&encoded[..chunk_encoded_len])?;
         }
         Ok(())
     }

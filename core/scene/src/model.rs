@@ -6,6 +6,16 @@ use pdf_rs_syntax::ObjectRef;
 
 use crate::{GraphicsScene, SceneError, SceneErrorCode, SceneLimits, SceneScalar};
 
+/// Observer for bounded canonical Scene serialization.
+///
+/// The serializer calls this before appending each bounded output fragment. Returning `false`
+/// interrupts serialization with [`SceneErrorCode::CanonicalizationInterrupted`] and publishes no
+/// canonical byte vector. Observers must not retain the borrowed fragment.
+pub trait SceneCanonicalObserver {
+    /// Returns whether serialization may append the next fragment.
+    fn observe(&mut self, next_fragment: &[u8]) -> bool;
+}
+
 /// Version of the immutable Scene schema.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SceneVersion {

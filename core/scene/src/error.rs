@@ -114,6 +114,8 @@ pub enum SceneErrorCode {
     ResourceLimit,
     /// Internal checked state could not be maintained safely.
     InternalState,
+    /// A canonical-output observer requested interruption before publication.
+    CanonicalizationInterrupted,
 }
 
 /// Coarse Scene error policy category.
@@ -129,6 +131,8 @@ pub enum SceneErrorCategory {
     Resource,
     /// Internal implementation invariant failure.
     Internal,
+    /// A caller-owned observer interrupted otherwise valid work.
+    Interrupted,
 }
 
 /// Stable recovery policy for a Scene failure.
@@ -202,6 +206,11 @@ impl SceneError {
                 SceneErrorCategory::Internal,
                 SceneRecoverability::DoNotRetry,
                 "RPE-SCENE-0009",
+            ),
+            SceneErrorCode::CanonicalizationInterrupted => (
+                SceneErrorCategory::Interrupted,
+                SceneRecoverability::DoNotRetry,
+                "RPE-SCENE-0010",
             ),
         };
         Self {

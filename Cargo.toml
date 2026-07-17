@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "core/*",
     "runtime/cache",
+    "runtime/policy",
     "runtime/protocol",
     "runtime/session",
     "tools/*",

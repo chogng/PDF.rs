@@ -317,6 +317,7 @@ impl SceneDiff {
         let mut writer = CanonicalWriter::new(
             self.limits.max_canonical_bytes(),
             SceneLimitKind::DiffCanonicalBytes,
+            None,
         );
         writer.push(b"{\"differences\":[")?;
         for (index, difference) in self.differences.iter().copied().enumerate() {
@@ -851,7 +852,7 @@ fn difference_index(index: usize) -> Result<u32, SceneError> {
 }
 
 fn write_difference(
-    writer: &mut CanonicalWriter,
+    writer: &mut CanonicalWriter<'_>,
     difference: SceneDifference,
 ) -> Result<(), SceneError> {
     writer.push(b"{\"field\":")?;

@@ -1,7 +1,8 @@
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
 use pdf_rs_scene::{
-    CommandSource, Matrix, PageGeometry, PageRotation, SceneBinding, SceneBuilder, SceneErrorCode,
-    SceneFeature, SceneLimitConfig, SceneLimitKind, SceneLimits, SceneRect, SceneScalar,
+    CommandSource, Matrix, PageGeometry, PageRotation, SceneBinding, SceneBuilder,
+    SceneCanonicalObserver, SceneErrorCode, SceneFeature, SceneLimitConfig, SceneLimitKind,
+    SceneLimits, SceneRect, SceneScalar,
 };
 use pdf_rs_syntax::ObjectRef;
 
@@ -66,6 +67,40 @@ fn empty_scene_has_exact_stable_field_order() {
         std::str::from_utf8(&canonical).unwrap(),
         "{\"binding\":{\"page_index\":0,\"page_object\":{\"generation\":0,\"number\":3},\"revision_startxref\":42},\"commands\":[],\"features\":{\"decision\":\"supported\",\"tags\":[]},\"geometry\":{\"crop_box\":[0,0,100000000000,200000000000],\"media_box\":[0,0,100000000000,200000000000],\"rotation\":0},\"provenance\":[],\"resources\":[],\"schema\":{\"major\":1,\"minor\":0}}"
     );
+}
+
+#[test]
+fn observed_canonicalization_is_byte_identical_and_interruptible() {
+    struct Observer {
+        remaining: Option<usize>,
+    }
+
+    impl SceneCanonicalObserver for Observer {
+        fn observe(&mut self, _next_fragment: &[u8]) -> bool {
+            let Some(remaining) = self.remaining.as_mut() else {
+                return true;
+            };
+            if *remaining == 0 {
+                return false;
+            }
+            *remaining -= 1;
+            true
+        }
+    }
+
+    let scene = SceneBuilder::new(binding(1), geometry(), SceneLimits::default())
+        .finish()
+        .unwrap();
+    let expected = scene.canonical_json_bytes().unwrap();
+    let observed = scene
+        .canonical_json_bytes_observed(&mut Observer { remaining: None })
+        .unwrap();
+    assert_eq!(observed, expected);
+
+    let error = scene
+        .canonical_json_bytes_observed(&mut Observer { remaining: Some(1) })
+        .unwrap_err();
+    assert_eq!(error.code(), SceneErrorCode::CanonicalizationInterrupted);
 }
 
 #[test]

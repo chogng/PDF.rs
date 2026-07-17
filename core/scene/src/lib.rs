@@ -40,7 +40,7 @@ pub use graphics_builder::{GraphicsSceneBuilder, GraphicsSceneLimitConfig, Graph
 pub use limits::{SceneLimitConfig, SceneLimits};
 pub use model::{
     CapabilityDecision, CommandSource, FeatureReport, PageGeometry, PageRotation, ResourceId,
-    Scene, SceneBinding, SceneCommand, SceneCommandKind, SceneFeature, SceneName, SceneRect,
-    SceneResource, SceneResourceKind, SceneStats, SceneVersion,
+    Scene, SceneBinding, SceneCanonicalObserver, SceneCommand, SceneCommandKind, SceneFeature,
+    SceneName, SceneRect, SceneResource, SceneResourceKind, SceneStats, SceneVersion,
 };
 pub use scalar::{Matrix, SceneScalar};
