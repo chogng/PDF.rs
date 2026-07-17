@@ -1453,7 +1453,7 @@ entries = ["2026-07-13: introduced"]
 
     #[test]
     fn accepts_optional_raster_output_budget_and_rejects_noncanonical_values() {
-        assert!(validate_manifest(&VALID).is_ok());
+        assert!(validate_manifest(VALID).is_ok());
 
         let exact = VALID.replace(
             "max_stream_output_bytes = 1048576",
