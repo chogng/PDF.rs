@@ -21,6 +21,7 @@ fn staged_geometry_kernel_surface_remains_reachable_before_renderer_integration(
 
     let mask = CoverageMask::empty(1, 1, &mut work).unwrap();
     assert_eq!((mask.width(), mask.height()), (1, 1));
+    assert_eq!(work.peak_coverage_bytes(), mask.retained_bytes().unwrap());
 
     let scalar = |value| SceneScalar::from_decimal(value).unwrap();
     let bounds = SceneRect::new([

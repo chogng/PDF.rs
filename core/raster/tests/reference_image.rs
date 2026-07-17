@@ -20,8 +20,8 @@ use reference::geometry::{
     GeometryCancellation, GeometryFailure, GeometryLimitKind, GeometryLimits, GeometryWork,
 };
 use reference::image::{
-    ImageCancellation, ImageFailure, ImageLimitKind, ImageLimits, ImageRaster, rasterize_image,
-    unit_index,
+    ImageCancellation, ImageFailure, ImageLimitKind, ImageLimits, ImageRaster, ImageStats,
+    paint_image, rasterize_image, unit_index,
 };
 
 struct NeverCancel;
@@ -617,4 +617,44 @@ fn cancellation_is_observed_before_allocation_and_during_fixed_fuel_work() {
             Err(ImageFailure::Cancelled)
         );
     }
+}
+
+#[test]
+fn mounted_conversion_cancellation_counts_only_completed_samples_before_mutation() {
+    let image = image(
+        2,
+        2,
+        ImageColorSpace::DeviceRgb,
+        false,
+        vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255],
+    );
+    let cancellation = CancelAtCheck {
+        checks: Cell::new(0),
+        cancel_at: 2,
+    };
+    let mut pixels = [white(); 4];
+    let mut stats = ImageStats::default();
+    assert_eq!(
+        paint_image(
+            &image,
+            geometry(),
+            Matrix::IDENTITY,
+            2,
+            2,
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            &mut pixels,
+            None,
+            ImageLimits::default(),
+            &cancellation,
+            &mut stats,
+        ),
+        Err(ImageFailure::Cancelled)
+    );
+    assert_eq!(stats.fuel(), 257);
+    assert_eq!(stats.samples(), 125);
+    assert_eq!(stats.conversions(), 125);
+    assert_ne!(pixels[0], white());
+    assert_eq!(pixels[1], white());
+    assert_eq!(stats.cancellation_checks(), cancellation.checks.get());
 }

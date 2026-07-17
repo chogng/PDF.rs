@@ -246,6 +246,8 @@ impl CoverageMask {
                 attempted_bytes: semantic_bytes,
             })?;
         let retained_bytes = capacity_bytes::<u64>(samples.capacity())?;
+        work.observe_coverage_bytes(retained_bytes);
+        work.note_working_bytes(retained_bytes)?;
         ensure_coverage_bytes(0, retained_bytes, work)?;
         while samples.len() < pixel_count {
             let next = samples
@@ -561,6 +563,7 @@ impl ClipStack {
         work: &mut GeometryWork<'_>,
         reserve: impl FnOnce(&mut Vec<Option<Vec<u64>>>, usize, u64) -> Result<(), GeometryFailure>,
     ) -> Result<(), GeometryFailure> {
+        self.begin_operation();
         let attempted_depth = u32::try_from(self.saved.len())
             .map_err(|_| GeometryFailure::NumericOverflow)?
             .checked_add(1)
@@ -628,6 +631,13 @@ impl ClipStack {
                     attempted_bytes: copy_semantic_bytes,
                 })?;
             let copy_bytes = capacity_bytes::<u64>(copy.capacity())?;
+            let copy_transient = retained_before
+                .checked_add(copy_bytes)
+                .ok_or(GeometryFailure::NumericOverflow)?;
+            self.operation_peak_retained_bytes =
+                self.operation_peak_retained_bytes.max(copy_transient);
+            self.peak_retained_bytes = self.peak_retained_bytes.max(copy_transient);
+            work.note_working_bytes(copy_bytes)?;
             self.ensure_clip_bytes(retained_before, copy_bytes, work)?;
             work.ensure_working_bytes(copy_bytes)?;
             for chunk in mask.chunks(MASK_INITIALIZATION_CHUNK_PIXELS) {
@@ -660,11 +670,13 @@ impl ClipStack {
             let transient_additional = saved_bytes
                 .checked_add(replacement_bytes)
                 .ok_or(GeometryFailure::NumericOverflow)?;
-            self.ensure_clip_bytes(retained_before, transient_additional, work)?;
-            work.ensure_working_bytes(transient_additional)?;
             let transient_retained = retained_before
                 .checked_add(transient_additional)
                 .ok_or(GeometryFailure::NumericOverflow)?;
+            self.observe_operation_peak(transient_retained);
+            work.note_working_bytes(transient_additional)?;
+            self.ensure_clip_bytes(retained_before, transient_additional, work)?;
+            work.ensure_working_bytes(transient_additional)?;
             let committed_retained = transient_retained
                 .checked_sub(outer_bytes_before)
                 .ok_or(GeometryFailure::NumericOverflow)?;
@@ -679,11 +691,7 @@ impl ClipStack {
             replacement.push(saved);
             self.saved = replacement;
             self.retained_bytes = committed_retained;
-            self.peak_retained_bytes = self
-                .peak_retained_bytes
-                .max(transient_retained)
-                .max(committed_retained);
-            self.operation_peak_retained_bytes = transient_retained.max(committed_retained);
+            self.observe_operation_peak(committed_retained);
         } else {
             let committed_retained = retained_before
                 .checked_add(saved_bytes)
@@ -691,13 +699,13 @@ impl ClipStack {
             work.charge_fuel(1)?;
             self.saved.push(saved);
             self.retained_bytes = committed_retained;
-            self.update_peak_retained_bytes();
-            self.operation_peak_retained_bytes = committed_retained;
+            self.observe_operation_peak(committed_retained);
         }
         Ok(())
     }
 
     pub(crate) fn restore(&mut self, work: &mut GeometryWork<'_>) -> Result<(), GeometryFailure> {
+        self.begin_operation();
         if self.saved.is_empty() {
             return Err(GeometryFailure::InvalidGeometry);
         }
@@ -715,7 +723,7 @@ impl ClipStack {
         let saved = self.saved.pop().ok_or(GeometryFailure::InvalidGeometry)?;
         self.current = saved;
         self.retained_bytes = committed_retained;
-        self.operation_peak_retained_bytes = retained_before.max(committed_retained);
+        self.observe_operation_peak(retained_before.max(committed_retained));
         Ok(())
     }
 
@@ -724,6 +732,22 @@ impl ClipStack {
         mask: CoverageMask,
         work: &mut GeometryWork<'_>,
     ) -> Result<(), GeometryFailure> {
+        self.intersect_with_reserve(mask, work, |replacement, target_capacity, target_bytes| {
+            replacement.try_reserve_exact(target_capacity).map_err(|_| {
+                GeometryFailure::Allocation {
+                    attempted_bytes: target_bytes,
+                }
+            })
+        })
+    }
+
+    fn intersect_with_reserve(
+        &mut self,
+        mask: CoverageMask,
+        work: &mut GeometryWork<'_>,
+        reserve: impl FnOnce(&mut Vec<u64>, usize, u64) -> Result<(), GeometryFailure>,
+    ) -> Result<(), GeometryFailure> {
+        self.begin_operation();
         if mask.width != self.width || mask.height != self.height {
             return Err(GeometryFailure::InvalidGeometry);
         }
@@ -749,18 +773,20 @@ impl ClipStack {
             work.check_cancellation()?;
 
             let mut replacement = Vec::new();
-            replacement.try_reserve_exact(current.len()).map_err(|_| {
-                GeometryFailure::Allocation {
-                    attempted_bytes: semantic_bytes,
-                }
-            })?;
+            reserve(&mut replacement, current.len(), semantic_bytes)?;
             let replacement_bytes = capacity_bytes::<u64>(replacement.capacity())?;
+            let transient_retained = retained_before
+                .checked_add(replacement_bytes)
+                .ok_or(GeometryFailure::NumericOverflow)?;
+            self.operation_peak_retained_bytes =
+                self.operation_peak_retained_bytes.max(transient_retained);
+            self.peak_retained_bytes = self.peak_retained_bytes.max(transient_retained);
+            let actual_additional = incoming_bytes
+                .checked_add(replacement_bytes)
+                .ok_or(GeometryFailure::NumericOverflow)?;
+            work.note_working_bytes(actual_additional)?;
             self.ensure_clip_bytes(retained_before, replacement_bytes, work)?;
-            work.ensure_working_bytes(
-                incoming_bytes
-                    .checked_add(replacement_bytes)
-                    .ok_or(GeometryFailure::NumericOverflow)?,
-            )?;
+            work.ensure_working_bytes(actual_additional)?;
             for (current_chunk, incoming_chunk) in current
                 .chunks(MASK_INITIALIZATION_CHUNK_PIXELS)
                 .zip(mask.samples.chunks(MASK_INITIALIZATION_CHUNK_PIXELS))
@@ -776,20 +802,13 @@ impl ClipStack {
                         .map(|(current, incoming)| *current & *incoming),
                 );
             }
-            let transient_retained = retained_before
-                .checked_add(replacement_bytes)
-                .ok_or(GeometryFailure::NumericOverflow)?;
             let committed_retained = retained_before
                 .checked_sub(current_bytes)
                 .and_then(|value| value.checked_add(replacement_bytes))
                 .ok_or(GeometryFailure::NumericOverflow)?;
             self.current = Some(replacement);
             self.retained_bytes = committed_retained;
-            self.peak_retained_bytes = self
-                .peak_retained_bytes
-                .max(transient_retained)
-                .max(committed_retained);
-            self.operation_peak_retained_bytes = transient_retained.max(committed_retained);
+            self.observe_operation_peak(committed_retained);
         } else {
             let consumed = self.retained_bytes;
             let bytes = capacity_bytes::<u64>(mask.samples.capacity())?;
@@ -801,8 +820,7 @@ impl ClipStack {
             work.charge_fuel(1)?;
             self.current = Some(mask.samples);
             self.retained_bytes = committed_retained;
-            self.update_peak_retained_bytes();
-            self.operation_peak_retained_bytes = committed_retained;
+            self.observe_operation_peak(committed_retained);
         }
         Ok(())
     }
@@ -816,6 +834,22 @@ impl ClipStack {
         mask: &mut CoverageMask,
         work: &mut GeometryWork<'_>,
     ) -> Result<(), GeometryFailure> {
+        self.apply_with_reserve(mask, work, |replacement, target_capacity, target_bytes| {
+            replacement.try_reserve_exact(target_capacity).map_err(|_| {
+                GeometryFailure::Allocation {
+                    attempted_bytes: target_bytes,
+                }
+            })
+        })
+    }
+
+    fn apply_with_reserve(
+        &mut self,
+        mask: &mut CoverageMask,
+        work: &mut GeometryWork<'_>,
+        reserve: impl FnOnce(&mut Vec<u64>, usize, u64) -> Result<(), GeometryFailure>,
+    ) -> Result<(), GeometryFailure> {
+        self.begin_operation();
         if mask.width != self.width || mask.height != self.height {
             return Err(GeometryFailure::InvalidGeometry);
         }
@@ -828,19 +862,31 @@ impl ClipStack {
             let semantic_bytes = pixels
                 .checked_mul(8)
                 .ok_or(GeometryFailure::NumericOverflow)?;
+            let incoming_bytes = mask.retained_bytes()?;
             let retained_before = self.retained_bytes;
             self.ensure_clip_bytes(retained_before, semantic_bytes, work)?;
+            let semantic_working_bytes = incoming_bytes
+                .checked_add(semantic_bytes)
+                .ok_or(GeometryFailure::NumericOverflow)?;
+            work.ensure_working_bytes(semantic_working_bytes)?;
             work.preflight_fuel(pixels)?;
             work.check_cancellation()?;
 
             let mut replacement = Vec::new();
-            replacement.try_reserve_exact(current.len()).map_err(|_| {
-                GeometryFailure::Allocation {
-                    attempted_bytes: semantic_bytes,
-                }
-            })?;
+            reserve(&mut replacement, current.len(), semantic_bytes)?;
             let replacement_bytes = capacity_bytes::<u64>(replacement.capacity())?;
+            let transient_retained = retained_before
+                .checked_add(replacement_bytes)
+                .ok_or(GeometryFailure::NumericOverflow)?;
+            self.operation_peak_retained_bytes =
+                self.operation_peak_retained_bytes.max(transient_retained);
+            self.peak_retained_bytes = self.peak_retained_bytes.max(transient_retained);
+            let actual_working_bytes = incoming_bytes
+                .checked_add(replacement_bytes)
+                .ok_or(GeometryFailure::NumericOverflow)?;
+            work.note_working_bytes(actual_working_bytes)?;
             self.ensure_clip_bytes(retained_before, replacement_bytes, work)?;
+            work.ensure_working_bytes(actual_working_bytes)?;
             for (samples_chunk, clip_chunk) in mask
                 .samples
                 .chunks(MASK_INITIALIZATION_CHUNK_PIXELS)
@@ -857,11 +903,7 @@ impl ClipStack {
                         .map(|(samples, clip)| *samples & *clip),
                 );
             }
-            let transient_retained = retained_before
-                .checked_add(replacement_bytes)
-                .ok_or(GeometryFailure::NumericOverflow)?;
             mask.samples = replacement;
-            self.peak_retained_bytes = self.peak_retained_bytes.max(transient_retained);
         }
         Ok(())
     }
@@ -899,6 +941,15 @@ impl ClipStack {
     )]
     pub(crate) const fn operation_peak_retained_bytes(&self) -> u64 {
         self.operation_peak_retained_bytes
+    }
+
+    fn begin_operation(&mut self) {
+        self.operation_peak_retained_bytes = self.retained_bytes;
+    }
+
+    fn observe_operation_peak(&mut self, retained_bytes: u64) {
+        self.operation_peak_retained_bytes = self.operation_peak_retained_bytes.max(retained_bytes);
+        self.peak_retained_bytes = self.peak_retained_bytes.max(retained_bytes);
     }
 
     fn ensure_clip_bytes(
@@ -945,10 +996,6 @@ impl ClipStack {
                 .ok_or(GeometryFailure::NumericOverflow)?;
         }
         Ok(retained)
-    }
-
-    fn update_peak_retained_bytes(&mut self) {
-        self.peak_retained_bytes = self.peak_retained_bytes.max(self.retained_bytes);
     }
 }
 
@@ -1041,6 +1088,24 @@ mod tests {
             clips.retained_bytes().unwrap(),
             clips.recompute_retained_bytes().unwrap()
         );
+    }
+
+    fn full_mask(width: u32, height: u32, samples: u64) -> super::CoverageMask {
+        super::CoverageMask {
+            width,
+            height,
+            samples: vec![samples; usize::try_from(u64::from(width) * u64::from(height)).unwrap()],
+        }
+    }
+
+    fn clips_with_current(width: u32, height: u32, samples: u64) -> ClipStack {
+        let cancellation = NeverCancel;
+        let mut work = GeometryWork::new(GeometryLimits::default(), &cancellation).unwrap();
+        let mut clips = ClipStack::new(width, height).unwrap();
+        clips
+            .intersect(full_mask(width, height, samples), &mut work)
+            .unwrap();
+        clips
     }
 
     #[test]
@@ -1323,6 +1388,364 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn clip_actual_overcapacity_postflight_records_failure_peaks_transactionally() {
+        let cancellation = NeverCancel;
+
+        let target_outer_capacity = crate::reference::geometry::logical_vector_capacity(1).unwrap();
+        let semantic_outer_bytes =
+            super::capacity_bytes::<Option<Vec<u64>>>(target_outer_capacity).unwrap();
+        let mut save_work = GeometryWork::new(
+            GeometryLimits {
+                max_clip_bytes: semantic_outer_bytes,
+                ..GeometryLimits::default()
+            },
+            &cancellation,
+        )
+        .unwrap();
+        let mut save_clips = ClipStack::new(1, 1).unwrap();
+        let mut actual_outer_bytes = 0;
+        let save_failure = save_clips
+            .save_with_outer_reserve(
+                &mut save_work,
+                |replacement, target_capacity, target_bytes| {
+                    replacement
+                        .try_reserve_exact(target_capacity.checked_add(1).unwrap())
+                        .map_err(|_| GeometryFailure::Allocation {
+                            attempted_bytes: target_bytes,
+                        })?;
+                    actual_outer_bytes =
+                        super::capacity_bytes::<Option<Vec<u64>>>(replacement.capacity())?;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert!(actual_outer_bytes > semantic_outer_bytes);
+        assert!(matches!(
+            save_failure,
+            GeometryFailure::Limit {
+                kind: GeometryLimitKind::ClipBytes,
+                limit,
+                consumed: 0,
+                attempted,
+            } if limit == semantic_outer_bytes && attempted == actual_outer_bytes
+        ));
+        assert_eq!(save_clips.depth(), 0);
+        assert_eq!(save_clips.retained_bytes().unwrap(), 0);
+        assert_eq!(
+            save_clips.operation_peak_retained_bytes(),
+            actual_outer_bytes
+        );
+        assert_eq!(save_clips.peak_retained_bytes(), actual_outer_bytes);
+        assert_eq!(save_work.peak_working_bytes(), actual_outer_bytes);
+
+        let mut intersect_clips = clips_with_current(1, 1, FULL_SAMPLE_MASK);
+        let intersect_retained = intersect_clips.retained_bytes().unwrap();
+        let incoming = full_mask(1, 1, 0);
+        let incoming_bytes = incoming.retained_bytes().unwrap();
+        let semantic_replacement_bytes = u64::try_from(std::mem::size_of::<u64>()).unwrap();
+        let intersect_limit = intersect_retained
+            .checked_add(semantic_replacement_bytes)
+            .unwrap();
+        let mut intersect_work = GeometryWork::new(
+            GeometryLimits {
+                max_clip_bytes: intersect_limit,
+                ..GeometryLimits::default()
+            },
+            &cancellation,
+        )
+        .unwrap();
+        let mut actual_intersection_bytes = 0;
+        let intersect_failure = intersect_clips
+            .intersect_with_reserve(
+                incoming,
+                &mut intersect_work,
+                |replacement, target_capacity, target_bytes| {
+                    replacement
+                        .try_reserve_exact(target_capacity.checked_add(1).unwrap())
+                        .map_err(|_| GeometryFailure::Allocation {
+                            attempted_bytes: target_bytes,
+                        })?;
+                    actual_intersection_bytes =
+                        super::capacity_bytes::<u64>(replacement.capacity())?;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert!(actual_intersection_bytes > semantic_replacement_bytes);
+        assert!(matches!(
+            intersect_failure,
+            GeometryFailure::Limit {
+                kind: GeometryLimitKind::ClipBytes,
+                limit,
+                consumed,
+                attempted,
+            } if limit == intersect_limit
+                && consumed == intersect_retained
+                && attempted == actual_intersection_bytes
+        ));
+        let intersect_peak = intersect_retained
+            .checked_add(actual_intersection_bytes)
+            .unwrap();
+        assert_eq!(
+            intersect_clips.retained_bytes().unwrap(),
+            intersect_retained
+        );
+        assert_eq!(intersect_clips.sample_mask(0, 0), Some(FULL_SAMPLE_MASK));
+        assert_eq!(
+            intersect_clips.operation_peak_retained_bytes(),
+            intersect_peak
+        );
+        assert_eq!(intersect_clips.peak_retained_bytes(), intersect_peak);
+        assert_eq!(
+            intersect_work.peak_working_bytes(),
+            actual_intersection_bytes
+                .checked_add(incoming_bytes)
+                .unwrap()
+        );
+        assert_eq!(
+            intersect_retained
+                .checked_add(intersect_work.peak_working_bytes())
+                .unwrap(),
+            intersect_peak.checked_add(incoming_bytes).unwrap()
+        );
+
+        let mut apply_clips = clips_with_current(1, 1, 0);
+        let apply_retained = apply_clips.retained_bytes().unwrap();
+        let apply_limit = apply_retained
+            .checked_add(semantic_replacement_bytes)
+            .unwrap();
+        let mut apply_work = GeometryWork::new(
+            GeometryLimits {
+                max_clip_bytes: apply_limit,
+                ..GeometryLimits::default()
+            },
+            &cancellation,
+        )
+        .unwrap();
+        let mut target = full_mask(1, 1, FULL_SAMPLE_MASK);
+        let target_bytes = target.retained_bytes().unwrap();
+        let target_before = target.clone();
+        let mut actual_apply_bytes = 0;
+        let apply_failure = apply_clips
+            .apply_with_reserve(
+                &mut target,
+                &mut apply_work,
+                |replacement, target_capacity, target_bytes| {
+                    replacement
+                        .try_reserve_exact(target_capacity.checked_add(1).unwrap())
+                        .map_err(|_| GeometryFailure::Allocation {
+                            attempted_bytes: target_bytes,
+                        })?;
+                    actual_apply_bytes = super::capacity_bytes::<u64>(replacement.capacity())?;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert!(actual_apply_bytes > semantic_replacement_bytes);
+        assert!(matches!(
+            apply_failure,
+            GeometryFailure::Limit {
+                kind: GeometryLimitKind::ClipBytes,
+                limit,
+                consumed,
+                attempted,
+            } if limit == apply_limit
+                && consumed == apply_retained
+                && attempted == actual_apply_bytes
+        ));
+        let apply_peak = apply_retained.checked_add(actual_apply_bytes).unwrap();
+        assert_eq!(target, target_before);
+        assert_eq!(apply_clips.retained_bytes().unwrap(), apply_retained);
+        assert_eq!(apply_clips.operation_peak_retained_bytes(), apply_peak);
+        assert_eq!(apply_clips.peak_retained_bytes(), apply_peak);
+        assert_eq!(
+            apply_work.peak_working_bytes(),
+            target_bytes.checked_add(actual_apply_bytes).unwrap()
+        );
+        assert_eq!(
+            apply_retained
+                .checked_add(apply_work.peak_working_bytes())
+                .unwrap(),
+            apply_peak.checked_add(target_bytes).unwrap()
+        );
+    }
+
+    #[test]
+    fn clip_apply_semantic_working_one_less_rejects_before_allocation_transactionally() {
+        let cancellation = NeverCancel;
+        let mut clips = clips_with_current(1, 1, 0);
+        let retained_before = clips.retained_bytes().unwrap();
+        let peak_before = clips.peak_retained_bytes();
+        let mut target = full_mask(1, 1, FULL_SAMPLE_MASK);
+        let target_before = target.clone();
+        let target_bytes = target.retained_bytes().unwrap();
+        let semantic_replacement_bytes = u64::try_from(std::mem::size_of::<u64>()).unwrap();
+        let semantic_working_bytes = target_bytes
+            .checked_add(semantic_replacement_bytes)
+            .unwrap();
+        let mut work = GeometryWork::new(
+            GeometryLimits {
+                max_working_bytes: semantic_working_bytes - 1,
+                ..GeometryLimits::default()
+            },
+            &cancellation,
+        )
+        .unwrap();
+
+        assert_eq!(
+            clips.apply(&mut target, &mut work),
+            Err(GeometryFailure::Limit {
+                kind: GeometryLimitKind::WorkingBytes,
+                limit: semantic_working_bytes - 1,
+                consumed: 0,
+                attempted: semantic_working_bytes,
+            })
+        );
+        assert_eq!(target, target_before);
+        assert_eq!(clips.retained_bytes().unwrap(), retained_before);
+        assert_eq!(clips.operation_peak_retained_bytes(), retained_before);
+        assert_eq!(clips.peak_retained_bytes(), peak_before);
+        assert_eq!(work.peak_working_bytes(), 0);
+    }
+
+    #[test]
+    fn clip_apply_actual_overcapacity_working_postflight_records_peak_transactionally() {
+        let cancellation = NeverCancel;
+        let mut clips = clips_with_current(1, 1, 0);
+        let retained_before = clips.retained_bytes().unwrap();
+        let mut target = full_mask(1, 1, FULL_SAMPLE_MASK);
+        let target_bytes = target.retained_bytes().unwrap();
+        let target_before = target.clone();
+        let semantic_replacement_bytes = u64::try_from(std::mem::size_of::<u64>()).unwrap();
+        let semantic_working_bytes = target_bytes
+            .checked_add(semantic_replacement_bytes)
+            .unwrap();
+        let mut work = GeometryWork::new(
+            GeometryLimits {
+                max_working_bytes: semantic_working_bytes,
+                ..GeometryLimits::default()
+            },
+            &cancellation,
+        )
+        .unwrap();
+        let mut actual_replacement_bytes = 0;
+
+        let failure = clips
+            .apply_with_reserve(
+                &mut target,
+                &mut work,
+                |replacement, target_capacity, target_bytes| {
+                    replacement
+                        .try_reserve_exact(target_capacity.checked_add(1).unwrap())
+                        .map_err(|_| GeometryFailure::Allocation {
+                            attempted_bytes: target_bytes,
+                        })?;
+                    actual_replacement_bytes =
+                        super::capacity_bytes::<u64>(replacement.capacity())?;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        let actual_working_bytes = target_bytes.checked_add(actual_replacement_bytes).unwrap();
+        assert!(actual_replacement_bytes > semantic_replacement_bytes);
+        assert_eq!(
+            failure,
+            GeometryFailure::Limit {
+                kind: GeometryLimitKind::WorkingBytes,
+                limit: semantic_working_bytes,
+                consumed: 0,
+                attempted: actual_working_bytes,
+            }
+        );
+        assert_eq!(target, target_before);
+        assert_eq!(clips.retained_bytes().unwrap(), retained_before);
+        assert_eq!(
+            clips.operation_peak_retained_bytes(),
+            retained_before
+                .checked_add(actual_replacement_bytes)
+                .unwrap()
+        );
+        assert_eq!(
+            clips.peak_retained_bytes(),
+            clips.operation_peak_retained_bytes()
+        );
+        assert_eq!(work.peak_working_bytes(), actual_working_bytes);
+    }
+
+    #[test]
+    fn clip_cancellation_after_temporary_allocation_records_failure_peaks_transactionally() {
+        let mut save_clips = clips_with_current(16, 16, FULL_SAMPLE_MASK);
+        let save_retained = save_clips.retained_bytes().unwrap();
+        let cancellation = Cancellation::at(3);
+        let mut save_work = GeometryWork::new(GeometryLimits::default(), &cancellation).unwrap();
+        assert_eq!(
+            save_clips.save(&mut save_work),
+            Err(GeometryFailure::Cancelled)
+        );
+        let save_peak = save_clips.operation_peak_retained_bytes();
+        assert!(save_peak > save_retained);
+        assert_eq!(save_clips.retained_bytes().unwrap(), save_retained);
+        assert_eq!(save_clips.depth(), 0);
+        assert_eq!(save_clips.peak_retained_bytes(), save_peak);
+        assert_eq!(
+            save_retained
+                .checked_add(save_work.peak_working_bytes())
+                .unwrap(),
+            save_peak
+        );
+
+        let mut intersect_clips = clips_with_current(16, 16, FULL_SAMPLE_MASK);
+        let intersect_retained = intersect_clips.retained_bytes().unwrap();
+        let incoming = full_mask(16, 16, 0);
+        let incoming_bytes = incoming.retained_bytes().unwrap();
+        let cancellation = Cancellation::at(3);
+        let mut intersect_work =
+            GeometryWork::new(GeometryLimits::default(), &cancellation).unwrap();
+        assert_eq!(
+            intersect_clips.intersect(incoming, &mut intersect_work),
+            Err(GeometryFailure::Cancelled)
+        );
+        let intersect_peak = intersect_clips.operation_peak_retained_bytes();
+        assert!(intersect_peak > intersect_retained);
+        assert_eq!(
+            intersect_clips.retained_bytes().unwrap(),
+            intersect_retained
+        );
+        assert_eq!(intersect_clips.sample_mask(0, 0), Some(FULL_SAMPLE_MASK));
+        assert_eq!(intersect_clips.peak_retained_bytes(), intersect_peak);
+        assert_eq!(
+            intersect_work.peak_working_bytes(),
+            intersect_peak
+                .checked_sub(intersect_retained)
+                .and_then(|replacement| replacement.checked_add(incoming_bytes))
+                .unwrap()
+        );
+
+        let mut apply_clips = clips_with_current(16, 16, 0);
+        let apply_retained = apply_clips.retained_bytes().unwrap();
+        let cancellation = Cancellation::at(3);
+        let mut apply_work = GeometryWork::new(GeometryLimits::default(), &cancellation).unwrap();
+        let mut target = full_mask(16, 16, FULL_SAMPLE_MASK);
+        let target_bytes = target.retained_bytes().unwrap();
+        let target_before = target.clone();
+        assert_eq!(
+            apply_clips.apply(&mut target, &mut apply_work),
+            Err(GeometryFailure::Cancelled)
+        );
+        let apply_peak = apply_clips.operation_peak_retained_bytes();
+        assert!(apply_peak > apply_retained);
+        assert_eq!(target, target_before);
+        assert_eq!(apply_clips.retained_bytes().unwrap(), apply_retained);
+        assert_eq!(apply_clips.peak_retained_bytes(), apply_peak);
+        assert_eq!(
+            apply_retained
+                .checked_add(apply_work.peak_working_bytes())
+                .unwrap(),
+            apply_peak.checked_add(target_bytes).unwrap()
+        );
     }
 
     #[test]

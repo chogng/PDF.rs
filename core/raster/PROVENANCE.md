@@ -21,7 +21,8 @@ platform handle. Those runtime and platform contracts belong to M4.
 # Semantic owner
 
 Graphics/Color owns the Reference output encoding, checked device-pixel geometry, deterministic
-device-color conversion, premultiplied-alpha arithmetic and blending, command-plus-pixel fuel,
+device-color conversion, premultiplied-alpha arithmetic and blending, deterministic nested
+preflight/initialization/raster/compositing/conversion fuel,
 cooperative cancellation schedule, pixel allocation and retention budgets, atomic publication,
 and terminal replay. `core/scene` owns immutable semantic commands, resources, provenance,
 features, page geometry, and runtime source/page binding.
@@ -85,9 +86,14 @@ independent review, and the M3 exit decision.
   turn a future command into silent blank output.
 - A complete empty or marked-content-only page is opaque white: every pixel is
   `[255, 255, 255, 255]`. Visible commands mutate one job-private premultiplied Q16 surface in
-  source order. The final RGBA vector is reserved only after successful dispatch, verified against
-  allocator-reported capacity, filled from the private surface, cancellation-checked immediately
-  before publication, and only then moved into an immutable buffer.
+  source order. The surface allocation is reserved first, then initialized white in fixed
+  256-pixel chunks through renderer-owned fuel and cancellation; empty-page fuel therefore charges
+  one unit for initialization and one for final conversion per pixel. The final RGBA vector is
+  reserved only after successful dispatch, verified against allocator-reported capacity, filled
+  from the private surface, cancellation-checked immediately before publication, and only then
+  moved into an immutable buffer. Allocator overcapacity is recorded in actual component and
+  simultaneous-working peaks before postflight rejection, while failed output never reports
+  published retained bytes.
 - Independent aggregate limits cover dimensions, pixels, output bytes, commands, resources,
   requirements and dependency edges; geometry, stroke, clip, image and glyph work; recursion,
   fuel and cancellation; private surface, operation-local coverage/geometry, clip replacements,
@@ -101,7 +107,10 @@ independent review, and the M3 exit decision.
   dependency order, requirement contexts, resource types, balanced save/restore, every glyph
   outline lookup, the exact supported capability parameters, and every command family before the
   private pixel surface is allocated. Producer `Supported` status is never treated as sufficient
-  without the renderer's independent exact-profile decision.
+  without the renderer's independent exact-profile decision. After O(1) outer-table count
+  admission, a fuelled and cancellation-bounded outer pass aggregates dependency and positioned
+  glyph slice lengths before any nested entry is visited; the semantic pass then charges every
+  dependency edge and glyph resource lookup individually.
 - Geometry uses signed Q32.32 fixed point. Conversion from Scene billionths, matrix products,
   interpolation, averages, and division use checked integer arithmetic with exact half-way cases
   rounded away from zero. Overflow, singular transforms, and invalid geometry fail closed.
@@ -123,7 +132,10 @@ independent review, and the M3 exit decision.
 - Clip state stores the same 64-bit sample masks as fill and stroke coverage. Intersections use
   bitwise AND in save/restore order. Depth, pixels, fuel, current and saved capacities, replacement
   allocations, transient bytes, retained bytes, and peak retained bytes are independently
-  checked; cancellation and one-byte-short failures preserve the prior clip state.
+  checked. Applying a clip to a caller-owned mask admits the live incoming allocation plus the
+  semantic replacement before allocation, then postflights the allocator-reported replacement
+  capacity and records that actual peak before any handoff. Cancellation, one-byte-short, and
+  allocator-overcapacity failures preserve the prior clip and target-mask state.
 - Geometry vectors and the clip save stack use a logical minimum-four, power-of-two capacity
   schedule derived only from logical length. Move fuel, cancellation probes, and one-less work
   boundaries therefore do not depend on allocator overcapacity. Physical `Vec::capacity()` is
@@ -174,7 +186,11 @@ independent review, and the M3 exit decision.
   Geometry replacement capacity is admitted and recorded at its transient peak. Aggregate retained
   statistics are the greater of coverage plus peak geometry and coverage plus output pixels, so a
   retained-limit failure is never mislabeled as an independent geometry-limit failure. Both the
-  glyph and shared geometry work schedules probe cancellation at fixed fuel intervals.
+  glyph and shared geometry work schedules probe cancellation at fixed fuel intervals. The mounted
+  outline-cardinality preflight charges and probes once per positioned glyph without prematurely
+  committing glyph, lookup, or outline completed counters. The standalone result reports the
+  greater of its exact coverage-plus-geometry and coverage-plus-allocator-reported-pixel working
+  stages.
 - The mounted glyph form likewise writes into the private Q16 surface and retains only its union
   coverage plus transient geometry. Its child retained budget is the exact global working budget
   remaining after the live surface and clip; the parent records that aggregate once, without
@@ -182,7 +198,19 @@ independent review, and the M3 exit decision.
 - Path and clip dispatch use the same combined working admission. Geometry growth, coverage-mask
   allocation, saved-clip copies, incoming masks, and clip replacement storage are checked before
   allocation against the remaining surface-plus-clip working budget. Exact and one-byte-short
-  profiles therefore share one deterministic boundary.
+  profiles therefore share one deterministic boundary. Each child records its actual simultaneous
+  private working peak as allocation events occur; allocator overcapacity is observed before
+  postflight rejection. Success and failure both merge that peak and all work already executed by
+  private geometry, image, and glyph children—including split glyph orchestration/geometry fuel
+  and cancellation probes—before the child is dropped. Mounted children receive the exact remaining
+  aggregate allowance, including zero, while standalone kernel constructors retain their strict
+  nonzero limit contract; a zero-work child can therefore complete, and the first actual work
+  charge rejects an exhausted dimension without a fabricated one-unit allowance. Every child merge
+  first validates all checked totals, fuel, and cancellation counts and only then commits the full
+  statistics update, so no late field can leave a partial public merge. Public
+  `coverage_bytes` is current live transient coverage and is therefore zero after each command or
+  terminal unwind; `peak_coverage_bytes` retains the greatest observed mask, while successful clip
+  masks remain represented by `clip_bytes` and `peak_clip_bytes`.
 - Scene values outside the typed device colors and three blend modes are never coerced into a
   fallback paint. Unsupported color, alpha, blend, mask, or group requirements remain structured
   capability outcomes before the mounted color kernel or pixel publication.
@@ -227,6 +255,13 @@ independent review, and the M3 exit decision.
   successful capability decisions.
 - Aggregate requirements, dependency edges, resources, image dimensions, and simultaneous
   working-memory exact/one-less boundaries across mounted path/clip, image, and glyph commands.
+- Aggregate nested-length admission before dependency/glyph traversal; fixed-fuel cancellation of
+  large outer tables, dependency edges, and repeated glyph lookups; exact terminal replay.
+- Empty-surface initialization plus final conversion exact/one-less fuel, mid-initialization
+  cancellation, allocator-overcapacity-safe semantic completion, and actual-capacity failure peaks.
+- Mid-child cancellation and one-less failure statistics for path, clip, image, and glyph work,
+  including exact callback counts, combined glyph fuel error context, zero current coverage, and
+  frozen terminal replay.
 - Cancellation at the final post-conversion publication probe proves late failure never exposes a
   partial buffer; success and failure terminals replay without additional cancellation or work.
 - Exact one- and two-pixel image orientation, transforms, rotations, texel boundaries, clip,

@@ -28,13 +28,13 @@ pub struct ReferenceRasterLimitConfig {
     pub max_stride_bytes: u64,
     /// Maximum semantic RGBA bytes in one complete output.
     pub max_output_bytes: u64,
-    /// Maximum Scene commands traversed and dispatched.
+    /// Maximum aggregate Scene commands admitted before traversal and dispatch.
     pub max_commands: u64,
     /// Maximum Scene graphics resources admitted.
     pub max_resources: u64,
-    /// Maximum Scene capability requirements traversed before dispatch.
+    /// Maximum aggregate Scene capability requirements admitted before nested traversal.
     pub max_requirements: u64,
-    /// Maximum capability dependency edges traversed before dispatch.
+    /// Maximum aggregate capability dependency edges admitted before edge traversal.
     pub max_dependencies: u64,
     /// Maximum flattened path and glyph segments across the page.
     pub max_geometry_segments: u64,
@@ -78,7 +78,7 @@ pub struct ReferenceRasterLimitConfig {
     pub max_glyph_composites: u64,
     /// Maximum adaptive curve recursion admitted by the profile.
     pub max_curve_recursion: u8,
-    /// Maximum deterministic traversal, raster, compositing, and conversion work.
+    /// Maximum deterministic preflight, initialization, raster, compositing, and conversion work.
     pub max_fuel: u64,
     /// Maximum allocator-reported bytes in the private Q16 surface.
     pub max_surface_bytes: u64,

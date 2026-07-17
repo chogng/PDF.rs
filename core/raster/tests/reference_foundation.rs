@@ -139,7 +139,7 @@ fn exact_white_pixel_contract_and_multiline_stride_are_stable() {
     assert_eq!(one.rgba(), &[255, 255, 255, 255]);
     assert_eq!(one.stats().commands(), 0);
     assert_eq!(one.stats().pixels(), 1);
-    assert_eq!(one.stats().fuel(), 1);
+    assert_eq!(one.stats().fuel(), one.stats().pixels() * 2);
     assert!(one.stats().retained_bytes() >= 4);
     assert_eq!(one.stats().cancellation_checks(), 3);
 
@@ -151,7 +151,7 @@ fn exact_white_pixel_contract_and_multiline_stride_are_stable() {
     assert_eq!(multi.stride_bytes(), 8);
     assert_eq!(multi.rgba(), &[255; 16]);
     assert_eq!(multi.stats().pixels(), 4);
-    assert_eq!(multi.stats().fuel(), 4);
+    assert_eq!(multi.stats().fuel(), multi.stats().pixels() * 2);
 }
 
 #[test]
@@ -161,7 +161,10 @@ fn marked_content_is_explicitly_non_painting_and_binding_remains_runtime_exact()
     let marked = render(marked_scene(7), config, ReferenceRasterLimits::default());
     assert_eq!(empty.rgba(), marked.rgba());
     assert_eq!(marked.stats().commands(), 2);
-    assert_eq!(marked.stats().fuel(), 4);
+    assert_eq!(
+        marked.stats().fuel(),
+        empty.stats().fuel() + marked.stats().commands()
+    );
 
     let other_source = render(empty_scene(91), config, ReferenceRasterLimits::default());
     assert_eq!(empty.rgba(), other_source.rgba());
@@ -296,6 +299,9 @@ fn configuration_and_limit_profiles_fail_closed() {
 #[test]
 fn every_semantic_budget_rejects_one_less_than_required_work() {
     let config = ReferenceRenderConfig::opaque_srgb(2, 2).unwrap();
+    let measured_fuel = render(empty_scene(2), config, ReferenceRasterLimits::default())
+        .stats()
+        .fuel();
     for (limits, expected_kind) in [
         (
             limits(|value| value.max_width = 1),
@@ -318,7 +324,7 @@ fn every_semantic_budget_rejects_one_less_than_required_work() {
             ReferenceRenderLimitKind::OutputBytes,
         ),
         (
-            limits(|value| value.max_fuel = 3),
+            limits(|value| value.max_fuel = measured_fuel - 1),
             ReferenceRenderLimitKind::Fuel,
         ),
         (
@@ -355,9 +361,9 @@ fn every_semantic_budget_rejects_one_less_than_required_work() {
 #[test]
 fn exact_measured_profile_is_admitted_and_one_less_retention_is_rejected() {
     let config = ReferenceRenderConfig::opaque_srgb(3, 1).unwrap();
-    let measured = render(empty_scene(5), config, ReferenceRasterLimits::default())
-        .stats()
-        .retained_bytes();
+    let measured_stats = render(empty_scene(5), config, ReferenceRasterLimits::default()).stats();
+    let measured = measured_stats.retained_bytes();
+    let measured_fuel = measured_stats.fuel();
     let exact = render(
         empty_scene(5),
         config,
@@ -368,18 +374,19 @@ fn exact_measured_profile_is_admitted_and_one_less_retention_is_rejected() {
             value.max_stride_bytes = 12;
             value.max_output_bytes = 12;
             value.max_commands = 1;
-            value.max_fuel = 3;
+            value.max_fuel = measured_fuel;
             value.max_retained_bytes = measured;
         }),
     );
     assert_eq!(exact.stats().retained_bytes(), measured);
     assert_eq!(exact.stats().requirements(), 0);
     assert_eq!(exact.stats().pixels(), 3);
-    assert_eq!(exact.stats().fuel(), 3);
+    assert_eq!(exact.stats().fuel(), measured_fuel);
 
-    let marked_measured = render(marked_scene(5), config, ReferenceRasterLimits::default())
-        .stats()
-        .retained_bytes();
+    let marked_measured_stats =
+        render(marked_scene(5), config, ReferenceRasterLimits::default()).stats();
+    let marked_measured = marked_measured_stats.retained_bytes();
+    let marked_measured_fuel = marked_measured_stats.fuel();
     let marked_exact = render(
         marked_scene(5),
         config,
@@ -390,13 +397,13 @@ fn exact_measured_profile_is_admitted_and_one_less_retention_is_rejected() {
             value.max_stride_bytes = 12;
             value.max_output_bytes = 12;
             value.max_commands = 2;
-            value.max_fuel = 5;
+            value.max_fuel = marked_measured_fuel;
             value.max_retained_bytes = marked_measured;
         }),
     );
     assert_eq!(marked_exact.stats().commands(), 2);
     assert_eq!(marked_exact.stats().requirements(), 0);
-    assert_eq!(marked_exact.stats().fuel(), 5);
+    assert_eq!(marked_exact.stats().fuel(), marked_measured_fuel);
 
     let mut one_less = ReferenceRenderJob::new(
         empty_scene(5),

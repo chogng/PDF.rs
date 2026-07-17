@@ -21,7 +21,8 @@ use pdf_rs_syntax::ObjectRef;
 use reference::coverage::CoverageMask;
 use reference::geometry::{GeometryCancellation, GeometryLimits, GeometryWork};
 use reference::glyph::{
-    GlyphCancellation, GlyphFailure, GlyphLimitKind, GlyphLimits, GlyphRaster, rasterize_glyph_run,
+    GlyphCancellation, GlyphFailure, GlyphLimitKind, GlyphLimits, GlyphRaster, GlyphStats,
+    paint_glyph_run, rasterize_glyph_run,
 };
 
 struct NeverCancel;
@@ -759,6 +760,10 @@ fn aggregate_retention_counts_coverage_plus_transient_geometry() {
         stats.retained_bytes(),
         coverage_geometry_peak.max(coverage_pixel_peak)
     );
+    assert_eq!(
+        stats.peak_working_bytes(),
+        coverage_geometry_peak.max(coverage_pixel_peak)
+    );
 
     let exact = GlyphLimits {
         max_retained_bytes: stats.retained_bytes(),
@@ -833,6 +838,40 @@ fn aggregate_retention_counts_coverage_plus_transient_geometry() {
 }
 
 #[test]
+fn standalone_peak_working_tracks_geometry_and_actual_pixel_stages() {
+    let (geometry_run, geometry_resources) = build_run(
+        vec![(outline(24, 1_000, octagon()), Matrix::IDENTITY, 81)],
+        black(),
+    );
+    let backdrop = [white(); 4];
+    let geometry_stats = raster(&geometry_run, &geometry_resources, 2, 2, &backdrop)
+        .unwrap()
+        .stats();
+    let geometry_stage = geometry_stats
+        .coverage_bytes()
+        .checked_add(geometry_stats.peak_geometry_bytes())
+        .unwrap();
+    assert_eq!(geometry_stats.peak_working_bytes(), geometry_stage);
+
+    let (pixel_run, pixel_resources) = build_run(
+        vec![(outline(25, 1_000, empty_path()), Matrix::IDENTITY, 82)],
+        black(),
+    );
+    let pixel_stats = raster(&pixel_run, &pixel_resources, 2, 2, &backdrop)
+        .unwrap()
+        .stats();
+    let pixel_geometry_stage = pixel_stats
+        .coverage_bytes()
+        .checked_add(pixel_stats.peak_geometry_bytes())
+        .unwrap();
+    assert!(pixel_stats.retained_bytes() > pixel_geometry_stage);
+    assert_eq!(
+        pixel_stats.peak_working_bytes(),
+        pixel_stats.retained_bytes()
+    );
+}
+
+#[test]
 fn cancellation_is_observed_before_allocations_during_geometry_and_before_return() {
     let (run, resources) = build_run(
         vec![(outline(12, 1_000, square("1000")), Matrix::IDENTITY, 75)],
@@ -861,4 +900,118 @@ fn cancellation_is_observed_before_allocations_during_geometry_and_before_return
             "cancellation check {cancel_at}"
         );
     }
+}
+
+#[test]
+fn mounted_one_less_composite_guard_precedes_surface_mutation_and_counter_commit() {
+    let (run, resources) = build_run(
+        vec![(outline(12, 1_000, square("1000")), Matrix::IDENTITY, 75)],
+        black(),
+    );
+    let mut baseline_pixels = [white()];
+    let mut baseline = GlyphStats::default();
+    paint_glyph_run(
+        &run,
+        &resources,
+        geometry(),
+        1,
+        1,
+        &mut baseline_pixels,
+        None,
+        GlyphLimits::default(),
+        &NeverCancel,
+        &mut baseline,
+    )
+    .unwrap();
+    assert!(baseline.composites() > 0);
+
+    let mut pixels = [white()];
+    let mut stats = GlyphStats::default();
+    let limit = baseline.composites() - 1;
+    let failure = paint_glyph_run(
+        &run,
+        &resources,
+        geometry(),
+        1,
+        1,
+        &mut pixels,
+        None,
+        GlyphLimits {
+            max_composites: limit,
+            ..GlyphLimits::default()
+        },
+        &NeverCancel,
+        &mut stats,
+    )
+    .unwrap_err();
+    assert_eq!(
+        failure,
+        GlyphFailure::Limit {
+            kind: GlyphLimitKind::Composites,
+            limit,
+            consumed: 0,
+            attempted: baseline.composites(),
+        }
+    );
+    assert_eq!(stats.composites(), 0);
+    assert_eq!(pixels, [white()]);
+}
+
+#[test]
+fn mounted_zero_remaining_outline_rejects_before_surface_or_completed_counter_mutation() {
+    let (run, resources) = build_run(
+        vec![(outline(26, 1_000, square("1000")), Matrix::IDENTITY, 83)],
+        black(),
+    );
+    let limits = GlyphLimits {
+        max_outline_segments: 0,
+        ..GlyphLimits::default()
+    };
+    let mut pixels = [white()];
+    let mut stats = GlyphStats::default();
+    let failure = paint_glyph_run(
+        &run,
+        &resources,
+        geometry(),
+        1,
+        1,
+        &mut pixels,
+        None,
+        limits,
+        &NeverCancel,
+        &mut stats,
+    )
+    .unwrap_err();
+    assert_eq!(
+        failure,
+        GlyphFailure::Limit {
+            kind: GlyphLimitKind::OutlineSegments,
+            limit: 0,
+            consumed: 0,
+            attempted: 5,
+        }
+    );
+    assert_eq!(pixels, [white()]);
+    assert_eq!(stats.glyphs(), 0);
+    assert_eq!(stats.resource_lookups(), 0);
+    assert_eq!(stats.outline_segments(), 0);
+    assert_eq!(stats.coverage_bytes(), 0);
+    assert_eq!(stats.fuel(), 1);
+    assert_eq!(stats.cancellation_checks(), 1);
+
+    assert_eq!(
+        rasterize_glyph_run(
+            &run,
+            &resources,
+            geometry(),
+            1,
+            1,
+            &[white()],
+            None,
+            limits,
+            &NeverCancel,
+        ),
+        Err(GlyphFailure::InvalidGlyph),
+        "the standalone constructor retains its strict nonzero limit contract"
+    );
 }

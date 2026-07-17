@@ -257,31 +257,16 @@ fn execute(
         limits.max_requirements(),
         requirements,
     )?;
-    let dependencies = match scene.graphics() {
-        None => 0,
-        Some(graphics) => graphics
-            .requirements()
-            .iter()
-            .try_fold(0_u64, |total, value| {
-                total.checked_add(u64::try_from(value.dependencies().len()).ok()?)
-            })
-            .ok_or_else(numeric_overflow)?,
-    };
-    ensure_limit(
-        ReferenceRenderLimitKind::Dependencies,
-        limits.max_dependencies(),
-        dependencies,
-    )?;
-
     *stats = ReferenceRenderStats::new(commands, requirements, pixels, 0, 0, 0);
     stats.resources = resources;
-    stats.dependencies = dependencies;
-    let mut work = RenderWork::new(limits, pixels, stats, cancellation)?;
+    let reserved_pixel_fuel = pixels.checked_mul(2).ok_or_else(numeric_overflow)?;
+    let mut work = RenderWork::new(limits, reserved_pixel_fuel, stats, cancellation)?;
 
-    if let Some(graphics) = scene.graphics()
-        && let Some(unsupported) = preflight_graphics(graphics, &mut work)?
-    {
-        return Ok(ExecuteTerminal::Unsupported(unsupported));
+    if let Some(graphics) = scene.graphics() {
+        admit_nested_cardinalities(graphics, &mut work)?;
+        if let Some(unsupported) = preflight_graphics(graphics, &mut work)? {
+            return Ok(ExecuteTerminal::Unsupported(unsupported));
+        }
     }
     for command in scene.commands() {
         match command.kind() {
@@ -300,26 +285,36 @@ fn execute(
         limits.max_surface_bytes(),
         surface_semantic_bytes,
     )?;
-    work.observe_working(surface_semantic_bytes, 0, 0, 0)?;
+    work.ensure_working(surface_semantic_bytes, 0, 0, 0)?;
     work.check_cancellation()?;
-    let mut surface = ReferenceSurface::new_white(config.size().width(), config.size().height())
+    let mut surface = ReferenceSurface::reserve(config.size().width(), config.size().height())
         .map_err(|failure| map_surface_failure(failure, limits, work.stats))?;
-    ensure_limit(
-        ReferenceRenderLimitKind::SurfaceBytes,
-        limits.max_surface_bytes(),
-        surface.retained_bytes(),
-    )?;
-    work.stats.surface_bytes = surface.retained_bytes();
-    work.observe_working(surface.retained_bytes(), 0, 0, 0)?;
+    work.postflight_surface_capacity(surface.retained_bytes())?;
+    let mut remaining = usize::try_from(pixels).map_err(|_| numeric_overflow())?;
+    while remaining != 0 {
+        let chunk =
+            remaining.min(usize::try_from(CANCELLATION_WORK_INTERVAL).unwrap_or(usize::MAX));
+        work.charge_pixel_fuel(u64::try_from(chunk).map_err(|_| numeric_overflow())?)?;
+        surface
+            .initialize_white(chunk)
+            .map_err(|failure| map_surface_failure(failure, limits, work.stats))?;
+        remaining -= chunk;
+    }
+    if !surface.is_initialized() {
+        return Err(ReferenceRenderError::for_code(
+            ReferenceRenderErrorCode::InternalState,
+        ));
+    }
 
     if let Some(graphics) = scene.graphics() {
-        let mut clips = ClipStack::new(surface.width(), surface.height())
-            .map_err(|failure| map_geometry_failure(failure, limits, work.stats))?;
+        let mut clips = ClipStack::new(surface.width(), surface.height()).map_err(|failure| {
+            map_geometry_failure(failure, limits, work.stats, work.reserved_pixel_fuel)
+        })?;
         dispatch_graphics(scene, graphics, &mut surface, &mut clips, &mut work)?;
         work.stats.clip_depth = u64::try_from(clips.depth()).map_err(|_| numeric_overflow())?;
-        work.stats.clip_bytes = clips
-            .retained_bytes()
-            .map_err(|failure| map_geometry_failure(failure, limits, work.stats))?;
+        work.stats.clip_bytes = clips.retained_bytes().map_err(|failure| {
+            map_geometry_failure(failure, limits, work.stats, work.reserved_pixel_fuel)
+        })?;
         work.stats.peak_clip_bytes = work.stats.peak_clip_bytes.max(clips.peak_retained_bytes());
     }
 
@@ -329,7 +324,7 @@ fn execute(
         .checked_add(output_bytes)
         .and_then(|value| value.checked_add(work.stats.clip_bytes))
         .ok_or_else(numeric_overflow)?;
-    work.observe_working(final_peak, 0, 0, 0)?;
+    work.ensure_working(final_peak, 0, 0, 0)?;
     let mut rgba = Vec::new();
     rgba.try_reserve_exact(required_capacity).map_err(|_| {
         ReferenceRenderError::resource(
@@ -341,20 +336,10 @@ fn execute(
     })?;
     let retained_bytes = u64::try_from(rgba.capacity())
         .map_err(|_| ReferenceRenderError::for_code(ReferenceRenderErrorCode::InternalState))?;
-    ensure_limit(
-        ReferenceRenderLimitKind::RetainedBytes,
-        limits.max_retained_bytes(),
-        retained_bytes,
-    )?;
-    let actual_peak = surface
-        .retained_bytes()
-        .checked_add(retained_bytes)
-        .and_then(|value| value.checked_add(work.stats.clip_bytes))
-        .ok_or_else(numeric_overflow)?;
-    work.observe_working(actual_peak, 0, 0, 0)?;
+    work.postflight_output_capacity(surface.retained_bytes(), retained_bytes)?;
     for pixel in surface.pixels() {
+        work.charge_pixel_fuel(1)?;
         rgba.extend_from_slice(&pixel.to_straight_rgba8());
-        work.charge_final_fuel(1)?;
         work.stats.final_conversion_pixels = work
             .stats
             .final_conversion_pixels
@@ -366,8 +351,8 @@ fn execute(
             ReferenceRenderErrorCode::InternalState,
         ));
     }
-    work.stats.retained_bytes = retained_bytes;
     work.check_cancellation()?;
+    work.stats.retained_bytes = retained_bytes;
 
     Ok(ExecuteTerminal::Ready(CanonicalPixelBuffer::new(
         identity,
@@ -378,6 +363,52 @@ fn execute(
         rgba,
         *work.stats,
     )))
+}
+
+fn admit_nested_cardinalities(
+    graphics: &GraphicsScene,
+    work: &mut RenderWork<'_>,
+) -> Result<(), ReferenceRenderError> {
+    let mut dependencies = 0_u64;
+    for requirement in graphics.requirements() {
+        let additional =
+            u64::try_from(requirement.dependencies().len()).map_err(|_| numeric_overflow())?;
+        ensure_additional(
+            ReferenceRenderLimitKind::Dependencies,
+            work.limits.max_dependencies(),
+            dependencies,
+            additional,
+        )?;
+        dependencies = dependencies
+            .checked_add(additional)
+            .ok_or_else(numeric_overflow)?;
+        work.charge_raster_fuel(1)?;
+    }
+
+    let mut positioned_glyphs = 0_u64;
+    for record in graphics.commands() {
+        if let GraphicsCommand::DrawGlyphRun(run) = record.command() {
+            let additional = u64::try_from(run.glyphs().len()).map_err(|_| numeric_overflow())?;
+            ensure_additional(
+                ReferenceRenderLimitKind::Glyphs,
+                work.limits.max_glyphs(),
+                positioned_glyphs,
+                additional,
+            )?;
+            ensure_additional(
+                ReferenceRenderLimitKind::GlyphResourceLookups,
+                work.limits.max_glyph_resource_lookups(),
+                positioned_glyphs,
+                additional,
+            )?;
+            positioned_glyphs = positioned_glyphs
+                .checked_add(additional)
+                .ok_or_else(numeric_overflow)?;
+        }
+        work.charge_raster_fuel(1)?;
+    }
+    work.stats.dependencies = dependencies;
+    Ok(())
 }
 
 fn preflight_graphics(
@@ -446,6 +477,7 @@ fn preflight_graphics(
                 }
                 for glyph in run.glyphs() {
                     resolve_glyph(graphics, glyph.outline())?;
+                    work.charge_raster_fuel(1)?;
                 }
             }
             GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup => {
@@ -511,7 +543,9 @@ fn dispatch_graphics(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let page_map = PageDeviceMap::new(scene.geometry(), surface.width(), surface.height())
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
+        .map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?;
     for record in graphics.commands() {
         match record.command() {
             GraphicsCommand::Save => save_clip(clips, work)?,
@@ -605,18 +639,30 @@ fn save_clip(clips: &mut ClipStack, work: &mut RenderWork<'_>) -> Result<(), Ref
     let clip_bytes = clip_bytes(clips, work)?;
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
-    let mut child = GeometryWork::new(work.geometry_limits(working_bytes)?, &cancellation)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    clips
-        .save(&mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    work.observe_working(
+    let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
+        .map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?;
+    let initial = child.check_cancellation();
+    work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, initial)?;
+    let result = clips.save(&mut child);
+    if let Err(error) =
+        work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, result)
+    {
+        work.commit_clip(clips)?;
+        return Err(error);
+    }
+    if let Err(error) = work.observe_working(
         work.stats.surface_bytes,
         clips.operation_peak_retained_bytes(),
         0,
         child.geometry_bytes(),
-    )?;
-    work.commit_geometry(&child, 0)?;
+    ) {
+        work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
+        work.commit_clip(clips)?;
+        return Err(error);
+    }
+    work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
     work.commit_clip(clips)?;
     Ok(())
 }
@@ -628,18 +674,30 @@ fn restore_clip(
     let clip_bytes = clip_bytes(clips, work)?;
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
-    let mut child = GeometryWork::new(work.geometry_limits(working_bytes)?, &cancellation)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    clips
-        .restore(&mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    work.observe_working(
+    let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
+        .map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?;
+    let initial = child.check_cancellation();
+    work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, initial)?;
+    let result = clips.restore(&mut child);
+    if let Err(error) =
+        work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, result)
+    {
+        work.commit_clip(clips)?;
+        return Err(error);
+    }
+    if let Err(error) = work.observe_working(
         work.stats.surface_bytes,
         clips.operation_peak_retained_bytes(),
         0,
         child.geometry_bytes(),
-    )?;
-    work.commit_geometry(&child, 0)?;
+    ) {
+        work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
+        work.commit_clip(clips)?;
+        return Err(error);
+    }
+    work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
     work.commit_clip(clips)?;
     Ok(())
 }
@@ -655,45 +713,76 @@ fn clip_path(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes_before = clip_bytes(clips, work)?;
+    let surface_bytes = surface.retained_bytes();
     let working_bytes = work.remaining_working_bytes(clip_bytes_before)?;
     let had_mask = clips.has_mask();
     let cancellation = KernelCancellation(work.cancellation);
-    let mut child = GeometryWork::new(work.geometry_limits(working_bytes)?, &cancellation)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let path_to_device = page_map
-        .combined(transform)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let flattened = flatten_reference_path(path, path_to_device, &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let edges = FillEdges::from_path(&flattened, &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let mask = rasterize_fill(&edges, rule, surface.width(), surface.height(), &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let coverage_bytes = mask
-        .retained_bytes()
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    work.observe_working(
-        surface.retained_bytes(),
+    let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
+        .map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?;
+    let initial = child.check_cancellation();
+    work.finish_geometry_step(&child, surface_bytes, clip_bytes_before, 0, initial)?;
+    let combined = page_map.combined(transform);
+    let path_to_device =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes_before, 0, combined)?;
+    let flattened_result = flatten_reference_path(path, path_to_device, &mut child);
+    let flattened = work.finish_geometry_step(
+        &child,
+        surface_bytes,
+        clip_bytes_before,
+        0,
+        flattened_result,
+    )?;
+    let edges_result = FillEdges::from_path(&flattened, &mut child);
+    let edges =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes_before, 0, edges_result)?;
+    let mask_result = rasterize_fill(&edges, rule, surface.width(), surface.height(), &mut child);
+    let mask =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes_before, 0, mask_result)?;
+    let retained_result = mask.retained_bytes();
+    let coverage_bytes =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes_before, 0, retained_result)?;
+    if let Err(error) = work.observe_working(
+        surface_bytes,
         clip_bytes_before,
         0,
         child.peak_geometry_bytes(),
-    )?;
-    work.observe_working(
-        surface.retained_bytes(),
+    ) {
+        work.absorb_geometry(&child, surface_bytes, clip_bytes_before, coverage_bytes)?;
+        return Err(error);
+    }
+    if let Err(error) = work.observe_working(
+        surface_bytes,
         clip_bytes_before,
         coverage_bytes,
         child.geometry_bytes(),
-    )?;
-    clips
-        .intersect(mask, &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    work.observe_working(
-        surface.retained_bytes(),
+    ) {
+        work.absorb_geometry(&child, surface_bytes, clip_bytes_before, coverage_bytes)?;
+        return Err(error);
+    }
+    let intersect_result = clips.intersect(mask, &mut child);
+    if let Err(error) = work.finish_geometry_step(
+        &child,
+        surface_bytes,
+        clip_bytes_before,
+        coverage_bytes,
+        intersect_result,
+    ) {
+        work.commit_clip(clips)?;
+        return Err(error);
+    }
+    if let Err(error) = work.observe_working(
+        surface_bytes,
         clips.operation_peak_retained_bytes(),
         if had_mask { coverage_bytes } else { 0 },
         child.geometry_bytes(),
-    )?;
-    work.commit_geometry(&child, coverage_bytes)?;
+    ) {
+        work.absorb_geometry(&child, surface_bytes, clip_bytes_before, coverage_bytes)?;
+        work.commit_clip(clips)?;
+        return Err(error);
+    }
+    work.absorb_geometry(&child, surface_bytes, clip_bytes_before, coverage_bytes)?;
     work.commit_clip(clips)?;
     Ok(())
 }
@@ -710,19 +799,25 @@ fn fill_path(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes = clip_bytes(clips, work)?;
+    let surface_bytes = surface.retained_bytes();
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
-    let mut child = GeometryWork::new(work.geometry_limits(working_bytes)?, &cancellation)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let path_to_device = page_map
-        .combined(transform)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let flattened = flatten_reference_path(path, path_to_device, &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let edges = FillEdges::from_path(&flattened, &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let mask = rasterize_fill(&edges, rule, surface.width(), surface.height(), &mut child)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
+    let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
+        .map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?;
+    let initial = child.check_cancellation();
+    work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, initial)?;
+    let combined = page_map.combined(transform);
+    let path_to_device =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, combined)?;
+    let flattened_result = flatten_reference_path(path, path_to_device, &mut child);
+    let flattened =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, flattened_result)?;
+    let edges_result = FillEdges::from_path(&flattened, &mut child);
+    let edges = work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, edges_result)?;
+    let mask_result = rasterize_fill(&edges, rule, surface.width(), surface.height(), &mut child);
+    let mask = work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, mask_result)?;
     finish_path_paint(mask, paint, clips, surface, child, work)
 }
 
@@ -738,13 +833,19 @@ fn stroke_path(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes = clip_bytes(clips, work)?;
+    let surface_bytes = surface.retained_bytes();
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
-    let mut child = GeometryWork::new(work.geometry_limits(working_bytes)?, &cancellation)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let path_to_page = Affine::from_scene(transform)
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let mask = rasterize_stroke(
+    let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
+        .map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?;
+    let initial = child.check_cancellation();
+    work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, initial)?;
+    let path_result = Affine::from_scene(transform);
+    let path_to_page =
+        work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, path_result)?;
+    let mask_result = rasterize_stroke(
         path,
         path_to_page,
         page_map.affine(),
@@ -752,8 +853,8 @@ fn stroke_path(
         surface.width(),
         surface.height(),
         &mut child,
-    )
-    .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
+    );
+    let mask = work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, mask_result)?;
     finish_path_paint(mask, paint, clips, surface, child, work)
 }
 
@@ -762,30 +863,51 @@ fn finish_path_paint(
     paint: Paint,
     clips: &ClipStack,
     surface: &mut ReferenceSurface,
-    child: GeometryWork<'_>,
+    mut child: GeometryWork<'_>,
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
-    let coverage_bytes = mask
-        .retained_bytes()
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    let clip_bytes = clips
-        .retained_bytes()
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?;
-    work.observe_working(
-        surface.retained_bytes(),
-        clip_bytes,
+    let surface_bytes = surface.retained_bytes();
+    let retained_result = mask.retained_bytes();
+    let coverage_bytes = work.finish_geometry_step(
+        &child,
+        surface_bytes,
+        work.stats.clip_bytes,
         0,
-        child.peak_geometry_bytes(),
+        retained_result,
     )?;
-    work.observe_working(
-        surface.retained_bytes(),
+    let clip_result = clips.retained_bytes();
+    let clip_bytes = work.finish_geometry_step(
+        &child,
+        surface_bytes,
+        work.stats.clip_bytes,
+        coverage_bytes,
+        clip_result,
+    )?;
+    let base_result = child.set_working_base_bytes(coverage_bytes);
+    work.finish_geometry_step(
+        &child,
+        surface_bytes,
+        clip_bytes,
+        coverage_bytes,
+        base_result,
+    )?;
+    if let Err(error) =
+        work.observe_working(surface_bytes, clip_bytes, 0, child.peak_geometry_bytes())
+    {
+        work.absorb_geometry(&child, surface_bytes, clip_bytes, coverage_bytes)?;
+        return Err(error);
+    }
+    if let Err(error) = work.observe_working(
+        surface_bytes,
         clip_bytes,
         coverage_bytes,
         child.geometry_bytes(),
-    )?;
-    work.commit_geometry(&child, coverage_bytes)?;
+    ) {
+        work.absorb_geometry(&child, surface_bytes, clip_bytes, coverage_bytes)?;
+        return Err(error);
+    }
+    work.absorb_geometry(&child, surface_bytes, clip_bytes, coverage_bytes)?;
     paint_coverage(surface, &mask, clips, paint, work)?;
-    work.stats.coverage_bytes = 0;
     Ok(())
 }
 
@@ -822,12 +944,12 @@ fn paint_coverage(
             let coverage = mask.sample_mask(x, y).ok_or_else(invalid_scene)?
                 & clips.sample_mask(x, y).ok_or_else(invalid_scene)?;
             let covered = u64::from(coverage.count_ones());
+            work.charge_raster_fuel(covered.checked_add(1).ok_or_else(numeric_overflow)?)?;
             if covered != 0 {
                 let backdrop = surface.pixels()[index];
                 let painted = blend.source_over(source, backdrop);
                 surface.pixels_mut()[index] = coverage_average(backdrop, painted, covered)?;
             }
-            work.charge_raster_fuel(covered.checked_add(1).ok_or_else(numeric_overflow)?)?;
         }
     }
     Ok(())
@@ -848,7 +970,8 @@ fn draw_image(
     let cancellation = KernelCancellation(work.cancellation);
     let width = surface.width();
     let height = surface.height();
-    let stats = paint_image(
+    let mut stats = ImageStats::default();
+    let result = paint_image(
         image,
         scene.geometry(),
         transform,
@@ -860,14 +983,19 @@ fn draw_image(
         Some(clips),
         limits,
         &cancellation,
-    )
-    .map_err(|failure| map_image_failure(failure, work.limits, work.stats))?;
-    work.commit_image(stats)?;
+        &mut stats,
+    );
+    if let Err(failure) = result {
+        let error = map_image_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel);
+        work.absorb_image(stats)?;
+        return Err(error);
+    }
+    work.absorb_image(stats)?;
     work.observe_working(
         surface.retained_bytes(),
-        clips
-            .retained_bytes()
-            .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))?,
+        clips.retained_bytes().map_err(|failure| {
+            map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+        })?,
         0,
         0,
     )?;
@@ -896,7 +1024,8 @@ fn draw_glyphs(
     let cancellation = KernelCancellation(work.cancellation);
     let width = surface.width();
     let height = surface.height();
-    let stats = paint_glyph_run(
+    let mut stats = GlyphStats::default();
+    let result = paint_glyph_run(
         run,
         graphics.resources(),
         scene.geometry(),
@@ -906,22 +1035,42 @@ fn draw_glyphs(
         Some(clips),
         limits,
         &cancellation,
-    )
-    .map_err(|failure| map_glyph_failure(failure, work.limits, work.stats))?;
-    work.observe_working(
+        &mut stats,
+    );
+    if let Err(failure) = result {
+        work.note_working(
+            surface.retained_bytes(),
+            clip_bytes,
+            stats.peak_working_bytes(),
+            0,
+        )?;
+        let error = map_glyph_failure(
+            failure,
+            work.limits,
+            work.stats,
+            stats,
+            work.reserved_pixel_fuel,
+        );
+        work.absorb_glyph(stats)?;
+        return Err(error);
+    }
+    if let Err(error) = work.observe_working(
         surface.retained_bytes(),
         clip_bytes,
-        stats.retained_bytes(),
+        stats.peak_working_bytes(),
         0,
-    )?;
-    work.commit_glyph(stats)?;
+    ) {
+        work.absorb_glyph(stats)?;
+        return Err(error);
+    }
+    work.absorb_glyph(stats)?;
     Ok(())
 }
 
 fn clip_bytes(clips: &ClipStack, work: &RenderWork<'_>) -> Result<u64, ReferenceRenderError> {
-    clips
-        .retained_bytes()
-        .map_err(|failure| map_geometry_failure(failure, work.limits, work.stats))
+    clips.retained_bytes().map_err(|failure| {
+        map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
+    })
 }
 
 fn resolve_entry(
@@ -988,7 +1137,7 @@ impl GlyphCancellation for KernelCancellation<'_> {
 
 struct RenderWork<'a> {
     limits: ReferenceRasterLimits,
-    reserved_final_fuel: u64,
+    reserved_pixel_fuel: u64,
     stats: &'a mut ReferenceRenderStats,
     cancellation: &'a dyn ReferenceRasterCancellation,
     fuel_since_cancellation: u64,
@@ -997,7 +1146,7 @@ struct RenderWork<'a> {
 impl<'a> RenderWork<'a> {
     fn new(
         limits: ReferenceRasterLimits,
-        reserved_final_fuel: u64,
+        reserved_pixel_fuel: u64,
         stats: &'a mut ReferenceRenderStats,
         cancellation: &'a dyn ReferenceRasterCancellation,
     ) -> Result<Self, ReferenceRenderError> {
@@ -1005,11 +1154,11 @@ impl<'a> RenderWork<'a> {
             ReferenceRenderLimitKind::Fuel,
             limits.max_fuel(),
             0,
-            reserved_final_fuel,
+            reserved_pixel_fuel,
         )?;
         let mut work = Self {
             limits,
-            reserved_final_fuel,
+            reserved_pixel_fuel,
             stats,
             cancellation,
             fuel_since_cancellation: 0,
@@ -1022,7 +1171,7 @@ impl<'a> RenderWork<'a> {
         let consumed_with_reserved = self
             .stats
             .fuel
-            .checked_add(self.reserved_final_fuel)
+            .checked_add(self.reserved_pixel_fuel)
             .ok_or_else(numeric_overflow)?;
         ensure_additional(
             ReferenceRenderLimitKind::Fuel,
@@ -1033,15 +1182,15 @@ impl<'a> RenderWork<'a> {
         self.charge_fuel_unreserved(amount)
     }
 
-    fn charge_final_fuel(&mut self, amount: u64) -> Result<(), ReferenceRenderError> {
+    fn charge_pixel_fuel(&mut self, amount: u64) -> Result<(), ReferenceRenderError> {
         ensure_additional(
             ReferenceRenderLimitKind::Fuel,
             self.limits.max_fuel(),
             self.stats.fuel,
             amount,
         )?;
-        self.reserved_final_fuel =
-            self.reserved_final_fuel
+        self.reserved_pixel_fuel =
+            self.reserved_pixel_fuel
                 .checked_sub(amount)
                 .ok_or_else(|| {
                     ReferenceRenderError::for_code(ReferenceRenderErrorCode::InternalState)
@@ -1067,19 +1216,15 @@ impl<'a> RenderWork<'a> {
     }
 
     fn remaining_fuel(&self) -> Result<u64, ReferenceRenderError> {
+        let consumed = self
+            .stats
+            .fuel
+            .checked_add(self.reserved_pixel_fuel)
+            .ok_or_else(numeric_overflow)?;
         self.limits
             .max_fuel()
-            .checked_sub(self.stats.fuel)
-            .and_then(|value| value.checked_sub(self.reserved_final_fuel))
-            .filter(|value| *value != 0)
-            .ok_or_else(|| {
-                ReferenceRenderError::resource(
-                    ReferenceRenderLimitKind::Fuel,
-                    self.limits.max_fuel(),
-                    self.stats.fuel,
-                    1,
-                )
-            })
+            .checked_sub(consumed)
+            .ok_or_else(numeric_overflow)
     }
 
     fn check_cancellation(&mut self) -> Result<(), ReferenceRenderError> {
@@ -1105,28 +1250,19 @@ impl<'a> RenderWork<'a> {
                 .limits
                 .max_curve_recursion()
                 .min(REFERENCE_CURVE_RECURSION),
-            max_segments: remaining_or_one(
+            max_segments: remaining(
                 self.limits.max_geometry_segments(),
                 self.stats.geometry_segments,
             )?,
-            max_edges: remaining_or_one(
-                self.limits.max_geometry_edges(),
-                self.stats.geometry_edges,
-            )?,
-            max_samples: remaining_or_one(
+            max_edges: remaining(self.limits.max_geometry_edges(), self.stats.geometry_edges)?,
+            max_samples: remaining(
                 self.limits.max_geometry_samples(),
                 self.stats.geometry_samples,
             )?,
             max_coverage_bytes: self.limits.max_coverage_bytes(),
-            max_dash_chunks: remaining_or_one(
-                self.limits.max_dash_chunks(),
-                self.stats.dash_chunks,
-            )?,
-            max_stroke_runs: remaining_or_one(
-                self.limits.max_stroke_runs(),
-                self.stats.stroke_runs,
-            )?,
-            max_stroke_primitives: remaining_or_one(
+            max_dash_chunks: remaining(self.limits.max_dash_chunks(), self.stats.dash_chunks)?,
+            max_stroke_runs: remaining(self.limits.max_stroke_runs(), self.stats.stroke_runs)?,
+            max_stroke_primitives: remaining(
                 self.limits.max_stroke_primitives(),
                 self.stats.stroke_primitives,
             )?,
@@ -1140,21 +1276,18 @@ impl<'a> RenderWork<'a> {
 
     fn image_limits(&self) -> Result<ImageLimits, ReferenceRenderError> {
         Ok(ImageLimits {
-            max_source_pixels: remaining_or_one(
+            max_source_pixels: remaining(
                 self.limits.max_image_source_pixels(),
                 self.stats.image_source_pixels,
             )?,
             max_stride_bytes: self.limits.max_image_stride_bytes(),
-            max_decoded_bytes: remaining_or_one(
+            max_decoded_bytes: remaining(
                 self.limits.max_image_decoded_bytes(),
                 self.stats.image_decoded_bytes,
             )?,
             max_output_pixels: self.limits.max_pixels(),
-            max_samples: remaining_or_one(
-                self.limits.max_image_samples(),
-                self.stats.image_samples,
-            )?,
-            max_conversions: remaining_or_one(
+            max_samples: remaining(self.limits.max_image_samples(), self.stats.image_samples)?,
+            max_conversions: remaining(
                 self.limits.max_image_conversions(),
                 self.stats.image_conversions,
             )?,
@@ -1164,34 +1297,31 @@ impl<'a> RenderWork<'a> {
     }
 
     fn glyph_limits(&self, max_retained_bytes: u64) -> Result<GlyphLimits, ReferenceRenderError> {
-        let remaining_shared_samples = remaining_or_one(
+        let remaining_shared_samples = remaining(
             self.limits.max_geometry_samples(),
             self.stats.geometry_samples,
         )?;
         let remaining_glyph_samples =
-            remaining_or_one(self.limits.max_glyph_samples(), self.stats.glyph_samples)?;
+            remaining(self.limits.max_glyph_samples(), self.stats.glyph_samples)?;
         Ok(GlyphLimits {
-            max_glyphs: remaining_or_one(self.limits.max_glyphs(), self.stats.glyphs)?,
-            max_resource_lookups: remaining_or_one(
+            max_glyphs: remaining(self.limits.max_glyphs(), self.stats.glyphs)?,
+            max_resource_lookups: remaining(
                 self.limits.max_glyph_resource_lookups(),
                 self.stats.glyph_resource_lookups,
             )?,
-            max_outline_segments: remaining_or_one(
+            max_outline_segments: remaining(
                 self.limits.max_glyph_outline_segments(),
                 self.stats.glyph_outline_segments,
             )?,
-            max_flattened_segments: remaining_or_one(
+            max_flattened_segments: remaining(
                 self.limits.max_geometry_segments(),
                 self.stats.geometry_segments,
             )?,
-            max_edges: remaining_or_one(
-                self.limits.max_geometry_edges(),
-                self.stats.geometry_edges,
-            )?,
+            max_edges: remaining(self.limits.max_geometry_edges(), self.stats.geometry_edges)?,
             max_samples: remaining_shared_samples.min(remaining_glyph_samples),
             max_coverage_bytes: self.limits.max_coverage_bytes(),
             max_output_pixels: self.limits.max_pixels(),
-            max_composites: remaining_or_one(
+            max_composites: remaining(
                 self.limits.max_glyph_composites(),
                 self.stats.glyph_composites,
             )?,
@@ -1206,67 +1336,126 @@ impl<'a> RenderWork<'a> {
         })
     }
 
-    fn commit_geometry(
+    fn absorb_geometry(
         &mut self,
         child: &GeometryWork<'_>,
-        coverage_bytes: u64,
+        surface_bytes: u64,
+        clip_bytes: u64,
+        peak_coverage_bytes: u64,
     ) -> Result<(), ReferenceRenderError> {
-        add_counter(
-            &mut self.stats.geometry_segments,
+        self.record_geometry_working(child, surface_bytes, clip_bytes)?;
+        self.merge_geometry_stats(child, peak_coverage_bytes)
+    }
+
+    fn record_geometry_working(
+        &mut self,
+        child: &GeometryWork<'_>,
+        surface_bytes: u64,
+        clip_bytes: u64,
+    ) -> Result<(), ReferenceRenderError> {
+        self.note_working(surface_bytes, clip_bytes, child.peak_working_bytes(), 0)?;
+        Ok(())
+    }
+
+    fn merge_geometry_stats(
+        &mut self,
+        child: &GeometryWork<'_>,
+        peak_coverage_bytes: u64,
+    ) -> Result<(), ReferenceRenderError> {
+        let geometry_segments = checked_counter_total(
+            self.stats.geometry_segments,
             child.segments(),
             self.limits.max_geometry_segments(),
             ReferenceRenderLimitKind::GeometrySegments,
         )?;
-        add_counter(
-            &mut self.stats.geometry_edges,
+        let geometry_edges = checked_counter_total(
+            self.stats.geometry_edges,
             child.edges(),
             self.limits.max_geometry_edges(),
             ReferenceRenderLimitKind::GeometryEdges,
         )?;
-        add_counter(
-            &mut self.stats.geometry_samples,
+        let geometry_samples = checked_counter_total(
+            self.stats.geometry_samples,
             child.samples(),
             self.limits.max_geometry_samples(),
             ReferenceRenderLimitKind::GeometrySamples,
         )?;
-        add_counter(
-            &mut self.stats.dash_chunks,
+        let dash_chunks = checked_counter_total(
+            self.stats.dash_chunks,
             child.dash_chunks(),
             self.limits.max_dash_chunks(),
             ReferenceRenderLimitKind::DashChunks,
         )?;
-        add_counter(
-            &mut self.stats.stroke_runs,
+        let stroke_runs = checked_counter_total(
+            self.stats.stroke_runs,
             child.stroke_runs(),
             self.limits.max_stroke_runs(),
             ReferenceRenderLimitKind::StrokeRuns,
         )?;
-        add_counter(
-            &mut self.stats.stroke_primitives,
+        let stroke_primitives = checked_counter_total(
+            self.stats.stroke_primitives,
             child.stroke_primitives(),
             self.limits.max_stroke_primitives(),
             ReferenceRenderLimitKind::StrokePrimitives,
         )?;
-        self.stats.coverage_bytes = coverage_bytes;
-        self.stats.peak_coverage_bytes = self.stats.peak_coverage_bytes.max(coverage_bytes);
+        let cancellation_checks = self
+            .stats
+            .cancellation_checks
+            .checked_add(child.cancellation_checks())
+            .ok_or_else(numeric_overflow)?;
+        let fuel = self.child_fuel_total(child.fuel())?;
+
+        self.stats.geometry_segments = geometry_segments;
+        self.stats.geometry_edges = geometry_edges;
+        self.stats.geometry_samples = geometry_samples;
+        self.stats.dash_chunks = dash_chunks;
+        self.stats.stroke_runs = stroke_runs;
+        self.stats.stroke_primitives = stroke_primitives;
+        self.stats.coverage_bytes = 0;
+        self.stats.peak_coverage_bytes = self
+            .stats
+            .peak_coverage_bytes
+            .max(peak_coverage_bytes)
+            .max(child.peak_coverage_bytes());
         self.stats.geometry_bytes = self.stats.geometry_bytes.max(child.geometry_bytes());
         self.stats.peak_geometry_bytes = self
             .stats
             .peak_geometry_bytes
             .max(child.peak_geometry_bytes());
-        self.stats.cancellation_checks = self
-            .stats
-            .cancellation_checks
-            .checked_add(child.cancellation_checks())
-            .ok_or_else(numeric_overflow)?;
-        self.charge_raster_fuel(child.fuel())
+        self.stats.cancellation_checks = cancellation_checks;
+        self.stats.fuel = fuel;
+        Ok(())
+    }
+
+    fn finish_geometry_step<T>(
+        &mut self,
+        child: &GeometryWork<'_>,
+        surface_bytes: u64,
+        clip_bytes: u64,
+        peak_coverage_bytes: u64,
+        result: Result<T, GeometryFailure>,
+    ) -> Result<T, ReferenceRenderError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(failure) => {
+                self.record_geometry_working(child, surface_bytes, clip_bytes)?;
+                let error = map_geometry_failure(
+                    failure,
+                    self.limits,
+                    self.stats,
+                    self.reserved_pixel_fuel,
+                );
+                self.merge_geometry_stats(child, peak_coverage_bytes)?;
+                Err(error)
+            }
+        }
     }
 
     fn commit_clip(&mut self, clips: &ClipStack) -> Result<(), ReferenceRenderError> {
         self.stats.clip_depth = u64::try_from(clips.depth()).map_err(|_| numeric_overflow())?;
-        self.stats.clip_bytes = clips
-            .retained_bytes()
-            .map_err(|failure| map_geometry_failure(failure, self.limits, self.stats))?;
+        self.stats.clip_bytes = clips.retained_bytes().map_err(|failure| {
+            map_geometry_failure(failure, self.limits, self.stats, self.reserved_pixel_fuel)
+        })?;
         self.stats.peak_clip_bytes = self.stats.peak_clip_bytes.max(clips.peak_retained_bytes());
         Ok(())
     }
@@ -1288,126 +1477,224 @@ impl<'a> RenderWork<'a> {
             .ok_or_else(numeric_overflow)
     }
 
-    fn commit_image(&mut self, child: ImageStats) -> Result<(), ReferenceRenderError> {
-        add_counter(
-            &mut self.stats.image_commands,
+    fn absorb_image(&mut self, child: ImageStats) -> Result<(), ReferenceRenderError> {
+        let image_commands = checked_counter_total(
+            self.stats.image_commands,
             1,
             self.limits.max_commands(),
             ReferenceRenderLimitKind::Commands,
         )?;
-        add_counter(
-            &mut self.stats.image_source_pixels,
+        let image_source_pixels = checked_counter_total(
+            self.stats.image_source_pixels,
             child.source_pixels(),
             self.limits.max_image_source_pixels(),
             ReferenceRenderLimitKind::ImageSourcePixels,
         )?;
-        self.stats.image_stride_bytes = self.stats.image_stride_bytes.max(child.stride_bytes());
+        let image_stride_bytes = self.stats.image_stride_bytes.max(child.stride_bytes());
         ensure_limit(
             ReferenceRenderLimitKind::ImageStrideBytes,
             self.limits.max_image_stride_bytes(),
-            self.stats.image_stride_bytes,
+            image_stride_bytes,
         )?;
-        add_counter(
-            &mut self.stats.image_decoded_bytes,
+        let image_decoded_bytes = checked_counter_total(
+            self.stats.image_decoded_bytes,
             child.decoded_bytes(),
             self.limits.max_image_decoded_bytes(),
             ReferenceRenderLimitKind::ImageDecodedBytes,
         )?;
-        add_counter(
-            &mut self.stats.image_samples,
+        let image_samples = checked_counter_total(
+            self.stats.image_samples,
             child.samples(),
             self.limits.max_image_samples(),
             ReferenceRenderLimitKind::ImageSamples,
         )?;
-        add_counter(
-            &mut self.stats.image_conversions,
+        let image_conversions = checked_counter_total(
+            self.stats.image_conversions,
             child.conversions(),
             self.limits.max_image_conversions(),
             ReferenceRenderLimitKind::ImageConversions,
         )?;
-        self.stats.cancellation_checks = self
+        let cancellation_checks = self
             .stats
             .cancellation_checks
             .checked_add(child.cancellation_checks())
             .ok_or_else(numeric_overflow)?;
-        self.charge_raster_fuel(child.fuel())
+        let fuel = self.child_fuel_total(child.fuel())?;
+
+        self.stats.image_commands = image_commands;
+        self.stats.image_source_pixels = image_source_pixels;
+        self.stats.image_stride_bytes = image_stride_bytes;
+        self.stats.image_decoded_bytes = image_decoded_bytes;
+        self.stats.image_samples = image_samples;
+        self.stats.image_conversions = image_conversions;
+        self.stats.cancellation_checks = cancellation_checks;
+        self.stats.coverage_bytes = 0;
+        self.stats.fuel = fuel;
+        Ok(())
     }
 
-    fn commit_glyph(&mut self, child: GlyphStats) -> Result<(), ReferenceRenderError> {
-        add_counter(
-            &mut self.stats.glyph_runs,
+    fn absorb_glyph(&mut self, child: GlyphStats) -> Result<(), ReferenceRenderError> {
+        let glyph_runs = checked_counter_total(
+            self.stats.glyph_runs,
             1,
             self.limits.max_commands(),
             ReferenceRenderLimitKind::Commands,
         )?;
-        add_counter(
-            &mut self.stats.glyphs,
+        let glyphs = checked_counter_total(
+            self.stats.glyphs,
             child.glyphs(),
             self.limits.max_glyphs(),
             ReferenceRenderLimitKind::Glyphs,
         )?;
-        add_counter(
-            &mut self.stats.glyph_resource_lookups,
+        let glyph_resource_lookups = checked_counter_total(
+            self.stats.glyph_resource_lookups,
             child.resource_lookups(),
             self.limits.max_glyph_resource_lookups(),
             ReferenceRenderLimitKind::GlyphResourceLookups,
         )?;
-        add_counter(
-            &mut self.stats.glyph_outline_segments,
+        let glyph_outline_segments = checked_counter_total(
+            self.stats.glyph_outline_segments,
             child.outline_segments(),
             self.limits.max_glyph_outline_segments(),
             ReferenceRenderLimitKind::GlyphOutlineSegments,
         )?;
-        add_counter(
-            &mut self.stats.geometry_segments,
+        let geometry_segments = checked_counter_total(
+            self.stats.geometry_segments,
             child.flattened_segments(),
             self.limits.max_geometry_segments(),
             ReferenceRenderLimitKind::GeometrySegments,
         )?;
-        add_counter(
-            &mut self.stats.geometry_edges,
+        let geometry_edges = checked_counter_total(
+            self.stats.geometry_edges,
             child.edges(),
             self.limits.max_geometry_edges(),
             ReferenceRenderLimitKind::GeometryEdges,
         )?;
-        add_counter(
-            &mut self.stats.geometry_samples,
+        let geometry_samples = checked_counter_total(
+            self.stats.geometry_samples,
             child.samples(),
             self.limits.max_geometry_samples(),
             ReferenceRenderLimitKind::GeometrySamples,
         )?;
-        add_counter(
-            &mut self.stats.glyph_samples,
+        let glyph_samples = checked_counter_total(
+            self.stats.glyph_samples,
             child.samples(),
             self.limits.max_glyph_samples(),
             ReferenceRenderLimitKind::GlyphSamples,
         )?;
-        add_counter(
-            &mut self.stats.glyph_composites,
+        let glyph_composites = checked_counter_total(
+            self.stats.glyph_composites,
             child.composites(),
             self.limits.max_glyph_composites(),
             ReferenceRenderLimitKind::GlyphComposites,
         )?;
+        let cancellation_checks = self
+            .stats
+            .cancellation_checks
+            .checked_add(child.cancellation_checks())
+            .ok_or_else(numeric_overflow)?;
+        let child_fuel = child
+            .fuel()
+            .checked_add(child.geometry_fuel())
+            .ok_or_else(numeric_overflow)?;
+        let fuel = self.child_fuel_total(child_fuel)?;
+
+        self.stats.glyph_runs = glyph_runs;
+        self.stats.glyphs = glyphs;
+        self.stats.glyph_resource_lookups = glyph_resource_lookups;
+        self.stats.glyph_outline_segments = glyph_outline_segments;
+        self.stats.geometry_segments = geometry_segments;
+        self.stats.geometry_edges = geometry_edges;
+        self.stats.geometry_samples = geometry_samples;
+        self.stats.glyph_samples = glyph_samples;
+        self.stats.glyph_composites = glyph_composites;
         self.stats.peak_coverage_bytes = self.stats.peak_coverage_bytes.max(child.coverage_bytes());
+        self.stats.coverage_bytes = 0;
         self.stats.geometry_bytes = self.stats.geometry_bytes.max(child.geometry_bytes());
         self.stats.peak_geometry_bytes = self
             .stats
             .peak_geometry_bytes
             .max(child.peak_geometry_bytes());
-        self.stats.cancellation_checks = self
+        self.stats.cancellation_checks = cancellation_checks;
+        self.stats.fuel = fuel;
+        Ok(())
+    }
+
+    fn child_fuel_total(&self, amount: u64) -> Result<u64, ReferenceRenderError> {
+        let consumed_with_reserved = self
             .stats
-            .cancellation_checks
-            .checked_add(child.cancellation_checks())
+            .fuel
+            .checked_add(self.reserved_pixel_fuel)
             .ok_or_else(numeric_overflow)?;
-        let fuel = child
-            .fuel()
-            .checked_add(child.geometry_fuel())
+        ensure_additional(
+            ReferenceRenderLimitKind::Fuel,
+            self.limits.max_fuel(),
+            consumed_with_reserved,
+            amount,
+        )?;
+        self.stats
+            .fuel
+            .checked_add(amount)
+            .ok_or_else(numeric_overflow)
+    }
+
+    fn postflight_surface_capacity(
+        &mut self,
+        retained_bytes: u64,
+    ) -> Result<(), ReferenceRenderError> {
+        self.stats.surface_bytes = retained_bytes;
+        let actual_peak = self.note_working(retained_bytes, 0, 0, 0)?;
+        ensure_limit(
+            ReferenceRenderLimitKind::SurfaceBytes,
+            self.limits.max_surface_bytes(),
+            retained_bytes,
+        )?;
+        ensure_limit(
+            ReferenceRenderLimitKind::PeakWorkingBytes,
+            self.limits.max_peak_working_bytes(),
+            actual_peak,
+        )
+    }
+
+    fn postflight_output_capacity(
+        &mut self,
+        surface_bytes: u64,
+        retained_bytes: u64,
+    ) -> Result<(), ReferenceRenderError> {
+        let actual_peak = surface_bytes
+            .checked_add(retained_bytes)
+            .and_then(|value| value.checked_add(self.stats.clip_bytes))
             .ok_or_else(numeric_overflow)?;
-        self.charge_raster_fuel(fuel)
+        self.note_working(actual_peak, 0, 0, 0)?;
+        ensure_limit(
+            ReferenceRenderLimitKind::RetainedBytes,
+            self.limits.max_retained_bytes(),
+            retained_bytes,
+        )?;
+        ensure_limit(
+            ReferenceRenderLimitKind::PeakWorkingBytes,
+            self.limits.max_peak_working_bytes(),
+            actual_peak,
+        )
     }
 
     fn observe_working(
         &mut self,
+        surface_or_total: u64,
+        clip: u64,
+        coverage: u64,
+        geometry: u64,
+    ) -> Result<(), ReferenceRenderError> {
+        let total = self.note_working(surface_or_total, clip, coverage, geometry)?;
+        ensure_limit(
+            ReferenceRenderLimitKind::PeakWorkingBytes,
+            self.limits.max_peak_working_bytes(),
+            total,
+        )
+    }
+
+    fn ensure_working(
+        &self,
         surface_or_total: u64,
         clip: u64,
         coverage: u64,
@@ -1422,9 +1709,23 @@ impl<'a> RenderWork<'a> {
             ReferenceRenderLimitKind::PeakWorkingBytes,
             self.limits.max_peak_working_bytes(),
             total,
-        )?;
+        )
+    }
+
+    fn note_working(
+        &mut self,
+        surface_or_total: u64,
+        clip: u64,
+        coverage: u64,
+        geometry: u64,
+    ) -> Result<u64, ReferenceRenderError> {
+        let total = surface_or_total
+            .checked_add(clip)
+            .and_then(|value| value.checked_add(coverage))
+            .and_then(|value| value.checked_add(geometry))
+            .ok_or_else(numeric_overflow)?;
         self.stats.peak_working_bytes = self.stats.peak_working_bytes.max(total);
-        Ok(())
+        Ok(total)
     }
 }
 
@@ -1483,22 +1784,18 @@ fn pixel_index(width: u32, height: u32, x: u32, y: u32) -> Option<usize> {
         .ok()
 }
 
-fn add_counter(
-    consumed: &mut u64,
+fn checked_counter_total(
+    consumed: u64,
     amount: u64,
     limit: u64,
     kind: ReferenceRenderLimitKind,
-) -> Result<(), ReferenceRenderError> {
-    ensure_additional(kind, limit, *consumed, amount)?;
-    *consumed = consumed.checked_add(amount).ok_or_else(numeric_overflow)?;
-    Ok(())
+) -> Result<u64, ReferenceRenderError> {
+    ensure_additional(kind, limit, consumed, amount)?;
+    consumed.checked_add(amount).ok_or_else(numeric_overflow)
 }
 
-fn remaining_or_one(limit: u64, consumed: u64) -> Result<u64, ReferenceRenderError> {
-    limit
-        .checked_sub(consumed)
-        .map(|value| value.max(1))
-        .ok_or_else(numeric_overflow)
+fn remaining(limit: u64, consumed: u64) -> Result<u64, ReferenceRenderError> {
+    limit.checked_sub(consumed).ok_or_else(numeric_overflow)
 }
 
 fn ensure_limit(
@@ -1550,6 +1847,7 @@ fn map_geometry_failure(
     failure: GeometryFailure,
     limits: ReferenceRasterLimits,
     stats: &ReferenceRenderStats,
+    reserved_pixel_fuel: u64,
 ) -> ReferenceRenderError {
     match failure {
         GeometryFailure::NumericOverflow => numeric_overflow(),
@@ -1638,7 +1936,10 @@ fn map_geometry_failure(
                 GeometryLimitKind::Fuel => (
                     ReferenceRenderLimitKind::Fuel,
                     limits.max_fuel(),
-                    stats.fuel,
+                    match stats.fuel.checked_add(reserved_pixel_fuel) {
+                        Some(value) => value,
+                        None => return numeric_overflow(),
+                    },
                 ),
             };
             ReferenceRenderError::resource(kind, limit, base.saturating_add(consumed), attempted)
@@ -1650,6 +1951,7 @@ fn map_image_failure(
     failure: ImageFailure,
     limits: ReferenceRasterLimits,
     stats: &ReferenceRenderStats,
+    reserved_pixel_fuel: u64,
 ) -> ReferenceRenderError {
     match failure {
         ImageFailure::NumericOverflow => numeric_overflow(),
@@ -1677,6 +1979,7 @@ fn map_image_failure(
             },
             limits,
             stats,
+            reserved_pixel_fuel,
         ),
         ImageFailure::Limit {
             kind,
@@ -1721,7 +2024,10 @@ fn map_image_failure(
                 ImageLimitKind::Fuel => (
                     ReferenceRenderLimitKind::Fuel,
                     limits.max_fuel(),
-                    stats.fuel,
+                    match stats.fuel.checked_add(reserved_pixel_fuel) {
+                        Some(value) => value,
+                        None => return numeric_overflow(),
+                    },
                 ),
             };
             ReferenceRenderError::resource(kind, limit, base.saturating_add(consumed), attempted)
@@ -1733,6 +2039,8 @@ fn map_glyph_failure(
     failure: GlyphFailure,
     limits: ReferenceRasterLimits,
     stats: &ReferenceRenderStats,
+    child: GlyphStats,
+    reserved_pixel_fuel: u64,
 ) -> ReferenceRenderError {
     match failure {
         GlyphFailure::NumericOverflow => numeric_overflow(),
@@ -1752,15 +2060,34 @@ fn map_glyph_failure(
             consumed,
             attempted,
         } => {
+            if matches!(kind, GlyphLimitKind::GeometryFuel | GlyphLimitKind::Fuel) {
+                let other_fuel = if kind == GlyphLimitKind::GeometryFuel {
+                    child.fuel()
+                } else {
+                    child.geometry_fuel()
+                };
+                let Some(consumed) = stats
+                    .fuel
+                    .checked_add(reserved_pixel_fuel)
+                    .and_then(|value| value.checked_add(other_fuel))
+                    .and_then(|value| value.checked_add(consumed))
+                else {
+                    return numeric_overflow();
+                };
+                return ReferenceRenderError::resource(
+                    ReferenceRenderLimitKind::Fuel,
+                    limits.max_fuel(),
+                    consumed,
+                    attempted,
+                );
+            }
             if kind == GlyphLimitKind::Samples {
                 let remaining_geometry = limits
                     .max_geometry_samples()
-                    .saturating_sub(stats.geometry_samples)
-                    .max(1);
+                    .saturating_sub(stats.geometry_samples);
                 let remaining_glyph = limits
                     .max_glyph_samples()
-                    .saturating_sub(stats.glyph_samples)
-                    .max(1);
+                    .saturating_sub(stats.glyph_samples);
                 let (kind, limit, base) = if remaining_geometry <= remaining_glyph {
                     (
                         ReferenceRenderLimitKind::GeometrySamples,
@@ -1836,11 +2163,9 @@ fn map_glyph_failure(
                     0,
                 ),
                 GlyphLimitKind::RetainedBytes => unreachable!("handled above"),
-                GlyphLimitKind::GeometryFuel | GlyphLimitKind::Fuel => (
-                    ReferenceRenderLimitKind::Fuel,
-                    limits.max_fuel(),
-                    stats.fuel,
-                ),
+                GlyphLimitKind::GeometryFuel | GlyphLimitKind::Fuel => {
+                    unreachable!("handled above")
+                }
                 GlyphLimitKind::CurveRecursion => (
                     ReferenceRenderLimitKind::CurveRecursion,
                     u64::from(limits.max_curve_recursion()),
@@ -1858,4 +2183,87 @@ const fn invalid_scene() -> ReferenceRenderError {
 
 const fn numeric_overflow() -> ReferenceRenderError {
     ReferenceRenderError::for_code(ReferenceRenderErrorCode::NumericOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReferenceRasterCancellation, ReferenceRenderStats, RenderWork};
+    use crate::reference::{
+        ReferenceRasterLimitConfig, ReferenceRasterLimits, ReferenceRenderLimitKind,
+    };
+
+    struct NeverCancelled;
+
+    impl ReferenceRasterCancellation for NeverCancelled {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn actual_surface_overcapacity_is_recorded_before_postflight_rejection() {
+        let limits = ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_surface_bytes: 16,
+            max_peak_working_bytes: 100,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap();
+        let mut stats = ReferenceRenderStats::default();
+        let mut work = RenderWork::new(limits, 1, &mut stats, &NeverCancelled).unwrap();
+        let error = work.postflight_surface_capacity(17).unwrap_err();
+
+        assert_eq!(
+            error.limit().unwrap().kind(),
+            ReferenceRenderLimitKind::SurfaceBytes
+        );
+        assert_eq!(work.stats.surface_bytes, 17);
+        assert_eq!(work.stats.peak_working_bytes, 17);
+    }
+
+    #[test]
+    fn actual_output_overcapacity_records_peak_but_not_published_retention() {
+        let limits = ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_retained_bytes: 4,
+            max_peak_working_bytes: 100,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap();
+        let mut stats = ReferenceRenderStats::default();
+        let mut work = RenderWork::new(limits, 1, &mut stats, &NeverCancelled).unwrap();
+        let error = work.postflight_output_capacity(16, 5).unwrap_err();
+
+        assert_eq!(
+            error.limit().unwrap().kind(),
+            ReferenceRenderLimitKind::RetainedBytes
+        );
+        assert_eq!(work.stats.peak_working_bytes, 21);
+        assert_eq!(work.stats.retained_bytes, 0);
+    }
+
+    #[test]
+    fn every_child_entry_receives_exact_zero_after_mandatory_pixel_fuel_is_reserved() {
+        enum ChildEntry {
+            Geometry,
+            Image,
+            Glyph,
+        }
+
+        let limits = ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_fuel: 2,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap();
+
+        for child in [ChildEntry::Geometry, ChildEntry::Image, ChildEntry::Glyph] {
+            let mut stats = ReferenceRenderStats::default();
+            let work = RenderWork::new(limits, 2, &mut stats, &NeverCancelled).unwrap();
+            let (label, child_fuel) = match child {
+                ChildEntry::Geometry => ("geometry", work.geometry_limits(1).unwrap().max_fuel),
+                ChildEntry::Image => ("image", work.image_limits().unwrap().max_fuel),
+                ChildEntry::Glyph => ("glyph", work.glyph_limits(1).unwrap().max_fuel),
+            };
+            assert_eq!(child_fuel, 0, "{label}");
+            assert_eq!(work.stats.fuel, 0, "{label}");
+        }
+    }
 }

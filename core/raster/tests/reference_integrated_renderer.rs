@@ -5,7 +5,7 @@ use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
 use pdf_rs_raster::reference::{
     CanonicalPixelBuffer, ReferenceRasterCancellation, ReferenceRasterLimitConfig,
     ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderErrorCode, ReferenceRenderJob,
-    ReferenceRenderLimitKind, ReferenceRenderPhase, ReferenceRenderPoll,
+    ReferenceRenderLimitKind, ReferenceRenderPhase, ReferenceRenderPoll, ReferenceRenderStats,
     ReferenceRenderUnsupportedKind,
 };
 use pdf_rs_scene::{
@@ -196,6 +196,70 @@ fn image_scene() -> Arc<Scene> {
     Arc::new(builder.finish().unwrap())
 }
 
+fn double_image_scene() -> Arc<Scene> {
+    let image = ImageResource::new(
+        resource_source(26),
+        1,
+        1,
+        ImageColorSpace::DeviceRgb,
+        8,
+        false,
+        vec![255, 0, 0],
+    )
+    .unwrap();
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for index in 0..2 {
+        builder
+            .draw_image(
+                image.clone(),
+                Matrix::IDENTITY,
+                SceneUnit::ONE,
+                BlendMode::Normal,
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn image_then_singular_image_scene() -> Arc<Scene> {
+    let image = ImageResource::new(
+        resource_source(28),
+        1,
+        1,
+        ImageColorSpace::DeviceRgb,
+        8,
+        false,
+        vec![255, 0, 0],
+    )
+    .unwrap();
+    let singular = Matrix::new([
+        SceneScalar::ZERO,
+        SceneScalar::ZERO,
+        SceneScalar::ZERO,
+        SceneScalar::ONE,
+        SceneScalar::ZERO,
+        SceneScalar::ZERO,
+    ]);
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for (index, transform) in [(0, Matrix::IDENTITY), (1, singular)] {
+        builder
+            .draw_image(
+                image.clone(),
+                transform,
+                SceneUnit::ONE,
+                BlendMode::Normal,
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
 fn interpolated_image_scene() -> Arc<Scene> {
     let image = ImageResource::new(
         resource_source(22),
@@ -249,6 +313,49 @@ fn glyph_scene() -> Arc<Scene> {
     builder
         .draw_glyph_run(glyphs, black(), SceneBounds::Page, source(0))
         .unwrap();
+    Arc::new(builder.finish().unwrap())
+}
+
+fn double_glyph_scene() -> Arc<Scene> {
+    let outline =
+        GlyphOutline::new(resource_source(27), 10, 1, rectangle("0", "0", "1", "1")).unwrap();
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for index in 0..2 {
+        builder
+            .draw_glyph_run(
+                vec![GlyphUse::new(outline.clone(), Matrix::IDENTITY, 65)],
+                black(),
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn glyph_then_empty_glyph_scene() -> Arc<Scene> {
+    let visible =
+        GlyphOutline::new(resource_source(29), 11, 1, rectangle("0", "0", "1", "1")).unwrap();
+    let empty = GlyphOutline::new(
+        resource_source(30),
+        12,
+        1,
+        PathResource::new(Vec::new()).unwrap(),
+    )
+    .unwrap();
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for (index, outline) in [(0, visible), (1, empty)] {
+        builder
+            .draw_glyph_run(
+                vec![GlyphUse::new(outline, Matrix::IDENTITY, 65)],
+                black(),
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
     Arc::new(builder.finish().unwrap())
 }
 
@@ -375,6 +482,150 @@ fn nested_save_scene() -> Arc<Scene> {
     Arc::new(builder.finish().unwrap())
 }
 
+fn empty_scene() -> Arc<Scene> {
+    Arc::new(
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default())
+            .finish()
+            .unwrap(),
+    )
+}
+
+fn fill_only_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    builder
+        .append_fill(
+            rectangle("0", "0", "1", "1"),
+            FillRule::Nonzero,
+            black(),
+            Matrix::IDENTITY,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    Arc::new(builder.finish().unwrap())
+}
+
+fn double_fill_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for index in 0..2 {
+        builder
+            .append_fill(
+                rectangle("0", "0", "1", "1"),
+                FillRule::Nonzero,
+                black(),
+                Matrix::IDENTITY,
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn fill_then_empty_fill_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for (index, path) in [
+        (0, rectangle("0", "0", "1", "1")),
+        (1, PathResource::new(Vec::new()).unwrap()),
+    ] {
+        builder
+            .append_fill(
+                path,
+                FillRule::Nonzero,
+                black(),
+                Matrix::IDENTITY,
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn clip_only_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    builder
+        .append_clip(
+            rectangle("0", "0", "0.5", "1"),
+            FillRule::Nonzero,
+            Matrix::IDENTITY,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    Arc::new(builder.finish().unwrap())
+}
+
+fn double_clip_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for (index, maximum_x) in [(0, "0.75"), (1, "0.5")] {
+        builder
+            .append_clip(
+                rectangle("0", "0", maximum_x, "1"),
+                FillRule::Nonzero,
+                Matrix::IDENTITY,
+                SceneBounds::Page,
+                source(index),
+            )
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn repeated_glyph_scene() -> Arc<Scene> {
+    let outline =
+        GlyphOutline::new(resource_source(24), 9, 1, rectangle("0", "0", "1", "1")).unwrap();
+    let glyphs = (0..300)
+        .map(|_| GlyphUse::new(outline.clone(), Matrix::IDENTITY, 65))
+        .collect();
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    builder
+        .draw_glyph_run(glyphs, black(), SceneBounds::Page, source(0))
+        .unwrap();
+    Arc::new(builder.finish().unwrap())
+}
+
+fn dense_dependency_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    let mut previous = Vec::new();
+    for _ in 0..25 {
+        let id = builder
+            .add_requirement(
+                GraphicsCapability::PathFill,
+                0,
+                CapabilityContext::Scene,
+                previous.clone(),
+                CapabilityStatus::Supported,
+            )
+            .unwrap();
+        previous.push(id);
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn huge_outer_command_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    for index in 0..150 {
+        builder
+            .append_save(SceneBounds::Page, source(index))
+            .unwrap();
+    }
+    for index in 150..300 {
+        builder
+            .append_restore(SceneBounds::Page, source(index))
+            .unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
 fn ready(
     scene: Arc<Scene>,
     width: u32,
@@ -391,6 +642,112 @@ fn ready(
         ReferenceRenderPoll::Ready(buffer) => buffer,
         outcome => panic!("integrated render must succeed: {outcome:?}"),
     }
+}
+
+fn failed_limit_stats(
+    scene: Arc<Scene>,
+    width: u32,
+    height: u32,
+    config: ReferenceRasterLimitConfig,
+    expected_kind: ReferenceRenderLimitKind,
+) -> (ReferenceRenderStats, u64, u64) {
+    let cancellation = Cancellation::never();
+    let released = Arc::downgrade(&scene);
+    let mut job = ReferenceRenderJob::new(
+        scene,
+        ReferenceRenderConfig::opaque_srgb(width, height).unwrap(),
+        ReferenceRasterLimits::validate(config).unwrap(),
+    );
+    let failure = match job.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error) => error,
+        outcome => panic!("{expected_kind:?} exhaustion must fail: {outcome:?}"),
+    };
+    let limit = failure
+        .limit()
+        .expect("aggregate exhaustion must retain context");
+    assert_eq!(limit.kind(), expected_kind);
+    let stats = job.stats();
+    assert_eq!(stats.cancellation_checks(), cancellation.calls());
+    assert_eq!(stats.coverage_bytes(), 0);
+    assert_eq!(stats.retained_bytes(), 0);
+    assert!(released.upgrade().is_none());
+
+    let frozen_calls = cancellation.calls();
+    assert_eq!(
+        job.poll(&cancellation),
+        ReferenceRenderPoll::Failed(failure)
+    );
+    assert_eq!(job.stats(), stats);
+    assert_eq!(cancellation.calls(), frozen_calls);
+    (stats, limit.consumed(), limit.attempted())
+}
+
+fn find_mid_child_cancellation(
+    scene: SceneFactory,
+    width: u32,
+    height: u32,
+    predicate: impl Fn(ReferenceRenderStats, ReferenceRenderStats) -> bool,
+) -> ReferenceRenderStats {
+    let measurement = Cancellation::never();
+    let baseline = ready(
+        scene(),
+        width,
+        height,
+        ReferenceRasterLimits::default(),
+        &measurement,
+    );
+    let baseline_stats = baseline.stats();
+
+    for cancel_at in 2..=measurement.calls() {
+        let cancellation = Cancellation::at(cancel_at);
+        let scene = scene();
+        let released = Arc::downgrade(&scene);
+        let mut job = ReferenceRenderJob::new(
+            scene,
+            ReferenceRenderConfig::opaque_srgb(width, height).unwrap(),
+            ReferenceRasterLimits::default(),
+        );
+        let failure = match job.poll(&cancellation) {
+            ReferenceRenderPoll::Failed(error)
+                if error.code() == ReferenceRenderErrorCode::Cancelled =>
+            {
+                error
+            }
+            _ => continue,
+        };
+        assert_eq!(job.stats().cancellation_checks(), cancellation.calls());
+        assert!(released.upgrade().is_none());
+        if !predicate(job.stats(), baseline_stats) {
+            continue;
+        }
+
+        let frozen_stats = job.stats();
+        let frozen_calls = cancellation.calls();
+        assert_eq!(
+            job.poll(&cancellation),
+            ReferenceRenderPoll::Failed(failure)
+        );
+        assert_eq!(job.stats(), frozen_stats);
+        assert_eq!(cancellation.calls(), frozen_calls);
+        return frozen_stats;
+    }
+    panic!("no deterministic child cancellation point matched the requested phase")
+}
+
+fn assert_failed_component_peaks(stats: ReferenceRenderStats, label: &str) {
+    for (component, bytes) in [
+        ("coverage", stats.peak_coverage_bytes()),
+        ("geometry", stats.peak_geometry_bytes()),
+        ("clip", stats.peak_clip_bytes()),
+    ] {
+        let lower_bound = stats.surface_bytes().checked_add(bytes).unwrap();
+        assert!(
+            stats.peak_working_bytes() >= lower_bound,
+            "{label} must retain its {component} child peak in aggregate working stats"
+        );
+    }
+    assert_eq!(stats.coverage_bytes(), 0, "{label}");
+    assert_eq!(stats.retained_bytes(), 0, "{label}");
 }
 
 #[test]
@@ -412,6 +769,7 @@ fn save_clip_fill_restore_and_source_order_publish_literal_pixels_and_replay() {
     assert!(first.stats().geometry_segments() > 0);
     assert!(first.stats().geometry_edges() > 0);
     assert!(first.stats().geometry_samples() > 0);
+    assert_eq!(first.stats().coverage_bytes(), 0);
     assert!(first.stats().peak_coverage_bytes() > 0);
     assert_eq!(first.stats().clip_depth(), 0);
     assert!(first.stats().clip_bytes() > 0);
@@ -689,6 +1047,444 @@ fn aggregate_requirement_dependency_and_resource_profiles_have_exact_one_less_bo
 }
 
 #[test]
+fn nested_preflight_admits_aggregate_lengths_before_bounded_traversal() {
+    let dense = ready(
+        dense_dependency_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(dense.stats().dependencies(), 300);
+    ready(
+        dense_dependency_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_dependencies: 300,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+        &Cancellation::never(),
+    );
+
+    let scene = dense_dependency_scene();
+    let released = Arc::downgrade(&scene);
+    let cancellation = Cancellation::never();
+    let mut job = ReferenceRenderJob::new(
+        scene,
+        ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_dependencies: 299,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+    );
+    let failure = match job.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error) => error,
+        outcome => panic!("one-less nested dependency admission must fail: {outcome:?}"),
+    };
+    assert_eq!(
+        failure.limit().unwrap().kind(),
+        ReferenceRenderLimitKind::Dependencies
+    );
+    assert_eq!(job.stats().dependencies(), 0);
+    assert_eq!(job.stats().surface_bytes(), 0);
+    assert_eq!(job.stats().cancellation_checks(), cancellation.calls());
+    assert!(released.upgrade().is_none());
+    let frozen_calls = cancellation.calls();
+    assert_eq!(
+        job.poll(&cancellation),
+        ReferenceRenderPoll::Failed(failure)
+    );
+    assert_eq!(cancellation.calls(), frozen_calls);
+
+    let repeated = ready(
+        repeated_glyph_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(repeated.stats().glyphs(), 300);
+    assert_eq!(repeated.stats().glyph_resource_lookups(), 300);
+    for (kind, limits) in [
+        (
+            ReferenceRenderLimitKind::Glyphs,
+            ReferenceRasterLimitConfig {
+                max_glyphs: 299,
+                ..ReferenceRasterLimitConfig::default()
+            },
+        ),
+        (
+            ReferenceRenderLimitKind::GlyphResourceLookups,
+            ReferenceRasterLimitConfig {
+                max_glyph_resource_lookups: 299,
+                ..ReferenceRasterLimitConfig::default()
+            },
+        ),
+    ] {
+        let cancellation = Cancellation::never();
+        let mut job = ReferenceRenderJob::new(
+            repeated_glyph_scene(),
+            ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
+            ReferenceRasterLimits::validate(limits).unwrap(),
+        );
+        match job.poll(&cancellation) {
+            ReferenceRenderPoll::Failed(error) => {
+                assert_eq!(error.limit().unwrap().kind(), kind);
+                assert_eq!(job.stats().glyphs(), 0);
+                assert_eq!(job.stats().glyph_resource_lookups(), 0);
+                assert_eq!(job.stats().surface_bytes(), 0);
+                assert_eq!(job.stats().cancellation_checks(), cancellation.calls());
+            }
+            outcome => panic!("one-less repeated-glyph admission must fail: {outcome:?}"),
+        }
+    }
+}
+
+#[test]
+fn exhausted_aggregate_child_limits_reject_without_partial_merge_or_surface_mutation() {
+    let (image_source, consumed, attempted) = failed_limit_stats(
+        double_image_scene(),
+        1,
+        1,
+        ReferenceRasterLimitConfig {
+            max_image_source_pixels: 1,
+            ..ReferenceRasterLimitConfig::default()
+        },
+        ReferenceRenderLimitKind::ImageSourcePixels,
+    );
+    assert_eq!((consumed, attempted), (1, 1));
+    assert_eq!(image_source.image_commands(), 2);
+    assert_eq!(image_source.image_source_pixels(), 1);
+    assert_eq!(image_source.image_decoded_bytes(), 3);
+    assert_eq!(image_source.image_samples(), 64);
+    assert_eq!(image_source.image_conversions(), 64);
+
+    let (image_samples, consumed, attempted) = failed_limit_stats(
+        double_image_scene(),
+        1,
+        1,
+        ReferenceRasterLimitConfig {
+            max_image_samples: 64,
+            ..ReferenceRasterLimitConfig::default()
+        },
+        ReferenceRenderLimitKind::ImageSamples,
+    );
+    assert_eq!((consumed, attempted), (64, 64));
+    assert_eq!(image_samples.image_commands(), 2);
+    assert_eq!(image_samples.image_source_pixels(), 2);
+    assert_eq!(image_samples.image_decoded_bytes(), 6);
+    assert_eq!(image_samples.image_samples(), 64);
+    assert_eq!(image_samples.image_conversions(), 64);
+    assert_eq!(image_samples.fuel(), image_source.fuel());
+    assert_eq!(
+        image_samples.cancellation_checks(),
+        image_source.cancellation_checks()
+    );
+    assert_eq!(
+        image_samples.peak_coverage_bytes(),
+        image_source.peak_coverage_bytes()
+    );
+
+    let first_fill = ready(
+        fill_only_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    )
+    .stats();
+    let (geometry_segments, consumed, attempted) = failed_limit_stats(
+        double_fill_scene(),
+        1,
+        1,
+        ReferenceRasterLimitConfig {
+            max_geometry_segments: first_fill.geometry_segments(),
+            ..ReferenceRasterLimitConfig::default()
+        },
+        ReferenceRenderLimitKind::GeometrySegments,
+    );
+    assert_eq!((consumed, attempted), (first_fill.geometry_segments(), 1));
+    assert_eq!(
+        geometry_segments.geometry_segments(),
+        first_fill.geometry_segments()
+    );
+    assert_eq!(
+        geometry_segments.geometry_edges(),
+        first_fill.geometry_edges()
+    );
+    assert_eq!(
+        geometry_segments.geometry_samples(),
+        first_fill.geometry_samples()
+    );
+
+    let (geometry_samples, consumed, attempted) = failed_limit_stats(
+        double_fill_scene(),
+        1,
+        1,
+        ReferenceRasterLimitConfig {
+            max_geometry_samples: first_fill.geometry_samples(),
+            ..ReferenceRasterLimitConfig::default()
+        },
+        ReferenceRenderLimitKind::GeometrySamples,
+    );
+    assert_eq!(
+        (consumed, attempted),
+        (first_fill.geometry_samples(), first_fill.geometry_samples())
+    );
+    assert_eq!(
+        geometry_samples.geometry_segments(),
+        first_fill.geometry_segments() * 2
+    );
+    assert_eq!(
+        geometry_samples.geometry_edges(),
+        first_fill.geometry_edges() * 2
+    );
+    assert_eq!(
+        geometry_samples.geometry_samples(),
+        first_fill.geometry_samples()
+    );
+    assert_eq!(
+        geometry_samples.peak_coverage_bytes(),
+        first_fill.peak_coverage_bytes()
+    );
+    assert!(geometry_samples.fuel() > geometry_segments.fuel());
+
+    let (glyph_outline, consumed, attempted) = failed_limit_stats(
+        double_glyph_scene(),
+        1,
+        1,
+        ReferenceRasterLimitConfig {
+            max_glyph_outline_segments: 5,
+            ..ReferenceRasterLimitConfig::default()
+        },
+        ReferenceRenderLimitKind::GlyphOutlineSegments,
+    );
+    assert_eq!((consumed, attempted), (5, 5));
+    assert_eq!(glyph_outline.glyph_runs(), 2);
+    assert_eq!(glyph_outline.glyphs(), 1);
+    assert_eq!(glyph_outline.glyph_resource_lookups(), 1);
+    assert_eq!(glyph_outline.glyph_outline_segments(), 5);
+    assert_eq!(glyph_outline.glyph_samples(), 64);
+    assert_eq!(glyph_outline.glyph_composites(), 64);
+    assert!(glyph_outline.fuel() > 0);
+    assert!(glyph_outline.peak_coverage_bytes() > 0);
+}
+
+#[test]
+fn exact_zero_remaining_dimensions_still_admit_zero_work_children() {
+    let first_fill = ready(
+        fill_only_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    )
+    .stats();
+    let fill = ready(
+        fill_then_empty_fill_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_geometry_segments: first_fill.geometry_segments(),
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+        &Cancellation::never(),
+    );
+    assert_eq!(
+        fill.stats().geometry_segments(),
+        first_fill.geometry_segments()
+    );
+
+    let image = ready(
+        image_then_singular_image_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_image_samples: 64,
+            max_image_conversions: 64,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+        &Cancellation::never(),
+    );
+    assert_eq!(image.stats().image_commands(), 2);
+    assert_eq!(image.stats().image_samples(), 64);
+    assert_eq!(image.stats().image_conversions(), 64);
+
+    let glyph = ready(
+        glyph_then_empty_glyph_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_glyph_outline_segments: 5,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+        &Cancellation::never(),
+    );
+    assert_eq!(glyph.stats().glyph_runs(), 2);
+    assert_eq!(glyph.stats().glyph_outline_segments(), 5);
+}
+
+#[test]
+fn large_outer_and_nested_preflight_scans_are_fuelled_cancellable_and_terminal() {
+    for (scene, label) in [
+        (dense_dependency_scene as SceneFactory, "dependency edges"),
+        (repeated_glyph_scene as SceneFactory, "glyph lookups"),
+        (huge_outer_command_scene as SceneFactory, "outer commands"),
+    ] {
+        let cancellation = Cancellation::at(2);
+        let scene = scene();
+        let released = Arc::downgrade(&scene);
+        let mut job = ReferenceRenderJob::new(
+            scene,
+            ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
+            ReferenceRasterLimits::default(),
+        );
+        let failure = match job.poll(&cancellation) {
+            ReferenceRenderPoll::Failed(error)
+                if error.code() == ReferenceRenderErrorCode::Cancelled =>
+            {
+                error
+            }
+            outcome => panic!("{label} scan must cancel at its fixed fuel boundary: {outcome:?}"),
+        };
+        assert_eq!(cancellation.calls(), 2, "{label}");
+        assert_eq!(job.stats().cancellation_checks(), cancellation.calls());
+        assert_eq!(job.stats().fuel(), 256, "{label}");
+        assert_eq!(job.stats().surface_bytes(), 0, "{label}");
+        assert!(released.upgrade().is_none(), "{label}");
+
+        let frozen_stats = job.stats();
+        let frozen_calls = cancellation.calls();
+        assert_eq!(
+            job.poll(&cancellation),
+            ReferenceRenderPoll::Failed(failure)
+        );
+        assert_eq!(job.stats(), frozen_stats);
+        assert_eq!(cancellation.calls(), frozen_calls);
+    }
+}
+
+#[test]
+fn white_surface_initialization_has_exact_fuel_midpoint_cancellation_and_replay() {
+    let measurement = Cancellation::never();
+    let baseline = ready(
+        empty_scene(),
+        16,
+        16,
+        ReferenceRasterLimits::default(),
+        &measurement,
+    );
+    assert_eq!(baseline.stats().fuel(), 512);
+    assert_eq!(baseline.stats().final_conversion_pixels(), 256);
+    assert_eq!(baseline.stats().cancellation_checks(), measurement.calls());
+
+    let exact = ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+        max_fuel: 512,
+        ..ReferenceRasterLimitConfig::default()
+    })
+    .unwrap();
+    assert_eq!(
+        ready(empty_scene(), 16, 16, exact, &Cancellation::never()).stats(),
+        baseline.stats()
+    );
+
+    let scene = empty_scene();
+    let released = Arc::downgrade(&scene);
+    let cancellation = Cancellation::never();
+    let mut one_less = ReferenceRenderJob::new(
+        scene,
+        ReferenceRenderConfig::opaque_srgb(16, 16).unwrap(),
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_fuel: 511,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+    );
+    let failure = match one_less.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error) => error,
+        outcome => panic!("one-less initialization-plus-conversion fuel must fail: {outcome:?}"),
+    };
+    assert_eq!(
+        failure.limit().unwrap().kind(),
+        ReferenceRenderLimitKind::Fuel
+    );
+    assert_eq!(cancellation.calls(), 0);
+    assert_eq!(one_less.stats().surface_bytes(), 0);
+    assert!(released.upgrade().is_none());
+
+    let scene = empty_scene();
+    let released = Arc::downgrade(&scene);
+    let cancellation = Cancellation::at(3);
+    let mut mid_init = ReferenceRenderJob::new(
+        scene,
+        ReferenceRenderConfig::opaque_srgb(16, 16).unwrap(),
+        ReferenceRasterLimits::default(),
+    );
+    let failure = match mid_init.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error)
+            if error.code() == ReferenceRenderErrorCode::Cancelled =>
+        {
+            error
+        }
+        outcome => panic!("surface initialization must cancel in its first chunk: {outcome:?}"),
+    };
+    assert_eq!(mid_init.stats().fuel(), 256);
+    assert_eq!(mid_init.stats().final_conversion_pixels(), 0);
+    assert!(mid_init.stats().surface_bytes() > 0);
+    assert_eq!(mid_init.stats().retained_bytes(), 0);
+    assert_eq!(mid_init.stats().cancellation_checks(), cancellation.calls());
+    assert!(released.upgrade().is_none());
+    let frozen_stats = mid_init.stats();
+    let frozen_calls = cancellation.calls();
+    assert_eq!(
+        mid_init.poll(&cancellation),
+        ReferenceRenderPoll::Failed(failure)
+    );
+    assert_eq!(mid_init.stats(), frozen_stats);
+    assert_eq!(cancellation.calls(), frozen_calls);
+
+    let scene = empty_scene();
+    let released = Arc::downgrade(&scene);
+    let cancellation = Cancellation::at(4);
+    let mut mid_conversion = ReferenceRenderJob::new(
+        scene,
+        ReferenceRenderConfig::opaque_srgb(16, 16).unwrap(),
+        ReferenceRasterLimits::default(),
+    );
+    let failure = match mid_conversion.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error)
+            if error.code() == ReferenceRenderErrorCode::Cancelled =>
+        {
+            error
+        }
+        outcome => panic!("final conversion must cancel before its 256th pixel: {outcome:?}"),
+    };
+    assert_eq!(mid_conversion.stats().fuel(), 512);
+    assert_eq!(mid_conversion.stats().final_conversion_pixels(), 255);
+    assert!(mid_conversion.stats().surface_bytes() > 0);
+    assert_eq!(mid_conversion.stats().retained_bytes(), 0);
+    assert_eq!(
+        mid_conversion.stats().cancellation_checks(),
+        cancellation.calls()
+    );
+    assert!(released.upgrade().is_none());
+    let frozen_stats = mid_conversion.stats();
+    let frozen_calls = cancellation.calls();
+    assert_eq!(
+        mid_conversion.poll(&cancellation),
+        ReferenceRenderPoll::Failed(failure)
+    );
+    assert_eq!(mid_conversion.stats(), frozen_stats);
+    assert_eq!(cancellation.calls(), frozen_calls);
+}
+
+#[test]
 fn combined_working_memory_is_admitted_exactly_and_rejected_one_byte_short() {
     let cases: [WorkingCase; 4] = [
         (clipped_fill_scene, 2, 1, "path-clip"),
@@ -738,6 +1534,197 @@ fn combined_working_memory_is_admitted_exactly_and_rejected_one_byte_short() {
             outcome => panic!("{label} one-less working budget must fail: {outcome:?}"),
         }
     }
+}
+
+#[test]
+fn every_mounted_child_merges_mid_cancellation_progress_and_freezes_replay() {
+    let fill = find_mid_child_cancellation(fill_only_scene, 8, 8, |stats, baseline| {
+        stats.geometry_segments() > 0
+            && stats.geometry_samples() > 0
+            && stats.geometry_samples() < baseline.geometry_samples()
+            && stats.final_conversion_pixels() == 0
+    });
+    assert_failed_component_peaks(fill, "fill cancellation");
+
+    let clip = find_mid_child_cancellation(clip_only_scene, 8, 8, |stats, baseline| {
+        stats.geometry_segments() > 0
+            && stats.geometry_samples() > 0
+            && stats.geometry_samples() < baseline.geometry_samples()
+            && stats.clip_bytes() == 0
+    });
+    assert_failed_component_peaks(clip, "clip cancellation");
+
+    let clip_replacement =
+        find_mid_child_cancellation(double_clip_scene, 16, 16, |stats, _baseline| {
+            stats.clip_bytes() > 0 && stats.peak_clip_bytes() > stats.clip_bytes()
+        });
+    assert_failed_component_peaks(clip_replacement, "clip replacement cancellation");
+
+    let image = find_mid_child_cancellation(image_scene, 8, 8, |stats, baseline| {
+        stats.image_commands() == 1
+            && stats.image_samples() > 0
+            && stats.image_samples() < baseline.image_samples()
+    });
+    assert!(image.image_source_pixels() > 0);
+    assert!(image.image_decoded_bytes() > 0);
+    assert_eq!(image.coverage_bytes(), 0);
+
+    let glyph = find_mid_child_cancellation(glyph_scene, 8, 8, |stats, baseline| {
+        stats.glyph_runs() == 1
+            && stats.glyph_resource_lookups() > 0
+            && stats.geometry_samples() > 0
+            && stats.geometry_samples() < baseline.geometry_samples()
+    });
+    assert!(glyph.glyph_outline_segments() > 0);
+    assert_failed_component_peaks(glyph, "glyph cancellation");
+}
+
+#[test]
+fn mounted_child_one_less_failures_retain_consumed_stats_and_exact_error_context() {
+    for (scene, label) in [
+        (fill_only_scene as SceneFactory, "fill"),
+        (clip_only_scene as SceneFactory, "clip"),
+    ] {
+        let baseline = ready(
+            scene(),
+            8,
+            8,
+            ReferenceRasterLimits::default(),
+            &Cancellation::never(),
+        );
+        let limit = baseline.stats().geometry_samples() - 1;
+        let cancellation = Cancellation::never();
+        let mut job = ReferenceRenderJob::new(
+            scene(),
+            ReferenceRenderConfig::opaque_srgb(8, 8).unwrap(),
+            ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+                max_geometry_samples: limit,
+                ..ReferenceRasterLimitConfig::default()
+            })
+            .unwrap(),
+        );
+        let failure = match job.poll(&cancellation) {
+            ReferenceRenderPoll::Failed(error) => error,
+            outcome => panic!("{label} one-less child budget must fail: {outcome:?}"),
+        };
+        let context = failure.limit().unwrap();
+        assert_eq!(context.kind(), ReferenceRenderLimitKind::GeometrySamples);
+        assert_eq!(context.consumed(), job.stats().geometry_samples());
+        assert!(job.stats().geometry_segments() > 0, "{label}");
+        assert!(job.stats().geometry_edges() > 0, "{label}");
+        assert_eq!(job.stats().coverage_bytes(), 0, "{label}");
+        assert_failed_component_peaks(job.stats(), label);
+        assert_eq!(job.stats().cancellation_checks(), cancellation.calls());
+        let frozen_stats = job.stats();
+        let frozen_calls = cancellation.calls();
+        assert_eq!(
+            job.poll(&cancellation),
+            ReferenceRenderPoll::Failed(failure)
+        );
+        assert_eq!(job.stats(), frozen_stats);
+        assert_eq!(cancellation.calls(), frozen_calls);
+    }
+
+    let image_baseline = ready(
+        image_scene(),
+        2,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    let cancellation = Cancellation::never();
+    let mut image_job = ReferenceRenderJob::new(
+        image_scene(),
+        ReferenceRenderConfig::opaque_srgb(2, 1).unwrap(),
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_image_samples: image_baseline.stats().image_samples() - 1,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+    );
+    let image_failure = match image_job.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error) => error,
+        outcome => panic!("image one-less child budget must fail: {outcome:?}"),
+    };
+    assert_eq!(image_job.stats().image_commands(), 1);
+    assert_eq!(image_job.stats().image_source_pixels(), 2);
+    assert_eq!(image_job.stats().image_decoded_bytes(), 6);
+    assert_eq!(image_job.stats().image_samples(), 0);
+    assert_eq!(
+        image_failure.limit().unwrap().consumed(),
+        image_job.stats().image_samples()
+    );
+    assert_eq!(
+        image_job.stats().cancellation_checks(),
+        cancellation.calls()
+    );
+
+    let glyph_baseline = ready(
+        glyph_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    let cancellation = Cancellation::never();
+    let mut glyph_job = ReferenceRenderJob::new(
+        glyph_scene(),
+        ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
+        ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
+            max_fuel: glyph_baseline.stats().fuel() - 1,
+            ..ReferenceRasterLimitConfig::default()
+        })
+        .unwrap(),
+    );
+    let glyph_failure = match glyph_job.poll(&cancellation) {
+        ReferenceRenderPoll::Failed(error) => error,
+        outcome => panic!("glyph one-less aggregate fuel must fail: {outcome:?}"),
+    };
+    let context = glyph_failure.limit().unwrap();
+    assert_eq!(context.kind(), ReferenceRenderLimitKind::Fuel);
+    assert_eq!(context.consumed(), glyph_job.stats().fuel() + 1);
+    assert!(context.consumed() + context.attempted() > context.limit());
+    assert!(glyph_job.stats().glyph_resource_lookups() > 0);
+    assert!(glyph_job.stats().geometry_samples() > 0);
+    assert_failed_component_peaks(glyph_job.stats(), "glyph one-less fuel");
+    assert_eq!(
+        glyph_job.stats().cancellation_checks(),
+        cancellation.calls()
+    );
+}
+
+#[test]
+fn transient_coverage_is_zero_after_clip_image_and_glyph_completion() {
+    let clip = ready(
+        clip_only_scene(),
+        2,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(clip.stats().coverage_bytes(), 0);
+    assert!(clip.stats().peak_coverage_bytes() > 0);
+    assert!(clip.stats().clip_bytes() > 0);
+    assert!(clip.stats().peak_clip_bytes() >= clip.stats().clip_bytes());
+
+    let image = ready(
+        image_scene(),
+        2,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(image.stats().coverage_bytes(), 0);
+
+    let glyph = ready(
+        glyph_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(glyph.stats().coverage_bytes(), 0);
+    assert!(glyph.stats().peak_coverage_bytes() > 0);
 }
 
 #[test]

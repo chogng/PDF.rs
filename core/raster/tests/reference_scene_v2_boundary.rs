@@ -187,7 +187,7 @@ fn requirement_count_has_exact_stats_and_one_less_preallocation_rejection() {
     let supported = Arc::new(supported.finish().unwrap());
     let limits = ReferenceRasterLimits::validate(ReferenceRasterLimitConfig {
         max_requirements: 1,
-        max_fuel: 2,
+        max_fuel: 4,
         ..ReferenceRasterLimitConfig::default()
     })
     .unwrap();
@@ -199,7 +199,7 @@ fn requirement_count_has_exact_stats_and_one_less_preallocation_rejection() {
     match exact.poll(&Cancellation::never()) {
         ReferenceRenderPoll::Ready(buffer) => {
             assert_eq!(buffer.stats().requirements(), 1);
-            assert_eq!(buffer.stats().fuel(), 2);
+            assert_eq!(buffer.stats().fuel(), 4);
         }
         outcome => panic!("exact requirement profile must render: {outcome:?}"),
     }

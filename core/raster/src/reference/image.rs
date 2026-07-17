@@ -225,7 +225,7 @@ impl ImageRaster {
 struct ImageWork<'a> {
     limits: ImageLimits,
     cancellation: &'a dyn ImageCancellation,
-    stats: ImageStats,
+    stats: &'a mut ImageStats,
     fuel_since_cancellation: u64,
 }
 
@@ -233,22 +233,34 @@ impl<'a> ImageWork<'a> {
     fn new(
         limits: ImageLimits,
         cancellation: &'a dyn ImageCancellation,
+        stats: &'a mut ImageStats,
     ) -> Result<Self, ImageFailure> {
         if limits.max_source_pixels == 0
-            || limits.max_stride_bytes == 0
             || limits.max_decoded_bytes == 0
-            || limits.max_output_pixels == 0
             || limits.max_samples == 0
             || limits.max_conversions == 0
-            || limits.max_retained_bytes == 0
             || limits.max_fuel == 0
+        {
+            return Err(ImageFailure::InvalidImage);
+        }
+        Self::new_mounted(limits, cancellation, stats)
+    }
+
+    fn new_mounted(
+        limits: ImageLimits,
+        cancellation: &'a dyn ImageCancellation,
+        stats: &'a mut ImageStats,
+    ) -> Result<Self, ImageFailure> {
+        if limits.max_stride_bytes == 0
+            || limits.max_output_pixels == 0
+            || limits.max_retained_bytes == 0
         {
             return Err(ImageFailure::InvalidImage);
         }
         let mut work = Self {
             limits,
             cancellation,
-            stats: ImageStats::default(),
+            stats,
             fuel_since_cancellation: 0,
         };
         work.check_cancellation()?;
@@ -294,22 +306,30 @@ impl<'a> ImageWork<'a> {
         Ok(())
     }
 
-    fn charge_sample(&mut self, convert: bool) -> Result<(), ImageFailure> {
-        self.stats.samples = self.ensure(
+    fn guard_sample(&mut self, convert: bool) -> Result<(u64, u64), ImageFailure> {
+        let samples = self.ensure(
             ImageLimitKind::Samples,
             self.limits.max_samples,
             self.stats.samples,
             1,
         )?;
-        if convert {
-            self.stats.conversions = self.ensure(
+        let conversions = if convert {
+            self.ensure(
                 ImageLimitKind::Conversions,
                 self.limits.max_conversions,
                 self.stats.conversions,
                 1,
-            )?;
-        }
-        self.charge_fuel(1 + u64::from(convert))
+            )?
+        } else {
+            self.stats.conversions
+        };
+        self.charge_fuel(1 + u64::from(convert))?;
+        Ok((samples, conversions))
+    }
+
+    fn commit_sample(&mut self, samples: u64, conversions: u64) {
+        self.stats.samples = samples;
+        self.stats.conversions = conversions;
     }
 
     fn check_cancellation(&mut self) -> Result<(), ImageFailure> {
@@ -346,7 +366,8 @@ pub(crate) fn rasterize_image(
     limits: ImageLimits,
     cancellation: &dyn ImageCancellation,
 ) -> Result<ImageRaster, ImageFailure> {
-    let mut work = ImageWork::new(limits, cancellation)?;
+    let mut stats = ImageStats::default();
+    let mut work = ImageWork::new(limits, cancellation, &mut stats)?;
     if image.bits_per_component() != 8 {
         return Err(ImageFailure::InvalidImage);
     }
@@ -467,19 +488,20 @@ pub(crate) fn rasterize_image(
         actual_retained,
     )?;
     for pixel in backdrop {
-        pixels.push(*pixel);
         work.charge_fuel(1)?;
+        pixels.push(*pixel);
     }
 
     let Some(device_to_image) = device_to_image else {
         // A rank-zero or rank-one image transform paints no area. It is a valid no-op, not a
         // page-level failure, and still publishes a private copy of the exact backdrop.
         work.check_cancellation()?;
+        let stats = *work.stats;
         return Ok(ImageRaster {
             width: output_width,
             height: output_height,
             pixels,
-            stats: work.stats,
+            stats,
         });
     };
     let alpha = NormalizedQ16::from(alpha);
@@ -507,7 +529,7 @@ pub(crate) fn rasterize_image(
                     } else {
                         None
                     };
-                    work.charge_sample(source_index.is_some())?;
+                    let completed = work.guard_sample(source_index.is_some())?;
                     let composed = match source_index {
                         Some(source_index) => {
                             let source =
@@ -528,19 +550,22 @@ pub(crate) fn rasterize_image(
                     sums[3] = sums[3]
                         .checked_add(u64::from(composed.alpha().bits()))
                         .ok_or(ImageFailure::NumericOverflow)?;
+                    work.commit_sample(completed.0, completed.1);
                 }
             }
-            pixels[index] = averaged_pixel(sums)?;
+            let averaged = averaged_pixel(sums)?;
             work.charge_fuel(1)?;
+            pixels[index] = averaged;
         }
     }
     work.check_cancellation()?;
+    let stats = *work.stats;
 
     Ok(ImageRaster {
         width: output_width,
         height: output_height,
         pixels,
-        stats: work.stats,
+        stats,
     })
 }
 
@@ -565,8 +590,9 @@ pub(crate) fn paint_image(
     clip: Option<&ClipStack>,
     limits: ImageLimits,
     cancellation: &dyn ImageCancellation,
-) -> Result<ImageStats, ImageFailure> {
-    let mut work = ImageWork::new(limits, cancellation)?;
+    progress: &mut ImageStats,
+) -> Result<(), ImageFailure> {
+    let mut work = ImageWork::new_mounted(limits, cancellation, progress)?;
     if image.bits_per_component() != 8 {
         return Err(ImageFailure::InvalidImage);
     }
@@ -656,7 +682,7 @@ pub(crate) fn paint_image(
     work.charge_fuel(output_pixels)?;
     let Some(device_to_image) = device_to_image else {
         work.check_cancellation()?;
-        return Ok(work.stats);
+        return Ok(());
     };
     let alpha = NormalizedQ16::from(alpha);
     let blend_mode = ReferenceBlendMode::from(blend_mode);
@@ -683,7 +709,7 @@ pub(crate) fn paint_image(
                     } else {
                         None
                     };
-                    work.charge_sample(source_index.is_some())?;
+                    let completed = work.guard_sample(source_index.is_some())?;
                     let composed = match source_index {
                         Some(source_index) => {
                             let source =
@@ -704,14 +730,16 @@ pub(crate) fn paint_image(
                     sums[3] = sums[3]
                         .checked_add(u64::from(composed.alpha().bits()))
                         .ok_or(ImageFailure::NumericOverflow)?;
+                    work.commit_sample(completed.0, completed.1);
                 }
             }
-            pixels[index] = averaged_pixel(sums)?;
+            let averaged = averaged_pixel(sums)?;
             work.charge_fuel(1)?;
+            pixels[index] = averaged;
         }
     }
     work.check_cancellation()?;
-    Ok(work.stats)
+    Ok(())
 }
 
 fn image_sample_index(

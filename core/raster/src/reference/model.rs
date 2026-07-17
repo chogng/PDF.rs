@@ -194,7 +194,7 @@ impl ReferenceRenderConfig {
     }
 }
 
-/// Deterministic work and retained-capacity accounting for one published pixel buffer.
+/// Deterministic work and allocator-capacity accounting for one render attempt.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReferenceRenderStats {
     pub(crate) commands: u64,
@@ -284,12 +284,12 @@ impl ReferenceRenderStats {
         }
     }
 
-    /// Returns the traversed Scene command count.
+    /// Returns the aggregate Scene command count admitted before command traversal.
     pub const fn commands(self) -> u64 {
         self.commands
     }
 
-    /// Returns the traversed capability requirement count.
+    /// Returns the aggregate capability requirement count admitted before nested traversal.
     pub const fn requirements(self) -> u64 {
         self.requirements
     }
@@ -299,7 +299,7 @@ impl ReferenceRenderStats {
         self.resources
     }
 
-    /// Returns capability dependency edges traversed during preflight.
+    /// Returns aggregate capability dependency edges admitted before nested preflight traversal.
     pub const fn dependencies(self) -> u64 {
         self.dependencies
     }
@@ -324,12 +324,15 @@ impl ReferenceRenderStats {
         self.geometry_samples
     }
 
-    /// Returns live coverage bytes retained at the latest committed paint boundary.
+    /// Returns transient coverage bytes still live at the observable boundary.
+    ///
+    /// Completed commands and terminal unwinds report zero; retained clip masks are accounted by
+    /// `clip_bytes`, while historical transient coverage remains in `peak_coverage_bytes`.
     pub const fn coverage_bytes(self) -> u64 {
         self.coverage_bytes
     }
 
-    /// Returns the greatest live coverage-mask capacity.
+    /// Returns the greatest allocator-reported live coverage-mask capacity, including failed work.
     pub const fn peak_coverage_bytes(self) -> u64 {
         self.peak_coverage_bytes
     }
@@ -349,27 +352,27 @@ impl ReferenceRenderStats {
         self.stroke_primitives
     }
 
-    /// Returns the greatest committed transient geometry capacity in one child operation.
+    /// Returns the greatest observed current transient geometry capacity in one child operation.
     pub const fn geometry_bytes(self) -> u64 {
         self.geometry_bytes
     }
 
-    /// Returns the greatest simultaneous geometry capacity during allocation replacement.
+    /// Returns the greatest simultaneous geometry capacity, including rejected actual replacement.
     pub const fn peak_geometry_bytes(self) -> u64 {
         self.peak_geometry_bytes
     }
 
-    /// Returns saved clip depth after the final command.
+    /// Returns saved clip depth at the latest completed observable command boundary.
     pub const fn clip_depth(self) -> u64 {
         self.clip_depth
     }
 
-    /// Returns live current and saved clip bytes after the final command.
+    /// Returns live current and saved clip bytes at the latest completed observable boundary.
     pub const fn clip_bytes(self) -> u64 {
         self.clip_bytes
     }
 
-    /// Returns the greatest simultaneous clip-mask capacity.
+    /// Returns the greatest simultaneous clip-mask capacity, including failed temporary work.
     pub const fn peak_clip_bytes(self) -> u64 {
         self.peak_clip_bytes
     }
@@ -409,7 +412,7 @@ impl ReferenceRenderStats {
         self.glyph_runs
     }
 
-    /// Returns positioned glyphs admitted across the page.
+    /// Returns positioned glyph lookups executed across mounted glyph runs.
     pub const fn glyphs(self) -> u64 {
         self.glyphs
     }
@@ -439,22 +442,29 @@ impl ReferenceRenderStats {
         self.final_conversion_pixels
     }
 
-    /// Returns deterministic requirement-plus-command-plus-pixel work units.
+    /// Returns deterministic preflight, initialization, raster, compositing, and conversion work.
     pub const fn fuel(self) -> u64 {
         self.fuel
     }
 
-    /// Returns allocator-reported retained pixel-vector capacity.
+    /// Returns allocator-reported capacity retained by a successfully published RGBA buffer.
+    ///
+    /// Failed and unsupported jobs report zero even if private output allocation was attempted.
     pub const fn retained_bytes(self) -> u64 {
         self.retained_bytes
     }
 
-    /// Returns allocator-reported bytes retained by the private Q16 working surface.
+    /// Returns allocator-reported bytes allocated by the private Q16 working surface.
+    ///
+    /// This remains observable in failed-job statistics after the private surface is dropped.
     pub const fn surface_bytes(self) -> u64 {
         self.surface_bytes
     }
 
-    /// Returns the greatest simultaneous private working allocation before publication.
+    /// Returns the greatest simultaneous allocator-reported private working allocation.
+    ///
+    /// An actual allocator overcapacity value is recorded before a component or aggregate
+    /// postflight limit rejects that allocation.
     pub const fn peak_working_bytes(self) -> u64 {
         self.peak_working_bytes
     }

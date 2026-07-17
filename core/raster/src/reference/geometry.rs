@@ -91,6 +91,9 @@ pub(crate) struct GeometryWork<'a> {
     dash_chunks: u64,
     stroke_runs: u64,
     stroke_primitives: u64,
+    peak_coverage_bytes: u64,
+    working_base_bytes: u64,
+    peak_working_bytes: u64,
     geometry_bytes: u64,
     peak_geometry_bytes: u64,
     fuel: u64,
@@ -103,22 +106,38 @@ impl<'a> GeometryWork<'a> {
         limits: GeometryLimits,
         cancellation: &'a dyn GeometryCancellation,
     ) -> Result<Self, GeometryFailure> {
-        if limits.max_curve_recursion == 0
-            || limits.max_segments == 0
+        if limits.max_segments == 0
             || limits.max_edges == 0
             || limits.max_samples == 0
-            || limits.max_coverage_bytes == 0
             || limits.max_dash_chunks == 0
             || limits.max_stroke_runs == 0
             || limits.max_stroke_primitives == 0
-            || limits.max_geometry_bytes == 0
-            || limits.max_clip_depth == 0
-            || limits.max_clip_bytes == 0
             || limits.max_fuel == 0
         {
             return Err(GeometryFailure::InvalidGeometry);
         }
-        let mut work = Self {
+        let mut work = Self::new_deferred(limits, cancellation)?;
+        work.check_cancellation()?;
+        Ok(work)
+    }
+
+    /// Constructs validated work state without performing the initial cancellation probe.
+    ///
+    /// The mounted renderer uses this form so a failed initial probe can still be merged into the
+    /// public job statistics before the private child is discarded.
+    pub(crate) fn new_deferred(
+        limits: GeometryLimits,
+        cancellation: &'a dyn GeometryCancellation,
+    ) -> Result<Self, GeometryFailure> {
+        if limits.max_curve_recursion == 0
+            || limits.max_coverage_bytes == 0
+            || limits.max_geometry_bytes == 0
+            || limits.max_clip_depth == 0
+            || limits.max_clip_bytes == 0
+        {
+            return Err(GeometryFailure::InvalidGeometry);
+        }
+        Ok(Self {
             limits,
             cancellation,
             segments: 0,
@@ -127,14 +146,15 @@ impl<'a> GeometryWork<'a> {
             dash_chunks: 0,
             stroke_runs: 0,
             stroke_primitives: 0,
+            peak_coverage_bytes: 0,
+            working_base_bytes: 0,
+            peak_working_bytes: 0,
             geometry_bytes: 0,
             peak_geometry_bytes: 0,
             fuel: 0,
             cancellation_checks: 0,
             fuel_since_cancellation: 0,
-        };
-        work.check_cancellation()?;
-        Ok(work)
+        })
     }
 
     pub(crate) const fn limits(&self) -> GeometryLimits {
@@ -163,6 +183,31 @@ impl<'a> GeometryWork<'a> {
 
     pub(crate) const fn stroke_primitives(&self) -> u64 {
         self.stroke_primitives
+    }
+
+    pub(crate) const fn peak_coverage_bytes(&self) -> u64 {
+        self.peak_coverage_bytes
+    }
+
+    pub(crate) fn observe_coverage_bytes(&mut self, retained_bytes: u64) {
+        self.peak_coverage_bytes = self.peak_coverage_bytes.max(retained_bytes);
+    }
+
+    pub(crate) const fn peak_working_bytes(&self) -> u64 {
+        self.peak_working_bytes
+    }
+
+    #[allow(
+        dead_code,
+        reason = "the geometry-only harness omits mounted coverage and glyph lifetime tracking"
+    )]
+    pub(crate) fn set_working_base_bytes(
+        &mut self,
+        retained_bytes: u64,
+    ) -> Result<(), GeometryFailure> {
+        self.working_base_bytes = retained_bytes;
+        self.note_working_bytes(0)?;
+        self.ensure_working_bytes(0).map(|_| ())
     }
 
     pub(crate) const fn geometry_bytes(&self) -> u64 {
@@ -369,8 +414,14 @@ impl<'a> GeometryWork<'a> {
             .map_err(|_| GeometryFailure::NumericOverflow)?
             .checked_mul(item_size)
             .ok_or(GeometryFailure::NumericOverflow)?;
+        let transient_geometry_bytes = self
+            .geometry_bytes
+            .checked_add(new_capacity)
+            .ok_or(GeometryFailure::NumericOverflow)?;
+        self.peak_geometry_bytes = self.peak_geometry_bytes.max(transient_geometry_bytes);
+        self.note_working_bytes(new_capacity)?;
         self.ensure_working_bytes(new_capacity)?;
-        let transient_geometry_bytes = checked_counter(
+        checked_counter(
             self.geometry_bytes,
             self.limits.max_geometry_bytes,
             new_capacity,
@@ -389,17 +440,30 @@ impl<'a> GeometryWork<'a> {
         replacement.append(values);
         *values = replacement;
         self.geometry_bytes = committed_geometry_bytes;
-        self.peak_geometry_bytes = self.peak_geometry_bytes.max(transient_geometry_bytes);
         Ok(())
     }
 
     pub(crate) fn ensure_working_bytes(&self, additional: u64) -> Result<u64, GeometryFailure> {
+        let consumed = self
+            .working_base_bytes
+            .checked_add(self.geometry_bytes)
+            .ok_or(GeometryFailure::NumericOverflow)?;
         checked_counter(
-            self.geometry_bytes,
+            consumed,
             self.limits.max_working_bytes,
             additional,
             GeometryLimitKind::WorkingBytes,
         )
+    }
+
+    pub(crate) fn note_working_bytes(&mut self, additional: u64) -> Result<u64, GeometryFailure> {
+        let observed = self
+            .working_base_bytes
+            .checked_add(self.geometry_bytes)
+            .and_then(|value| value.checked_add(additional))
+            .ok_or(GeometryFailure::NumericOverflow)?;
+        self.peak_working_bytes = self.peak_working_bytes.max(observed);
+        Ok(observed)
     }
 
     pub(crate) fn try_push_geometry<T>(
@@ -1515,8 +1579,8 @@ mod tests {
         let exact_transient_bytes = original_geometry_bytes.checked_add(target_bytes).unwrap();
         work.limits.max_geometry_bytes = exact_transient_bytes;
 
-        assert!(matches!(
-            work.try_reserve_geometry_with(
+        let failure = work
+            .try_reserve_geometry_with(
                 &mut values,
                 1,
                 |replacement, target_capacity, target_bytes| {
@@ -1525,22 +1589,29 @@ mod tests {
                         .map_err(|_| GeometryFailure::Allocation {
                             attempted_bytes: target_bytes.checked_add(8).unwrap(),
                         })
-                }
-            ),
-            Err(GeometryFailure::Limit {
+                },
+            )
+            .unwrap_err();
+        let rejected_bytes = match failure {
+            GeometryFailure::Limit {
                 kind: GeometryLimitKind::GeometryBytes,
                 limit,
                 consumed,
                 attempted,
                 ..
-            }) if limit == exact_transient_bytes
-                && consumed == original_geometry_bytes
-                && attempted > target_bytes
-        ));
+            } => {
+                assert_eq!(limit, exact_transient_bytes);
+                assert_eq!(consumed, original_geometry_bytes);
+                assert!(attempted > target_bytes);
+                consumed.checked_add(attempted).unwrap()
+            }
+            failure => panic!("allocator overcapacity must fail component postflight: {failure:?}"),
+        };
         assert_eq!(values, original);
         assert_eq!(values.capacity(), original_capacity);
         assert_eq!(work.geometry_bytes(), original_geometry_bytes);
-        assert_eq!(work.peak_geometry_bytes(), original_geometry_bytes);
+        assert_eq!(work.peak_geometry_bytes(), rejected_bytes);
+        assert_eq!(work.peak_working_bytes(), rejected_bytes);
 
         work.limits.max_geometry_bytes = GeometryLimits::default().max_geometry_bytes;
         work.try_push_geometry(&mut values, 30_u64).unwrap();
@@ -1549,7 +1620,8 @@ mod tests {
             work.geometry_bytes(),
             u64::try_from(values.capacity()).unwrap() * 8
         );
-        assert_eq!(work.peak_geometry_bytes(), exact_transient_bytes);
+        assert_eq!(work.peak_geometry_bytes(), rejected_bytes);
+        assert_eq!(work.peak_working_bytes(), rejected_bytes);
     }
 
     #[test]

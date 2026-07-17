@@ -158,13 +158,13 @@ pub enum ReferenceRenderLimitKind {
     StrideBytes,
     /// Semantic RGBA bytes in the complete output.
     OutputBytes,
-    /// Scene commands traversed by the Reference profile.
+    /// Aggregate Scene commands admitted before traversal.
     Commands,
     /// Scene graphics resources admitted by the Reference profile.
     Resources,
-    /// Scene capability requirements traversed before dispatch.
+    /// Aggregate Scene capability requirements admitted before nested traversal.
     Requirements,
-    /// Scene capability dependency edges traversed before dispatch.
+    /// Aggregate Scene capability dependency edges admitted before edge traversal.
     Dependencies,
     /// Flattened path and glyph segments.
     GeometrySegments,
@@ -208,7 +208,7 @@ pub enum ReferenceRenderLimitKind {
     GlyphComposites,
     /// Adaptive curve recursion depth.
     CurveRecursion,
-    /// Deterministic requirement-plus-command-plus-pixel work units.
+    /// Deterministic preflight, initialization, raster, compositing, and conversion work units.
     Fuel,
     /// Allocator-reported private Q16 surface capacity.
     SurfaceBytes,
@@ -254,7 +254,10 @@ impl ReferenceRenderLimit {
         self.limit
     }
 
-    /// Returns work or bytes committed before the rejected operation.
+    /// Returns work or bytes committed or deterministically reserved before the rejected operation.
+    ///
+    /// Fuel failures include the remaining mandatory pixel-initialization/publication reservation;
+    /// `ReferenceRenderStats::fuel` itself reports only work already charged.
     pub const fn consumed(self) -> u64 {
         self.consumed
     }
