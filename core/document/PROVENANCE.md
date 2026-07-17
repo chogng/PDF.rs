@@ -83,6 +83,54 @@ allocates no proof heap, exposes no `PdfDictionary`, and never calls `ByteSource
 checks bracket each cancellation probe, and runtime source change then cancellation override a
 resource or semantic fallback. Entry scans probe cooperative cancellation at most every 256
 visited entries.
+`PageResourceScope::font_resolver` is the corresponding no-I/O bridge for the registered M3
+embedded simple-font slice. It accepts only a unique direct `/Font` dictionary whose requested
+name selects an indirect Font object. Its fixed-size `PageFontReference` binds that target to the
+same source snapshot, revision, inherited Resources owner, and exact outer and selected-entry
+offsets without retaining the requested name or opening any object. Indirect `/Font` dictionaries
+and direct selected Font dictionaries are typed capability outcomes; missing, duplicate, or
+wrong-shaped structures remain document failures. Independent lookup and entry-visit limits,
+source-change-before-cancellation precedence, and the 256-entry cancellation interval match the
+property resolver without sharing its accounting.
+`AcquireFontResourceJob` consumes only that lookup proof and the paired shared attested revision.
+It reopens the selected Font, an optional indirect FontDescriptor, and the indirect FontFile2
+stream through distinct proof-preserving checkpoints, then requests exactly the proven stream
+payload. The registered PDF profile is one simple `/TrueType` Font with direct
+`/WinAnsiEncoding`, direct byte-valued FirstChar/LastChar, direct integer Widths, and a direct or
+indirect FontDescriptor. A well-formed character interval that does not cover printable ASCII is
+a typed capability outcome; reversed or out-of-byte-range bounds remain malformed. FontFile,
+FontFile2, and FontFile3 declarations are mutually exclusive even when one would otherwise be
+selected, and the registered descriptor must select FontFile2. FontFile2 accepts identity with
+absent or null decode parameters, or one direct FlateDecode layer with absent, null, or empty
+direct decode parameters, and requires a direct exact Length1. Decoder layer and final-output
+ceilings bind work to the smallest approved Document, decoder, and lower-font byte budget rather
+than to the untrusted Length1 claim. Successful decoding must then equal Length1 exactly, so both
+low and high declarations are malformed while a tighter caller budget remains typed resource
+exhaustion. The already-validated lower cumulative-output ceiling permits allocator growth beyond
+the decoder's initial output chunk. The sealed decoded bytes are parsed only by the project-owned
+pure TrueType profile; no
+system font lookup, shaping, hinting, platform rasterizer, or external font engine is consulted.
+Published state retains the Page lookup proof, every opened object, the sealed decoded-program
+proof, PDF character bounds and printable-ASCII widths, and the immutable parsed TrueType font.
+PDF text advancement deliberately uses the PDF Widths array rather than TrueType `hmtx`; the
+lower font remains the owner of glyph mapping, metrics, and exact outline geometry. Polls, opened
+objects, reference edges, metadata visits, Widths entries, object read/parse work, encoded and
+decoded bytes, decode fuel, TrueType parser work, and aggregate retained state are independently
+bounded before atomic publication. Every lower TrueType table, glyph, cmap, geometry, component,
+path, retention, and fuel dimension preserves its independently typed limit evidence at the
+Document API. Aggregate object read/parse evidence adds the already committed child prefix, and
+retention evidence adds previously retained objects plus the decoded program's plan and peak
+capacity where applicable. Unsupported font subtypes, encodings, character ranges, aliases,
+embedding forms, filters, decode parameters, and lower TrueType capabilities remain typed
+non-publication outcomes; malformed PDF or font bytes, cancellation, source change, and resource
+exhaustion remain structured failures with stable terminal replay. Type0/CID fonts, Type3 fonts,
+custom or composite encodings, CMaps, system-font fallback, shaping, hint execution, and advanced
+embedded-font formats remain outside this bounded acquisition slice.
+Successful FontFile2 decoding commits the actual produced-byte count, decoder fuel, and checked
+object-plus-plan-plus-peak-capacity accounting before Length1 equality is evaluated. A low Length1
+therefore publishes no font and remains `InvalidFontResource`, while its stable terminal statistics
+still report all completed decode work and observed transient capacity; lower decode failures that
+publish no attestation remain represented only by their structured limit or decode error.
 `AcquirePageContentJob` consumes that exact `MaterializedPage`, revalidates its handle against the
 paired `PageIndex` and strict attested authority, and retains the page beside every
 ordered content-stream proof. It accepts one unique Contents value: absence, null, and an empty
@@ -1044,6 +1092,10 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   acquires exact payload slices, applies canonical foundational filters, preserves explicit empty
   identity proof, and publishes only a complete move-only decoded sequence under independent
   structure, object-work, payload, decode-fuel, and retained-state budgets.
+- 2026-07-16: Added the M3 embedded simple TrueType document slice with no-I/O proof-bearing Page
+  Font lookup, staged Font/FontDescriptor/FontFile2 acquisition, strict WinAnsi printable-ASCII PDF
+  widths, identity or Flate decoded-program proof, project-owned TrueType parsing, independent
+  aggregate budgets, typed capability outcomes, and stable resumable terminal policy.
 - 2026-07-13: Added candidate-only single-revision physical indexing, bounded cancellable sort,
   exact lookup errors, and crate-private five-field object-target construction.
 - 2026-07-13: Added resumable physical-order top-level attestation, strict header/trivia closure,

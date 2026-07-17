@@ -7,8 +7,10 @@ use pdf_rs_syntax::{ObjectRef, PdfDictionary, SyntaxObject};
 
 use crate::{
     AttestedObject, DocumentCancellation, DocumentError, DocumentErrorCode, DocumentLimitKind,
-    ImageXObjectUnsupported, ImageXObjectUnsupportedKind, PagePropertyLookupLimits,
-    PagePropertyLookupStats, PageXObjectLookupLimits, PageXObjectLookupStats, RevisionId,
+    FontResourceUnsupported, FontResourceUnsupportedKind, ImageXObjectUnsupported,
+    ImageXObjectUnsupportedKind, PageFontLookupLimits, PageFontLookupStats,
+    PagePropertyLookupLimits, PagePropertyLookupStats, PageXObjectLookupLimits,
+    PageXObjectLookupStats, RevisionId,
 };
 
 const CANCELLATION_PROBE_INTERVAL: u64 = 256;
@@ -118,6 +120,21 @@ impl PageResourceScope {
             scope: self,
             limits,
             stats: PageXObjectLookupStats {
+                lookups: 0,
+                entry_visits: 0,
+            },
+        }
+    }
+
+    /// Creates a no-I/O resolver borrowing this exact resource dictionary proof.
+    ///
+    /// The resolver returns only a fixed-size indirect-reference proof. It does not open or
+    /// retain the selected font, descriptor, or embedded program.
+    pub const fn font_resolver(&self, limits: PageFontLookupLimits) -> PageFontResolver<'_> {
+        PageFontResolver {
+            scope: self,
+            limits,
+            stats: PageFontLookupStats {
                 lookups: 0,
                 entry_visits: 0,
             },
@@ -325,6 +342,363 @@ impl fmt::Debug for PagePropertyReference {
             .field("property_name", &"[NOT RETAINED]")
             .field("property_key_offset", &self.property_key_offset)
             .field("property_value_offset", &self.property_value_offset)
+            .finish()
+    }
+}
+
+/// Fixed-size proof that one Page resource name selected an indirect Font reference.
+///
+/// Requested name bytes are not retained. Exact category and selected-entry offsets bind this
+/// proof to the source occurrence and the retained revision owner.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PageFontReference {
+    target: ObjectRef,
+    snapshot: SourceSnapshot,
+    revision_id: RevisionId,
+    revision_startxref: u64,
+    scope_defining_object: ObjectRef,
+    scope_defining_value_offset: u64,
+    resource_dictionary_owner: ObjectRef,
+    font_key_offset: u64,
+    font_value_offset: u64,
+    entry_key_offset: u64,
+    entry_value_offset: u64,
+}
+
+impl PageFontReference {
+    /// Returns the indirect font object named by the selected entry.
+    pub const fn target(self) -> ObjectRef {
+        self.target
+    }
+    /// Returns the immutable source snapshot retained by the resource owner.
+    pub const fn snapshot(self) -> SourceSnapshot {
+        self.snapshot
+    }
+    /// Returns the caller-assigned revision identity of the resource owner.
+    pub const fn revision_id(self) -> RevisionId {
+        self.revision_id
+    }
+    /// Returns the `startxref` anchor of the resource owner's revision.
+    pub const fn revision_startxref(self) -> u64 {
+        self.revision_startxref
+    }
+    /// Returns the Page or Pages object whose Resources field ended inheritance lookup.
+    pub const fn scope_defining_object(self) -> ObjectRef {
+        self.scope_defining_object
+    }
+    /// Returns the exact Resources value offset in the defining object.
+    pub const fn scope_defining_value_offset(self) -> u64 {
+        self.scope_defining_value_offset
+    }
+    /// Returns the indirect object physically owning the resource dictionary.
+    pub const fn resource_dictionary_owner(self) -> ObjectRef {
+        self.resource_dictionary_owner
+    }
+    /// Returns the source offset of the unique `/Font` key.
+    pub const fn font_key_offset(self) -> u64 {
+        self.font_key_offset
+    }
+    /// Returns the source offset of the unique `/Font` value.
+    pub const fn font_value_offset(self) -> u64 {
+        self.font_value_offset
+    }
+    /// Returns the source offset of the selected font-name key.
+    pub const fn entry_key_offset(self) -> u64 {
+        self.entry_key_offset
+    }
+    /// Returns the source offset of the selected indirect-reference value.
+    pub const fn entry_value_offset(self) -> u64 {
+        self.entry_value_offset
+    }
+}
+
+impl fmt::Debug for PageFontReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageFontReference")
+            .field("target", &self.target)
+            .field("snapshot", &self.snapshot)
+            .field("revision_id", &self.revision_id)
+            .field("revision_startxref", &self.revision_startxref)
+            .field("scope_defining_object", &self.scope_defining_object)
+            .field(
+                "scope_defining_value_offset",
+                &self.scope_defining_value_offset,
+            )
+            .field("resource_dictionary_owner", &self.resource_dictionary_owner)
+            .field("font_key_offset", &self.font_key_offset)
+            .field("font_value_offset", &self.font_value_offset)
+            .field("resource_name", &"[NOT RETAINED]")
+            .field("entry_key_offset", &self.entry_key_offset)
+            .field("entry_value_offset", &self.entry_value_offset)
+            .finish()
+    }
+}
+
+/// Terminal result of one no-I/O Page Font name lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PageFontLookupOutcome {
+    /// One exact indirect Font reference was proven.
+    Ready(PageFontReference),
+    /// The selected representation is valid but outside the registered subset.
+    Unsupported(FontResourceUnsupported),
+}
+
+/// Borrowed no-I/O resolver for one exact inherited Page resource dictionary.
+pub struct PageFontResolver<'scope> {
+    scope: &'scope PageResourceScope,
+    limits: PageFontLookupLimits,
+    stats: PageFontLookupStats,
+}
+
+impl PageFontResolver<'_> {
+    /// Returns the validated independent lookup and entry-visit profile.
+    pub const fn limits(&self) -> PageFontLookupLimits {
+        self.limits
+    }
+    /// Returns cumulative work, including work retained after failed lookups.
+    pub const fn stats(&self) -> PageFontLookupStats {
+        self.stats
+    }
+
+    /// Resolves one Page Font name without polling or opening the target object.
+    ///
+    /// This profile accepts only `/Font << /Name n 0 R >>`. Indirect category dictionaries and
+    /// directly embedded selected Font dictionaries are typed unsupported outcomes. Missing,
+    /// malformed, and duplicate structures are document failures.
+    pub fn lookup_font(
+        &mut self,
+        name: &[u8],
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<PageFontLookupOutcome, DocumentError> {
+        let scope = self.scope;
+        let limits = self.limits;
+        let stats = &mut self.stats;
+        let owner = scope.dictionary_owner();
+        let snapshot = owner.snapshot();
+        let owner_reference = owner.reference();
+        let scope_offset = scope.defining_value_offset;
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Err(fallback) = charge_font_lookup(stats, limits, owner_reference, scope_offset) {
+            return Err(prioritize_runtime_error(
+                snapshot,
+                source,
+                cancellation,
+                fallback,
+                owner_reference,
+                scope_offset,
+            ));
+        }
+        let dictionary = scope.dictionary().map_err(|fallback| {
+            prioritize_runtime_error(
+                snapshot,
+                source,
+                cancellation,
+                fallback,
+                owner_reference,
+                scope_offset,
+            )
+        })?;
+
+        let mut font_key_offset = None;
+        let mut font_value = None;
+        let mut duplicate_font_offset = None;
+        for entry in dictionary.entries() {
+            let key_offset = entry.key().span().start();
+            probe_font_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            if let Err(fallback) =
+                charge_font_entry_visit(stats, limits, owner_reference, key_offset)
+            {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                ));
+            }
+            if entry.key().value().bytes() != b"Font" {
+                continue;
+            }
+            if font_value.is_some() {
+                duplicate_font_offset.get_or_insert(key_offset);
+            } else {
+                font_key_offset = Some(key_offset);
+                font_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Some(offset) = duplicate_font_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(font_value) = font_value else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageFontResource,
+                Some(owner_reference),
+                Some(scope_offset),
+            ));
+        };
+        let font_value_offset = font_value.span().start();
+        let Some(font_key_offset) = font_key_offset else {
+            return Err(internal_error(owner_reference, Some(font_value_offset)));
+        };
+        let fonts = match font_value.value() {
+            SyntaxObject::Dictionary(dictionary) => dictionary,
+            SyntaxObject::Reference(reference) => {
+                return Ok(PageFontLookupOutcome::Unsupported(
+                    FontResourceUnsupported::new(
+                        FontResourceUnsupportedKind::IndirectFontDictionary,
+                        *reference,
+                        font_value_offset,
+                    ),
+                ));
+            }
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPageFontResource,
+                    Some(owner_reference),
+                    Some(font_value_offset),
+                ));
+            }
+        };
+
+        let mut entry_key_offset = None;
+        let mut entry_value = None;
+        let mut duplicate_entry_offset = None;
+        for entry in fonts.entries() {
+            let key_offset = entry.key().span().start();
+            probe_font_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            if let Err(fallback) =
+                charge_font_entry_visit(stats, limits, owner_reference, key_offset)
+            {
+                return Err(prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                ));
+            }
+            if entry.key().value().bytes() != name {
+                continue;
+            }
+            if entry_value.is_some() {
+                duplicate_entry_offset.get_or_insert(key_offset);
+            } else {
+                entry_key_offset = Some(key_offset);
+                entry_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            font_value_offset,
+        )?;
+        if let Some(offset) = duplicate_entry_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(entry_value) = entry_value else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageFontResource,
+                Some(owner_reference),
+                Some(font_value_offset),
+            ));
+        };
+        let entry_value_offset = entry_value.span().start();
+        let Some(entry_key_offset) = entry_key_offset else {
+            return Err(internal_error(owner_reference, Some(entry_value_offset)));
+        };
+        let target = match entry_value.value() {
+            SyntaxObject::Reference(reference) => *reference,
+            SyntaxObject::Dictionary(_) => {
+                return Ok(PageFontLookupOutcome::Unsupported(
+                    FontResourceUnsupported::new(
+                        FontResourceUnsupportedKind::DirectFont,
+                        owner_reference,
+                        entry_value_offset,
+                    ),
+                ));
+            }
+            _ => {
+                return Err(DocumentError::for_code(
+                    DocumentErrorCode::InvalidPageFontResource,
+                    Some(owner_reference),
+                    Some(entry_value_offset),
+                ));
+            }
+        };
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            entry_value_offset,
+        )?;
+        Ok(PageFontLookupOutcome::Ready(PageFontReference {
+            target,
+            snapshot,
+            revision_id: owner.revision_id(),
+            revision_startxref: owner.revision_startxref(),
+            scope_defining_object: scope.defining_object,
+            scope_defining_value_offset: scope_offset,
+            resource_dictionary_owner: owner_reference,
+            font_key_offset,
+            font_value_offset,
+            entry_key_offset,
+            entry_value_offset,
+        }))
+    }
+}
+
+impl fmt::Debug for PageFontResolver<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageFontResolver")
+            .field("scope", &self.scope)
+            .field("limits", &self.limits)
+            .field("stats", &self.stats)
+            .field("dictionary", &"[REDACTED]")
             .finish()
     }
 }
@@ -1073,6 +1447,70 @@ fn charge_xobject_entry_visit(
     if stats.entry_visits >= limits.max_entry_visits() {
         return Err(DocumentError::page_property_resource(
             DocumentLimitKind::PageXObjectEntryVisits,
+            limits.max_entry_visits(),
+            stats.entry_visits,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.entry_visits = stats
+        .entry_visits
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn probe_font_scan(
+    stats: &PageFontLookupStats,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits != 0
+        && stats
+            .entry_visits
+            .is_multiple_of(CANCELLATION_PROBE_INTERVAL)
+    {
+        runtime_guard(snapshot, source, cancellation, reference, offset)?;
+    }
+    Ok(())
+}
+
+fn charge_font_lookup(
+    stats: &mut PageFontLookupStats,
+    limits: PageFontLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.lookups >= limits.max_lookups() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageFontLookups,
+            limits.max_lookups(),
+            stats.lookups,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.lookups = stats
+        .lookups
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn charge_font_entry_visit(
+    stats: &mut PageFontLookupStats,
+    limits: PageFontLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits >= limits.max_entry_visits() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageFontEntryVisits,
             limits.max_entry_visits(),
             stats.entry_visits,
             1,

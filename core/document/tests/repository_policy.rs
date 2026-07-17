@@ -37,6 +37,7 @@ fn product_document_core_has_only_approved_sibling_dependencies_and_no_platform_
         [
             r#"pdf-rs-bytes = { path = "../bytes" }"#,
             r#"pdf-rs-filters = { path = "../filters" }"#,
+            r#"pdf-rs-font = { path = "../font" }"#,
             r#"pdf-rs-syntax = { path = "../syntax" }"#,
             r#"pdf-rs-xref = { path = "../xref" }"#,
             r#"pdf-rs-object = { path = "../object" }"#,

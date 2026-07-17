@@ -155,6 +155,58 @@ pub enum DocumentLimitKind {
     PageXObjectLookups,
     /// Outer resource and inner XObject dictionary entries visited during XObject lookup.
     PageXObjectEntryVisits,
+    /// Page resource names resolved through one borrowed Font resolver.
+    PageFontLookups,
+    /// Outer resource and inner Font dictionary entries visited during Font lookup.
+    PageFontEntryVisits,
+    /// Polls admitted while one embedded Font acquisition remained active.
+    FontResourcePolls,
+    /// Proof-preserving Font, descriptor, and FontFile2 objects opened.
+    FontResourceObjects,
+    /// Font-to-descriptor and descriptor-to-program indirect reference edges followed.
+    FontResourceReferenceEdges,
+    /// Top-level Font, descriptor, and FontFile2 metadata entries visited.
+    FontResourceMetadataEntries,
+    /// Entries admitted from the direct PDF `/Widths` array.
+    FontResourceWidths,
+    /// Cumulative exact source bytes consumed by proof-bound Font object jobs.
+    FontResourceObjectReadBytes,
+    /// Cumulative parser-window bytes consumed by proof-bound Font object jobs.
+    FontResourceObjectParseBytes,
+    /// Exact encoded FontFile2 payload bytes.
+    FontResourceEncodedBytes,
+    /// Exact decoded TrueType program bytes.
+    FontResourceDecodedBytes,
+    /// Deterministic foundational stream-decoder fuel for FontFile2.
+    FontResourceDecodeFuel,
+    /// Deterministic lower TrueType parser work.
+    FontResourceParserWork,
+    /// Records in the embedded sfnt table directory.
+    FontResourceTables,
+    /// Glyphs declared by the embedded TrueType `maxp` table.
+    FontResourceGlyphs,
+    /// Segments in the selected embedded TrueType character map.
+    FontResourceCmapSegments,
+    /// Bytes addressed by the embedded TrueType `glyf`/`loca` pair.
+    FontResourceGlyphDataBytes,
+    /// Bytes in one embedded TrueType glyph description.
+    FontResourceGlyphBytes,
+    /// Contours in one embedded simple TrueType glyph.
+    FontResourceGlyphContours,
+    /// Source contours across all embedded simple TrueType glyphs.
+    FontResourceTotalContours,
+    /// Points in one embedded simple TrueType glyph.
+    FontResourceGlyphPoints,
+    /// Source points across all embedded simple TrueType glyphs.
+    FontResourceTotalPoints,
+    /// Direct component records across all embedded compound TrueType glyphs.
+    FontResourceComponents,
+    /// Recursive embedded compound-glyph expansion depth.
+    FontResourceComponentDepth,
+    /// Project-owned outline segments after embedded compound-glyph expansion.
+    FontResourcePathSegments,
+    /// Conservatively accounted objects, decoded program, and parsed TrueType state.
+    FontResourceRetainedBytes,
     /// Top-level and nested Image XObject metadata entries visited before decode.
     ImageXObjectMetadataEntries,
     /// Exact source bytes consumed while reopening one proof-bound Image XObject.
@@ -363,6 +415,16 @@ pub enum DocumentErrorCode {
     InvalidImageXObject,
     /// A registered Image XObject stream failed canonical filter planning or decoding.
     ImageXObjectDecodeFailure,
+    /// `/Font` or one requested Page Font name has an invalid semantic shape.
+    InvalidPageFontResource,
+    /// Runtime identity or checkpoints for Font resource acquisition are inconsistent.
+    InvalidFontResourceJobContext,
+    /// A selected simple Font, descriptor, or embedded program has malformed metadata.
+    InvalidFontResource,
+    /// A registered FontFile2 stream failed canonical planning or decoding.
+    FontResourceDecodeFailure,
+    /// A decoded embedded TrueType program is malformed under the registered profile.
+    FontProgramFailure,
     /// Runtime identity or child checkpoints for outline traversal are inconsistent.
     InvalidOutlineJobContext,
     /// The Catalog outline entry or outline root dictionary has the wrong shape.
@@ -780,6 +842,31 @@ impl DocumentError {
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0081",
             ),
+            DocumentErrorCode::InvalidPageFontResource => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0082",
+            ),
+            DocumentErrorCode::InvalidFontResourceJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0083",
+            ),
+            DocumentErrorCode::InvalidFontResource => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0084",
+            ),
+            DocumentErrorCode::FontResourceDecodeFailure => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0085",
+            ),
+            DocumentErrorCode::FontProgramFailure => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0086",
+            ),
             DocumentErrorCode::InvalidOutlineJobContext => (
                 DocumentErrorCategory::Configuration,
                 DocumentRecoverability::CorrectConfiguration,
@@ -1033,6 +1120,27 @@ impl DocumentError {
     }
 
     pub(crate) const fn image_xobject_resource(
+        kind: DocumentLimitKind,
+        limit: u64,
+        consumed: u64,
+        attempted: u64,
+        reference: ObjectRef,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            code: DocumentErrorCode::ResourceLimit,
+            category: DocumentErrorCategory::Resource,
+            recoverability: DocumentRecoverability::ReduceWorkload,
+            diagnostic_id: "RPE-DOCUMENT-0002",
+            reference: Some(reference),
+            offset,
+            detail: DocumentErrorDetail::Limit(DocumentLimit::new(
+                kind, limit, consumed, attempted,
+            )),
+        }
+    }
+
+    pub(crate) const fn font_resource(
         kind: DocumentLimitKind,
         limit: u64,
         consumed: u64,

@@ -65,6 +65,8 @@ mod attestation_limits;
 mod catalog;
 mod dictionary;
 mod error;
+mod font_resource;
+mod font_resource_limits;
 mod image_xobject;
 mod image_xobject_limits;
 mod index;
@@ -75,6 +77,7 @@ mod outline;
 mod outline_limits;
 mod page_content;
 mod page_content_limits;
+mod page_font_lookup_limits;
 mod page_geometry;
 mod page_index;
 mod page_index_job;
@@ -120,6 +123,11 @@ pub use error::{
     DocumentError, DocumentErrorCategory, DocumentErrorCode, DocumentLimit, DocumentLimitKind,
     DocumentRecoverability,
 };
+pub use font_resource::{
+    AcquireFontResourceJob, AcquiredFontResource, FontResourceJobContext, FontResourcePhase,
+    FontResourcePoll, FontResourceStats, FontResourceUnsupported, FontResourceUnsupportedKind,
+};
+pub use font_resource_limits::{FontResourceLimitConfig, FontResourceLimits};
 pub use image_xobject::{
     AcquireImageXObjectJob, AcquiredImageXObject, ImageXObjectColorSpace, ImageXObjectJobContext,
     ImageXObjectPhase, ImageXObjectPoll, ImageXObjectStats, ImageXObjectUnsupported,
@@ -147,6 +155,9 @@ pub use page_content::{
     PageContentDecode, PageContentJobContext, PageContentPhase, PageContentPoll, PageContentStats,
 };
 pub use page_content_limits::{PageContentLimitConfig, PageContentLimits};
+pub use page_font_lookup_limits::{
+    PageFontLookupLimitConfig, PageFontLookupLimits, PageFontLookupStats,
+};
 pub use page_geometry::{
     InheritedPageValue, PageBoxes, PageCoordinate, PageRectangle, PageRotation, PageValueProvenance,
 };
@@ -167,8 +178,9 @@ pub use page_property_lookup_limits::{
     PagePropertyLookupLimitConfig, PagePropertyLookupLimits, PagePropertyLookupStats,
 };
 pub use page_resources::{
-    PagePropertyReference, PagePropertyResolver, PageResourceScope, PageXObjectLookupOutcome,
-    PageXObjectReference, PageXObjectResolver,
+    PageFontLookupOutcome, PageFontReference, PageFontResolver, PagePropertyReference,
+    PagePropertyResolver, PageResourceScope, PageXObjectLookupOutcome, PageXObjectReference,
+    PageXObjectResolver,
 };
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,
