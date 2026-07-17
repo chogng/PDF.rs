@@ -19,6 +19,7 @@ pdf-rs-corpus = { path = "../corpus" }
 pdf-rs-document = { path = "../../core/document" }
 pdf-rs-filters = { path = "../../core/filters" }
 pdf-rs-object = { path = "../../core/object" }
+pdf-rs-raster = { path = "../../core/raster" }
 pdf-rs-scene = { path = "../../core/scene" }
 pdf-rs-session = { path = "../../runtime/session" }
 pdf-rs-syntax = { path = "../../core/syntax" }

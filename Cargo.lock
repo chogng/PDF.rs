@@ -123,6 +123,7 @@ dependencies = [
  "pdf-rs-filters",
  "pdf-rs-generate",
  "pdf-rs-object",
+ "pdf-rs-raster",
  "pdf-rs-scene",
  "pdf-rs-session",
  "pdf-rs-syntax",
