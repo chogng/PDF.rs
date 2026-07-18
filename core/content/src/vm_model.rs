@@ -2,9 +2,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use pdf_rs_document::{
-    AcquiredPageContent, FontResourceStats, ImageXObjectStats, MaterializedPage,
-    PageFontLookupStats, PageFontReference, PagePropertyLookupStats, PagePropertyReference,
-    PageXObjectLookupStats, PageXObjectReference,
+    AcquiredFormXObject, AcquiredPageContent, FontResourceStats, ImageXObjectStats,
+    MaterializedPage, PageFontLookupStats, PageFontReference, PagePropertyLookupStats,
+    PagePropertyReference, PageXObjectLookupStats, PageXObjectReference,
 };
 use pdf_rs_scene::{GraphicsResourceSource, Matrix, Scene};
 
@@ -997,6 +997,157 @@ impl fmt::Debug for InterpretedPage {
             .field("scene", &"[REDACTED]")
             .field("final_ctm", &"[REDACTED]")
             .field("content", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Immutable successful result of one proof-bound Form XObject interpretation.
+///
+/// The value owns the acquired Form and its direct resource scope together with the Scene
+/// commands produced in the caller's page coordinate system.
+pub struct InterpretedForm {
+    acquired: Arc<AcquiredFormXObject>,
+    scene: Arc<Scene>,
+    property_uses: Vec<ResolvedPropertyUse>,
+    image_uses: Vec<ResolvedImageUse>,
+    font_uses: Vec<ResolvedFontUse>,
+    final_ctm: Matrix,
+    scan_stats: ContentScanStats,
+    vm_stats: ContentVmStats,
+    property_stats: PagePropertyLookupStats,
+    xobject_stats: PageXObjectLookupStats,
+    image_stats: ContentImageStats,
+    font_lookup_stats: PageFontLookupStats,
+    font_stats: ContentFontStats,
+}
+
+impl InterpretedForm {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "atomic Form publication retains each sealed lower result and accounting snapshot"
+    )]
+    pub(crate) fn new(
+        acquired: Arc<AcquiredFormXObject>,
+        scene: Scene,
+        property_uses: Vec<ResolvedPropertyUse>,
+        image_uses: Vec<ResolvedImageUse>,
+        font_uses: Vec<ResolvedFontUse>,
+        final_ctm: Matrix,
+        scan_stats: ContentScanStats,
+        vm_stats: ContentVmStats,
+        property_stats: PagePropertyLookupStats,
+        xobject_stats: PageXObjectLookupStats,
+        image_stats: ContentImageStats,
+        font_lookup_stats: PageFontLookupStats,
+        font_stats: ContentFontStats,
+    ) -> Self {
+        Self {
+            acquired,
+            scene: Arc::new(scene),
+            property_uses,
+            image_uses,
+            font_uses,
+            final_ctm,
+            scan_stats,
+            vm_stats,
+            property_stats,
+            xobject_stats,
+            image_stats,
+            font_lookup_stats,
+            font_stats,
+        }
+    }
+
+    /// Borrows the proof-bearing acquired Form and its direct resource scope.
+    pub const fn acquired_form(&self) -> &Arc<AcquiredFormXObject> {
+        &self.acquired
+    }
+
+    /// Borrows the immutable graphics Scene in caller page coordinates.
+    pub fn scene(&self) -> &Scene {
+        self.scene.as_ref()
+    }
+
+    /// Clones the shared immutable Scene handle.
+    pub fn scene_arc(&self) -> Arc<Scene> {
+        Arc::clone(&self.scene)
+    }
+
+    /// Returns resolved property proofs in execution order.
+    pub fn property_uses(&self) -> &[ResolvedPropertyUse] {
+        &self.property_uses
+    }
+
+    /// Returns executed Image XObject proofs in execution order.
+    pub fn image_uses(&self) -> &[ResolvedImageUse] {
+        &self.image_uses
+    }
+
+    /// Returns executed Font selection proofs in execution order.
+    pub fn font_uses(&self) -> &[ResolvedFontUse] {
+        &self.font_uses
+    }
+
+    /// Returns the final Form-local transformation matrix in page coordinates.
+    pub const fn final_ctm(&self) -> Matrix {
+        self.final_ctm
+    }
+
+    /// Returns the complete scanner accounting snapshot.
+    pub const fn scan_stats(&self) -> ContentScanStats {
+        self.scan_stats
+    }
+
+    /// Returns the complete VM accounting snapshot.
+    pub const fn vm_stats(&self) -> ContentVmStats {
+        self.vm_stats
+    }
+
+    /// Returns property lookup accounting.
+    pub const fn property_stats(&self) -> PagePropertyLookupStats {
+        self.property_stats
+    }
+
+    /// Returns XObject lookup accounting.
+    pub const fn xobject_stats(&self) -> PageXObjectLookupStats {
+        self.xobject_stats
+    }
+
+    /// Returns aggregate Image XObject accounting.
+    pub const fn image_stats(&self) -> ContentImageStats {
+        self.image_stats
+    }
+
+    /// Returns Font lookup accounting.
+    pub const fn font_lookup_stats(&self) -> PageFontLookupStats {
+        self.font_lookup_stats
+    }
+
+    /// Returns aggregate embedded-font accounting.
+    pub const fn font_stats(&self) -> ContentFontStats {
+        self.font_stats
+    }
+}
+
+impl fmt::Debug for InterpretedForm {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InterpretedForm")
+            .field("reference", &self.acquired.reference())
+            .field(
+                "scene_command_count",
+                &self
+                    .scene
+                    .graphics()
+                    .map_or(0, |graphics| graphics.commands().len()),
+            )
+            .field("property_use_count", &self.property_uses.len())
+            .field("image_use_count", &self.image_uses.len())
+            .field("font_use_count", &self.font_uses.len())
+            .field("scan_stats", &self.scan_stats)
+            .field("vm_stats", &self.vm_stats)
+            .field("content", &"[REDACTED]")
+            .field("scene", &"[REDACTED]")
             .finish()
     }
 }

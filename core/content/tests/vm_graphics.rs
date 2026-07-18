@@ -12,27 +12,29 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_content::{
     ContentFontLimitConfig, ContentFontLimitKind, ContentFontLimits, ContentFontProfile,
-    ContentFontStats, ContentGraphicsLimitConfig, ContentGraphicsLimitKind, ContentGraphicsLimits,
-    ContentImageLimitConfig, ContentImageLimitKind, ContentImageLimits, ContentImageProfile,
-    ContentLimits, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure,
-    ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll, InterpretPageJob,
+    ContentFontStats, ContentFormPoll, ContentGraphicsLimitConfig, ContentGraphicsLimitKind,
+    ContentGraphicsLimits, ContentImageLimitConfig, ContentImageLimitKind, ContentImageLimits,
+    ContentImageProfile, ContentLimits, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
+    ContentVmFailure, ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll,
+    InterpretFormJob, InterpretPageJob,
 };
 use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
-    FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind,
-    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelled as DocumentNeverCancelled,
-    PageContentJobContext, PageContentLimits, PageContentPoll, PageFontLookupLimits,
-    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
-    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
-    PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits, PageXObjectLookupLimits,
-    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
-    SharedAttestedRevisionIndex,
+    FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind, FormXObjectJobContext,
+    FormXObjectPoll, ImageXObjectJobContext, ImageXObjectLimits,
+    NeverCancelled as DocumentNeverCancelled, PageContentJobContext, PageContentLimits,
+    PageContentPoll, PageFontLookupLimits, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
+    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
+    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
+    PageXObjectLookupLimits, PageXObjectLookupOutcome, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
     BlendMode, DashPatternBuilder, DeviceColor, FillRule, GraphicsCommand, GraphicsResource,
     GraphicsSceneLimitConfig, GraphicsSceneLimits, ImageColorSpace, LineCap, LineJoin, Matrix,
-    PathResourceBuilder, PathSegment, SceneScalar, SceneUnit, SceneVersion,
+    PageGeometry, PageRotation as ScenePageRotation, PathResourceBuilder, PathSegment,
+    SceneBinding, SceneRect, SceneScalar, SceneUnit, SceneVersion,
 };
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{
@@ -363,6 +365,19 @@ fn image_object(number: u32, dictionary_entries: &[u8], decoded: &[u8]) -> Vec<u
     object.extend_from_slice(dictionary_entries);
     object.extend_from_slice(b" >>\nstream\n");
     object.extend_from_slice(decoded);
+    object.extend_from_slice(b"\nendstream\nendobj\n");
+    object
+}
+
+fn form_object(number: u32, dictionary_entries: &[u8], content: &[u8]) -> Vec<u8> {
+    let mut object = format!(
+        "{number} 0 obj\n<< /Type /XObject /Subtype /Form /Length {} ",
+        content.len()
+    )
+    .into_bytes();
+    object.extend_from_slice(dictionary_entries);
+    object.extend_from_slice(b" >>\nstream\n");
+    object.extend_from_slice(content);
     object.extend_from_slice(b"\nendstream\nendobj\n");
     object
 }
@@ -4326,4 +4341,187 @@ fn one_page_publishes_images_and_embedded_text_through_combined_profiles() {
         GraphicsCommand::DrawGlyphRun(_)
     ));
     assert_eq!(graphics.resources().len(), 2);
+}
+
+#[test]
+fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
+    let input = acquire_with_objects(
+        b"",
+        b"<< /XObject << /Fm0 5 0 R >> >>",
+        &[(
+            5,
+            form_object(
+                5,
+                b"/BBox [0 0 10 10] /Matrix [2 0 0 3 4 5] /Resources << >>",
+                b"0 0 10 10 re 1 0 0 rg f",
+            ),
+        )],
+        0xf5,
+    );
+    let VmInput {
+        acquired,
+        authority,
+        store,
+    } = input;
+    let proof = {
+        let mut resolver = acquired
+            .page()
+            .resources()
+            .xobject_resolver(PageXObjectLookupLimits::default());
+        match resolver
+            .lookup_image_xobject(b"Fm0", &store, &DocumentNeverCancelled)
+            .expect("Form resource lookup")
+        {
+            PageXObjectLookupOutcome::Ready(proof) => proof,
+            PageXObjectLookupOutcome::Unsupported(unsupported) => {
+                panic!("indirect Form proof expected: {unsupported:?}")
+            }
+        }
+    };
+    let mut acquisition = authority
+        .acquire_form_xobject(
+            proof,
+            FormXObjectJobContext::new(
+                JobId::new(35_001),
+                ResumeCheckpoint::new(35_002),
+                ResumeCheckpoint::new(35_003),
+                ResumeCheckpoint::new(35_004),
+                RequestPriority::VisiblePage,
+            ),
+        )
+        .expect("Form acquisition job");
+    let form = match acquisition.poll(&store, &DocumentNeverCancelled) {
+        FormXObjectPoll::Ready(form) => form,
+        outcome => panic!("identity Form must acquire: {outcome:?}"),
+    };
+
+    let handle = acquired.handle();
+    let binding = SceneBinding::new(
+        handle.snapshot().identity(),
+        handle.revision_startxref(),
+        handle.index(),
+        handle.object(),
+    );
+    let boxes = acquired.page().boxes();
+    let media = SceneRect::new(
+        boxes
+            .media_box()
+            .coordinates()
+            .map(|value| SceneScalar::from_scaled(value.scaled())),
+    )
+    .expect("page media box");
+    let crop = SceneRect::new(
+        boxes
+            .crop_box()
+            .coordinates()
+            .map(|value| SceneScalar::from_scaled(value.scaled())),
+    )
+    .expect("page crop box");
+    let geometry = PageGeometry::new(media, crop, ScenePageRotation::Degrees0);
+    let image_profile = ContentImageProfile::new(
+        authority.clone(),
+        PageXObjectLookupLimits::default(),
+        ImageXObjectJobContext::new(
+            JobId::new(35_101),
+            ResumeCheckpoint::new(35_102),
+            ResumeCheckpoint::new(35_103),
+            ResumeCheckpoint::new(35_104),
+            RequestPriority::VisiblePage,
+        ),
+        ImageXObjectLimits::default(),
+        ContentImageLimits::default(),
+    );
+    let font_profile = ContentFontProfile::new(
+        authority,
+        PageFontLookupLimits::default(),
+        font_context(35_201),
+        FontResourceLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let invocation = Matrix::new([
+        SceneScalar::ONE,
+        SceneScalar::ZERO,
+        SceneScalar::ZERO,
+        SceneScalar::ONE,
+        SceneScalar::from_scaled(10_000_000_000),
+        SceneScalar::from_scaled(20_000_000_000),
+    ]);
+    let mut job = InterpretFormJob::new_graphics_v2_with_images_and_fonts(
+        form,
+        binding,
+        geometry,
+        invocation,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile,
+        font_profile,
+        GraphicsSceneLimits::default(),
+    )
+    .expect("representable invocation and Form matrices");
+    let interpreted = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentFormPoll::Ready(form) => form,
+        outcome => panic!("path-only Form must interpret: {outcome:?}"),
+    };
+    let graphics = interpreted.scene().graphics().expect("graphics-v2 Form");
+    assert!(matches!(
+        graphics.commands().first().map(|record| record.command()),
+        Some(GraphicsCommand::Save)
+    ));
+    assert!(matches!(
+        graphics.commands().get(1).map(|record| record.command()),
+        Some(GraphicsCommand::Clip { .. })
+    ));
+    assert!(matches!(
+        graphics.commands().last().map(|record| record.command()),
+        Some(GraphicsCommand::Restore)
+    ));
+    let Some((path_id, transform)) = graphics.commands().iter().find_map(|record| {
+        let GraphicsCommand::Fill {
+            path, transform, ..
+        } = record.command()
+        else {
+            return None;
+        };
+        Some((*path, *transform))
+    }) else {
+        panic!("Form rectangle must become one fill");
+    };
+    assert_eq!(
+        transform.components().map(SceneScalar::scaled),
+        Matrix::IDENTITY.components().map(SceneScalar::scaled)
+    );
+    let GraphicsResource::Path(path) = graphics
+        .resources()
+        .iter()
+        .find(|entry| entry.id() == path_id)
+        .expect("fill path resource")
+        .resource()
+    else {
+        panic!("Form fill must retain its transformed path");
+    };
+    let points = path
+        .segments()
+        .iter()
+        .filter_map(|segment| match segment {
+            PathSegment::MoveTo(point) | PathSegment::LineTo(point) => {
+                Some([point.x().scaled(), point.y().scaled()])
+            }
+            PathSegment::CubicTo { .. } | PathSegment::ClosePath => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        points,
+        [
+            [14_000_000_000, 25_000_000_000],
+            [34_000_000_000, 25_000_000_000],
+            [34_000_000_000, 55_000_000_000],
+            [14_000_000_000, 55_000_000_000],
+        ]
+    );
+    assert_eq!(
+        interpreted.acquired_form().resources().defining_object(),
+        proof.target()
+    );
 }

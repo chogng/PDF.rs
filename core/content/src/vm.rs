@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_document::{
-    AcquiredPageContent, DocumentCancellation, FontResourceJobContext, FontResourceLimits,
-    ImageXObjectJobContext, ImageXObjectLimits, PageFontLookupLimits, PageFontLookupOutcome,
-    PageFontLookupStats, PagePropertyLookupLimits, PagePropertyLookupStats,
-    PageXObjectLookupLimits, PageXObjectLookupOutcome, PageXObjectLookupStats,
+    AcquiredFormXObject, AcquiredPageContent, DocumentCancellation, FontResourceJobContext,
+    FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits, PageFontLookupLimits,
+    PageFontLookupOutcome, PageFontLookupStats, PagePropertyLookupLimits, PagePropertyLookupStats,
+    PageResourceScope, PageXObjectLookupLimits, PageXObjectLookupOutcome, PageXObjectLookupStats,
     SharedAttestedRevisionIndex,
 };
 use pdf_rs_font::{GlyphId, OutlineSegment};
@@ -27,8 +27,9 @@ use crate::{
     ContentNumber, ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats,
     ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
     ContentVmFailure, ContentVmLimit, ContentVmLimitKind, ContentVmLimits, ContentVmPhase,
-    ContentVmStats, DecodedContentStream, InterpretedPage, LocatedOperand, OperatorContext,
-    OperatorKind, OperatorOperandShape, ResolvedFontUse, ResolvedImageUse, ResolvedPropertyUse,
+    ContentVmStats, DecodedContentStream, InterpretedForm, InterpretedPage, LocatedOperand,
+    OperatorContext, OperatorKind, OperatorOperandShape, ResolvedFontUse, ResolvedImageUse,
+    ResolvedPropertyUse,
 };
 
 mod font;
@@ -67,6 +68,49 @@ impl fmt::Debug for ContentVmPoll {
             Self::Ready(page) => formatter
                 .debug_tuple("Ready")
                 .field(&page.acquired_content().handle())
+                .finish(),
+            Self::Unsupported(error) => formatter.debug_tuple("Unsupported").field(error).finish(),
+            Self::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => formatter
+                .debug_struct("Pending")
+                .field("ticket", ticket)
+                .field("missing", missing)
+                .field("checkpoint", checkpoint)
+                .finish(),
+            Self::Failed(error) => formatter.debug_tuple("Failed").field(error).finish(),
+        }
+    }
+}
+
+/// One replayable sealed Form-XObject interpretation outcome.
+#[derive(Clone)]
+pub enum ContentFormPoll {
+    /// Complete immutable interpreted Form.
+    Ready(Arc<InterpretedForm>),
+    /// Validated feature outside the bounded Form profile.
+    Unsupported(ContentUnsupported),
+    /// One proof-bound child resource requires absent source bytes.
+    Pending {
+        /// One-shot data-arrival ticket returned by the byte source.
+        ticket: DataTicket,
+        /// Canonical exact ranges still missing from the request.
+        missing: SmallRanges,
+        /// Child acquisition checkpoint.
+        checkpoint: ResumeCheckpoint,
+    },
+    /// Terminal lower-layer or VM failure.
+    Failed(ContentVmFailure),
+}
+
+impl fmt::Debug for ContentFormPoll {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ready(form) => formatter
+                .debug_tuple("Ready")
+                .field(&form.acquired_form().reference())
                 .finish(),
             Self::Unsupported(error) => formatter.debug_tuple("Unsupported").field(error).finish(),
             Self::Pending {
@@ -233,6 +277,41 @@ pub struct InterpretPageJob {
     image_stats: ContentImageStats,
     font_lookup_stats: PageFontLookupStats,
     font_stats: ContentFontStats,
+}
+
+/// Single-owner sealed interpreter for one exact proof-bearing Form XObject.
+pub struct InterpretFormJob {
+    acquired: Option<Arc<AcquiredFormXObject>>,
+    binding: SceneBinding,
+    geometry: PageGeometry,
+    initial_ctm: Matrix,
+    scan_limits: ContentLimits,
+    vm_limits: ContentVmLimits,
+    property_limits: PagePropertyLookupLimits,
+    xobject_limits: PageXObjectLookupLimits,
+    font_lookup_limits: PageFontLookupLimits,
+    profile: ContentVmProfile,
+    image_runtime: Option<ImageRuntime>,
+    font_runtime: Option<FontRuntime>,
+    ext_gstate_profile: Option<ContentExtGStateProfile>,
+    program: Option<ContentProgram>,
+    plan: Option<ExecutionPlan>,
+    scan_peak_retained: u64,
+    state: FormJobState,
+    scan_stats: ContentScanStats,
+    vm_stats: ContentVmStats,
+    property_stats: PagePropertyLookupStats,
+    xobject_stats: PageXObjectLookupStats,
+    image_stats: ContentImageStats,
+    font_lookup_stats: PageFontLookupStats,
+    font_stats: ContentFontStats,
+}
+
+enum FormJobState {
+    Pending,
+    Ready(Arc<InterpretedForm>),
+    Unsupported(ContentUnsupported),
+    Failed(ContentVmFailure),
 }
 
 impl InterpretPageJob {
@@ -531,7 +610,7 @@ impl InterpretPageJob {
                 .as_ref()
                 .expect("pending interpretation retains its acquired Page");
             run_interpretation(
-                acquired,
+                AcquiredContentInput::Page(acquired),
                 &mut self.program,
                 &mut self.plan,
                 self.scan_limits,
@@ -661,6 +740,226 @@ impl fmt::Debug for InterpretPageJob {
     }
 }
 
+impl InterpretFormJob {
+    /// Creates a graphics-v2 Form interpreter with proof-bound image and Font resources.
+    ///
+    /// The Form matrix is concatenated after the caller's invocation CTM before any Form
+    /// operator is planned.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the Form constructor keeps proof authorities, coordinate context, and independent limits explicit"
+    )]
+    pub fn new_graphics_v2_with_images_and_fonts(
+        acquired: Arc<AcquiredFormXObject>,
+        binding: SceneBinding,
+        geometry: PageGeometry,
+        invocation_ctm: Matrix,
+        scan_limits: ContentLimits,
+        vm_limits: ContentVmLimits,
+        graphics_limits: ContentGraphicsLimits,
+        property_limits: PagePropertyLookupLimits,
+        image_profile: ContentImageProfile,
+        font_profile: ContentFontProfile,
+        scene_limits: GraphicsSceneLimits,
+    ) -> Result<Self, SceneError> {
+        let form_matrix = Matrix::new(
+            acquired
+                .matrix()
+                .map(|coordinate| SceneScalar::from_scaled(coordinate.scaled())),
+        );
+        let initial_ctm = invocation_ctm.checked_multiply(form_matrix)?;
+        Ok(Self {
+            acquired: Some(acquired),
+            binding,
+            geometry,
+            initial_ctm,
+            scan_limits,
+            vm_limits,
+            property_limits,
+            xobject_limits: image_profile.lookup_limits(),
+            font_lookup_limits: font_profile.lookup_limits(),
+            profile: ContentVmProfile::GraphicsV2 {
+                graphics_limits,
+                scene_limits,
+            },
+            image_runtime: Some(ImageRuntime::new(image_profile)),
+            font_runtime: Some(FontRuntime::new(font_profile)),
+            ext_gstate_profile: None,
+            program: None,
+            plan: None,
+            scan_peak_retained: 0,
+            state: FormJobState::Pending,
+            scan_stats: ContentScanStats::default(),
+            vm_stats: ContentVmStats::default(),
+            property_stats: PagePropertyLookupStats::default(),
+            xobject_stats: PageXObjectLookupStats::default(),
+            image_stats: ContentImageStats::default(),
+            font_lookup_stats: PageFontLookupStats::default(),
+            font_stats: ContentFontStats::default(),
+        })
+    }
+
+    /// Installs a proof-bound external graphics-state registry owned by this Form scope.
+    pub fn with_ext_gstates(mut self, profile: ContentExtGStateProfile) -> Self {
+        self.ext_gstate_profile = Some(profile);
+        self
+    }
+
+    /// Returns the pending or terminal Form phase.
+    pub const fn phase(&self) -> ContentVmPhase {
+        match self.state {
+            FormJobState::Pending => ContentVmPhase::Pending,
+            FormJobState::Ready(_) => ContentVmPhase::Ready,
+            FormJobState::Unsupported(_) => ContentVmPhase::Unsupported,
+            FormJobState::Failed(_) => ContentVmPhase::Failed,
+        }
+    }
+
+    /// Executes once against the current source generation, then replays the terminal result.
+    pub fn poll(
+        &mut self,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> ContentFormPoll {
+        match &self.state {
+            FormJobState::Ready(form) => return ContentFormPoll::Ready(Arc::clone(form)),
+            FormJobState::Unsupported(error) => return ContentFormPoll::Unsupported(*error),
+            FormJobState::Failed(error) => return ContentFormPoll::Failed(*error),
+            FormJobState::Pending => {}
+        }
+        let report = {
+            let acquired = self
+                .acquired
+                .as_ref()
+                .expect("pending Form interpretation retains its acquisition");
+            run_interpretation(
+                AcquiredContentInput::Form {
+                    acquired,
+                    binding: self.binding,
+                    geometry: self.geometry,
+                    initial_ctm: self.initial_ctm,
+                },
+                &mut self.program,
+                &mut self.plan,
+                self.scan_limits,
+                self.vm_limits,
+                self.property_limits,
+                self.xobject_limits,
+                self.font_lookup_limits,
+                self.profile,
+                self.image_runtime.as_mut(),
+                self.font_runtime.as_mut(),
+                self.ext_gstate_profile.as_ref(),
+                self.scan_stats,
+                self.xobject_stats,
+                self.scan_peak_retained,
+                source,
+                cancellation,
+            )
+        };
+        self.scan_stats = report.scan_stats;
+        self.vm_stats = report.vm_stats;
+        self.property_stats = report.property_stats;
+        self.xobject_stats = report.xobject_stats;
+        self.scan_peak_retained = report.scan_peak_retained;
+        self.image_stats = self
+            .image_runtime
+            .as_ref()
+            .map_or(ContentImageStats::default(), ImageRuntime::stats);
+        self.font_stats = self
+            .font_runtime
+            .as_ref()
+            .map_or(ContentFontStats::default(), FontRuntime::stats);
+        self.font_lookup_stats = self
+            .font_runtime
+            .as_ref()
+            .map_or(PageFontLookupStats::default(), FontRuntime::lookup_stats);
+
+        match report.terminal {
+            RunTerminal::Planned(_) => {
+                unreachable!("semantic plans are retained internally before polling returns")
+            }
+            RunTerminal::Ready(execution) => {
+                let acquired = self
+                    .acquired
+                    .take()
+                    .expect("successful Form interpretation retains its acquisition");
+                let form = Arc::new(InterpretedForm::new(
+                    acquired,
+                    execution.scene,
+                    execution.property_uses,
+                    execution.image_uses,
+                    execution.font_uses,
+                    execution.final_ctm,
+                    self.scan_stats,
+                    self.vm_stats,
+                    self.property_stats,
+                    self.xobject_stats,
+                    self.image_stats,
+                    self.font_lookup_stats,
+                    self.font_stats,
+                ));
+                self.image_runtime.take();
+                self.font_runtime.take();
+                self.ext_gstate_profile.take();
+                self.program.take();
+                self.plan.take();
+                self.state = FormJobState::Ready(Arc::clone(&form));
+                ContentFormPoll::Ready(form)
+            }
+            RunTerminal::Unsupported(error) => {
+                self.clear_transient();
+                self.state = FormJobState::Unsupported(error);
+                ContentFormPoll::Unsupported(error)
+            }
+            RunTerminal::Failed(error) => {
+                self.clear_transient();
+                self.state = FormJobState::Failed(error);
+                ContentFormPoll::Failed(error)
+            }
+            RunTerminal::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => ContentFormPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            },
+        }
+    }
+
+    fn clear_transient(&mut self) {
+        self.acquired.take();
+        self.image_runtime.take();
+        self.font_runtime.take();
+        self.ext_gstate_profile.take();
+        self.program.take();
+        self.plan.take();
+    }
+}
+
+impl fmt::Debug for InterpretFormJob {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InterpretFormJob")
+            .field("phase", &self.phase())
+            .field(
+                "reference",
+                &self.acquired.as_ref().map(|form| form.reference()),
+            )
+            .field("images_enabled", &self.image_runtime.is_some())
+            .field("fonts_enabled", &self.font_runtime.is_some())
+            .field("ext_gstates_enabled", &self.ext_gstate_profile.is_some())
+            .field("program_retained", &self.program.is_some())
+            .field("plan_retained", &self.plan.is_some())
+            .field("scan_stats", &self.scan_stats)
+            .field("vm_stats", &self.vm_stats)
+            .field("content", &"[REDACTED]")
+            .finish()
+    }
+}
+
 struct Execution {
     scene: Scene,
     property_uses: Vec<ResolvedPropertyUse>,
@@ -668,6 +967,108 @@ struct Execution {
     font_uses: Vec<ResolvedFontUse>,
     retained_use_capacity_bytes: u64,
     final_ctm: Matrix,
+}
+
+#[derive(Clone, Copy)]
+enum AcquiredContentInput<'a> {
+    Page(&'a AcquiredPageContent),
+    Form {
+        acquired: &'a AcquiredFormXObject,
+        binding: SceneBinding,
+        geometry: PageGeometry,
+        initial_ctm: Matrix,
+    },
+}
+
+impl<'a> AcquiredContentInput<'a> {
+    fn snapshot(self) -> SourceSnapshot {
+        match self {
+            Self::Page(acquired) => acquired.handle().snapshot(),
+            Self::Form { acquired, .. } => acquired.proof().snapshot(),
+        }
+    }
+
+    fn resources(self) -> &'a PageResourceScope {
+        match self {
+            Self::Page(acquired) => acquired.page().resources(),
+            Self::Form { acquired, .. } => acquired.resources(),
+        }
+    }
+
+    fn stream_count(self) -> usize {
+        match self {
+            Self::Page(acquired) => acquired.streams().len(),
+            Self::Form { .. } => 1,
+        }
+    }
+
+    fn decoded_bytes(self) -> u64 {
+        match self {
+            Self::Page(acquired) => acquired
+                .streams()
+                .iter()
+                .try_fold(0_u64, |total, stream| {
+                    total.checked_add(u64::try_from(stream.decoded_bytes().len()).ok()?)
+                })
+                .unwrap_or(u64::MAX),
+            Self::Form { acquired, .. } => {
+                u64::try_from(acquired.content_bytes().len()).unwrap_or(u64::MAX)
+            }
+        }
+    }
+
+    fn append_descriptors(self, descriptors: &mut Vec<DecodedContentStream<'a>>) {
+        match self {
+            Self::Page(acquired) => {
+                for stream in acquired.streams() {
+                    descriptors.push(DecodedContentStream::new(
+                        stream.reference(),
+                        stream.stream_index(),
+                        stream.decoded_bytes(),
+                    ));
+                }
+            }
+            Self::Form { acquired, .. } => {
+                descriptors.push(DecodedContentStream::new(
+                    acquired.reference(),
+                    0,
+                    acquired.content_bytes(),
+                ));
+            }
+        }
+    }
+
+    fn scene_context(self) -> Result<(SceneBinding, PageGeometry), SceneError> {
+        match self {
+            Self::Page(acquired) => page_scene_context(acquired),
+            Self::Form {
+                binding, geometry, ..
+            } => Ok((binding, geometry)),
+        }
+    }
+
+    fn initial_ctm(self) -> Matrix {
+        match self {
+            Self::Page(_) => Matrix::IDENTITY,
+            Self::Form { initial_ctm, .. } => initial_ctm,
+        }
+    }
+
+    fn form(self) -> Option<&'a AcquiredFormXObject> {
+        match self {
+            Self::Page(_) => None,
+            Self::Form { acquired, .. } => Some(acquired),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FormEnvelope {
+    source: ContentOperatorSource,
+    command_source: CommandSource,
+    bounds: SceneBounds,
+    simple_transparency_group: bool,
+    retained_bytes: u64,
 }
 
 struct PlannedImageInvocation {
@@ -779,6 +1180,16 @@ enum ExecutionAction {
         source: CommandSource,
     },
     Restore {
+        bounds: SceneBounds,
+        source: CommandSource,
+    },
+    BeginGroup {
+        alpha: SceneUnit,
+        blend_mode: pdf_rs_scene::BlendMode,
+        bounds: SceneBounds,
+        source: CommandSource,
+    },
+    EndGroup {
         bounds: SceneBounds,
         source: CommandSource,
     },
@@ -1001,7 +1412,7 @@ impl Accounting {
     reason = "the sealed interpreter receives each independently validated lower limit profile"
 )]
 fn run_interpretation(
-    acquired: &AcquiredPageContent,
+    input: AcquiredContentInput<'_>,
     program_slot: &mut Option<ContentProgram>,
     plan_slot: &mut Option<ExecutionPlan>,
     scan_limits: ContentLimits,
@@ -1019,7 +1430,7 @@ fn run_interpretation(
     source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
 ) -> RunReport {
-    let snapshot = acquired.handle().snapshot();
+    let snapshot = input.snapshot();
     let mut accounting = Accounting::default();
     let mut property_stats = PagePropertyLookupStats::default();
 
@@ -1036,9 +1447,8 @@ fn run_interpretation(
     }
     if program_slot.is_none() && plan_slot.is_none() {
         if let Some(runtime) = image_runtime.as_deref_mut() {
-            let Some(input_bytes) = acquired.streams().iter().try_fold(0_u64, |total, stream| {
-                total.checked_add(u64::try_from(stream.decoded_bytes().len()).ok()?)
-            }) else {
+            let input_bytes = input.decoded_bytes();
+            if input_bytes == u64::MAX {
                 return report(
                     RunTerminal::Failed(ContentVmFailure::Vm(ContentVmError::new(
                         ContentVmErrorCode::InternalState,
@@ -1051,7 +1461,7 @@ fn run_interpretation(
                     scan_peak_retained,
                     0,
                 );
-            };
+            }
             if let Err(error) = runtime.record_scan(input_bytes) {
                 return report(
                     prioritize_vm_without_source(snapshot, source, cancellation, error),
@@ -1065,33 +1475,22 @@ fn run_interpretation(
             }
         }
         let mut descriptors = Vec::new();
-        let descriptor_bytes = match reserve_exact_slots(
-            &mut descriptors,
-            acquired.streams().len(),
-            0,
-            vm_limits,
-            None,
-        ) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return report(
-                    prioritize_vm_without_source(snapshot, source, cancellation, error),
-                    scan_stats,
-                    &accounting,
-                    property_stats,
-                    xobject_stats,
-                    scan_peak_retained,
-                    0,
-                );
-            }
-        };
-        for stream in acquired.streams() {
-            descriptors.push(DecodedContentStream::new(
-                stream.reference(),
-                stream.stream_index(),
-                stream.decoded_bytes(),
-            ));
-        }
+        let descriptor_bytes =
+            match reserve_exact_slots(&mut descriptors, input.stream_count(), 0, vm_limits, None) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return report(
+                        prioritize_vm_without_source(snapshot, source, cancellation, error),
+                        scan_stats,
+                        &accounting,
+                        property_stats,
+                        xobject_stats,
+                        scan_peak_retained,
+                        0,
+                    );
+                }
+            };
+        input.append_descriptors(&mut descriptors);
         let scan = run_scan(
             &descriptors,
             scan_limits,
@@ -1157,7 +1556,7 @@ fn run_interpretation(
             .as_ref()
             .expect("a successful scan remains retained until semantic planning completes");
         let planning = build_execution_plan(
-            acquired,
+            input,
             program,
             program_bytes,
             vm_limits,
@@ -1205,7 +1604,7 @@ fn run_interpretation(
     if let Some(runtime) = image_runtime.as_deref_mut()
         && !runtime.plan_complete()
         && let Err(terminal) = plan_image_resources(
-            acquired,
+            input,
             plan,
             xobject_limits,
             runtime,
@@ -1227,7 +1626,7 @@ fn run_interpretation(
     if let Some(runtime) = font_runtime.as_deref_mut()
         && !runtime.plan_complete()
         && let Err(terminal) = plan_font_resources(
-            acquired,
+            input,
             plan,
             font_lookup_limits,
             runtime,
@@ -1346,7 +1745,7 @@ fn run_interpretation(
         .expect("all resources ready before consuming the immutable execution plan");
     let mut materialization_peak_retained = 0_u64;
     let terminal = materialize_execution_plan(
-        acquired,
+        input,
         plan,
         profile,
         vm_limits,
@@ -1426,7 +1825,7 @@ fn report(
     reason = "image planning keeps each sealed lower limit and runtime authority explicit"
 )]
 fn plan_image_resources(
-    acquired: &AcquiredPageContent,
+    input: AcquiredContentInput<'_>,
     plan: &ExecutionPlan,
     xobject_limits: PageXObjectLookupLimits,
     runtime: &mut ImageRuntime,
@@ -1434,7 +1833,7 @@ fn plan_image_resources(
     cancellation: &dyn DocumentCancellation,
     xobject_stats: &mut PageXObjectLookupStats,
 ) -> Result<(), RunTerminal> {
-    let snapshot = acquired.handle().snapshot();
+    let snapshot = input.snapshot();
     let first_image_source = plan.image_invocations.first().map(|image| image.source);
     runtime
         .begin_plan(plan.image_invocations.len(), first_image_source)
@@ -1448,7 +1847,7 @@ fn plan_image_resources(
             )
         })?;
 
-    let mut resolver = acquired.page().resources().xobject_resolver(xobject_limits);
+    let mut resolver = input.resources().xobject_resolver(xobject_limits);
     let result = (|| {
         for image in &plan.image_invocations {
             let source = image.source;
@@ -1508,14 +1907,14 @@ fn plan_image_resources(
     reason = "font planning keeps proof lookup, runtime authority, and source guards explicit"
 )]
 fn plan_font_resources(
-    acquired: &AcquiredPageContent,
+    input: AcquiredContentInput<'_>,
     plan: &ExecutionPlan,
     lookup_limits: PageFontLookupLimits,
     runtime: &mut FontRuntime,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
 ) -> Result<(), RunTerminal> {
-    let snapshot = acquired.handle().snapshot();
+    let snapshot = input.snapshot();
     let expected = plan.font_use_count;
     let first_source = plan.first_font_source;
     runtime
@@ -1530,7 +1929,7 @@ fn plan_font_resources(
             )
         })?;
 
-    let mut resolver = acquired.page().resources().font_resolver(lookup_limits);
+    let mut resolver = input.resources().font_resolver(lookup_limits);
     let result = (|| {
         for action in &plan.actions {
             let action_source = action_operator_source(action);
@@ -2236,10 +2635,230 @@ fn append_text_action(
 
 #[allow(
     clippy::too_many_arguments,
+    clippy::result_large_err,
+    reason = "implicit Form framing accounts for the complete live execution-plan state"
+)]
+fn append_form_prologue(
+    input: AcquiredContentInput<'_>,
+    program: &ContentProgram,
+    actions: &mut Vec<ExecutionAction>,
+    property_uses: &Vec<ResolvedPropertyUse>,
+    image_uses: &Vec<ResolvedImageUse>,
+    planned_images: &Vec<PlannedImageInvocation>,
+    planned_name_bytes: u64,
+    program_bytes: u64,
+    vm_limits: ContentVmLimits,
+    accounting: &mut Accounting,
+) -> Result<Option<FormEnvelope>, ContentVmFailure> {
+    let Some(form) = input.form() else {
+        return Ok(None);
+    };
+    let Some(source) = program
+        .operators()
+        .first()
+        .map(|operator| operator.source())
+    else {
+        return Ok(None);
+    };
+    let command_source = command_source(source).map_err(ContentVmFailure::Scene)?;
+    let matrix = input.initial_ctm();
+    let bbox = form.bbox();
+    let lower_left = matrix
+        .checked_transform_point(ScenePoint::new(
+            SceneScalar::from_scaled(bbox.left().scaled()),
+            SceneScalar::from_scaled(bbox.bottom().scaled()),
+        ))
+        .map_err(ContentVmFailure::Scene)?;
+    let lower_right = matrix
+        .checked_transform_point(ScenePoint::new(
+            SceneScalar::from_scaled(bbox.right().scaled()),
+            SceneScalar::from_scaled(bbox.bottom().scaled()),
+        ))
+        .map_err(ContentVmFailure::Scene)?;
+    let upper_right = matrix
+        .checked_transform_point(ScenePoint::new(
+            SceneScalar::from_scaled(bbox.right().scaled()),
+            SceneScalar::from_scaled(bbox.top().scaled()),
+        ))
+        .map_err(ContentVmFailure::Scene)?;
+    let upper_left = matrix
+        .checked_transform_point(ScenePoint::new(
+            SceneScalar::from_scaled(bbox.left().scaled()),
+            SceneScalar::from_scaled(bbox.top().scaled()),
+        ))
+        .map_err(ContentVmFailure::Scene)?;
+    let corners = [lower_left, lower_right, upper_right, upper_left];
+    let minimum = ScenePoint::new(
+        corners.iter().map(|point| point.x()).min().ok_or_else(|| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?,
+        corners.iter().map(|point| point.y()).min().ok_or_else(|| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?,
+    );
+    let maximum = ScenePoint::new(
+        corners.iter().map(|point| point.x()).max().ok_or_else(|| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?,
+        corners.iter().map(|point| point.y()).max().ok_or_else(|| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?,
+    );
+    let bounds = SceneBounds::finite(minimum, maximum).map_err(ContentVmFailure::Scene)?;
+    let mut path = PathResourceBuilder::new();
+    path.try_reserve_exact(5).map_err(ContentVmFailure::Scene)?;
+    path.try_push(PathSegment::MoveTo(lower_left))
+        .map_err(ContentVmFailure::Scene)?;
+    path.try_push(PathSegment::LineTo(lower_right))
+        .map_err(ContentVmFailure::Scene)?;
+    path.try_push(PathSegment::LineTo(upper_right))
+        .map_err(ContentVmFailure::Scene)?;
+    path.try_push(PathSegment::LineTo(upper_left))
+        .map_err(ContentVmFailure::Scene)?;
+    path.try_push(PathSegment::ClosePath)
+        .map_err(ContentVmFailure::Scene)?;
+    let retained_bytes = path.retained_bytes().map_err(ContentVmFailure::Scene)?;
+    let base_capacity = execution_plan_capacity_bytes(
+        property_uses,
+        image_uses,
+        planned_images,
+        actions,
+        planned_name_bytes,
+    )
+    .map_err(ContentVmFailure::Vm)?;
+    let total = program_bytes
+        .checked_add(base_capacity)
+        .and_then(|value| value.checked_add(retained_bytes))
+        .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))?;
+    vm_limits
+        .preflight(ContentVmLimitKind::RetainedBytes, 0, total, Some(source))
+        .map_err(ContentVmFailure::Vm)?;
+    accounting.observe_retained(total);
+    let other_capacity = plan_value_capacity_bytes(
+        property_uses,
+        image_uses,
+        planned_images,
+        planned_name_bytes,
+    )
+    .and_then(|value| {
+        value
+            .checked_add(retained_bytes)
+            .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))
+    })
+    .map_err(ContentVmFailure::Vm)?;
+    push_execution_action(
+        actions,
+        ExecutionAction::Save {
+            bounds,
+            source: command_source,
+        },
+        program_bytes,
+        other_capacity,
+        vm_limits,
+        source,
+        accounting,
+    )
+    .map_err(ContentVmFailure::Vm)?;
+    push_execution_action(
+        actions,
+        ExecutionAction::Clip {
+            path: path.finish(),
+            rule: FillRule::Nonzero,
+            transform: Matrix::IDENTITY,
+            bounds,
+            source: command_source,
+        },
+        program_bytes,
+        other_capacity,
+        vm_limits,
+        source,
+        accounting,
+    )
+    .map_err(ContentVmFailure::Vm)?;
+    if form.simple_transparency_group() {
+        push_execution_action(
+            actions,
+            ExecutionAction::BeginGroup {
+                alpha: SceneUnit::ONE,
+                blend_mode: pdf_rs_scene::BlendMode::Normal,
+                bounds,
+                source: command_source,
+            },
+            program_bytes,
+            other_capacity,
+            vm_limits,
+            source,
+            accounting,
+        )
+        .map_err(ContentVmFailure::Vm)?;
+    }
+    accounting.max_graphics_depth = accounting.max_graphics_depth.max(1);
+    Ok(Some(FormEnvelope {
+        source,
+        command_source,
+        bounds,
+        simple_transparency_group: form.simple_transparency_group(),
+        retained_bytes,
+    }))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "implicit Form framing accounts for the complete live execution-plan state"
+)]
+fn append_form_epilogue(
+    envelope: FormEnvelope,
+    actions: &mut Vec<ExecutionAction>,
+    property_uses: &Vec<ResolvedPropertyUse>,
+    image_uses: &Vec<ResolvedImageUse>,
+    planned_images: &Vec<PlannedImageInvocation>,
+    planned_name_bytes: u64,
+    program_bytes: u64,
+    vm_limits: ContentVmLimits,
+    accounting: &mut Accounting,
+) -> Result<(), ContentVmError> {
+    let other_capacity = plan_value_capacity_bytes(
+        property_uses,
+        image_uses,
+        planned_images,
+        planned_name_bytes,
+    )?
+    .checked_add(envelope.retained_bytes)
+    .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, envelope.source))?;
+    if envelope.simple_transparency_group {
+        push_execution_action(
+            actions,
+            ExecutionAction::EndGroup {
+                bounds: envelope.bounds,
+                source: envelope.command_source,
+            },
+            program_bytes,
+            other_capacity,
+            vm_limits,
+            envelope.source,
+            accounting,
+        )?;
+    }
+    push_execution_action(
+        actions,
+        ExecutionAction::Restore {
+            bounds: envelope.bounds,
+            source: envelope.command_source,
+        },
+        program_bytes,
+        other_capacity,
+        vm_limits,
+        envelope.source,
+        accounting,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
     reason = "execution keeps source guards and independent sealed budgets explicit"
 )]
 fn build_execution_plan(
-    acquired: &AcquiredPageContent,
+    input: AcquiredContentInput<'_>,
     program: &ContentProgram,
     program_bytes: u64,
     vm_limits: ContentVmLimits,
@@ -2252,11 +2871,8 @@ fn build_execution_plan(
     cancellation: &dyn DocumentCancellation,
     accounting: &mut Accounting,
 ) -> ExecutionReport {
-    let snapshot = acquired.handle().snapshot();
-    let mut resolver = acquired
-        .page()
-        .resources()
-        .property_resolver(property_limits);
+    let snapshot = input.snapshot();
+    let mut resolver = input.resources().property_resolver(property_limits);
     let mut property_uses = Vec::new();
     let mut planned_images = Vec::new();
     let mut image_uses = Vec::new();
@@ -2264,7 +2880,7 @@ fn build_execution_plan(
     let mut planned_font_uses = 0_u64;
     let mut first_font_source = None;
     let terminal = (|| {
-        let (binding, geometry) = match scene_context(acquired) {
+        let (binding, geometry) = match input.scene_context() {
             Ok(value) => value,
             Err(error) => {
                 return prioritize(
@@ -2282,7 +2898,40 @@ fn build_execution_plan(
             ContentVmProfile::SceneV1 { .. } => None,
             ContentVmProfile::GraphicsV2 { .. } => Some(GraphicsVm::new()),
         };
-        let mut current_ctm = Matrix::IDENTITY;
+        let mut current_ctm = input.initial_ctm();
+        if let Some(machine) = graphics_v2.as_mut() {
+            machine.set_ctm(current_ctm);
+        }
+        let form_envelope = match append_form_prologue(
+            input,
+            program,
+            &mut actions,
+            &property_uses,
+            &image_uses,
+            &planned_images,
+            planned_name_bytes,
+            program_bytes,
+            vm_limits,
+            accounting,
+        ) {
+            Ok(value) => value,
+            Err(ContentVmFailure::Vm(error)) => {
+                return prioritize_vm_without_source(snapshot, byte_source, cancellation, error);
+            }
+            Err(ContentVmFailure::Scene(error)) => {
+                return prioritize(
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    program
+                        .operators()
+                        .first()
+                        .map(|operator| operator.source()),
+                    RunTerminal::Failed(ContentVmFailure::Scene(error)),
+                );
+            }
+            Err(failure) => return RunTerminal::Failed(failure),
+        };
         let mut text_active = false;
         let mut text_state = TextPlanningState::default();
         let mut saved_text_states = Vec::new();
@@ -3729,12 +4378,40 @@ fn build_execution_plan(
         if let Err(failure) = runtime_guard(snapshot, byte_source, cancellation, None) {
             return RunTerminal::Failed(failure);
         }
+        if let Some(envelope) = form_envelope
+            && let Err(error) = append_form_epilogue(
+                envelope,
+                &mut actions,
+                &property_uses,
+                &image_uses,
+                &planned_images,
+                planned_name_bytes,
+                program_bytes,
+                vm_limits,
+                accounting,
+            )
+        {
+            return prioritize_vm(snapshot, byte_source, cancellation, envelope.source, error);
+        }
         let final_ctm = graphics_v2
             .as_ref()
             .map_or(current_ctm, GraphicsVm::current_ctm);
-        let action_payload_retained_bytes = match graphics_v2
+        let graphics_action_payload_retained_bytes = match graphics_v2
             .as_ref()
             .map_or(Some(0), GraphicsVm::action_payload_retained_bytes)
+        {
+            Some(value) => value,
+            None => {
+                return prioritize_vm_without_source(
+                    snapshot,
+                    byte_source,
+                    cancellation,
+                    ContentVmError::new(ContentVmErrorCode::InternalState, None),
+                );
+            }
+        };
+        let action_payload_retained_bytes = match graphics_action_payload_retained_bytes
+            .checked_add(form_envelope.map_or(0, |envelope| envelope.retained_bytes))
         {
             Some(value) => value,
             None => {
@@ -4631,7 +5308,7 @@ fn guarded_text_probe(
     reason = "atomic materialization keeps each runtime, guard, budget, and peak sink explicit"
 )]
 fn materialize_execution_plan(
-    acquired: &AcquiredPageContent,
+    input: AcquiredContentInput<'_>,
     plan: ExecutionPlan,
     profile: ContentVmProfile,
     vm_limits: ContentVmLimits,
@@ -4641,7 +5318,7 @@ fn materialize_execution_plan(
     cancellation: &dyn DocumentCancellation,
     materialization_peak: &mut u64,
 ) -> RunTerminal {
-    let snapshot = acquired.handle().snapshot();
+    let snapshot = input.snapshot();
     let live_plan_retained = match plan.vm_retained_bytes() {
         Ok(value) => value,
         Err(error) => {
@@ -4738,6 +5415,19 @@ fn materialize_execution_plan(
                     .expect("only graphics-v2 plans contain graphics actions")
                     .append_restore(bounds, source)
             }
+            ExecutionAction::BeginGroup {
+                alpha,
+                blend_mode,
+                bounds,
+                source,
+            } => scene
+                .graphics_mut()
+                .expect("only graphics-v2 plans contain group actions")
+                .begin_group(alpha, blend_mode, bounds, source),
+            ExecutionAction::EndGroup { bounds, source } => scene
+                .graphics_mut()
+                .expect("only graphics-v2 plans contain group actions")
+                .end_group(bounds, source),
             ExecutionAction::Clip {
                 path,
                 rule,
@@ -4911,6 +5601,8 @@ fn action_operator_source(action: &ExecutionAction) -> ContentOperatorSource {
         | ExecutionAction::EndMarkedContent { source }
         | ExecutionAction::Save { source, .. }
         | ExecutionAction::Restore { source, .. }
+        | ExecutionAction::BeginGroup { source, .. }
+        | ExecutionAction::EndGroup { source, .. }
         | ExecutionAction::Clip { source, .. }
         | ExecutionAction::Fill { source, .. }
         | ExecutionAction::Stroke { source, .. }
@@ -5352,7 +6044,7 @@ fn command_source(source: ContentOperatorSource) -> Result<CommandSource, SceneE
     )
 }
 
-fn scene_context(
+fn page_scene_context(
     acquired: &AcquiredPageContent,
 ) -> Result<(SceneBinding, PageGeometry), SceneError> {
     let handle = acquired.handle();
