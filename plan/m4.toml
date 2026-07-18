@@ -250,6 +250,7 @@ progress = [
   "A frozen deterministic post-parse holdout now covers 1,000 eligible pages across fill, clip, image, and outline-glyph families with zero exclusions, fallbacks, partial publications, or channel differences against Reference CPU; its cohort, pixels, and Fast fuel are hash- or value-bound for replay.",
   "The holdout exposed and now guards a Fast nearest-image vertical row-orientation defect with a distinct 2-by-2 top/bottom regression instead of weakening the cohort or comparison tolerance.",
   "A registered m4fastraster libFuzzer target now mutates bounded fill, clip, image, and outline-glyph Scenes across eight tile orders, requires complete four-tile publication, and compares exact RGBA8 output to Reference CPU; the repository gate replays four hash-bound family seeds for 64 runs with fixed toolchain, seed, input, timeout, and RSS bounds.",
+  "Fixed local release-profile evidence now records 21 raw samples each for same-scope Fast and Reference first preview and first full viewport, 21 Fast first-tile and full-job samples, 84 tile-poll samples, cold versus job-local-bin reuse, deterministic renderer memory and work, and 21 in-flight cancellation samples; Fast p95 is 0.962 and 0.908 of Reference for the two viewer scopes, with cancellation p95 at 25.25 microseconds.",
 ]
 acceptance = [
   "Registered O0/O1/O3 cases, tile metamorphics, Fast-versus-Reference geometry and pixel diffs, lifecycle faults, and fixed-seed fuzz replay pass with no open critical or major finding.",

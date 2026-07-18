@@ -1,0 +1,211 @@
+schema = 1
+evidence_id = "m4.fast-cpu-canary.performance.v1"
+evidence_kind = "fixed-scope-raw-performance-samples"
+status = "passed"
+completed_at = 2026-07-18
+implementation_anchor = "4aa3fc68885adac7b86c9129145dc908a0ec8532"
+canary_local_eligible = true
+release_regression_eligible = false
+external_engine_comparison = false
+
+[environment]
+os = "macOS 26.4.1"
+build = "25E253"
+architecture = "arm64"
+model = "Mac Studio Mac14,13"
+cpu = "Apple M2 Max, 12 cores (8 performance, 4 efficiency)"
+memory_bytes = 34359738368
+rustc = "1.93.0 (254b59607 2026-01-19)"
+llvm = "21.1.8"
+cargo_profile = "release"
+test_threads = 1
+gpu = "not used"
+
+[viewer_scope]
+input = "tests/desktop/readable-preview.pdf"
+input_sha256 = "81ac290c1c89dd1e13578ae12c6cd5939f477285349a8b18fe431bfde91cfd0b"
+harness = "runtime/viewer/tests/m4_canary_benchmark.rs"
+harness_sha256 = "46b90b39d7e04ee237b5cf32abd91f5a964d7968587ac8ccbeeb853718035ba1"
+command = "cargo test --release --locked --package pdf-rs-viewer --test m4_canary_benchmark -- --ignored --nocapture --test-threads=1"
+sample_count = 21
+warmup_samples = 1
+first_preview_scope = "Fresh strict Native open plus page 0 interpretation and 153-by-198 render."
+first_full_viewport_scope = "Fresh strict Native open, untimed 153-by-198 preview, then timed same-document page 0 interpretation and 306-by-396 replacement render."
+cache_policy = "NativeDocument is reused only inside each first-full-viewport scenario; no decoded-Scene, raster, tile, or surface cache is retained between render_page_with_renderer calls."
+reference = "pdf-rs-viewer through Reference CPU with the same source, strict open, document, content, and output scope."
+product = "pdf-rs-viewer through Fast CPU."
+pixel_check = "Every timed renderer surface is byte-identical to its own warmup; untimed Fast-versus-Reference comparisons retain geometry and remain within width-specific reviewed readable-page channel bounds."
+
+[viewer.fast_first_preview]
+width = 153
+height = 198
+pixels = 30294
+output_memory_bytes = 121176
+median_ns = 45311458
+p95_ns = 45923208
+p99_ns = 49188833
+throughput_pixels_per_second_at_median = 668572
+raw_samples_ns = [
+  49188833, 45535042, 45864458, 45364458, 45923208, 44263583, 45311458,
+  44587875, 45618000, 45342583, 45196083, 45502167, 44379708, 44991792,
+  45258625, 44534958, 45476250, 44628583, 45398459, 45052250, 44796666,
+]
+
+[viewer.reference_first_preview]
+width = 153
+height = 198
+pixels = 30294
+output_memory_bytes = 121176
+median_ns = 47190334
+p95_ns = 47742542
+p99_ns = 47866834
+throughput_pixels_per_second_at_median = 641953
+raw_samples_ns = [
+  46666792, 47190334, 47626375, 47184584, 47569250, 47343625, 47314625,
+  47866834, 47065750, 47210250, 46917083, 47085250, 46940292, 46873292,
+  47495584, 47742542, 46868167, 47049417, 46607667, 47362125, 47616250,
+]
+
+[viewer.fast_first_full_viewport]
+width = 306
+height = 396
+pixels = 121176
+output_memory_bytes = 484704
+median_ns = 209314750
+p95_ns = 210667208
+p99_ns = 222128250
+throughput_pixels_per_second_at_median = 578917
+raw_samples_ns = [
+  209299291, 208177750, 209832291, 209054000, 209279583, 208419417,
+  209249292, 208677041, 209345292, 209314750, 210143125, 209868250,
+  208371041, 209209291, 222128250, 208897666, 209350792, 209430500,
+  210318042, 210667208, 210575667,
+]
+
+[viewer.reference_first_full_viewport]
+width = 306
+height = 396
+pixels = 121176
+output_memory_bytes = 484704
+median_ns = 231406500
+p95_ns = 232059125
+p99_ns = 232204208
+throughput_pixels_per_second_at_median = 523649
+raw_samples_ns = [
+  231633583, 231654542, 231235583, 230825666, 231571291, 231973375,
+  231406500, 232204208, 231717709, 230908416, 232059125, 230535500,
+  231388375, 231117375, 231695541, 231707916, 231262958, 231619250,
+  231047208, 230710917, 230854250,
+]
+
+[viewer.comparison]
+maximum_allowed_p95_ratio = 1.10
+first_preview_fast_over_reference_p95 = 0.9618928124941483
+first_full_viewport_fast_over_reference_p95 = 0.9078169539767075
+first_preview_pass = true
+first_full_viewport_pass = true
+
+[component_scope]
+harness = "core/fast-raster/tests/m4_canary_benchmark.rs"
+harness_sha256 = "279294b0f34daa23573a74b67eec92cadf75442dd74bea8e06a1100818e0ec17"
+command = "cargo test --release --locked --package pdf-rs-fast-raster --test m4_canary_benchmark -- --ignored --nocapture --test-threads=1"
+scene = "Deterministic post-parse 306-by-396 Scene with three fills and eight outline glyphs."
+renderer = "fast-scalar-tiled-v1"
+renderer_epoch = 13
+width = 306
+height = 396
+tiles = 4
+pixels = 121176
+sample_count = 21
+tile_sample_count = 84
+poll_budget = 4096
+cache_policy = "Cold samples include immutable bin construction; reused-bin samples retain one FastRasterJob and its bins but allocate and render a new complete private tile set each time."
+cancellation_scope = "A render runs on a worker thread; after one millisecond the host publishes an atomic cancellation flag and measures through joined terminal Cancelled with no tile-set publication."
+
+[component.first_tile]
+median_ns = 55112084
+p95_ns = 55912959
+p99_ns = 73272667
+raw_samples_ns = [
+  73272667, 55174708, 55094708, 54541958, 54268125, 55149666, 54294916,
+  54507417, 55339458, 55076542, 55112084, 55302375, 55244792, 53759250,
+  54818875, 55294583, 54866750, 55418792, 54737208, 55578708, 55912959,
+]
+
+[component.full_owned_job]
+median_ns = 97677833
+p95_ns = 98761750
+p99_ns = 118563084
+throughput_pixels_per_second_at_median = 1240568
+raw_samples_ns = [
+  118563084, 97170625, 97757750, 96963708, 96383500, 97677833, 96227666,
+  96841542, 98399375, 97925667, 97647584, 97436375, 97928167, 95919959,
+  98284417, 97730750, 97441292, 98008875, 97274250, 98761750, 97980084,
+]
+
+[component.tile_poll]
+median_ns = 27927709
+p95_ns = 55339375
+p99_ns = 73272125
+raw_samples_ns = [
+  73272125, 9990708, 30198458, 5099500, 55174542, 9000000, 27927709,
+  5066667, 55094292, 9079417, 28530500, 5052500, 54541875, 9070875,
+  28311750, 5037625, 54268000, 9208167, 28038291, 4868041, 55149584,
+  9133875, 28454750, 4938083, 54294542, 8958250, 27998917, 4974166,
+  54507291, 8831958, 28685084, 4816375, 55339375, 8970208, 28842291,
+  5245667, 55076083, 8910875, 28708084, 5228792, 55112000, 9314584,
+  28299542, 4920708, 55302208, 8997166, 28222000, 4913666, 55244708,
+  9059583, 28668959, 4954084, 53759125, 9038416, 28243500, 4878125,
+  54818833, 9231667, 29263000, 4969708, 55294417, 9006583, 28314083,
+  5114125, 54866500, 8955917, 28528791, 5088167, 55418708, 9049958,
+  28545584, 4993166, 54737084, 8928375, 28574917, 5032541, 55578250,
+  9080125, 29037042, 5064875, 55912875, 8721958, 28387458, 4956667,
+]
+
+[component.cold_bins_full_render]
+median_ns = 97873875
+p95_ns = 98559375
+p99_ns = 98731750
+throughput_pixels_per_second_at_median = 1238083
+raw_samples_ns = [
+  98731750, 97129417, 98559375, 97814000, 98378791, 98147167, 97287000,
+  98384959, 97287584, 98350083, 98475500, 98113417, 97354917, 96762166,
+  97256333, 98254625, 97024375, 97402292, 98433542, 97209500, 97873875,
+]
+
+[component.reused_bins_full_render]
+median_ns = 98047750
+p95_ns = 100414708
+p99_ns = 111746167
+throughput_pixels_per_second_at_median = 1235887
+raw_samples_ns = [
+  98247500, 98047750, 97427333, 98256000, 97800750, 98560125, 97970500,
+  98315000, 96426417, 94999042, 96791750, 97915333, 97658167, 98491000,
+  97971250, 98116875, 98135375, 111746167, 100414708, 98212084, 97778333,
+]
+
+[component.cache_comparison]
+cold_over_reused_median_ratio = 0.9982266293719132
+conclusion = "Job-local bin reuse is behaviorally exact but shows no material latency gain for this raster-dominated Scene; the product viewer currently creates a fresh Fast job for every render."
+
+[component.cancellation]
+median_ns = 17792
+p95_ns = 25250
+p99_ns = 57583
+terminal = "Cancelled"
+partial_publications = 0
+raw_samples_ns = [
+  57583, 24625, 16333, 19208, 15625, 15041, 18333, 25250, 17792, 13917,
+  13000, 25084, 14458, 13625, 20959, 24791, 18625, 13250, 14667, 20416,
+  15708,
+]
+
+[component.memory_and_work]
+retained_bytes = 486944
+peak_intermediate_bytes = 1487296
+maximum_accounted_bytes = 1974240
+fuel = 24317744
+cancellation_checks = 95003
+
+[scope]
+limitations = "These are local single-host release-profile measurements, not a fixed performance pool or a release regression threshold. Reference CPU is a same-Native-scope comparable baseline, not an external engine. No PDFium/O4, GPU, process RSS, Electron paint/compositor, packaging, or signing timing is claimed. Component memory is renderer-owned deterministic accounting; viewer memory records complete RGBA surface bytes only."
