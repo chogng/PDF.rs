@@ -1,0 +1,86 @@
+schema = 1
+profile_id = "m4.fast-cpu-r0-basic-page.v1"
+state = "CANARY_CANDIDATE"
+promotion_approved = false
+enabled_by_default = false
+completed_at = 2026-07-18
+implementation_commit = "85a76d302e44fb7a49880f4846f74f6deab18772"
+implementation_tree = "8fbd4ffc2947c5c262384a91b49304328f2e73ec"
+target = "core/fast-raster::FastRasterJob"
+reference_profile = "m3.reference-raster-v1.v1"
+reference_policy = "Reference CPU is the reviewed differential target for the registered subset, not an automatic specification oracle."
+
+[identity]
+renderer = "fast-scalar-tiled-v1"
+surface_renderer = "fast-cpu-v1"
+renderer_epoch = 1
+capability_flag = "PDF_RS_FAST_CPU_CANARY_V1"
+cohort = "m4-r0-basic-page-local-v1"
+cohort_schema = "m4.fast-cpu.canary-holdout.v1"
+cohort_sha256 = "cef88fcfcaa0d31cc74d9958e3185a9216cc7b638a3240ca7e3813a01b26ae42"
+pixel_sha256 = "f15710d0d7c0ef3d92c52b65a520576506a406a94789df04201d8e19ab363b9c"
+canonical_schema_sha256 = "466af0a81170c4e30677ce9fbff91d8a89fd62c9885b025519747bf29f4e8569"
+wire_schema_sha256 = "8bcfb8eb41fe9260c292ec1adb5452fe632a42469ec6c461562aba26dd0d8a01"
+
+[implementation]
+fast_kernels_sha256 = "cf04de5abf4f3faf95db8b098ca9acf8bd467ae42cfbb25a3486dfb0510fd0b3"
+fast_render_sha256 = "fe010afeb8e0169ad8b0d36813558dd94f658f80508a7eb5840b97afb9a6d11c"
+fast_owned_sha256 = "c4e46dc1bf18c8eff75b62eab35662284f3706f7752a9a1f9825c2c58647be75"
+viewer_sha256 = "9fb5890fcd1effa16c9d92c3ab7e8d1015c12ea77865b1c3354f1a321d5a4ef1"
+electron_bridge_rust_sha256 = "1bf1aaacaac2f5f2f16e4eeafc4a10155994cb44e843a3d063424aacdf13cab8"
+electron_bridge_js_sha256 = "96ffe71650cdb1fb93b20caf95eb90e0ecbe6ee5d63f856a38c96dd8432e8c1d"
+rollback_test_sha256 = "8696c097318d6aa88d21930c674564052ddf7fa39b96da57e052bb0ef41fb0f8"
+schema_record_sha256 = "4ed385163d65906b3cb92c52af3f96e92633e5a72087fa4361a61d70b7773af8"
+readable_pdf_sha256 = "81ac290c1c89dd1e13578ae12c6cd5939f477285349a8b18fe431bfde91cfd0b"
+
+[evidence]
+holdout = "docs/traceability/evidence/m4/fast-cpu-canary/holdout.toml"
+holdout_sha256 = "f42bf556c9172d2601434665d265cbc2a082b59c1d3ca35026cf9225d09dd864"
+fuzz_replay = "docs/traceability/evidence/m4/fast-cpu-canary/fuzz-replay.toml"
+fuzz_replay_sha256 = "8f8eb5ef89c331109a9323f653bdef702c1fd75bc5f4bd8ce47b483344279a38"
+performance = "docs/traceability/evidence/m4/fast-cpu-canary/performance.toml"
+performance_sha256 = "6e851d27bc353af9b713772c6e63d061f7c59a0b7abd1ff0e3407552cce2068e"
+product_purity = "docs/traceability/evidence/m4/fast-cpu-canary/product-purity.toml"
+product_purity_sha256 = "1155d79d12b94756e85320918cb268ee894b7e34a2dbedffdb9d73a5e4c061a4"
+
+[qualification]
+eligible_pages = 1000
+excluded_pages = 0
+completed_pages = 1000
+critical_findings = 0
+major_findings = 0
+maximum_channel_delta = 0
+fixed_seed_fuzz_runs = 64
+fuzz_crash_artifacts = 0
+viewer_first_preview_p95_ratio = 0.9618928124941483
+viewer_first_full_viewport_p95_ratio = 0.9078169539767075
+maximum_allowed_p95_ratio = 1.10
+cancellation_p95_ns = 25250
+fresh_release_product_packages = 24
+fresh_release_unknown_artifacts = 0
+external_engine_fallbacks = 0
+
+[exposure]
+selection = "Exact cohort identity must be present in Electron main; the Rust child receives one private exact-value environment flag."
+default_path = "Reference CPU"
+canary_path = "Fast CPU"
+invalid_cohort = "Rejected before child launch."
+rollback = "Remove the cohort selection and start a new bridge process; the same API then selects Reference CPU."
+rollback_rehearsed = true
+unsupported_semantics_unchanged = true
+automatic_rollout = false
+remote_rollout = false
+
+[review]
+required_roles = ["graphics-color", "quality-corpus"]
+completed_reviewers = []
+independent_review_complete = false
+open_p0 = 0
+open_p1 = 0
+open_p2 = 0
+decision = "PENDING"
+
+[scope]
+supported = ["registered bounded path fill stroke and clipping", "DeviceGray DeviceRGB and DeviceCMYK", "Normal Multiply and Screen", "basic unmasked 8-bit device-color Image XObjects", "registered embedded simple TrueType outline glyphs", "top-down straight-alpha project-sRGB RGBA8"]
+excluded = ["soft masks transparency groups knockout and overprint", "Form XObjects and inline images", "broader image codecs color spaces component depths Decode and interpolation", "external composite CFF Type1 Type3 vertical shaped hinted or platform text", "broad PDF compatibility", "default rollout", "remote rollout", "packaging signing notarization and release distribution"]
+limitations = "This record binds a default-off local CANARY candidate. Automated qualification is complete, but promotion_approved remains false until the required independent review roles sign a separate review record."

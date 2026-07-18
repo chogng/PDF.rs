@@ -1,0 +1,14 @@
+schema = 1
+version = "0.1.0"
+status = "active"
+
+[[profile]]
+id = "m4.fast-cpu-r0-basic-page.v1"
+owner = "graphics-color"
+state = "CANARY_CANDIDATE"
+target = "core/fast-raster::FastRasterJob"
+reference_profile = "m3.reference-raster-v1.v1"
+cohort = "m4-r0-basic-page-local-v1"
+enabled_by_default = false
+promotion_approved = false
+promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022"

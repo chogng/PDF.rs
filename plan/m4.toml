@@ -5,7 +5,7 @@ status = "in_progress"
 started_at = 2026-07-17
 depends_on = ["M3"]
 exit_gate = "R0-eligible basic pages reach CANARY and the desktop Native-only reading loop is usable."
-max_parallel_work_items = 3
+max_parallel_work_items = 1
 
 principles = [
   "Freeze the canonical Engine protocol and Surface schema before browser or desktop adapters implement transport-specific bindings.",
@@ -17,7 +17,7 @@ principles = [
   "Keep PDFium and every other external PDF engine outside product dependencies, runtime recovery, IPC, desktop packaging, and user-visible pixels.",
   "Use a local-development Electron shell for the selected M4 reading target while keeping PDF parsing, Scene production, and raster work behind a reusable Rust interface.",
   "Retain the authenticated macOS native-worker and AppKit-facing interfaces as a future fully Rust UI path; signing and packaged App Sandbox evidence do not block the selected Electron development target.",
-  "Interpret the three logical lanes as dependency and review limits; M4 and M5 may proceed in parallel only after M4-01 freezes their shared contract.",
+  "Execute the remaining milestone work serially with one active work item; do not resume M5 advancement until the bounded M4 gate is closed.",
 ]
 
 registered_scope = [
@@ -252,6 +252,7 @@ progress = [
   "A registered m4fastraster libFuzzer target now mutates bounded fill, clip, image, and outline-glyph Scenes across eight tile orders, requires complete four-tile publication, and compares exact RGBA8 output to Reference CPU; the repository gate replays four hash-bound family seeds for 64 runs with fixed toolchain, seed, input, timeout, and RSS bounds.",
   "Fixed local release-profile evidence now records 21 raw samples each for same-scope Fast and Reference first preview and first full viewport, 21 Fast first-tile and full-job samples, 84 tile-poll samples, cold versus job-local-bin reuse, deterministic renderer memory and work, and 21 in-flight cancellation samples; Fast p95 is 0.962 and 0.908 of Reference for the two viewer scopes, with cancellation p95 at 25.25 microseconds.",
   "Product purity now keeps the 1,000-page digest holdout in the non-product quality crate, registers viewer and the Electron bridge in the bidirectional product allowlist, validates the desktop Fast-raster fingerprint graph, and passes a fresh no-default release closure with 24 Native product packages, zero native or unknown artifacts, and no external-engine manifest token.",
+  "A central CANARY registry now content-addresses one default-off candidate record that binds the exact implementation tree, renderer and schema identities, qualification evidence, Electron cohort, rollback behavior, and product-purity closure; an executable repository gate recomputes every binding while promotion remains explicitly unapproved pending the required independent graphics-color and quality-corpus reviews.",
 ]
 acceptance = [
   "Registered O0/O1/O3 cases, tile metamorphics, Fast-versus-Reference geometry and pixel diffs, lifecycle faults, and fixed-seed fuzz replay pass with no open critical or major finding.",
