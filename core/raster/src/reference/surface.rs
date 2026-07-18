@@ -62,6 +62,25 @@ impl ReferenceSurface {
 
     /// Appends exactly `additional` white pixels without growing the reserved allocation.
     pub(super) fn initialize_white(&mut self, additional: usize) -> Result<(), SurfaceFailure> {
+        self.initialize(
+            additional,
+            ReferenceSrgbQ16::gray(NormalizedQ16::ONE).with_constant_alpha(NormalizedQ16::ONE),
+        )
+    }
+
+    /// Appends exactly `additional` transparent pixels without growing the reserved allocation.
+    pub(super) fn initialize_transparent(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), SurfaceFailure> {
+        self.initialize(additional, PremultipliedRgbaQ16::TRANSPARENT)
+    }
+
+    fn initialize(
+        &mut self,
+        additional: usize,
+        pixel: PremultipliedRgbaQ16,
+    ) -> Result<(), SurfaceFailure> {
         let target = self
             .pixels
             .len()
@@ -70,9 +89,7 @@ impl ReferenceSurface {
         if target > self.pixel_count {
             return Err(SurfaceFailure::InvalidSurface);
         }
-        let white =
-            ReferenceSrgbQ16::gray(NormalizedQ16::ONE).with_constant_alpha(NormalizedQ16::ONE);
-        self.pixels.resize(target, white);
+        self.pixels.resize(target, pixel);
         Ok(())
     }
 

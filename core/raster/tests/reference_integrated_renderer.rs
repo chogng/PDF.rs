@@ -18,7 +18,6 @@ use pdf_rs_scene::{
 use pdf_rs_syntax::ObjectRef;
 
 type SceneFactory = fn() -> Arc<Scene>;
-type UnsupportedCase = (SceneFactory, GraphicsCapability, &'static str);
 type WorkingCase = (SceneFactory, u32, u32, &'static str);
 
 struct Cancellation {
@@ -291,13 +290,48 @@ fn group_scene() -> Arc<Scene> {
         GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
     builder
         .begin_group(
+            SceneUnit::from_u16(32_768),
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    builder
+        .append_fill(
+            rectangle("0", "0", "1", "1"),
+            FillRule::Nonzero,
+            red(),
+            Matrix::IDENTITY,
+            SceneBounds::Page,
+            source(1),
+        )
+        .unwrap();
+    builder.end_group(SceneBounds::Page, source(2)).unwrap();
+    Arc::new(builder.finish().unwrap())
+}
+
+fn identity_group_scene() -> Arc<Scene> {
+    let mut builder =
+        GraphicsSceneBuilder::new_v2(binding(), unit_geometry(), GraphicsSceneLimits::default());
+    builder
+        .begin_group(
             SceneUnit::ONE,
             BlendMode::Normal,
             SceneBounds::Page,
             source(0),
         )
         .unwrap();
-    builder.end_group(SceneBounds::Page, source(1)).unwrap();
+    builder
+        .append_fill(
+            rectangle("0", "0", "1", "1"),
+            FillRule::Nonzero,
+            red(),
+            Matrix::IDENTITY,
+            SceneBounds::Page,
+            source(1),
+        )
+        .unwrap();
+    builder.end_group(SceneBounds::Page, source(2)).unwrap();
     Arc::new(builder.finish().unwrap())
 }
 
@@ -844,48 +878,64 @@ fn mounted_stroke_and_fill_stroke_dispatch_report_all_stroke_dimensions() {
 }
 
 #[test]
-fn group_and_interpolated_image_are_unsupported_before_surface_allocation_and_replay() {
-    let cases: [UnsupportedCase; 2] = [
-        (group_scene, GraphicsCapability::IsolatedGroup, "group"),
-        (
-            interpolated_image_scene,
-            GraphicsCapability::Image,
-            "interpolated-image",
-        ),
-    ];
-    for (scene, capability, label) in cases {
-        let scene = scene();
-        let released = Arc::downgrade(&scene);
-        let cancellation = Cancellation::never();
-        let mut job = ReferenceRenderJob::new(
-            scene,
-            ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
-            ReferenceRasterLimits::default(),
-        );
-        let unsupported = match job.poll(&cancellation) {
-            ReferenceRenderPoll::Unsupported(value) => value,
-            outcome => panic!("{label} must be structured unsupported: {outcome:?}"),
-        };
-        assert_eq!(
-            unsupported.kind(),
-            ReferenceRenderUnsupportedKind::VisibleGraphicsRequirement
-        );
-        assert_eq!(unsupported.capability(), Some(capability));
-        assert_eq!(
-            unsupported.producer_status(),
-            Some(CapabilityStatus::Supported)
-        );
-        assert_eq!(job.stats().surface_bytes(), 0);
-        assert_eq!(job.stats().peak_working_bytes(), 0);
-        assert!(released.upgrade().is_none());
+fn isolated_group_composites_offscreen_while_interpolated_image_stays_unsupported() {
+    let identity = ready(
+        identity_group_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(identity.rgba(), &[255, 0, 0, 255]);
 
-        let calls = cancellation.calls();
-        assert_eq!(
-            job.poll(&cancellation),
-            ReferenceRenderPoll::Unsupported(unsupported)
-        );
-        assert_eq!(cancellation.calls(), calls);
-    }
+    let group = ready(
+        group_scene(),
+        1,
+        1,
+        ReferenceRasterLimits::default(),
+        &Cancellation::never(),
+    );
+    assert_eq!(group.rgba(), &[255, 127, 127, 255]);
+    assert!(
+        group.stats().peak_working_bytes() > group.stats().surface_bytes(),
+        "offscreen group storage must contribute to peak working bytes"
+    );
+    assert!(
+        group.stats().peak_working_bytes() > identity.stats().peak_working_bytes(),
+        "identity groups must avoid a full-size offscreen surface"
+    );
+
+    let scene = interpolated_image_scene();
+    let released = Arc::downgrade(&scene);
+    let cancellation = Cancellation::never();
+    let mut job = ReferenceRenderJob::new(
+        scene,
+        ReferenceRenderConfig::opaque_srgb(1, 1).unwrap(),
+        ReferenceRasterLimits::default(),
+    );
+    let unsupported = match job.poll(&cancellation) {
+        ReferenceRenderPoll::Unsupported(value) => value,
+        outcome => panic!("interpolated image must be structured unsupported: {outcome:?}"),
+    };
+    assert_eq!(
+        unsupported.kind(),
+        ReferenceRenderUnsupportedKind::VisibleGraphicsRequirement
+    );
+    assert_eq!(unsupported.capability(), Some(GraphicsCapability::Image));
+    assert_eq!(
+        unsupported.producer_status(),
+        Some(CapabilityStatus::Supported)
+    );
+    assert_eq!(job.stats().surface_bytes(), 0);
+    assert_eq!(job.stats().peak_working_bytes(), 0);
+    assert!(released.upgrade().is_none());
+
+    let calls = cancellation.calls();
+    assert_eq!(
+        job.poll(&cancellation),
+        ReferenceRenderPoll::Unsupported(unsupported)
+    );
+    assert_eq!(cancellation.calls(), calls);
 }
 
 #[test]

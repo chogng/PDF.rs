@@ -21,10 +21,10 @@ use super::image::{
 use super::stroke::rasterize_stroke;
 use super::surface::{ReferenceSurface, SurfaceFailure};
 use crate::reference::{
-    CanonicalPixelBuffer, NormalizedQ16, PremultipliedRgbaQ16, ReferenceColorProfile,
-    ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderError, ReferenceRenderErrorCode,
-    ReferenceRenderIdentity, ReferenceRenderLimitKind, ReferenceRenderStats,
-    ReferenceRenderUnsupported,
+    CanonicalPixelBuffer, NormalizedQ16, PremultipliedRgbaQ16, ReferenceBlendMode,
+    ReferenceColorProfile, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderError,
+    ReferenceRenderErrorCode, ReferenceRenderIdentity, ReferenceRenderLimitKind,
+    ReferenceRenderStats, ReferenceRenderUnsupported,
 };
 
 const RGBA_BYTES_PER_PIXEL: u64 = 4;
@@ -262,9 +262,11 @@ fn execute(
     let reserved_pixel_fuel = pixels.checked_mul(2).ok_or_else(numeric_overflow)?;
     let mut work = RenderWork::new(limits, reserved_pixel_fuel, stats, cancellation)?;
 
+    let mut graphics_preflight = GraphicsPreflight::default();
     if let Some(graphics) = scene.graphics() {
         admit_nested_cardinalities(graphics, &mut work)?;
-        if let Some(unsupported) = preflight_graphics(graphics, &mut work)? {
+        if let Some(unsupported) = preflight_graphics(graphics, &mut graphics_preflight, &mut work)?
+        {
             return Ok(ExecuteTerminal::Unsupported(unsupported));
         }
     }
@@ -274,6 +276,11 @@ fn execute(
         }
         work.charge_raster_fuel(1)?;
     }
+    let group_pixel_fuel = pixels
+        .checked_mul(2)
+        .and_then(|value| value.checked_mul(graphics_preflight.group_count))
+        .ok_or_else(numeric_overflow)?;
+    work.reserve_pixel_fuel(group_pixel_fuel)?;
 
     let surface_semantic_bytes = pixels
         .checked_mul(
@@ -310,7 +317,14 @@ fn execute(
         let mut clips = ClipStack::new(surface.width(), surface.height()).map_err(|failure| {
             map_geometry_failure(failure, limits, work.stats, work.reserved_pixel_fuel)
         })?;
-        dispatch_graphics(scene, graphics, &mut surface, &mut clips, &mut work)?;
+        dispatch_graphics(
+            scene,
+            graphics,
+            &mut surface,
+            &mut clips,
+            graphics_preflight.max_group_depth,
+            &mut work,
+        )?;
         work.stats.clip_depth = u64::try_from(clips.depth()).map_err(|_| numeric_overflow())?;
         work.stats.clip_bytes = clips.retained_bytes().map_err(|failure| {
             map_geometry_failure(failure, limits, work.stats, work.reserved_pixel_fuel)
@@ -411,8 +425,15 @@ fn admit_nested_cardinalities(
     Ok(())
 }
 
+#[derive(Default)]
+struct GraphicsPreflight {
+    group_count: u64,
+    max_group_depth: usize,
+}
+
 fn preflight_graphics(
     graphics: &GraphicsScene,
+    preflight: &mut GraphicsPreflight,
     work: &mut RenderWork<'_>,
 ) -> Result<Option<ReferenceRenderUnsupported>, ReferenceRenderError> {
     for (index, requirement) in graphics.requirements().iter().enumerate() {
@@ -447,6 +468,7 @@ fn preflight_graphics(
     }
 
     let mut saved = 0_u64;
+    let mut group_depth = 0_usize;
     for (index, record) in graphics.commands().iter().enumerate() {
         let command = record.command();
         match command {
@@ -480,19 +502,76 @@ fn preflight_graphics(
                     work.charge_raster_fuel(1)?;
                 }
             }
-            GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup => {
-                return Ok(Some(ReferenceRenderUnsupported::command(
-                    u32::try_from(index).map_err(|_| numeric_overflow())?,
-                    command,
-                )));
+            GraphicsCommand::BeginIsolatedGroup { .. } => {
+                group_depth = group_depth.checked_add(1).ok_or_else(numeric_overflow)?;
+                let (passthrough, inspected) = inspect_isolated_group(graphics, index)?;
+                work.charge_raster_fuel(inspected)?;
+                if !passthrough {
+                    preflight.group_count = preflight
+                        .group_count
+                        .checked_add(1)
+                        .ok_or_else(numeric_overflow)?;
+                }
+                preflight.max_group_depth = preflight.max_group_depth.max(group_depth);
+            }
+            GraphicsCommand::EndIsolatedGroup => {
+                group_depth = group_depth.checked_sub(1).ok_or_else(invalid_scene)?;
             }
         }
         work.charge_raster_fuel(1)?;
     }
-    if saved != 0 {
+    if saved != 0 || group_depth != 0 {
         return Err(invalid_scene());
     }
     Ok(None)
+}
+
+fn inspect_isolated_group(
+    graphics: &GraphicsScene,
+    begin: usize,
+) -> Result<(bool, u64), ReferenceRenderError> {
+    let mut inspected = 1_u64;
+    let Some(GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode }) = graphics
+        .commands()
+        .get(begin)
+        .map(|record| record.command())
+    else {
+        return Ok((false, inspected));
+    };
+    if *alpha != pdf_rs_scene::SceneUnit::ONE || *blend_mode != pdf_rs_scene::BlendMode::Normal {
+        return Ok((false, inspected));
+    }
+    for record in &graphics.commands()[begin.saturating_add(1)..] {
+        inspected = inspected.checked_add(1).ok_or_else(numeric_overflow)?;
+        match record.command() {
+            GraphicsCommand::BeginIsolatedGroup { .. } => return Ok((false, inspected)),
+            GraphicsCommand::EndIsolatedGroup => return Ok((true, inspected)),
+            GraphicsCommand::Fill { paint, .. } | GraphicsCommand::Stroke { paint, .. } => {
+                if paint.blend_mode() != pdf_rs_scene::BlendMode::Normal {
+                    return Ok((false, inspected));
+                }
+            }
+            GraphicsCommand::FillStroke { fill, stroke, .. } => {
+                if fill.blend_mode() != pdf_rs_scene::BlendMode::Normal
+                    || stroke.blend_mode() != pdf_rs_scene::BlendMode::Normal
+                {
+                    return Ok((false, inspected));
+                }
+            }
+            GraphicsCommand::DrawImage { blend_mode, .. } => {
+                if *blend_mode != pdf_rs_scene::BlendMode::Normal {
+                    return Ok((false, inspected));
+                }
+            }
+            GraphicsCommand::DrawGlyphRun(run) => {
+                if run.paint().blend_mode() != pdf_rs_scene::BlendMode::Normal {
+                    return Ok((false, inspected));
+                }
+            }
+            GraphicsCommand::Save | GraphicsCommand::Restore | GraphicsCommand::Clip { .. } => {}
+        }
+    }
+    Ok((false, inspected))
 }
 
 fn valid_requirement_context(
@@ -531,7 +610,8 @@ fn reference_supports_requirement(requirement: &CapabilityRequirement) -> bool {
             parameter >> 17 == 0 && matches!(components, 1 | 3 | 4) && bits == 8 && interpolate == 0
         }
         GraphicsCapability::Glyph => parameter != 0,
-        GraphicsCapability::SoftMask | GraphicsCapability::IsolatedGroup => false,
+        GraphicsCapability::IsolatedGroup => parameter == 0,
+        GraphicsCapability::SoftMask => false,
     }
 }
 
@@ -540,13 +620,30 @@ fn dispatch_graphics(
     graphics: &GraphicsScene,
     surface: &mut ReferenceSurface,
     clips: &mut ClipStack,
+    max_group_depth: usize,
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let page_map = PageDeviceMap::new(scene.geometry(), surface.width(), surface.height())
         .map_err(|failure| {
             map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
         })?;
-    for record in graphics.commands() {
+    let nominal_group_stack_bytes = capacity_bytes::<GroupFrame>(max_group_depth)?;
+    let candidate_working = work
+        .working_surface_bytes()?
+        .checked_add(nominal_group_stack_bytes)
+        .ok_or_else(numeric_overflow)?;
+    work.ensure_working(candidate_working, clip_bytes(clips, work)?, 0, 0)?;
+    let mut groups = Vec::new();
+    groups.try_reserve_exact(max_group_depth).map_err(|_| {
+        ReferenceRenderError::resource(
+            ReferenceRenderLimitKind::Allocation,
+            work.limits.max_peak_working_bytes(),
+            work.working_surface_bytes().unwrap_or(u64::MAX),
+            nominal_group_stack_bytes,
+        )
+    })?;
+    work.set_group_stack_bytes(capacity_bytes::<GroupFrame>(groups.capacity())?, clips)?;
+    for (index, record) in graphics.commands().iter().enumerate() {
         match record.command() {
             GraphicsCommand::Save => save_clip(clips, work)?,
             GraphicsCommand::Restore => restore_clip(clips, work)?,
@@ -627,16 +724,123 @@ fn dispatch_graphics(
             GraphicsCommand::DrawGlyphRun(run) => {
                 draw_glyphs(run, graphics, scene, clips, surface, work)?;
             }
-            GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup => {
-                return Err(invalid_scene());
+            GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
+                let (passthrough, inspected) = inspect_isolated_group(graphics, index)?;
+                work.charge_raster_fuel(inspected)?;
+                begin_isolated_group(
+                    surface,
+                    &mut groups,
+                    passthrough,
+                    (*alpha).into(),
+                    (*blend_mode).into(),
+                    clips,
+                    work,
+                )?;
+            }
+            GraphicsCommand::EndIsolatedGroup => {
+                end_isolated_group(surface, &mut groups, clips, work)?;
             }
         }
     }
+    if !groups.is_empty() {
+        return Err(invalid_scene());
+    }
+    drop(groups);
+    work.set_group_stack_bytes(0, clips)?;
+    Ok(())
+}
+
+enum GroupFrame {
+    Passthrough,
+    Offscreen {
+        parent: ReferenceSurface,
+        alpha: NormalizedQ16,
+        blend_mode: ReferenceBlendMode,
+    },
+}
+
+fn begin_isolated_group(
+    surface: &mut ReferenceSurface,
+    groups: &mut Vec<GroupFrame>,
+    passthrough: bool,
+    alpha: NormalizedQ16,
+    blend_mode: ReferenceBlendMode,
+    clips: &ClipStack,
+    work: &mut RenderWork<'_>,
+) -> Result<(), ReferenceRenderError> {
+    if groups.len() == groups.capacity() {
+        return Err(invalid_scene());
+    }
+    if passthrough {
+        groups.push(GroupFrame::Passthrough);
+        return Ok(());
+    }
+    let mut group = ReferenceSurface::reserve(surface.width(), surface.height())
+        .map_err(|failure| map_surface_failure(failure, work.limits, work.stats))?;
+    work.admit_group_surface(group.retained_bytes(), clips)?;
+    let pixels = u64::from(group.width())
+        .checked_mul(u64::from(group.height()))
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(numeric_overflow)?;
+    let mut remaining = pixels;
+    while remaining != 0 {
+        let chunk =
+            remaining.min(usize::try_from(CANCELLATION_WORK_INTERVAL).unwrap_or(usize::MAX));
+        work.charge_pixel_fuel(u64::try_from(chunk).map_err(|_| numeric_overflow())?)?;
+        group
+            .initialize_transparent(chunk)
+            .map_err(|failure| map_surface_failure(failure, work.limits, work.stats))?;
+        remaining -= chunk;
+    }
+    if !group.is_initialized() {
+        return Err(ReferenceRenderError::for_code(
+            ReferenceRenderErrorCode::InternalState,
+        ));
+    }
+    let parent = std::mem::replace(surface, group);
+    groups.push(GroupFrame::Offscreen {
+        parent,
+        alpha,
+        blend_mode,
+    });
+    Ok(())
+}
+
+fn end_isolated_group(
+    surface: &mut ReferenceSurface,
+    groups: &mut Vec<GroupFrame>,
+    clips: &ClipStack,
+    work: &mut RenderWork<'_>,
+) -> Result<(), ReferenceRenderError> {
+    let frame = groups.pop().ok_or_else(invalid_scene)?;
+    let GroupFrame::Offscreen {
+        parent,
+        alpha,
+        blend_mode,
+    } = frame
+    else {
+        return Ok(());
+    };
+    let group = std::mem::replace(surface, parent);
+    if group.width() != surface.width()
+        || group.height() != surface.height()
+        || group.pixels().len() != surface.pixels().len()
+    {
+        return Err(invalid_scene());
+    }
+    for index in 0..group.pixels().len() {
+        work.charge_pixel_fuel(1)?;
+        let source = group.pixels()[index].apply_constant_alpha(alpha);
+        let backdrop = surface.pixels()[index];
+        surface.pixels_mut()[index] = blend_mode.source_over(source, backdrop);
+    }
+    work.release_group_surface(group.retained_bytes(), clips)?;
     Ok(())
 }
 
 fn save_clip(clips: &mut ClipStack, work: &mut RenderWork<'_>) -> Result<(), ReferenceRenderError> {
     let clip_bytes = clip_bytes(clips, work)?;
+    let surface_bytes = work.working_surface_bytes()?;
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
     let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
@@ -644,25 +848,23 @@ fn save_clip(clips: &mut ClipStack, work: &mut RenderWork<'_>) -> Result<(), Ref
             map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
         })?;
     let initial = child.check_cancellation();
-    work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, initial)?;
+    work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, initial)?;
     let result = clips.save(&mut child);
-    if let Err(error) =
-        work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, result)
-    {
+    if let Err(error) = work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, result) {
         work.commit_clip(clips)?;
         return Err(error);
     }
     if let Err(error) = work.observe_working(
-        work.stats.surface_bytes,
+        surface_bytes,
         clips.operation_peak_retained_bytes(),
         0,
         child.geometry_bytes(),
     ) {
-        work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
+        work.absorb_geometry(&child, surface_bytes, clip_bytes, 0)?;
         work.commit_clip(clips)?;
         return Err(error);
     }
-    work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
+    work.absorb_geometry(&child, surface_bytes, clip_bytes, 0)?;
     work.commit_clip(clips)?;
     Ok(())
 }
@@ -672,6 +874,7 @@ fn restore_clip(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes = clip_bytes(clips, work)?;
+    let surface_bytes = work.working_surface_bytes()?;
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
     let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
@@ -679,25 +882,23 @@ fn restore_clip(
             map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
         })?;
     let initial = child.check_cancellation();
-    work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, initial)?;
+    work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, initial)?;
     let result = clips.restore(&mut child);
-    if let Err(error) =
-        work.finish_geometry_step(&child, work.stats.surface_bytes, clip_bytes, 0, result)
-    {
+    if let Err(error) = work.finish_geometry_step(&child, surface_bytes, clip_bytes, 0, result) {
         work.commit_clip(clips)?;
         return Err(error);
     }
     if let Err(error) = work.observe_working(
-        work.stats.surface_bytes,
+        surface_bytes,
         clips.operation_peak_retained_bytes(),
         0,
         child.geometry_bytes(),
     ) {
-        work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
+        work.absorb_geometry(&child, surface_bytes, clip_bytes, 0)?;
         work.commit_clip(clips)?;
         return Err(error);
     }
-    work.absorb_geometry(&child, work.stats.surface_bytes, clip_bytes, 0)?;
+    work.absorb_geometry(&child, surface_bytes, clip_bytes, 0)?;
     work.commit_clip(clips)?;
     Ok(())
 }
@@ -713,7 +914,7 @@ fn clip_path(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes_before = clip_bytes(clips, work)?;
-    let surface_bytes = surface.retained_bytes();
+    let surface_bytes = work.working_surface_bytes()?;
     let working_bytes = work.remaining_working_bytes(clip_bytes_before)?;
     let had_mask = clips.has_mask();
     let cancellation = KernelCancellation(work.cancellation);
@@ -799,7 +1000,7 @@ fn fill_path(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes = clip_bytes(clips, work)?;
-    let surface_bytes = surface.retained_bytes();
+    let surface_bytes = work.working_surface_bytes()?;
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
     let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
@@ -833,7 +1034,7 @@ fn stroke_path(
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
     let clip_bytes = clip_bytes(clips, work)?;
-    let surface_bytes = surface.retained_bytes();
+    let surface_bytes = work.working_surface_bytes()?;
     let working_bytes = work.remaining_working_bytes(clip_bytes)?;
     let cancellation = KernelCancellation(work.cancellation);
     let mut child = GeometryWork::new_deferred(work.geometry_limits(working_bytes)?, &cancellation)
@@ -866,7 +1067,7 @@ fn finish_path_paint(
     mut child: GeometryWork<'_>,
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
-    let surface_bytes = surface.retained_bytes();
+    let surface_bytes = work.working_surface_bytes()?;
     let retained_result = mask.retained_bytes();
     let coverage_bytes = work.finish_geometry_step(
         &child,
@@ -992,7 +1193,7 @@ fn draw_image(
     }
     work.absorb_image(stats)?;
     work.observe_working(
-        surface.retained_bytes(),
+        work.working_surface_bytes()?,
         clips.retained_bytes().map_err(|failure| {
             map_geometry_failure(failure, work.limits, work.stats, work.reserved_pixel_fuel)
         })?,
@@ -1039,7 +1240,7 @@ fn draw_glyphs(
     );
     if let Err(failure) = result {
         work.note_working(
-            surface.retained_bytes(),
+            work.working_surface_bytes()?,
             clip_bytes,
             stats.peak_working_bytes(),
             0,
@@ -1055,7 +1256,7 @@ fn draw_glyphs(
         return Err(error);
     }
     if let Err(error) = work.observe_working(
-        surface.retained_bytes(),
+        work.working_surface_bytes()?,
         clip_bytes,
         stats.peak_working_bytes(),
         0,
@@ -1138,6 +1339,8 @@ impl GlyphCancellation for KernelCancellation<'_> {
 struct RenderWork<'a> {
     limits: ReferenceRasterLimits,
     reserved_pixel_fuel: u64,
+    live_group_surface_bytes: u64,
+    group_stack_bytes: u64,
     stats: &'a mut ReferenceRenderStats,
     cancellation: &'a dyn ReferenceRasterCancellation,
     fuel_since_cancellation: u64,
@@ -1159,12 +1362,33 @@ impl<'a> RenderWork<'a> {
         let mut work = Self {
             limits,
             reserved_pixel_fuel,
+            live_group_surface_bytes: 0,
+            group_stack_bytes: 0,
             stats,
             cancellation,
             fuel_since_cancellation: 0,
         };
         work.check_cancellation()?;
         Ok(work)
+    }
+
+    fn reserve_pixel_fuel(&mut self, amount: u64) -> Result<(), ReferenceRenderError> {
+        let consumed = self
+            .stats
+            .fuel
+            .checked_add(self.reserved_pixel_fuel)
+            .ok_or_else(numeric_overflow)?;
+        ensure_additional(
+            ReferenceRenderLimitKind::Fuel,
+            self.limits.max_fuel(),
+            consumed,
+            amount,
+        )?;
+        self.reserved_pixel_fuel = self
+            .reserved_pixel_fuel
+            .checked_add(amount)
+            .ok_or_else(numeric_overflow)?;
+        Ok(())
     }
 
     fn charge_raster_fuel(&mut self, amount: u64) -> Result<(), ReferenceRenderError> {
@@ -1460,10 +1684,76 @@ impl<'a> RenderWork<'a> {
         Ok(())
     }
 
+    fn working_surface_bytes(&self) -> Result<u64, ReferenceRenderError> {
+        self.stats
+            .surface_bytes
+            .checked_add(self.live_group_surface_bytes)
+            .and_then(|value| value.checked_add(self.group_stack_bytes))
+            .ok_or_else(numeric_overflow)
+    }
+
+    fn set_group_stack_bytes(
+        &mut self,
+        bytes: u64,
+        clips: &ClipStack,
+    ) -> Result<(), ReferenceRenderError> {
+        self.group_stack_bytes = bytes;
+        self.observe_working(
+            self.working_surface_bytes()?,
+            clips.retained_bytes().map_err(|failure| {
+                map_geometry_failure(failure, self.limits, self.stats, self.reserved_pixel_fuel)
+            })?,
+            0,
+            0,
+        )
+    }
+
+    fn admit_group_surface(
+        &mut self,
+        retained_bytes: u64,
+        clips: &ClipStack,
+    ) -> Result<(), ReferenceRenderError> {
+        ensure_limit(
+            ReferenceRenderLimitKind::SurfaceBytes,
+            self.limits.max_surface_bytes(),
+            retained_bytes,
+        )?;
+        self.live_group_surface_bytes = self
+            .live_group_surface_bytes
+            .checked_add(retained_bytes)
+            .ok_or_else(numeric_overflow)?;
+        self.observe_working(
+            self.working_surface_bytes()?,
+            clips.retained_bytes().map_err(|failure| {
+                map_geometry_failure(failure, self.limits, self.stats, self.reserved_pixel_fuel)
+            })?,
+            0,
+            0,
+        )
+    }
+
+    fn release_group_surface(
+        &mut self,
+        retained_bytes: u64,
+        clips: &ClipStack,
+    ) -> Result<(), ReferenceRenderError> {
+        self.live_group_surface_bytes = self
+            .live_group_surface_bytes
+            .checked_sub(retained_bytes)
+            .ok_or_else(numeric_overflow)?;
+        self.observe_working(
+            self.working_surface_bytes()?,
+            clips.retained_bytes().map_err(|failure| {
+                map_geometry_failure(failure, self.limits, self.stats, self.reserved_pixel_fuel)
+            })?,
+            0,
+            0,
+        )
+    }
+
     fn remaining_working_bytes(&self, clip_bytes: u64) -> Result<u64, ReferenceRenderError> {
         let live_base = self
-            .stats
-            .surface_bytes
+            .working_surface_bytes()?
             .checked_add(clip_bytes)
             .ok_or_else(numeric_overflow)?;
         ensure_limit(
@@ -1782,6 +2072,13 @@ fn pixel_index(width: u32, height: u32, x: u32, y: u32) -> Option<usize> {
         .checked_add(u64::from(x))?
         .try_into()
         .ok()
+}
+
+fn capacity_bytes<T>(capacity: usize) -> Result<u64, ReferenceRenderError> {
+    capacity
+        .checked_mul(size_of::<T>())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(numeric_overflow)
 }
 
 fn checked_counter_total(
