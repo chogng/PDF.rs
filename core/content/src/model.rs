@@ -492,6 +492,8 @@ pub enum OperatorKind {
     RestoreGraphicsState,
     /// Apply a named external graphics-state dictionary (`gs`).
     SetGraphicsState,
+    /// Set the current rendering intent (`ri`).
+    SetRenderingIntent,
     /// Concatenate current transformation matrix (`cm`).
     ConcatMatrix,
     /// Begin text object (`BT`).
@@ -673,6 +675,7 @@ impl OperatorKind {
             b"q" => Some(Self::SaveGraphicsState),
             b"Q" => Some(Self::RestoreGraphicsState),
             b"gs" => Some(Self::SetGraphicsState),
+            b"ri" => Some(Self::SetRenderingIntent),
             b"cm" => Some(Self::ConcatMatrix),
             b"BT" => Some(Self::BeginText),
             b"ET" => Some(Self::EndText),
@@ -760,6 +763,13 @@ impl OperatorKind {
                 b"gs",
                 OperatorOperandShape::Name,
                 OperatorContext::Any,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetRenderingIntent => spec(
+                b"ri",
+                OperatorOperandShape::Name,
+                OperatorContext::DeviceColor,
                 OperatorFailurePolicy::Execute,
                 2,
             ),

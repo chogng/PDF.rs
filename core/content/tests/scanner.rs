@@ -238,6 +238,14 @@ fn known_operator_table_declares_token_arity_context_and_cost() {
             OperatorFailurePolicy::Execute,
         ),
         (
+            OperatorKind::SetRenderingIntent,
+            b"ri".as_slice(),
+            1,
+            OperatorOperandShape::Name,
+            OperatorContext::DeviceColor,
+            OperatorFailurePolicy::Execute,
+        ),
+        (
             OperatorKind::ConcatMatrix,
             b"cm".as_slice(),
             6,

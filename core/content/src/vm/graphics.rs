@@ -35,9 +35,31 @@ impl From<SceneError> for GraphicsExecutionError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenderingIntent {
+    AbsoluteColorimetric,
+    RelativeColorimetric,
+    Saturation,
+    Perceptual,
+    Other,
+}
+
+impl RenderingIntent {
+    fn from_name(name: &[u8]) -> Self {
+        match name {
+            b"AbsoluteColorimetric" => Self::AbsoluteColorimetric,
+            b"RelativeColorimetric" => Self::RelativeColorimetric,
+            b"Saturation" => Self::Saturation,
+            b"Perceptual" => Self::Perceptual,
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct GraphicsState {
     ctm: Matrix,
+    rendering_intent: RenderingIntent,
     line_width: SceneScalar,
     line_cap: LineCap,
     line_join: LineJoin,
@@ -90,6 +112,7 @@ impl GraphicsState {
             DashPattern::new(Vec::new(), SceneScalar::ZERO).expect("the PDF default dash is valid");
         Self {
             ctm: Matrix::IDENTITY,
+            rendering_intent: RenderingIntent::RelativeColorimetric,
             line_width: SceneScalar::ONE,
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
@@ -726,6 +749,12 @@ impl GraphicsVm {
             .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
         let mut transient_machine_bytes = 0;
         match kind {
+            OperatorKind::SetRenderingIntent => {
+                let ValidatedOperands::Name(name) = operands else {
+                    unreachable!("validated ri operand has name shape");
+                };
+                self.current.rendering_intent = RenderingIntent::from_name(name.bytes());
+            }
             OperatorKind::MoveTo => {
                 let ValidatedOperands::TwoNumbers(values) = operands else {
                     unreachable!("validated m operands have two-number shape");
@@ -1460,6 +1489,7 @@ mod tests {
             ContentOperatorSource::new(DecodedSpan::new(ObjectRef::new(4, 0).unwrap(), 0, 0, 1), 0);
         let mut machine = GraphicsVm::new();
         machine.current.line_width = SceneScalar::from_scaled(2_000_000_000);
+        machine.current.rendering_intent = RenderingIntent::Perceptual;
         machine.current.line_cap = LineCap::Round;
         machine.current.line_join = LineJoin::Bevel;
         machine.current.miter_limit = SceneScalar::from_scaled(12_000_000_000);
@@ -1487,6 +1517,7 @@ mod tests {
         machine.push_current();
 
         machine.current.line_width = SceneScalar::ONE;
+        machine.current.rendering_intent = RenderingIntent::Saturation;
         machine.current.line_cap = LineCap::Butt;
         machine.current.line_join = LineJoin::Miter;
         machine.current.miter_limit = SceneScalar::ONE;
@@ -1515,6 +1546,10 @@ mod tests {
         assert_eq!(
             machine.current.line_width,
             SceneScalar::from_scaled(2_000_000_000)
+        );
+        assert_eq!(
+            machine.current.rendering_intent,
+            RenderingIntent::Perceptual
         );
         assert_eq!(machine.current.line_cap, LineCap::Round);
         assert_eq!(machine.current.line_join, LineJoin::Bevel);

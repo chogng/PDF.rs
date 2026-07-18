@@ -4712,6 +4712,7 @@ fn build_execution_plan(
                 | OperatorKind::SetLineJoin
                 | OperatorKind::SetMiterLimit
                 | OperatorKind::SetLineDash
+                | OperatorKind::SetRenderingIntent
                 | OperatorKind::SetStrokingGray
                 | OperatorKind::SetNonstrokingGray
                 | OperatorKind::SetStrokingRgb

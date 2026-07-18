@@ -1812,7 +1812,10 @@ fn graphics_v2_publishes_line_color_clip_paint_and_exact_provenance() {
 
 #[test]
 fn q_and_q_restore_complete_state_but_never_save_the_current_path() {
-    let page = graphics_ready(b"2 w 1 G 0 0 m q 5 w 1 0 0 RG 10 0 l Q S", 0x24);
+    let page = graphics_ready(
+        b"/Perceptual ri 2 w 1 G 0 0 m q /Saturation ri 5 w 1 0 0 RG 10 0 l Q S",
+        0x24,
+    );
     let graphics = page.scene().graphics().expect("v2 graphics");
     assert_eq!(graphics.commands().len(), 3);
     let GraphicsCommand::Stroke {
