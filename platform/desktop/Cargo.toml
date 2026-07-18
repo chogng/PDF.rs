@@ -12,6 +12,16 @@ test = false
 bench = false
 doc = false
 
+[[test]]
+name = "adversarial_child_transport"
+path = "tests/adversarial_child_transport.rs"
+harness = false
+
+[[test]]
+name = "render_disconnect_proxy"
+path = "tests/render_disconnect_proxy.rs"
+harness = false
+
 [dependencies]
 pdf-rs-bytes = { path = "../../core/bytes" }
 pdf-rs-engine = { path = "../../runtime/engine" }

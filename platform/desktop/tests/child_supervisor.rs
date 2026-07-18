@@ -12,16 +12,22 @@ use pdf_rs_desktop::{
     validate_read_only_fd,
 };
 use pdf_rs_protocol::{
-    ByteRange, Command, Correlation, DataTicket, DesktopFrameDecoder, EndpointCapabilities,
-    EndpointRole, Event, HelloAcceptCommand, HelloCommand, KNOWN_ENDPOINT_CAPABILITIES,
-    MAX_MESSAGE_BYTES, MAX_TRANSFER_SLOTS, MESSAGE_ID_HELLO, MESSAGE_ID_HELLO_ACCEPT,
-    MESSAGE_ID_SHUTDOWN, PROTOCOL_MAJOR, PROTOCOL_MINOR, PayloadCodecLimits, ProtocolHello,
-    ProtocolLimits, ProtocolValidator, SCHEMA_HASH, SessionId, ShutdownCommand, SourceDescriptor,
-    SourceIdentity, WorkerId, encode_correlation_payload, encode_hello_accept_command_payload,
-    encode_hello_command_payload, encode_shutdown_command_payload,
+    ByteRange, Command, Correlation, DataAttachmentRole, DataSegment, DataTicket,
+    DesktopFrameDecoder, EndpointCapabilities, EndpointRole, Event, GetPageMetricsCommand,
+    HelloAcceptCommand, HelloCommand, KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES,
+    MAX_TRANSFER_SLOTS, MESSAGE_ID_GET_PAGE_METRICS, MESSAGE_ID_HELLO, MESSAGE_ID_HELLO_ACCEPT,
+    MESSAGE_ID_OPEN, MESSAGE_ID_PROVIDE_DATA, MESSAGE_ID_SET_VIEWPORT, MESSAGE_ID_SHUTDOWN,
+    OpenCommand, OutputProfile, PROTOCOL_MAJOR, PROTOCOL_MINOR, PageCoordinateSpace, PageGeometry,
+    PageRotation, PageViewport, PayloadCodecLimits, ProtocolHello, ProtocolLimits,
+    ProtocolValidator, ProvideDataCommand, QualityPolicy, RequestId, SCHEMA_HASH, SessionId,
+    SetViewportCommand, ShutdownCommand, SourceDescriptor, SourceIdentity, ViewportRequest,
+    WorkerId, encode_correlation_payload, encode_get_page_metrics_command_payload,
+    encode_hello_accept_command_payload, encode_hello_command_payload, encode_open_command_payload,
+    encode_provide_data_command_payload, encode_set_viewport_command_payload,
+    encode_shutdown_command_payload,
 };
 use pdf_rs_surface::WorkerEpoch;
-use rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, WaitOptions, kill_process, waitpid};
 
 fn limits() -> DesktopIpcLimits {
     DesktopIpcLimits::new(DesktopIpcLimitConfig::default()).expect("default limits")
@@ -31,13 +37,7 @@ fn worker_path() -> &'static str {
     env!("CARGO_BIN_EXE_pdf-rs-desktop-worker")
 }
 
-fn command_frame(sequence: u64, worker: WorkerId, command: Command) -> Vec<u8> {
-    let correlation = Correlation {
-        worker,
-        session: None,
-        request: None,
-        generation: None,
-    };
+fn command_frame(sequence: u64, correlation: Correlation, command: Command) -> Vec<u8> {
     let mut payload =
         encode_correlation_payload(&correlation, PayloadCodecLimits::protocol_default())
             .expect("correlation payload");
@@ -56,6 +56,26 @@ fn command_frame(sequence: u64, worker: WorkerId, command: Command) -> Vec<u8> {
             MESSAGE_ID_SHUTDOWN,
             encode_shutdown_command_payload(value, PayloadCodecLimits::protocol_default())
                 .expect("Shutdown payload"),
+        ),
+        Command::Open(value) => (
+            MESSAGE_ID_OPEN,
+            encode_open_command_payload(value, PayloadCodecLimits::protocol_default())
+                .expect("Open payload"),
+        ),
+        Command::ProvideData(value) => (
+            MESSAGE_ID_PROVIDE_DATA,
+            encode_provide_data_command_payload(value, PayloadCodecLimits::protocol_default())
+                .expect("ProvideData payload"),
+        ),
+        Command::GetPageMetrics(value) => (
+            MESSAGE_ID_GET_PAGE_METRICS,
+            encode_get_page_metrics_command_payload(value, PayloadCodecLimits::protocol_default())
+                .expect("GetPageMetrics payload"),
+        ),
+        Command::SetViewport(value) => (
+            MESSAGE_ID_SET_VIEWPORT,
+            encode_set_viewport_command_payload(value, PayloadCodecLimits::protocol_default())
+                .expect("SetViewport payload"),
         ),
         _ => panic!("unsupported supervisor test command"),
     };
@@ -82,16 +102,41 @@ fn send_command<C: DesktopEpochCleanup>(
     limits: DesktopIpcLimits,
 ) {
     let worker = supervisor.worker_id().expect("active worker");
+    send_correlated_command(
+        supervisor,
+        sequence,
+        Correlation {
+            worker,
+            session: None,
+            request: None,
+            generation: None,
+        },
+        command,
+        Vec::new(),
+        &[],
+        limits,
+    );
+}
+
+fn send_correlated_command<C: DesktopEpochCleanup>(
+    supervisor: &mut DesktopChildSupervisor<C>,
+    sequence: u64,
+    correlation: Correlation,
+    command: Command,
+    capabilities: Vec<DesktopCapability>,
+    fds: &[OwnedFd],
+    limits: DesktopIpcLimits,
+) {
     let record = supervisor
         .new_host_record(
             sequence,
-            command_frame(sequence, worker, command),
-            Vec::new(),
+            command_frame(sequence, correlation, command),
+            capabilities,
             limits,
         )
         .expect("current authenticated record");
     supervisor
-        .send(&record, &[], limits)
+        .send(&record, fds, limits)
         .expect("supervised command send");
 }
 
@@ -150,11 +195,25 @@ fn expect_worker_fault<T>(result: Result<T, DesktopSupervisionError>) -> Desktop
     }
 }
 
-fn signal_active<C: DesktopEpochCleanup>(supervisor: &DesktopChildSupervisor<C>, signal: Signal) {
+fn active_pid<C: DesktopEpochCleanup>(supervisor: &DesktopChildSupervisor<C>) -> Pid {
     let raw_pid = i32::try_from(supervisor.process_id().expect("active child PID"))
         .expect("PID fits platform type");
-    let pid = Pid::from_raw(raw_pid).expect("nonzero child PID");
+    Pid::from_raw(raw_pid).expect("nonzero child PID")
+}
+
+fn signal_active<C: DesktopEpochCleanup>(supervisor: &DesktopChildSupervisor<C>, signal: Signal) {
+    let pid = active_pid(supervisor);
     kill_process(pid, signal).expect("signal child");
+}
+
+fn stop_active<C: DesktopEpochCleanup>(supervisor: &DesktopChildSupervisor<C>) {
+    let pid = active_pid(supervisor);
+    kill_process(pid, Signal::STOP).expect("stop child");
+    let (observed, status) = waitpid(Some(pid), WaitOptions::UNTRACED)
+        .expect("observe stopped child")
+        .expect("stopped child status");
+    assert_eq!(observed, pid);
+    assert_eq!(status.stopping_signal(), Some(Signal::STOP.as_raw()));
 }
 
 struct TrackedResources {
@@ -193,6 +252,160 @@ fn cleanup_resources(limits: DesktopIpcLimits) -> TrackedResources {
         bridge: HostRangeBridge::new(snapshot, limits),
         epoch_fds: Vec::new(),
         retired: Vec::new(),
+    }
+}
+
+fn open_fixture_for_render<C: DesktopEpochCleanup>(
+    supervisor: &mut DesktopChildSupervisor<C>,
+    decoder: DesktopFrameDecoder,
+    limits: DesktopIpcLimits,
+) -> (SessionId, PageGeometry) {
+    const SOURCE_BYTES: &[u8] = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+
+    let worker = supervisor.worker_id().expect("active worker");
+    let epoch = supervisor.worker_epoch().expect("active epoch");
+    let source = SourceDescriptor {
+        identity: SourceIdentity {
+            stable_id: [7; 32],
+            revision: 1,
+        },
+        length: Some(u64::try_from(SOURCE_BYTES.len()).expect("source length")),
+        validator: [9; 32],
+    };
+    send_correlated_command(
+        supervisor,
+        3,
+        Correlation {
+            worker,
+            session: None,
+            request: Some(RequestId::new(1)),
+            generation: None,
+        },
+        Command::Open(OpenCommand {
+            source: source.clone(),
+        }),
+        Vec::new(),
+        &[],
+        limits,
+    );
+    let (need, need_fds) = supervisor
+        .receive_event(decoder, limits)
+        .expect("NeedData from real child");
+    assert!(need_fds.is_empty());
+    let (session, need) = match (need.correlation.session, need.event) {
+        (Some(session), Event::NeedData(need)) => (session, need),
+        other => panic!("expected NeedData, got {other:?}"),
+    };
+
+    let snapshot = HostSourceSnapshot::new(source.clone(), Arc::from(SOURCE_BYTES), limits)
+        .expect("fixture source snapshot");
+    let mut bridge = HostRangeBridge::new(snapshot, limits);
+    bridge
+        .register(need.ticket, session, epoch, need.ranges.clone())
+        .expect("register requested source ranges");
+    let mut capability_table = DesktopCapabilityTable::new(limits);
+    let segments = bridge
+        .provide(need.ticket, &mut capability_table)
+        .expect("grant immutable source ranges");
+    let mut descriptors = Vec::new();
+    let mut source_fds = Vec::new();
+    let mut wire_segments = Vec::new();
+    for (slot, segment) in segments.iter().enumerate() {
+        let region = ReadOnlySharedRegion::from_bytes(segment.bytes(), limits)
+            .expect("source shared region");
+        descriptors.push(segment.capability);
+        source_fds.push(region.into_fd());
+        wire_segments.push(DataSegment {
+            range: segment.range.clone(),
+            slot: u16::try_from(slot).expect("bounded transfer slot"),
+            byte_length: segment.capability.byte_length(),
+            role: DataAttachmentRole::ImmutableRangeBytes,
+        });
+    }
+    send_correlated_command(
+        supervisor,
+        4,
+        Correlation {
+            worker,
+            session: Some(session),
+            request: None,
+            generation: None,
+        },
+        Command::ProvideData(ProvideDataCommand {
+            ticket: need.ticket,
+            source: source.identity,
+            segments: wire_segments,
+        }),
+        descriptors.clone(),
+        &source_fds,
+        limits,
+    );
+    for descriptor in descriptors {
+        capability_table
+            .release(descriptor.id())
+            .expect("release sent source capability");
+    }
+    assert_eq!(capability_table.live_count(), 0);
+    let (ready, ready_fds) = supervisor
+        .receive_event(decoder, limits)
+        .expect("DocumentReady from real child");
+    assert!(ready_fds.is_empty());
+    assert!(matches!(ready.event, Event::DocumentReady(_)));
+
+    send_correlated_command(
+        supervisor,
+        5,
+        Correlation {
+            worker,
+            session: Some(session),
+            request: Some(RequestId::new(2)),
+            generation: None,
+        },
+        Command::GetPageMetrics(GetPageMetricsCommand {
+            document_revision: 1,
+            start_index: 0,
+            max_count: 1,
+        }),
+        Vec::new(),
+        &[],
+        limits,
+    );
+    let (metrics, metrics_fds) = supervisor
+        .receive_event(decoder, limits)
+        .expect("PageMetrics from real child");
+    assert!(metrics_fds.is_empty());
+    let geometry = match metrics.event {
+        Event::PageMetrics(metrics) => metrics.pages[0].geometry.clone(),
+        other => panic!("expected PageMetrics, got {other:?}"),
+    };
+    (session, geometry)
+}
+
+fn render_viewport(geometry: PageGeometry) -> SetViewportCommand {
+    const RENDER_EDGE_MILLI_POINTS: u32 = 2_048_000;
+
+    SetViewportCommand {
+        viewport: ViewportRequest {
+            generation: 1,
+            document_revision: 1,
+            annotation_revision: 1,
+            zoom_numerator: 1,
+            zoom_denominator: 1,
+            visible_pages: vec![PageViewport {
+                page_index: 0,
+                coordinate_space: PageCoordinateSpace::PdfPointsBottomLeft,
+                geometry,
+                clip_x_milli_points: 0,
+                clip_y_milli_points: 0,
+                clip_width_milli_points: RENDER_EDGE_MILLI_POINTS,
+                clip_height_milli_points: RENDER_EDGE_MILLI_POINTS,
+            }],
+            quality: QualityPolicy::Full,
+            output_profile: OutputProfile::Srgb,
+            device_scale_milli: 1_000,
+            rotation: PageRotation::Degrees0,
+            optional_content_id: 1,
+        },
     }
 }
 
@@ -289,6 +502,97 @@ fn crash_restarts_new_epoch_cleans_resources_and_rejects_late_record_and_fd() {
     assert_eq!(supervisor.cleanup().capabilities.live_count(), 0);
     assert_eq!(supervisor.cleanup().bridge.outstanding(), 0);
     assert!(supervisor.cleanup().epoch_fds.is_empty());
+    assert_eq!(supervisor.cleanup().retired.len(), 2);
+}
+
+#[test]
+fn queued_render_disconnect_before_worker_execution_retires_epoch_and_restarts_once() {
+    let limits = limits();
+    let config =
+        DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
+    let mut supervisor =
+        DesktopChildSupervisor::start(worker_path(), config, cleanup_resources(limits))
+            .expect("initial child");
+    let old_worker = supervisor.worker_id().expect("old worker");
+    let old_epoch = supervisor.worker_epoch().expect("old epoch");
+    let handshake = negotiate(&mut supervisor, limits);
+    let decoder = DesktopFrameDecoder::for_handshake(handshake);
+    let (session, geometry) = open_fixture_for_render(&mut supervisor, decoder, limits);
+
+    let tracked = DesktopCapability::new(
+        101,
+        CapabilityClass::SourceSegment,
+        CapabilityRights::ReadOnly,
+        session,
+        old_epoch,
+        4,
+    )
+    .expect("tracked render capability");
+    {
+        let resources = supervisor.cleanup_mut();
+        resources
+            .capabilities
+            .insert(tracked)
+            .expect("track current render capability");
+        resources
+            .bridge
+            .register(
+                DataTicket::new(101),
+                session,
+                old_epoch,
+                vec![ByteRange { start: 0, len: 4 }],
+            )
+            .expect("track current render source range");
+        resources.epoch_fds.push(
+            ReadOnlySharedRegion::from_bytes(b"render-owned", limits)
+                .expect("tracked render FD")
+                .into_fd(),
+        );
+    }
+
+    // Establish a scheduler-independent boundary: wait until the kernel has
+    // stopped the real child, then enqueue a valid render command while it
+    // cannot execute actor or raster work. This proves the queued-command
+    // disconnect boundary; a post-plan/mid-raster boundary requires an
+    // explicit child-to-Host test barrier.
+    stop_active(&supervisor);
+    send_correlated_command(
+        &mut supervisor,
+        6,
+        Correlation {
+            worker: old_worker,
+            session: Some(session),
+            request: None,
+            generation: Some(1),
+        },
+        Command::SetViewport(render_viewport(geometry)),
+        Vec::new(),
+        &[],
+        limits,
+    );
+    signal_active(&supervisor, Signal::KILL);
+    let fault = expect_worker_fault(supervisor.receive_event(decoder, limits));
+    assert_eq!(fault.kind(), DesktopWorkerFaultKind::UnexpectedEof);
+    assert_eq!(fault.worker_id(), old_worker);
+    assert_eq!(fault.worker_epoch(), old_epoch);
+    assert_eq!(fault.restart_attempt(), Some(1));
+    let replacement_epoch = fault.replacement_epoch().expect("replacement epoch");
+    assert!(replacement_epoch.value() > old_epoch.value());
+    assert_eq!(supervisor.restart_count(), 1);
+    assert_eq!(supervisor.state(), DesktopSupervisorState::Running);
+
+    // The stopped worker could not consume the queued render command, so no
+    // Surface event or descriptor can precede this terminal fault. Every
+    // old-epoch Host resource is retired before the replacement is observable.
+    assert_eq!(supervisor.cleanup().capabilities.live_count(), 0);
+    assert_eq!(supervisor.cleanup().capabilities.retained_bytes(), 0);
+    assert_eq!(supervisor.cleanup().bridge.outstanding(), 0);
+    assert!(supervisor.cleanup().epoch_fds.is_empty());
+    assert_eq!(supervisor.cleanup().retired, vec![(old_worker, old_epoch)]);
+
+    negotiate(&mut supervisor, limits);
+    supervisor.shutdown();
+    assert_eq!(supervisor.state(), DesktopSupervisorState::Stopped);
     assert_eq!(supervisor.cleanup().retired.len(), 2);
 }
 
