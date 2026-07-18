@@ -173,7 +173,7 @@ planned_fte = 3.5
 start_date = 2027-05-03
 target_date = 2027-07-30
 dependencies = ["M3"]
-max_parallel_work_items = 3
+max_parallel_work_items = 1
 deliverables = [
   "tile scheduling and complete cache keys",
   "shared-memory surface transport",

@@ -1,0 +1,65 @@
+schema = 1
+type = "independent-review-request"
+id = "evidence.m4.fast-cpu-canary.review-request"
+milestone = "M4"
+promotion_work_item = "M4-11"
+milestone_gate_work_item = "M4-12"
+state = "PENDING"
+requested_at = 2026-07-18
+candidate_commit = "5967a4a28e55ee20ebbf8ae8119658b077b9940f"
+candidate_tree = "32337a500ec66a0f72b8d81f6b5230d655286527"
+candidate_resolution = "git-tree-at-candidate-commit-not-working-tree"
+promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022"
+canary_registry = "docs/traceability/canary-profiles.toml#sha256:6abfb2fbb369f403763ea760631500d0b4a07c44e283797a88d06575fa67400b"
+candidate_gate = "tools/quality/tests/m4_fast_canary_gate.rs#sha256:050964581fa89576d5f75d770f7f4f642577130b2989535efa568218d983bdd1"
+promotion_required_roles = ["graphics-color", "quality-corpus"]
+milestone_exit_required_roles = ["runtime-platform", "graphics-color", "quality-corpus"]
+completed_reviewers = []
+promotion_approved = false
+milestone_approved = false
+decision = "PENDING"
+
+review_surfaces = [
+  "Fast CPU scalar tiled implementation and exact Reference differential boundary",
+  "1,000-page registered post-parse holdout and fixed-seed cargo-fuzz replay",
+  "fixed-scope release performance samples and cancellation latency",
+  "Reference-default viewer API and exact-value Fast CPU Electron cohort",
+  "Fast-to-Reference rollback rehearsal with unchanged Unsupported semantics",
+  "Native-only product manifest and fresh release artifact closure",
+  "candidate registry and content-addressed promotion gate",
+]
+
+commands = [
+  "cargo test --locked --package pdf-rs-quality --test m4_fast_canary_gate",
+  "cargo test --locked --package pdf-rs-quality --test m4_fast_canary_holdout",
+  "cargo test --locked --package pdf-rs-quality --test m4_fast_raster_fuzz -- --nocapture",
+  "cargo test --locked --package pdf-rs-fast-raster",
+  "cargo test --locked --package pdf-rs-viewer --all-targets",
+  "cargo test --locked --package pdf-rs-electron-bridge --all-targets",
+  "npm --prefix platform/electron test",
+  "cargo run --quiet --locked --package pdf-rs-quality -- check-product-purity .",
+  "cargo fmt --all -- --check",
+  "git diff --check",
+]
+
+required_decision_record = "docs/traceability/evidence/m4/fast-cpu-canary/independent-review.toml"
+required_decision_fields = [
+  "actual reviewer identities and independent roles",
+  "candidate commit and tree",
+  "promotion content reference",
+  "reviewed subject content references",
+  "executed commands and environment",
+  "closed findings and open P0 P1 P2 counts",
+  "SHIP or CHANGES_REQUIRED verdict",
+]
+
+excluded_claims = [
+  "DEFAULT or STABLE rollout",
+  "broad PDF compatibility",
+  "external PDF engine fallback or comparison",
+  "Electron packaging signing notarization auto-update or distribution",
+  "the future fully Rust desktop UI",
+  "M5 browser implementation",
+]
+
+limitations = "This request is not an approval and contains no reviewer identity. M4-11 remains in progress, M4-12 remains planned, the Fast CPU cohort remains exact-value and default-off, and M5 must not resume until the required independent review and repository-only M4 exit are complete."
