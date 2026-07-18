@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod color_space;
 mod error;
 mod ext_gstate;
 mod font_limits;
@@ -25,6 +26,9 @@ mod vm_error;
 mod vm_limits;
 mod vm_model;
 
+pub use color_space::{
+    ContentColorSpaceAcquisitionProfile, ContentColorSpaceJobContext, ContentColorSpaceKind,
+};
 pub use error::{
     ContentError, ContentErrorCategory, ContentErrorCode, ContentLimit, ContentLimitKind,
     ContentRecoverability,

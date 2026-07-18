@@ -8,7 +8,7 @@ use pdf_rs_object::{
     ObjectJobContext, ObjectLimits, ObjectPhase, ObjectPoll, ObjectStats, ObjectWorkCaps,
     OpenObjectJob,
 };
-use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, SyntaxLimits, SyntaxObject};
+use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, PdfDictionary, SyntaxLimits, SyntaxObject};
 
 use crate::{
     AttestedRevisionIndex, DocumentCancellation, DocumentError, DocumentErrorCode,
@@ -206,6 +206,14 @@ impl AttestedObject {
         match self.object.value() {
             IndirectObjectValue::Direct(value) => Some(value),
             IndirectObjectValue::Stream(_) => None,
+        }
+    }
+
+    /// Borrows the source-located dictionary of a strictly framed stream object.
+    pub const fn stream_dictionary(&self) -> Option<&Located<PdfDictionary>> {
+        match self.object.value() {
+            IndirectObjectValue::Direct(_) => None,
+            IndirectObjectValue::Stream(stream) => Some(stream.dictionary()),
         }
     }
 }

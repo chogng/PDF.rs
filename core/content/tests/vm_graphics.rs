@@ -11,6 +11,7 @@ use pdf_rs_bytes::{
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_content::{
+    ContentColorSpaceAcquisitionProfile, ContentColorSpaceJobContext,
     ContentExtGStateAcquisitionProfile, ContentExtGStateJobContext, ContentFontLimitConfig,
     ContentFontLimitKind, ContentFontLimits, ContentFontProfile, ContentFontStats, ContentFormPoll,
     ContentFormProfile, ContentGraphicsLimitConfig, ContentGraphicsLimitKind,
@@ -23,13 +24,13 @@ use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
     FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind, FormXObjectJobContext,
     FormXObjectPoll, ImageXObjectJobContext, ImageXObjectLimits,
-    NeverCancelled as DocumentNeverCancelled, PageContentJobContext, PageContentLimits,
-    PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits, PageIndexBuildPoll,
-    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
-    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig,
-    PageTreeLimits, PageXObjectLookupLimits, PageXObjectLookupOutcome,
-    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
-    SharedAttestedRevisionIndex,
+    NeverCancelled as DocumentNeverCancelled, PageColorSpaceLookupLimits, PageContentJobContext,
+    PageContentLimits, PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits,
+    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
+    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
+    PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits, PageXObjectLookupLimits,
+    PageXObjectLookupOutcome, RevisionAttestationJobContext, RevisionAttestationLimits,
+    RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
@@ -4496,11 +4497,17 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
                 form_object(
                     5,
                     b"/BBox [0 0 10 10] /Matrix [2 0 0 3 4 5] \
-                      /Resources << /ExtGState << /Fade 6 0 R >> >>",
-                    b"/Fade gs 0 0 10 10 re 1 0 0 rg f",
+                      /Resources << /ExtGState << /Fade 6 0 R >> \
+                      /ColorSpace << /CS0 7 0 R >> >>",
+                    b"/Fade gs /CS0 cs 1 0 0 scn 0 0 10 10 re f",
                 ),
             ),
             (6, b"6 0 obj\n<< /ca 0.5 >>\nendobj\n".to_vec()),
+            (7, b"7 0 obj\n[/ICCBased 8 0 R]\nendobj\n".to_vec()),
+            (
+                8,
+                b"8 0 obj\n<< /N 3 /Length 0 >>\nstream\n\nendstream\nendobj\n".to_vec(),
+            ),
         ],
         0xf5,
     );
@@ -4607,11 +4614,20 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
     )
     .expect("representable invocation and Form matrices")
     .with_dynamic_ext_gstates(ContentExtGStateAcquisitionProfile::new(
-        authority,
+        authority.clone(),
         PageExtGStateLookupLimits::default(),
         ContentExtGStateJobContext::new(
             JobId::new(35_301),
             ResumeCheckpoint::new(35_302),
+            RequestPriority::VisiblePage,
+        ),
+    ))
+    .with_dynamic_color_spaces(ContentColorSpaceAcquisitionProfile::new(
+        authority,
+        PageColorSpaceLookupLimits::default(),
+        ContentColorSpaceJobContext::new(
+            JobId::new(35_401),
+            ResumeCheckpoint::new(35_402),
             RequestPriority::VisiblePage,
         ),
     ));
@@ -4641,6 +4657,19 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
         }),
         Some(SceneUnit::from_u16(32_768))
     );
+    assert!(matches!(
+        graphics.commands().iter().find_map(|record| {
+            let GraphicsCommand::Fill { paint, .. } = record.command() else {
+                return None;
+            };
+            Some(paint.color())
+        }),
+        Some(DeviceColor::Rgb {
+            red: SceneUnit::ONE,
+            green: SceneUnit::ZERO,
+            blue: SceneUnit::ZERO,
+        })
+    ));
     let Some((path_id, transform)) = graphics.commands().iter().find_map(|record| {
         let GraphicsCommand::Fill {
             path, transform, ..

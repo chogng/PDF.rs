@@ -454,6 +454,8 @@ pub enum OperatorOperandShape {
     TwoNumbersAndString,
     /// One PDF name followed by either a name or a direct dictionary.
     NameAndNameOrDictionary,
+    /// One to four numeric components interpreted against the selected color space.
+    ColorComponents,
 }
 
 impl OperatorOperandShape {
@@ -467,6 +469,7 @@ impl OperatorOperandShape {
             Self::SixNumbers => 6,
             Self::Name | Self::String | Self::Array => 1,
             Self::NameAndNameOrDictionary => 2,
+            Self::ColorComponents => 0,
         }
     }
 }
@@ -599,6 +602,18 @@ pub enum OperatorKind {
     SetStrokingCmyk,
     /// Set nonstroking DeviceCMYK (`k`).
     SetNonstrokingCmyk,
+    /// Select the stroking color space (`CS`).
+    SetStrokingColorSpace,
+    /// Select the nonstroking color space (`cs`).
+    SetNonstrokingColorSpace,
+    /// Set stroking color components (`SC`).
+    SetStrokingColor,
+    /// Set nonstroking color components (`sc`).
+    SetNonstrokingColor,
+    /// Set stroking color components or pattern (`SCN`).
+    SetStrokingColorExtended,
+    /// Set nonstroking color components or pattern (`scn`).
+    SetNonstrokingColorExtended,
     /// Paint one named external object (`Do`).
     PaintXObject,
 }
@@ -713,6 +728,12 @@ impl OperatorKind {
             b"rg" => Some(Self::SetNonstrokingRgb),
             b"K" => Some(Self::SetStrokingCmyk),
             b"k" => Some(Self::SetNonstrokingCmyk),
+            b"CS" => Some(Self::SetStrokingColorSpace),
+            b"cs" => Some(Self::SetNonstrokingColorSpace),
+            b"SC" => Some(Self::SetStrokingColor),
+            b"sc" => Some(Self::SetNonstrokingColor),
+            b"SCN" => Some(Self::SetStrokingColorExtended),
+            b"scn" => Some(Self::SetNonstrokingColorExtended),
             b"Do" => Some(Self::PaintXObject),
             _ => None,
         }
@@ -1043,6 +1064,24 @@ impl OperatorKind {
                 OperatorFailurePolicy::Execute,
                 5,
             ),
+            Self::SetStrokingColorSpace => spec(
+                b"CS",
+                OperatorOperandShape::Name,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetNonstrokingColorSpace => spec(
+                b"cs",
+                OperatorOperandShape::Name,
+                OperatorContext::DeviceColor,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
+            Self::SetStrokingColor => color_components_spec(b"SC"),
+            Self::SetNonstrokingColor => color_components_spec(b"sc"),
+            Self::SetStrokingColorExtended => color_components_spec(b"SCN"),
+            Self::SetNonstrokingColorExtended => color_components_spec(b"scn"),
             Self::PaintXObject => spec(
                 b"Do",
                 OperatorOperandShape::Name,
@@ -1051,6 +1090,18 @@ impl OperatorKind {
                 3,
             ),
         }
+    }
+}
+
+const fn color_components_spec(token: &'static [u8]) -> OperatorSpec {
+    OperatorSpec {
+        token,
+        min_operands: 1,
+        max_operands: 4,
+        operand_shape: OperatorOperandShape::ColorComponents,
+        context: OperatorContext::DeviceColor,
+        failure_policy: OperatorFailurePolicy::Execute,
+        base_fuel: 5,
     }
 }
 

@@ -20,13 +20,14 @@ use pdf_rs_scene::{
 };
 use pdf_rs_syntax::ObjectRef;
 
+use crate::color_space::{ContentColorSpaceRuntime, ContentColorSpaceRuntimePoll, device_space};
 use crate::ext_gstate::{ContentExtGStateRuntime, ContentExtGStateRuntimePoll, ResolvedExtGState};
 use crate::scanner::{ScanTerminal, run_scan};
 use crate::{
-    ContentCancellation, ContentExtGStateAcquisitionProfile, ContentExtGStateProfile,
-    ContentFontLimits, ContentFontStats, ContentGraphicsLimits, ContentImageLimits,
-    ContentImageStats, ContentLimits, ContentName, ContentNumber, ContentOperand,
-    ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
+    ContentCancellation, ContentColorSpaceAcquisitionProfile, ContentExtGStateAcquisitionProfile,
+    ContentExtGStateProfile, ContentFontLimits, ContentFontStats, ContentGraphicsLimits,
+    ContentImageLimits, ContentImageStats, ContentLimits, ContentName, ContentNumber,
+    ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
     ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
     ContentVmLimitKind, ContentVmLimits, ContentVmPhase, ContentVmStats, DecodedContentStream,
     InterpretedForm, InterpretedPage, LocatedOperand, OperatorContext, OperatorKind,
@@ -181,6 +182,7 @@ pub struct ContentFormProfile {
     image_profile: ContentImageProfile,
     font_profile: ContentFontProfile,
     ext_gstate_profile: Option<ContentExtGStateAcquisitionProfile>,
+    color_space_profile: Option<ContentColorSpaceAcquisitionProfile>,
     scene_limits: GraphicsSceneLimits,
 }
 
@@ -227,6 +229,7 @@ impl ContentFormProfile {
             image_profile,
             font_profile,
             ext_gstate_profile: None,
+            color_space_profile: None,
             scene_limits,
         })
     }
@@ -248,6 +251,23 @@ impl ContentFormProfile {
         Ok(self)
     }
 
+    /// Enables Form-local dynamic named color-space resolution under the same revision authority.
+    pub fn with_color_spaces(
+        mut self,
+        profile: ContentColorSpaceAcquisitionProfile,
+    ) -> Result<Self, ContentVmError> {
+        let expected = self.authority.as_attested();
+        let color_space = profile.authority().as_attested();
+        if expected.snapshot() != color_space.snapshot()
+            || expected.revision_id() != color_space.revision_id()
+            || expected.startxref() != color_space.startxref()
+        {
+            return Err(ContentVmError::new(ContentVmErrorCode::InvalidLimits, None));
+        }
+        self.color_space_profile = Some(profile);
+        Ok(self)
+    }
+
     fn child(&self) -> Option<Self> {
         let remaining_depth = self.remaining_depth.checked_sub(1)?;
         (remaining_depth != 0).then(|| Self {
@@ -261,6 +281,7 @@ impl ContentFormProfile {
             image_profile: self.image_profile.clone(),
             font_profile: self.font_profile.clone(),
             ext_gstate_profile: self.ext_gstate_profile.clone(),
+            color_space_profile: self.color_space_profile.clone(),
             scene_limits: self.scene_limits,
         })
     }
@@ -367,6 +388,7 @@ pub struct InterpretPageJob {
     font_runtime: Option<FontRuntime>,
     ext_gstate_profile: Option<ContentExtGStateProfile>,
     ext_gstate_runtime: Option<ContentExtGStateRuntime>,
+    color_space_runtime: Option<ContentColorSpaceRuntime>,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -396,6 +418,7 @@ pub struct InterpretFormJob {
     font_runtime: Option<FontRuntime>,
     ext_gstate_profile: Option<ContentExtGStateProfile>,
     ext_gstate_runtime: Option<ContentExtGStateRuntime>,
+    color_space_runtime: Option<ContentColorSpaceRuntime>,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -437,6 +460,7 @@ impl InterpretPageJob {
             font_runtime: None,
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
+            color_space_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -475,6 +499,7 @@ impl InterpretPageJob {
             font_runtime: None,
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
+            color_space_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -519,6 +544,7 @@ impl InterpretPageJob {
             font_runtime: None,
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
+            color_space_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -563,6 +589,7 @@ impl InterpretPageJob {
             font_runtime: Some(FontRuntime::new(font_profile)),
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
+            color_space_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -609,6 +636,7 @@ impl InterpretPageJob {
             font_runtime: Some(FontRuntime::new(font_profile)),
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
+            color_space_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -657,6 +685,15 @@ impl InterpretPageJob {
     /// Enables Page-local proof-bound ExtGState lookup and resumable object acquisition.
     pub fn with_dynamic_ext_gstates(mut self, profile: ContentExtGStateAcquisitionProfile) -> Self {
         self.ext_gstate_runtime = Some(ContentExtGStateRuntime::new(profile));
+        self
+    }
+
+    /// Enables Page-local proof-bound named color-space resolution.
+    pub fn with_dynamic_color_spaces(
+        mut self,
+        profile: ContentColorSpaceAcquisitionProfile,
+    ) -> Self {
+        self.color_space_runtime = Some(ContentColorSpaceRuntime::new(profile));
         self
     }
 
@@ -746,6 +783,7 @@ impl InterpretPageJob {
                 self.font_runtime.as_mut(),
                 self.ext_gstate_profile.as_ref(),
                 self.ext_gstate_runtime.as_mut(),
+                self.color_space_runtime.as_mut(),
                 self.scan_stats,
                 self.xobject_stats,
                 self.scan_peak_retained,
@@ -800,6 +838,7 @@ impl InterpretPageJob {
                 self.font_runtime.take();
                 self.ext_gstate_profile.take();
                 self.ext_gstate_runtime.take();
+                self.color_space_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Ready(Arc::clone(&page));
@@ -811,6 +850,7 @@ impl InterpretPageJob {
                 self.font_runtime.take();
                 self.ext_gstate_profile.take();
                 self.ext_gstate_runtime.take();
+                self.color_space_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Unsupported(error);
@@ -822,6 +862,7 @@ impl InterpretPageJob {
                 self.font_runtime.take();
                 self.ext_gstate_profile.take();
                 self.ext_gstate_runtime.take();
+                self.color_space_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Failed(error);
@@ -917,6 +958,7 @@ impl InterpretFormJob {
             font_runtime: Some(FontRuntime::new(font_profile)),
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
+            color_space_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -940,6 +982,15 @@ impl InterpretFormJob {
     /// Enables Form-local proof-bound ExtGState lookup and resumable object acquisition.
     pub fn with_dynamic_ext_gstates(mut self, profile: ContentExtGStateAcquisitionProfile) -> Self {
         self.ext_gstate_runtime = Some(ContentExtGStateRuntime::new(profile));
+        self
+    }
+
+    /// Enables Form-local proof-bound named color-space resolution.
+    pub fn with_dynamic_color_spaces(
+        mut self,
+        profile: ContentColorSpaceAcquisitionProfile,
+    ) -> Self {
+        self.color_space_runtime = Some(ContentColorSpaceRuntime::new(profile));
         self
     }
 
@@ -999,6 +1050,7 @@ impl InterpretFormJob {
                 self.font_runtime.as_mut(),
                 self.ext_gstate_profile.as_ref(),
                 self.ext_gstate_runtime.as_mut(),
+                self.color_space_runtime.as_mut(),
                 self.scan_stats,
                 self.xobject_stats,
                 self.scan_peak_retained,
@@ -1053,6 +1105,7 @@ impl InterpretFormJob {
                 self.font_runtime.take();
                 self.ext_gstate_profile.take();
                 self.ext_gstate_runtime.take();
+                self.color_space_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = FormJobState::Ready(Arc::clone(&form));
@@ -1086,6 +1139,7 @@ impl InterpretFormJob {
         self.font_runtime.take();
         self.ext_gstate_profile.take();
         self.ext_gstate_runtime.take();
+        self.color_space_runtime.take();
         self.program.take();
         self.plan.take();
     }
@@ -1592,6 +1646,7 @@ fn run_interpretation(
     mut font_runtime: Option<&mut FontRuntime>,
     ext_gstate_profile: Option<&ContentExtGStateProfile>,
     mut ext_gstate_runtime: Option<&mut ContentExtGStateRuntime>,
+    mut color_space_runtime: Option<&mut ContentColorSpaceRuntime>,
     mut scan_stats: ContentScanStats,
     mut xobject_stats: PageXObjectLookupStats,
     mut scan_peak_retained: u64,
@@ -1734,6 +1789,7 @@ fn run_interpretation(
             font_runtime.as_deref_mut(),
             ext_gstate_profile,
             ext_gstate_runtime.as_deref_mut(),
+            color_space_runtime.as_deref_mut(),
             source,
             cancellation,
             &mut accounting,
@@ -3037,6 +3093,7 @@ fn build_execution_plan(
     mut font_runtime: Option<&mut FontRuntime>,
     ext_gstate_profile: Option<&ContentExtGStateProfile>,
     mut ext_gstate_runtime: Option<&mut ContentExtGStateRuntime>,
+    mut color_space_runtime: Option<&mut ContentColorSpaceRuntime>,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
     accounting: &mut Accounting,
@@ -3496,6 +3553,113 @@ fn build_execution_plan(
                         resolved.stroking_alpha,
                         resolved.nonstroking_alpha,
                         resolved.blend_mode,
+                    );
+                }
+                OperatorKind::SetStrokingColorSpace | OperatorKind::SetNonstrokingColorSpace => {
+                    let Some(graphics) = graphics_v2.as_mut() else {
+                        return prioritize(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            Some(operator_source),
+                            RunTerminal::Unsupported(ContentUnsupported::new(
+                                ContentUnsupportedKind::GraphicsV2Operator,
+                                operator_source,
+                            )),
+                        );
+                    };
+                    let ValidatedOperands::Name(name) = validated else {
+                        unreachable!("validated CS/cs operands have name shape");
+                    };
+                    let color_space = if let Some(color_space) = device_space(name.bytes()) {
+                        color_space
+                    } else if let Some(runtime) = color_space_runtime.as_deref_mut() {
+                        match runtime.resolve(
+                            input.resources(),
+                            name.bytes(),
+                            byte_source,
+                            cancellation,
+                        ) {
+                            ContentColorSpaceRuntimePoll::Ready(value) => value,
+                            ContentColorSpaceRuntimePoll::Pending {
+                                ticket,
+                                missing,
+                                checkpoint,
+                            } => {
+                                return RunTerminal::Pending {
+                                    ticket,
+                                    missing,
+                                    checkpoint,
+                                };
+                            }
+                            ContentColorSpaceRuntimePoll::Unsupported => {
+                                return prioritize(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    Some(operator_source),
+                                    RunTerminal::Unsupported(ContentUnsupported::new(
+                                        ContentUnsupportedKind::ColorSpaceResource,
+                                        operator_source,
+                                    )),
+                                );
+                            }
+                            ContentColorSpaceRuntimePoll::Failed(error) => {
+                                let terminal =
+                                    ContentUnsupported::from_document(error, operator_source)
+                                        .map_or_else(
+                                            || {
+                                                RunTerminal::Failed(ContentVmFailure::Document(
+                                                    error,
+                                                ))
+                                            },
+                                            RunTerminal::Unsupported,
+                                        );
+                                return prioritize(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    Some(operator_source),
+                                    terminal,
+                                );
+                            }
+                            ContentColorSpaceRuntimePoll::ResourceLimit => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    ContentVmError::new(
+                                        ContentVmErrorCode::ResourceLimit,
+                                        Some(operator_source),
+                                    ),
+                                );
+                            }
+                            ContentColorSpaceRuntimePoll::Internal => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    vm_error(ContentVmErrorCode::InternalState, operator_source),
+                                );
+                            }
+                        }
+                    } else {
+                        return prioritize(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            Some(operator_source),
+                            RunTerminal::Unsupported(ContentUnsupported::new(
+                                ContentUnsupportedKind::ColorSpaceProfileRequired,
+                                operator_source,
+                            )),
+                        );
+                    };
+                    graphics.select_color_space(
+                        kind == OperatorKind::SetStrokingColorSpace,
+                        color_space,
                     );
                 }
                 OperatorKind::SaveGraphicsState => {
@@ -4579,7 +4743,11 @@ fn build_execution_plan(
                 | OperatorKind::SetStrokingRgb
                 | OperatorKind::SetNonstrokingRgb
                 | OperatorKind::SetStrokingCmyk
-                | OperatorKind::SetNonstrokingCmyk => {
+                | OperatorKind::SetNonstrokingCmyk
+                | OperatorKind::SetStrokingColor
+                | OperatorKind::SetNonstrokingColor
+                | OperatorKind::SetStrokingColorExtended
+                | OperatorKind::SetNonstrokingColorExtended => {
                     let graphics_limits = match profile {
                         ContentVmProfile::SceneV1 { .. } => {
                             return prioritize(
@@ -5990,6 +6158,10 @@ enum ValidatedOperands<'a> {
     TwoNumbers([ContentNumber; 2]),
     ThreeNumbers([ContentNumber; 3]),
     FourNumbers([ContentNumber; 4]),
+    ColorComponents {
+        values: [ContentNumber; 4],
+        count: u8,
+    },
     SixNumbers([ContentNumber; 6]),
     OneInteger(i64),
     Dash {
@@ -6026,6 +6198,7 @@ impl ValidatedOperands<'_> {
             | Self::TwoNumbers(_)
             | Self::ThreeNumbers(_)
             | Self::FourNumbers(_)
+            | Self::ColorComponents { .. }
             | Self::SixNumbers(_)
             | Self::OneInteger(_)
             | Self::Dash { .. }
@@ -6050,7 +6223,9 @@ fn validate_operand_structure(
     source: ContentOperatorSource,
 ) -> Result<(), ContentVmError> {
     let spec = kind.spec();
-    if operands.len() != usize::from(spec.min_operands()) {
+    if operands.len() < usize::from(spec.min_operands())
+        || operands.len() > usize::from(spec.max_operands())
+    {
         return Err(vm_error(ContentVmErrorCode::InvalidOperandCount, source));
     }
     let valid = match spec.operand_shape() {
@@ -6059,7 +6234,8 @@ fn validate_operand_structure(
         | OperatorOperandShape::TwoNumbers
         | OperatorOperandShape::ThreeNumbers
         | OperatorOperandShape::FourNumbers
-        | OperatorOperandShape::SixNumbers => operands.iter().all(is_number),
+        | OperatorOperandShape::SixNumbers
+        | OperatorOperandShape::ColorComponents => operands.iter().all(is_number),
         OperatorOperandShape::OneInteger => {
             matches!(operands[0].value(), ContentOperand::Integer(_))
         }
@@ -6320,6 +6496,17 @@ fn convert_operands<'a>(
                 _ => return Err(vm_error(ContentVmErrorCode::InvalidOperandType, source)),
             };
             Ok(ValidatedOperands::NameAndProperty { tag, property })
+        }
+        OperatorOperandShape::ColorComponents => {
+            let mut values = [ContentNumber::ZERO; 4];
+            for (output, operand) in values.iter_mut().zip(operands) {
+                *output = parse_number(operand, source)?;
+            }
+            Ok(ValidatedOperands::ColorComponents {
+                values,
+                count: u8::try_from(operands.len())
+                    .map_err(|_| vm_error(ContentVmErrorCode::InternalState, source))?,
+            })
         }
     }
 }

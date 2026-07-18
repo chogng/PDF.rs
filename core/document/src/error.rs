@@ -163,6 +163,10 @@ pub enum DocumentLimitKind {
     PageExtGStateLookups,
     /// Outer resource and inner ExtGState dictionary entries visited during lookup.
     PageExtGStateEntryVisits,
+    /// Page named color spaces resolved through one borrowed resource resolver.
+    PageColorSpaceLookups,
+    /// Outer resource and inner ColorSpace dictionary entries visited during lookup.
+    PageColorSpaceEntryVisits,
     /// Polls admitted while one embedded Font acquisition remained active.
     FontResourcePolls,
     /// Proof-preserving Font, descriptor, and FontFile2 objects opened.
@@ -423,6 +427,8 @@ pub enum DocumentErrorCode {
     InvalidPageFontResource,
     /// `/ExtGState` or one requested Page graphics-state name has an invalid semantic shape.
     InvalidPageExtGStateResource,
+    /// `/ColorSpace` or one requested named color space has an invalid semantic shape.
+    InvalidPageColorSpaceResource,
     /// Runtime identity or checkpoints for Font resource acquisition are inconsistent.
     InvalidFontResourceJobContext,
     /// A selected simple Font, descriptor, or embedded program has malformed metadata.
@@ -861,6 +867,11 @@ impl DocumentError {
                 DocumentErrorCategory::Syntax,
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0087",
+            ),
+            DocumentErrorCode::InvalidPageColorSpaceResource => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0088",
             ),
             DocumentErrorCode::InvalidFontResourceJobContext => (
                 DocumentErrorCategory::Configuration,

@@ -190,9 +190,10 @@ pub use page_property_lookup_limits::{
     PagePropertyLookupLimitConfig, PagePropertyLookupLimits, PagePropertyLookupStats,
 };
 pub use page_resources::{
-    PageExtGStateReference, PageExtGStateResolver, PageFontLookupOutcome, PageFontReference,
-    PageFontResolver, PagePropertyReference, PagePropertyResolver, PageResourceScope,
-    PageXObjectLookupOutcome, PageXObjectReference, PageXObjectResolver,
+    PageColorSpaceLookupLimits, PageColorSpaceLookupStats, PageColorSpaceReference,
+    PageColorSpaceResolver, PageExtGStateReference, PageExtGStateResolver, PageFontLookupOutcome,
+    PageFontReference, PageFontResolver, PagePropertyReference, PagePropertyResolver,
+    PageResourceScope, PageXObjectLookupOutcome, PageXObjectReference, PageXObjectResolver,
 };
 pub use page_tree::{
     CountPagesJob, PageCount, PageCountPoll, PageTreeJobContext, PageTreePhase, PageTreeStats,

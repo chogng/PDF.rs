@@ -163,6 +163,23 @@ impl PageResourceScope {
         }
     }
 
+    /// Creates a no-I/O resolver borrowing this exact resource dictionary proof.
+    ///
+    /// The resolver returns only a fixed-size indirect-reference proof for a named color space.
+    pub const fn color_space_resolver(
+        &self,
+        limits: PageColorSpaceLookupLimits,
+    ) -> PageColorSpaceResolver<'_> {
+        PageColorSpaceResolver {
+            scope: self,
+            limits,
+            stats: PageColorSpaceLookupStats {
+                lookups: 0,
+                entry_visits: 0,
+            },
+        }
+    }
+
     pub(crate) fn checked_retained_state_bytes(&self) -> Result<u64, DocumentError> {
         let chain_bytes = self.retained_lookup_chain_bytes().ok_or_else(|| {
             internal_error(self.defining_object, Some(self.defining_value_offset))
@@ -1021,6 +1038,284 @@ impl fmt::Debug for PageExtGStateResolver<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PageExtGStateResolver")
+            .field("scope", &self.scope)
+            .field("limits", &self.limits)
+            .field("stats", &self.stats)
+            .field("dictionary", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Named color-space lookup limits share the same bounded dictionary-scan shape as ExtGState.
+pub type PageColorSpaceLookupLimits = PageExtGStateLookupLimits;
+
+/// Named color-space lookup statistics share the same two bounded work dimensions as ExtGState.
+pub type PageColorSpaceLookupStats = PageExtGStateLookupStats;
+
+/// Fixed-size proof that one Page resource name selected an indirect ColorSpace reference.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PageColorSpaceReference {
+    target: ObjectRef,
+    snapshot: SourceSnapshot,
+    revision_id: RevisionId,
+    revision_startxref: u64,
+    scope_defining_object: ObjectRef,
+    scope_defining_value_offset: u64,
+    resource_dictionary_owner: ObjectRef,
+    category_key_offset: u64,
+    category_value_offset: u64,
+    entry_key_offset: u64,
+    entry_value_offset: u64,
+}
+
+impl PageColorSpaceReference {
+    /// Returns the indirect color-space object named by the selected entry.
+    pub const fn target(self) -> ObjectRef {
+        self.target
+    }
+
+    /// Returns the immutable source snapshot retained by the resource owner.
+    pub const fn snapshot(self) -> SourceSnapshot {
+        self.snapshot
+    }
+
+    /// Returns the caller-assigned revision identity of the resource owner.
+    pub const fn revision_id(self) -> RevisionId {
+        self.revision_id
+    }
+
+    /// Returns the `startxref` anchor of the resource owner's revision.
+    pub const fn revision_startxref(self) -> u64 {
+        self.revision_startxref
+    }
+
+    /// Returns the Page, Pages, or Form object defining this resource scope.
+    pub const fn scope_defining_object(self) -> ObjectRef {
+        self.scope_defining_object
+    }
+
+    /// Returns the exact Resources value offset in the defining object.
+    pub const fn scope_defining_value_offset(self) -> u64 {
+        self.scope_defining_value_offset
+    }
+
+    /// Returns the object physically owning the resource dictionary.
+    pub const fn resource_dictionary_owner(self) -> ObjectRef {
+        self.resource_dictionary_owner
+    }
+
+    /// Returns the source offset of the unique `/ColorSpace` key.
+    pub const fn category_key_offset(self) -> u64 {
+        self.category_key_offset
+    }
+
+    /// Returns the source offset of the unique `/ColorSpace` value.
+    pub const fn category_value_offset(self) -> u64 {
+        self.category_value_offset
+    }
+
+    /// Returns the source offset of the selected color-space key.
+    pub const fn entry_key_offset(self) -> u64 {
+        self.entry_key_offset
+    }
+
+    /// Returns the source offset of the selected indirect-reference value.
+    pub const fn entry_value_offset(self) -> u64 {
+        self.entry_value_offset
+    }
+}
+
+impl fmt::Debug for PageColorSpaceReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageColorSpaceReference")
+            .field("target", &self.target)
+            .field("snapshot", &self.snapshot)
+            .field("revision_id", &self.revision_id)
+            .field("revision_startxref", &self.revision_startxref)
+            .field("scope_defining_object", &self.scope_defining_object)
+            .field(
+                "scope_defining_value_offset",
+                &self.scope_defining_value_offset,
+            )
+            .field("resource_dictionary_owner", &self.resource_dictionary_owner)
+            .field("category_key_offset", &self.category_key_offset)
+            .field("category_value_offset", &self.category_value_offset)
+            .field("resource_name", &"[NOT RETAINED]")
+            .field("entry_key_offset", &self.entry_key_offset)
+            .field("entry_value_offset", &self.entry_value_offset)
+            .finish()
+    }
+}
+
+/// Borrowed no-I/O resolver for one exact inherited Page or Form ColorSpace dictionary.
+pub struct PageColorSpaceResolver<'scope> {
+    scope: &'scope PageResourceScope,
+    limits: PageColorSpaceLookupLimits,
+    stats: PageColorSpaceLookupStats,
+}
+
+impl PageColorSpaceResolver<'_> {
+    /// Returns the validated independent lookup and entry-visit profile.
+    pub const fn limits(&self) -> PageColorSpaceLookupLimits {
+        self.limits
+    }
+
+    /// Returns cumulative work, including work retained after failed lookups.
+    pub const fn stats(&self) -> PageColorSpaceLookupStats {
+        self.stats
+    }
+
+    /// Resolves one named ColorSpace without opening the target object.
+    pub fn lookup_color_space(
+        &mut self,
+        name: &[u8],
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<PageColorSpaceReference, DocumentError> {
+        let scope = self.scope;
+        let limits = self.limits;
+        let stats = &mut self.stats;
+        let owner = scope.dictionary_owner();
+        let snapshot = owner.snapshot();
+        let owner_reference = owner.reference();
+        let scope_offset = scope.defining_value_offset;
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        charge_color_space_lookup(stats, limits, owner_reference, scope_offset)?;
+        let dictionary = scope.dictionary()?;
+
+        let mut category_key_offset = None;
+        let mut category_value = None;
+        let mut duplicate_category_offset = None;
+        for entry in dictionary.entries() {
+            let key_offset = entry.key().span().start();
+            probe_color_space_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            charge_color_space_entry_visit(stats, limits, owner_reference, key_offset)?;
+            if entry.key().value().bytes() != b"ColorSpace" {
+                continue;
+            }
+            if category_value.is_some() {
+                duplicate_category_offset.get_or_insert(key_offset);
+            } else {
+                category_key_offset = Some(key_offset);
+                category_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            scope_offset,
+        )?;
+        if let Some(offset) = duplicate_category_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(category_value) = category_value else {
+            return Err(invalid_color_space(owner_reference, scope_offset));
+        };
+        let category_value_offset = category_value.span().start();
+        let Some(category_key_offset) = category_key_offset else {
+            return Err(internal_error(owner_reference, Some(category_value_offset)));
+        };
+        let SyntaxObject::Dictionary(spaces) = category_value.value() else {
+            return Err(invalid_color_space(owner_reference, category_value_offset));
+        };
+
+        let mut entry_key_offset = None;
+        let mut entry_value = None;
+        let mut duplicate_entry_offset = None;
+        for entry in spaces.entries() {
+            let key_offset = entry.key().span().start();
+            probe_color_space_scan(
+                stats,
+                snapshot,
+                source,
+                cancellation,
+                owner_reference,
+                key_offset,
+            )?;
+            charge_color_space_entry_visit(stats, limits, owner_reference, key_offset)?;
+            if entry.key().value().bytes() != name {
+                continue;
+            }
+            if entry_value.is_some() {
+                duplicate_entry_offset.get_or_insert(key_offset);
+            } else {
+                entry_key_offset = Some(key_offset);
+                entry_value = Some(entry.value());
+            }
+        }
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            category_value_offset,
+        )?;
+        if let Some(offset) = duplicate_entry_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let Some(entry_value) = entry_value else {
+            return Err(invalid_color_space(owner_reference, category_value_offset));
+        };
+        let entry_value_offset = entry_value.span().start();
+        let Some(entry_key_offset) = entry_key_offset else {
+            return Err(internal_error(owner_reference, Some(entry_value_offset)));
+        };
+        let SyntaxObject::Reference(target) = entry_value.value() else {
+            return Err(invalid_color_space(owner_reference, entry_value_offset));
+        };
+
+        runtime_guard(
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            entry_value_offset,
+        )?;
+        Ok(PageColorSpaceReference {
+            target: *target,
+            snapshot,
+            revision_id: owner.revision_id(),
+            revision_startxref: owner.revision_startxref(),
+            scope_defining_object: scope.defining_object,
+            scope_defining_value_offset: scope_offset,
+            resource_dictionary_owner: owner_reference,
+            category_key_offset,
+            category_value_offset,
+            entry_key_offset,
+            entry_value_offset,
+        })
+    }
+}
+
+impl fmt::Debug for PageColorSpaceResolver<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageColorSpaceResolver")
             .field("scope", &self.scope)
             .field("limits", &self.limits)
             .field("stats", &self.stats)
@@ -1918,6 +2213,78 @@ fn charge_ext_gstate_entry_visit(
 fn invalid_ext_gstate(reference: ObjectRef, offset: u64) -> DocumentError {
     DocumentError::for_code(
         DocumentErrorCode::InvalidPageExtGStateResource,
+        Some(reference),
+        Some(offset),
+    )
+}
+
+fn probe_color_space_scan(
+    stats: &PageColorSpaceLookupStats,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits != 0
+        && stats
+            .entry_visits
+            .is_multiple_of(CANCELLATION_PROBE_INTERVAL)
+    {
+        runtime_guard(snapshot, source, cancellation, reference, offset)?;
+    }
+    Ok(())
+}
+
+fn charge_color_space_lookup(
+    stats: &mut PageColorSpaceLookupStats,
+    limits: PageColorSpaceLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.lookups >= limits.max_lookups() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageColorSpaceLookups,
+            limits.max_lookups(),
+            stats.lookups,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.lookups = stats
+        .lookups
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn charge_color_space_entry_visit(
+    stats: &mut PageColorSpaceLookupStats,
+    limits: PageColorSpaceLookupLimits,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if stats.entry_visits >= limits.max_entry_visits() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageColorSpaceEntryVisits,
+            limits.max_entry_visits(),
+            stats.entry_visits,
+            1,
+            reference,
+            Some(offset),
+        ));
+    }
+    stats.entry_visits = stats
+        .entry_visits
+        .checked_add(1)
+        .ok_or_else(|| internal_error(reference, Some(offset)))?;
+    Ok(())
+}
+
+fn invalid_color_space(reference: ObjectRef, offset: u64) -> DocumentError {
+    DocumentError::for_code(
+        DocumentErrorCode::InvalidPageColorSpaceResource,
         Some(reference),
         Some(offset),
     )

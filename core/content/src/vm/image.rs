@@ -600,6 +600,9 @@ impl ImageRuntime {
                 if let Some(ext_gstate_profile) = profile.ext_gstate_profile.clone() {
                     job = job.with_dynamic_ext_gstates(ext_gstate_profile);
                 }
+                if let Some(color_space_profile) = profile.color_space_profile.clone() {
+                    job = job.with_dynamic_color_spaces(color_space_profile);
+                }
                 if let Some(child) = profile.child() {
                     job = match job.with_forms(child) {
                         Ok(job) => job,

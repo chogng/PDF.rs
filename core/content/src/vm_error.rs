@@ -662,6 +662,10 @@ pub enum ContentUnsupportedKind {
     ExtGStateProfileRequired,
     /// A selected external graphics-state name is absent from the proof-bound profile.
     ExtGStateResource,
+    /// A named `CS` or `cs` selection requires a proof-bound color-space profile.
+    ColorSpaceProfileRequired,
+    /// A selected named color space is outside the registered device/ICCBased subset.
+    ColorSpaceResource,
     /// A registered `Do` operator requires an explicit proof-bound Content image profile.
     ImageProfileRequired,
     /// The selected Page XObject or Image XObject representation is outside the registered subset.
@@ -810,6 +814,8 @@ impl ContentUnsupported {
             ContentUnsupportedKind::GraphicsV2Operator => "RPE-CONTENT-UNSUPPORTED-0007",
             ContentUnsupportedKind::ExtGStateProfileRequired => "RPE-CONTENT-UNSUPPORTED-0014",
             ContentUnsupportedKind::ExtGStateResource => "RPE-CONTENT-UNSUPPORTED-0015",
+            ContentUnsupportedKind::ColorSpaceProfileRequired => "RPE-CONTENT-UNSUPPORTED-0017",
+            ContentUnsupportedKind::ColorSpaceResource => "RPE-CONTENT-UNSUPPORTED-0018",
             ContentUnsupportedKind::ImageProfileRequired => "RPE-CONTENT-UNSUPPORTED-0008",
             ContentUnsupportedKind::ImageXObject => "RPE-CONTENT-UNSUPPORTED-0009",
             ContentUnsupportedKind::FormXObject => "RPE-CONTENT-UNSUPPORTED-0016",

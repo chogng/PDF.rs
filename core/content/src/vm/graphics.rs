@@ -13,9 +13,9 @@ use super::{
     reserve_vm_additional, vm_error,
 };
 use crate::{
-    ContentGraphicsLimitKind, ContentGraphicsLimits, ContentNumber, ContentOperatorSource,
-    ContentVmError, ContentVmErrorCode, ContentVmLimit, ContentVmLimitKind, ContentVmLimits,
-    OperatorKind,
+    ContentColorSpaceKind, ContentGraphicsLimitKind, ContentGraphicsLimits, ContentNumber,
+    ContentOperatorSource, ContentVmError, ContentVmErrorCode, ContentVmLimit, ContentVmLimitKind,
+    ContentVmLimits, OperatorKind,
 };
 
 pub(super) enum GraphicsExecutionError {
@@ -472,6 +472,34 @@ impl GraphicsVm {
 
     pub(super) fn set_ctm(&mut self, value: Matrix) {
         self.current.ctm = value;
+    }
+
+    pub(super) fn select_color_space(&mut self, stroking: bool, kind: ContentColorSpaceKind) {
+        let paint = if stroking {
+            self.current.stroking
+        } else {
+            self.current.nonstroking
+        };
+        let color = match kind {
+            ContentColorSpaceKind::Gray => DeviceColor::Gray(SceneUnit::ZERO),
+            ContentColorSpaceKind::Rgb => DeviceColor::Rgb {
+                red: SceneUnit::ZERO,
+                green: SceneUnit::ZERO,
+                blue: SceneUnit::ZERO,
+            },
+            ContentColorSpaceKind::Cmyk => DeviceColor::Cmyk {
+                cyan: SceneUnit::ZERO,
+                magenta: SceneUnit::ZERO,
+                yellow: SceneUnit::ZERO,
+                black: SceneUnit::ONE,
+            },
+        };
+        let selected = update_color(paint, color);
+        if stroking {
+            self.current.stroking = selected;
+        } else {
+            self.current.nonstroking = selected;
+        }
     }
 
     pub(super) fn apply_ext_gstate(
@@ -1002,6 +1030,20 @@ impl GraphicsVm {
                 self.current.nonstroking =
                     update_color(self.current.nonstroking, cmyk(four_numbers(operands)));
             }
+            OperatorKind::SetStrokingColor | OperatorKind::SetStrokingColorExtended => {
+                self.current.stroking = update_selected_color(
+                    self.current.stroking,
+                    color_components(operands),
+                    source,
+                )?;
+            }
+            OperatorKind::SetNonstrokingColor | OperatorKind::SetNonstrokingColorExtended => {
+                self.current.nonstroking = update_selected_color(
+                    self.current.nonstroking,
+                    color_components(operands),
+                    source,
+                )?;
+            }
             OperatorKind::SaveGraphicsState
             | OperatorKind::RestoreGraphicsState
             | OperatorKind::SetGraphicsState
@@ -1023,6 +1065,8 @@ impl GraphicsVm {
             | OperatorKind::ShowTextAdjusted
             | OperatorKind::MoveNextLineShowText
             | OperatorKind::SetSpacingMoveNextLineShowText
+            | OperatorKind::SetStrokingColorSpace
+            | OperatorKind::SetNonstrokingColorSpace
             | OperatorKind::BeginCompatibility
             | OperatorKind::EndCompatibility
             | OperatorKind::MarkedContentPoint
@@ -1298,6 +1342,25 @@ fn update_color(paint: Paint, color: DeviceColor) -> Paint {
     Paint::new(color, paint.alpha(), paint.blend_mode())
 }
 
+fn update_selected_color(
+    paint: Paint,
+    (values, count): ([ContentNumber; 4], u8),
+    source: ContentOperatorSource,
+) -> Result<Paint, ContentVmError> {
+    let color = match (paint.color(), count) {
+        (DeviceColor::Gray(_), 1) => DeviceColor::Gray(unit(values[0])),
+        (DeviceColor::Rgb { .. }, 3) => rgb([values[0], values[1], values[2]]),
+        (DeviceColor::Cmyk { .. }, 4) => cmyk(values),
+        _ => {
+            return Err(vm_error(
+                ContentVmErrorCode::InvalidGraphicsParameter,
+                source,
+            ));
+        }
+    };
+    Ok(update_color(paint, color))
+}
+
 fn rgb(values: [ContentNumber; 3]) -> DeviceColor {
     DeviceColor::Rgb {
         red: unit(values[0]),
@@ -1334,6 +1397,13 @@ fn four_numbers(operands: &ValidatedOperands<'_>) -> [ContentNumber; 4] {
         unreachable!("operator metadata guarantees four-number operands");
     };
     *values
+}
+
+fn color_components(operands: &ValidatedOperands<'_>) -> ([ContentNumber; 4], u8) {
+    let ValidatedOperands::ColorComponents { values, count } = operands else {
+        unreachable!("operator metadata guarantees variable color components");
+    };
+    (*values, *count)
 }
 
 fn retained_bytes<T>(values: &Vec<T>) -> Option<u64> {

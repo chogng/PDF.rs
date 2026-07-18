@@ -18,26 +18,27 @@ use pdf_rs_bytes::{
     SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentCancellation, ContentErrorCategory, ContentExtGStateAcquisitionProfile,
-    ContentExtGStateJobContext, ContentFontLimits, ContentFontProfile, ContentFormProfile,
-    ContentGraphicsLimits, ContentImageLimits, ContentImageProfile, ContentLimits,
-    ContentVmErrorCategory, ContentVmFailure, ContentVmLimits, ContentVmPoll, InterpretPageJob,
+    ContentCancellation, ContentColorSpaceAcquisitionProfile, ContentColorSpaceJobContext,
+    ContentErrorCategory, ContentExtGStateAcquisitionProfile, ContentExtGStateJobContext,
+    ContentFontLimits, ContentFontProfile, ContentFormProfile, ContentGraphicsLimits,
+    ContentImageLimits, ContentImageProfile, ContentLimits, ContentVmErrorCategory,
+    ContentVmFailure, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
     AcquiredObjectJobContext, AcquiredPageCountPoll, AttestRevisionJob, CandidateRevisionIndex,
     DocumentCancellation, DocumentError, DocumentErrorCategory, DocumentLimits,
     FontResourceJobContext, FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext,
     ImageXObjectLimits, NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
-    OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits, PageContentPoll,
-    PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex, PageIndexBuildPoll,
-    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
-    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits,
-    PageXObjectLookupLimits, RevisionAttestationJobContext, RevisionAttestationLimits,
-    RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex, SourceAcquiredDocument,
-    SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain, SourceRevisionChainError,
-    SourceRevisionChainErrorCategory, SourceRevisionChainJobContext, SourceRevisionChainLimits,
-    SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
-    StrictBaseOpenPoll,
+    OpenStrictBaseRevisionJob, PageColorSpaceLookupLimits, PageContentJobContext,
+    PageContentLimits, PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex,
+    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
+    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
+    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
+    SourceAcquiredDocument, SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain,
+    SourceRevisionChainError, SourceRevisionChainErrorCategory, SourceRevisionChainJobContext,
+    SourceRevisionChainLimits, SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError,
+    StrictBaseOpenLimits, StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterCancellation, FastRasterErrorCategory, FastRasterJob, FastRasterLimits,
@@ -884,6 +885,15 @@ fn render_strict_page(
             RequestPriority::FirstViewportResource,
         ),
     );
+    let color_space_profile = ContentColorSpaceAcquisitionProfile::new(
+        authority.clone(),
+        PageColorSpaceLookupLimits::default(),
+        ContentColorSpaceJobContext::new(
+            ids.content,
+            ResumeCheckpoint::new(ids.base + 800),
+            RequestPriority::FirstViewportResource,
+        ),
+    );
     let form_profile = ContentFormProfile::new(
         authority.clone(),
         FormXObjectJobContext::new(
@@ -903,6 +913,7 @@ fn render_strict_page(
         GraphicsSceneLimits::default(),
     )
     .and_then(|profile| profile.with_ext_gstates(ext_gstate_profile.clone()))
+    .and_then(|profile| profile.with_color_spaces(color_space_profile.clone()))
     .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
     let mut vm = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
         acquired,
@@ -915,6 +926,7 @@ fn render_strict_page(
         GraphicsSceneLimits::default(),
     )
     .with_dynamic_ext_gstates(ext_gstate_profile)
+    .with_dynamic_color_spaces(color_space_profile)
     .with_forms(form_profile)
     .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
     let vm_store = range_store(snapshot)?;
