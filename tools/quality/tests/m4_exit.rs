@@ -27,9 +27,9 @@ const ELECTRON_TARGET: &str = include_str!("../../../platform/electron/electron-
 const ELECTRON_PACKAGE: &str = include_str!("../../../platform/electron/package.json");
 
 const EXIT_CANDIDATE_SHA256: &str =
-    "006a3211ee6fff7fffff56ab8ee556f9885650bd7d765e5b3cf3994f587f9378";
-const CANDIDATE_BASE_COMMIT: &str = "b41e7890a9906a4bd7644eba7a4016d3f4bfc76d";
-const CANDIDATE_BASE_TREE: &str = "c88c82fdf66a35ed8a023a64d40381b160ed1be2";
+    "24d29ee71aaa6e89e16434f9d4a08093ebebb8ae9b9dfed55292b024f15b6513";
+const CANDIDATE_BASE_COMMIT: &str = "72bbd3b9383147c97f50060347a47aca2bde105c";
+const CANDIDATE_BASE_TREE: &str = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4";
 const DECISION_RECORD: &str =
     "docs/traceability/evidence/m4/fast-cpu-canary/independent-review.toml";
 
@@ -87,26 +87,58 @@ fn independent_review_contract_distinguishes_missing_invalid_and_valid_records()
 
     fs::write(
         &record,
-        format!(
-            "schema = 1\n\
-             type = \"independent-review\"\n\
-             milestone = \"M4\"\n\
-             candidate_commit = \"5967a4a28e55ee20ebbf8ae8119658b077b9940f\"\n\
-             exit_candidate = \"docs/traceability/evidence/m4/fast-cpu-canary/exit-candidate.toml#sha256:{EXIT_CANDIDATE_SHA256}\"\n\
-             reviewer_roles = [\"runtime-platform\", \"graphics-color\", \"quality-corpus\"]\n\
-             reviewer_identities = [\"reviewer-runtime\", \"reviewer-graphics\", \"reviewer-quality\"]\n\
-             independent_review_complete = true\n\
-             open_p0 = 0\n\
-             open_p1 = 0\n\
-             open_p2 = 0\n\
-             verdict = \"SHIP\"\n"
-        ),
+        complete_review_record(["reviewer-runtime", "reviewer-graphics", "reviewer-quality"]),
+    )
+    .expect("placeholder review record");
+    assert_eq!(
+        independent_review_state(repository.path()),
+        IndependentReviewState::Invalid
+    );
+
+    fs::write(
+        &record,
+        complete_review_record(["rtp-9f2a7c", "gfx-84b1de", "qcp-5e39a0"]),
     )
     .expect("valid review record");
     assert_eq!(
         independent_review_state(repository.path()),
         IndependentReviewState::Valid
     );
+}
+
+fn complete_review_record(identities: [&str; 3]) -> String {
+    let request = RootToml::parse(REVIEW_REQUEST).expect("review request");
+    let reviewed_subjects = expected_review_subjects(&request);
+    let executed_commands = request.array("commands").expect("review commands");
+    let reviewer_identities = identities
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    format!(
+        "schema = 1\n\
+         type = \"independent-review\"\n\
+         milestone = \"M4\"\n\
+         candidate_commit = \"72bbd3b9383147c97f50060347a47aca2bde105c\"\n\
+         candidate_tree = \"4ca19d3cc92670482e4a8f51617e61eb5d728cc4\"\n\
+         promotion = {:?}\n\
+         exit_candidate = \"docs/traceability/evidence/m4/fast-cpu-canary/exit-candidate.toml#sha256:{EXIT_CANDIDATE_SHA256}\"\n\
+         reviewed_subjects = {}\n\
+         executed_commands = {}\n\
+         environment = \"os=macOS; arch=arm64; rustc=1.93.0; node=24\"\n\
+         reviewed_at = \"2026-07-18\"\n\
+         reviewer_roles = [\"runtime-platform\", \"graphics-color\", \"quality-corpus\"]\n\
+         reviewer_identities = {}\n\
+         findings_closed = true\n\
+         independent_review_complete = true\n\
+         open_p0 = 0\n\
+         open_p1 = 0\n\
+         open_p2 = 0\n\
+         verdict = \"SHIP\"\n",
+        request.string("promotion").expect("promotion reference"),
+        toml_array(&reviewed_subjects),
+        toml_array(executed_commands),
+        toml_array(&reviewer_identities),
+    )
 }
 
 fn verify_automated_closure(root: &Path) {
@@ -177,7 +209,7 @@ fn verify_automated_closure(root: &Path) {
                 .expect("content references"),
         )
         .expect("content-addressed M4 exit inputs"),
-        24,
+        25,
         "M4 exit input topology changed"
     );
 
@@ -427,15 +459,36 @@ fn independent_review_state(repository: &Path) -> IndependentReviewState {
     let Ok(identities) = review.array("reviewer_identities") else {
         return IndependentReviewState::Invalid;
     };
+    let Ok(reviewed_subjects) = review.array("reviewed_subjects") else {
+        return IndependentReviewState::Invalid;
+    };
+    let Ok(executed_commands) = review.array("executed_commands") else {
+        return IndependentReviewState::Invalid;
+    };
+    let request = RootToml::parse(REVIEW_REQUEST).expect("review request");
+    let expected_subjects = expected_review_subjects(&request);
+    let expected_commands = request.array("commands").expect("review commands");
     let unique_identities = identities.iter().collect::<BTreeSet<_>>();
     let valid = review.string("type").ok() == Some("independent-review")
         && review.string("milestone").ok() == Some("M4")
         && review.string("candidate_commit").ok()
-            == Some("5967a4a28e55ee20ebbf8ae8119658b077b9940f")
+            == Some("72bbd3b9383147c97f50060347a47aca2bde105c")
+        && review.string("candidate_tree").ok() == Some("4ca19d3cc92670482e4a8f51617e61eb5d728cc4")
+        && review.string("promotion").ok() == request.string("promotion").ok()
         && review.string("exit_candidate").ok()
             == Some(&format!(
                 "docs/traceability/evidence/m4/fast-cpu-canary/exit-candidate.toml#sha256:{EXIT_CANDIDATE_SHA256}"
             ))
+        && reviewed_subjects == expected_subjects
+        && executed_commands == expected_commands
+        && review
+            .string("environment")
+            .ok()
+            .is_some_and(valid_review_environment)
+        && review
+            .string("reviewed_at")
+            .ok()
+            .is_some_and(canonical_date)
         && roles
             == [
                 "runtime-platform".to_owned(),
@@ -446,7 +499,8 @@ fn independent_review_state(repository: &Path) -> IndependentReviewState {
         && unique_identities.len() == 3
         && identities
             .iter()
-            .all(|identity| !identity.trim().is_empty())
+            .all(|identity| !placeholder_reviewer_identity(identity))
+        && review.boolean("findings_closed").ok() == Some(true)
         && review.boolean("independent_review_complete").ok() == Some(true)
         && review.unsigned("open_p0").ok() == Some(0)
         && review.unsigned("open_p1").ok() == Some(0)
@@ -457,6 +511,68 @@ fn independent_review_state(repository: &Path) -> IndependentReviewState {
     } else {
         IndependentReviewState::Invalid
     }
+}
+
+fn expected_review_subjects(request: &RootToml) -> Vec<String> {
+    [
+        "promotion",
+        "canary_registry",
+        "candidate_gate",
+        "electron_viewer_regression",
+    ]
+    .into_iter()
+    .map(|field| {
+        request
+            .string(field)
+            .unwrap_or_else(|error| panic!("{field}: {error}"))
+            .to_owned()
+    })
+    .collect()
+}
+
+fn toml_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn placeholder_reviewer_identity(identity: &str) -> bool {
+    let normalized = identity.trim().to_ascii_lowercase();
+    normalized.len() < 3
+        || normalized.starts_with("reviewer-")
+        || matches!(
+            normalized.as_str(),
+            "tbd"
+                | "pending"
+                | "unknown"
+                | "none"
+                | "n/a"
+                | "runtime-platform"
+                | "graphics-color"
+                | "quality-corpus"
+        )
+}
+
+fn valid_review_environment(environment: &str) -> bool {
+    ["os=", "arch=", "rustc=", "node="]
+        .into_iter()
+        .all(|field| environment.contains(field))
+}
+
+fn canonical_date(date: &str) -> bool {
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
 }
 
 fn record<'a>(records: &'a [RootToml], id: &str, kind: &str) -> &'a RootToml {

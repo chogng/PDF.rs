@@ -6,12 +6,13 @@ promotion_work_item = "M4-11"
 milestone_gate_work_item = "M4-12"
 state = "PENDING"
 requested_at = 2026-07-18
-candidate_commit = "5967a4a28e55ee20ebbf8ae8119658b077b9940f"
-candidate_tree = "32337a500ec66a0f72b8d81f6b5230d655286527"
+candidate_commit = "72bbd3b9383147c97f50060347a47aca2bde105c"
+candidate_tree = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4"
 candidate_resolution = "git-tree-at-candidate-commit-not-working-tree"
 promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022"
 canary_registry = "docs/traceability/canary-profiles.toml#sha256:6abfb2fbb369f403763ea760631500d0b4a07c44e283797a88d06575fa67400b"
 candidate_gate = "tools/quality/tests/m4_fast_canary_gate.rs#sha256:050964581fa89576d5f75d770f7f4f642577130b2989535efa568218d983bdd1"
+electron_viewer_regression = "runtime/viewer/tests/native_preview.rs#sha256:e71b91984e906a01a9f0106a54f8a6db0c52c0145f8cc6ae79b7c3787151c5e9"
 promotion_required_roles = ["graphics-color", "quality-corpus"]
 milestone_exit_required_roles = ["runtime-platform", "graphics-color", "quality-corpus"]
 completed_reviewers = []
@@ -24,6 +25,7 @@ review_surfaces = [
   "1,000-page registered post-parse holdout and fixed-seed cargo-fuzz replay",
   "fixed-scope release performance samples and cancellation latency",
   "Reference-default viewer API and exact-value Fast CPU Electron cohort",
+  "both readable pages at the Electron 384px and 480px canvas widths under bounded Fast-versus-Reference drift",
   "Fast-to-Reference rollback rehearsal with unchanged Unsupported semantics",
   "Native-only product manifest and fresh release artifact closure",
   "candidate registry and content-addressed promotion gate",

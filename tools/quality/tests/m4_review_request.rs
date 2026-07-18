@@ -11,8 +11,8 @@ const REQUEST: &str =
     include_str!("../../../docs/traceability/evidence/m4/fast-cpu-canary/review-request.toml");
 const PLAN: &str = include_str!("../../../plan/m4.toml");
 const R0_PLAN: &str = include_str!("../../../plan/r0.toml");
-const CANDIDATE_COMMIT: &str = "5967a4a28e55ee20ebbf8ae8119658b077b9940f";
-const CANDIDATE_TREE: &str = "32337a500ec66a0f72b8d81f6b5230d655286527";
+const CANDIDATE_COMMIT: &str = "72bbd3b9383147c97f50060347a47aca2bde105c";
+const CANDIDATE_TREE: &str = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4";
 
 #[test]
 fn m4_review_request_is_hash_bound_reproducible_and_still_pending() {
@@ -76,13 +76,16 @@ fn m4_review_request_is_hash_bound_reproducible_and_still_pending() {
             .string("canary_registry")
             .expect("registry reference"),
         request.string("candidate_gate").expect("gate reference"),
+        request
+            .string("electron_viewer_regression")
+            .expect("Electron viewer regression reference"),
     ]
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
     assert_eq!(
         verify_subject_entries(&root, &subjects).expect("review-request subjects"),
-        3
+        4
     );
 
     request
