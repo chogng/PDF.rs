@@ -302,6 +302,41 @@ fn identity_h_cidfont_fixture(program: &[u8], salt: u8) -> Fixture {
     )
 }
 
+fn identity_h_indirect_descendant_array_fixture(program: &[u8], salt: u8) -> Fixture {
+    resource_fixture(
+        b"<< /Font << /F0 4 0 R >> >>",
+        vec![
+            (
+                4,
+                direct_object(
+                    4,
+                    b"<< /Type /Font /Subtype /Type0 /Encoding /Identity-H \
+                       /DescendantFonts 5 0 R >>",
+                ),
+            ),
+            (5, direct_object(5, b"[6 0 R]")),
+            (
+                6,
+                direct_object(
+                    6,
+                    b"<< /Type /Font /Subtype /CIDFontType2 /CIDToGIDMap /Identity \
+                       /DW 1000 /W [1 [777 778] 3 3 779] /FontDescriptor 7 0 R >>",
+                ),
+            ),
+            (
+                7,
+                direct_object(7, b"<< /Type /FontDescriptor /FontFile2 8 0 R >>"),
+            ),
+            (
+                8,
+                stream_body(8, format!("/Length1 {}", program.len()).as_bytes(), program),
+            ),
+        ],
+        9,
+        salt,
+    )
+}
+
 fn declared_length_font_fixture(
     program: &[u8],
     flate: bool,
@@ -883,6 +918,86 @@ fn identity_h_cidfonttype2_acquisition_preserves_two_byte_codes_widths_and_proof
     assert_eq!(ready.glyph_id_for_character_code(4), None);
     assert_eq!(ready.stats().objects(), 4);
     assert_eq!(ready.stats().reference_edges(), 3);
+}
+
+#[test]
+fn identity_h_indirect_descendant_array_retains_the_container_proof() {
+    let program = font_support::foundational_font();
+    let fixture = identity_h_indirect_descendant_array_fixture(&program, 0xe9);
+    let prepared = prepare(&fixture, 18_471);
+    let context = font_context(18_481);
+    let missing = RangeStore::new(fixture.snapshot, Default::default()).unwrap();
+    let source = CheckpointMissingSource {
+        complete: &prepared.store,
+        missing: &missing,
+        blocked: context.descendant_envelope_checkpoint(),
+    };
+    let mut job = prepared
+        .authority
+        .acquire_font_resource(
+            lookup_font(&prepared),
+            context,
+            FontResourceLimits::default(),
+        )
+        .unwrap();
+    match job.poll(&source, &DocumentNeverCancelled) {
+        FontResourcePoll::Pending { checkpoint, .. } => {
+            assert_eq!(checkpoint, context.descendant_envelope_checkpoint())
+        }
+        other => panic!("indirect DescendantFonts checkpoint must suspend: {other:?}"),
+    }
+    let ready = match job.poll(&prepared.store, &DocumentNeverCancelled) {
+        FontResourcePoll::Ready(font) => font,
+        other => panic!("indirect DescendantFonts must resume to Ready: {other:?}"),
+    };
+
+    assert!(ready.uses_identity_h());
+    assert_eq!(
+        ready
+            .descendant_array_object()
+            .map(|object| object.reference()),
+        Some(object_ref(5))
+    );
+    assert_eq!(
+        ready.descendant_object().map(|object| object.reference()),
+        Some(object_ref(6))
+    );
+    assert_eq!(
+        ready.descriptor_object().map(|object| object.reference()),
+        Some(object_ref(7))
+    );
+    assert_eq!(ready.program_object().reference(), object_ref(8));
+    assert_eq!(ready.glyph_id_for_character_code(3).unwrap().get(), 3);
+    assert_eq!(ready.stats().objects(), 5);
+    assert_eq!(ready.stats().reference_edges(), 4);
+
+    for (index, (kind, config)) in [
+        (
+            DocumentLimitKind::FontResourceObjects,
+            FontResourceLimitConfig {
+                max_objects: 4,
+                ..FontResourceLimitConfig::default()
+            },
+        ),
+        (
+            DocumentLimitKind::FontResourceReferenceEdges,
+            FontResourceLimitConfig {
+                max_reference_edges: 3,
+                ..FontResourceLimitConfig::default()
+            },
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let error = acquire_failure(
+            &prepared,
+            FontResourceLimits::validate(config).unwrap(),
+            18_482 + u64::try_from(index).unwrap(),
+        );
+        assert_eq!(error.code(), DocumentErrorCode::ResourceLimit);
+        assert_eq!(error.limit().expect("typed limit evidence").kind(), kind);
+    }
 }
 
 #[test]

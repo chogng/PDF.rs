@@ -20,7 +20,7 @@ pub struct FontResourceLimitConfig {
     pub max_polls: u64,
     /// Maximum proof-preserving indirect objects opened.
     pub max_objects: u64,
-    /// Maximum Font-to-encoding, Font-to-descriptor, and descriptor-to-program reference edges.
+    /// Maximum Font-to-descendant-container, descendant, encoding, descriptor, and program edges.
     pub max_reference_edges: u64,
     /// Maximum top-level Font, Encoding, descriptor, and embedded-program metadata entries visited.
     pub max_metadata_entries: u64,
@@ -48,8 +48,8 @@ impl Default for FontResourceLimitConfig {
     fn default() -> Self {
         Self {
             max_polls: 1_048_576,
-            max_objects: 4,
-            max_reference_edges: 3,
+            max_objects: 5,
+            max_reference_edges: 4,
             max_metadata_entries: 2_048,
             max_widths: 256,
             max_object_read_bytes: 96 * 1024 * 1024,

@@ -143,8 +143,8 @@ impl FontResourceUnsupported {
     }
 }
 
-/// Runtime identity and exact checkpoints for Font, descendant, encoding, descriptor, program,
-/// and payload acquisition.
+/// Runtime identity and exact checkpoints for Font, descendant container/CIDFont, encoding,
+/// descriptor, program, and payload acquisition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FontResourceJobContext {
     job: JobId,
@@ -272,7 +272,7 @@ impl FontResourceJobContext {
 pub enum FontResourcePhase {
     /// The selected simple Font dictionary is being reopened.
     Font,
-    /// A Type0 descendant CIDFontType2 dictionary is being reopened.
+    /// A Type0 descendant array or CIDFontType2 dictionary is being reopened.
     Descendant,
     /// An indirect simple-font Encoding dictionary is being reopened.
     Encoding,
@@ -369,6 +369,7 @@ impl FontResourceStats {
 pub struct AcquiredFontResource {
     proof: PageFontReference,
     font_object: AttestedObject,
+    descendant_array_object: Option<AttestedObject>,
     descendant_object: Option<AttestedObject>,
     encoding_object: Option<AttestedObject>,
     descriptor_object: Option<AttestedObject>,
@@ -415,6 +416,10 @@ impl AcquiredFontResource {
     /// Borrows the proof-bound selected Font dictionary object.
     pub const fn font_object(&self) -> &AttestedObject {
         &self.font_object
+    }
+    /// Borrows an indirect Type0 `/DescendantFonts` array, when the array is indirect.
+    pub const fn descendant_array_object(&self) -> Option<&AttestedObject> {
+        self.descendant_array_object.as_ref()
     }
     /// Borrows the Type0 descendant CIDFont object, when this is a composite font.
     pub const fn descendant_object(&self) -> Option<&AttestedObject> {
@@ -568,6 +573,13 @@ impl fmt::Debug for AcquiredFontResource {
             .debug_struct("AcquiredFontResource")
             .field("reference", &self.reference())
             .field(
+                "descendant_array_reference",
+                &self
+                    .descendant_array_object
+                    .as_ref()
+                    .map(AttestedObject::reference),
+            )
+            .field(
                 "descendant_reference",
                 &self
                     .descendant_object
@@ -638,6 +650,7 @@ impl fmt::Debug for FontResourcePoll {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChildKind {
     Font,
+    DescendantArray,
     Descendant,
     Encoding,
     Descriptor,
@@ -693,6 +706,7 @@ enum Type1EncodingPlan {
 )]
 enum FontInspection {
     Ready(PdfFontMetadata),
+    DescendantArray(ObjectRef),
     Descendant(ObjectRef),
 }
 
@@ -784,6 +798,7 @@ pub struct AcquireFontResourceJob {
     limits: FontResourceLimits,
     child: Option<ChildState>,
     font_object: Option<AttestedObject>,
+    descendant_array_object: Option<AttestedObject>,
     descendant_object: Option<AttestedObject>,
     encoding_object: Option<AttestedObject>,
     descriptor_object: Option<AttestedObject>,
@@ -824,7 +839,9 @@ impl AcquireFontResourceJob {
             FontJobState::Active => match self.child.as_ref() {
                 Some(child) => match child.kind {
                     ChildKind::Font => FontResourcePhase::Font,
-                    ChildKind::Descendant => FontResourcePhase::Descendant,
+                    ChildKind::DescendantArray | ChildKind::Descendant => {
+                        FontResourcePhase::Descendant
+                    }
                     ChildKind::Encoding => FontResourcePhase::Encoding,
                     ChildKind::Descriptor => FontResourcePhase::Descriptor,
                     ChildKind::Program => FontResourcePhase::Program,
@@ -979,9 +996,22 @@ impl AcquireFontResourceJob {
                     self.font_object = Some(object);
                     self.follow_and_start(reference, ChildKind::Descendant)
                 }
+                Ok(Ok(FontInspection::DescendantArray(reference))) => {
+                    self.font_object = Some(object);
+                    self.follow_and_start(reference, ChildKind::DescendantArray)
+                }
                 Ok(Err(value)) => return StageResult::Unsupported(value),
                 Err(error) => return StageResult::Failed(error),
             },
+            ChildKind::DescendantArray => {
+                let reference = match self.inspect_descendant_array(&object, source, cancellation) {
+                    Ok(Ok(reference)) => reference,
+                    Ok(Err(value)) => return StageResult::Unsupported(value),
+                    Err(error) => return StageResult::Failed(error),
+                };
+                self.descendant_array_object = Some(object);
+                self.follow_and_start(reference, ChildKind::Descendant)
+            }
             ChildKind::Descendant => {
                 let metadata = match self.inspect_descendant(&object, source, cancellation) {
                     Ok(Ok(metadata)) => metadata,
@@ -1105,7 +1135,7 @@ impl AcquireFontResourceJob {
                 self.context.font_envelope_checkpoint(),
                 self.context.font_boundary_checkpoint(),
             ),
-            ChildKind::Descendant => (
+            ChildKind::DescendantArray | ChildKind::Descendant => (
                 self.context.descendant_envelope_checkpoint(),
                 self.context.descendant_boundary_checkpoint(),
             ),
@@ -1149,6 +1179,10 @@ impl AcquireFontResourceJob {
 
     fn reference_seen(&self, reference: ObjectRef) -> bool {
         self.proof.target() == reference
+            || self
+                .descendant_array_object
+                .as_ref()
+                .is_some_and(|object| object.reference() == reference)
             || self
                 .descendant_object
                 .as_ref()
@@ -1257,6 +1291,7 @@ impl AcquireFontResourceJob {
             .ok_or_else(|| self.internal_error(self.current_offset()))?;
         [
             self.font_object.as_ref(),
+            self.descendant_array_object.as_ref(),
             self.descendant_object.as_ref(),
             self.encoding_object.as_ref(),
             self.descriptor_object.as_ref(),
@@ -1378,10 +1413,9 @@ impl AcquireFontResourceJob {
                     },
                     _ => return Err(invalid_font(reference, descendants.span().start())),
                 },
-                SyntaxObject::Reference(_) => {
-                    return Ok(Err(
-                        self.indirect_metadata(reference, descendants.span().start())
-                    ));
+                SyntaxObject::Reference(target) => {
+                    self.runtime_guard(source, cancellation, Some(descendants.span().start()))?;
+                    return Ok(Ok(FontInspection::DescendantArray(*target)));
                 }
                 _ => return Err(invalid_font(reference, descendants.span().start())),
             };
@@ -1589,6 +1623,40 @@ impl AcquireFontResourceJob {
             },
             descriptor,
         })))
+    }
+
+    fn inspect_descendant_array(
+        &mut self,
+        object: &AttestedObject,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<ObjectRef, FontResourceUnsupported>, DocumentError> {
+        let reference = object.reference();
+        let value = match object.value() {
+            IndirectObjectValue::Stream(stream) => {
+                return Err(invalid_font(reference, stream.dictionary().span().start()));
+            }
+            IndirectObjectValue::Direct(value) => value,
+        };
+        let descendant = match value.value() {
+            SyntaxObject::Array(values) => match values.values() {
+                [value] => match value.value() {
+                    SyntaxObject::Reference(reference) => *reference,
+                    _ => return Err(invalid_font(reference, value.span().start())),
+                },
+                _ => return Err(invalid_font(reference, value.span().start())),
+            },
+            SyntaxObject::Reference(_) => {
+                return Ok(Err(FontResourceUnsupported::new(
+                    FontResourceUnsupportedKind::FontAlias,
+                    reference,
+                    value.span().start(),
+                )));
+            }
+            _ => return Err(invalid_font(reference, value.span().start())),
+        };
+        self.runtime_guard(source, cancellation, Some(value.span().start()))?;
+        Ok(Ok(descendant))
     }
 
     fn inspect_type1_encoding(
@@ -3109,6 +3177,7 @@ impl AcquireFontResourceJob {
         let acquired = AcquiredFontResource {
             proof: self.proof,
             font_object,
+            descendant_array_object: self.descendant_array_object.take(),
             descendant_object: self.descendant_object.take(),
             encoding_object: self.encoding_object.take(),
             descriptor_object: self.descriptor_object.take(),
@@ -3545,6 +3614,7 @@ impl SharedAttestedRevisionIndex {
                 base_parse_bytes: 0,
             }),
             font_object: None,
+            descendant_array_object: None,
             descendant_object: None,
             encoding_object: None,
             descriptor_object: None,
