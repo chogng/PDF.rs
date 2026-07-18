@@ -466,7 +466,11 @@ fn font_program_object(number: u32, program: &[u8]) -> Vec<u8> {
 }
 
 fn font_widths(ascii_a: u32) -> String {
-    (0x20_u8..=0x7e)
+    font_widths_for_range(0x20, 0x7e, ascii_a)
+}
+
+fn font_widths_for_range(first: u8, last: u8, ascii_a: u32) -> String {
+    (first..=last)
         .map(|byte| if byte == b'A' { ascii_a } else { 600 })
         .map(|width| width.to_string())
         .collect::<Vec<_>>()
@@ -484,6 +488,31 @@ fn embedded_font_objects(
         "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
          /FirstChar 32 /LastChar 126 /Widths [{}] /FontDescriptor {descriptor_number} 0 R >>",
         font_widths(ascii_a_width)
+    );
+    vec![
+        (font_number, indirect_object(font_number, font.as_bytes())),
+        (
+            descriptor_number,
+            indirect_object(
+                descriptor_number,
+                format!("<< /Type /FontDescriptor /FontFile2 {program_number} 0 R >>").as_bytes(),
+            ),
+        ),
+        (program_number, font_program_object(program_number, program)),
+    ]
+}
+
+fn complete_winansi_font_objects(
+    font_number: u32,
+    descriptor_number: u32,
+    program_number: u32,
+    program: &[u8],
+    ascii_a_width: u32,
+) -> Vec<(u32, Vec<u8>)> {
+    let font = format!(
+        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
+         /FirstChar 32 /LastChar 255 /Widths [{}] /FontDescriptor {descriptor_number} 0 R >>",
+        font_widths_for_range(0x20, 0xff, ascii_a_width)
     );
     vec![
         (font_number, indirect_object(font_number, font.as_bytes())),
@@ -2920,7 +2949,7 @@ fn text_render_mode_distinguishes_malformed_values_from_valid_unsupported_modes(
 }
 
 #[test]
-fn td_next_line_quotes_empty_adjustments_space_and_ascii_boundaries_are_exact() {
+fn td_next_line_quotes_empty_adjustments_and_winansi_boundaries_are_exact() {
     let page = font_ready(
         b"BT /F0 10 Tf 2 TL 3 -4 TD (A) Tj T* (A) Tj (A) ' 1 2 (A) \" \
           () Tj [] TJ [100] TJ (A) Tj ET",
@@ -2991,20 +3020,42 @@ fn td_next_line_quotes_empty_adjustments_space_and_ascii_boundaries_are_exact() 
         [0x20, 0x7e]
     );
 
-    for (salt, byte) in [(0x93, 0x1f), (0x94, 0x7f)] {
-        let mut content = b"BT /F0 10 Tf (".to_vec();
-        content.push(byte);
-        content.extend_from_slice(b") Tj ET");
-        let (mut job, store) = default_font_job(&content, salt);
-        match job.poll(&store, &DocumentNeverCancelled) {
-            ContentVmPoll::Unsupported(error) => {
-                assert_eq!(error.kind(), ContentUnsupportedKind::TextEncoding)
-            }
-            outcome => panic!("byte {byte:#x} must be unsupported before lookup: {outcome:?}"),
+    let mut control = b"BT /F0 10 Tf (".to_vec();
+    control.push(0x1f);
+    control.extend_from_slice(b") Tj ET");
+    let (mut job, store) = default_font_job(&control, 0x93);
+    match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Unsupported(error) => {
+            assert_eq!(error.kind(), ContentUnsupportedKind::TextEncoding)
         }
-        assert_eq!(job.font_stats().lookups(), 0);
-        assert_eq!(job.font_stats().acquisitions(), 0);
+        outcome => panic!("control byte must be unsupported before lookup: {outcome:?}"),
     }
+    assert_eq!(job.font_stats().lookups(), 0);
+    assert_eq!(job.font_stats().acquisitions(), 0);
+
+    let mut extended = b"BT /F0 10 Tf (".to_vec();
+    extended.push(0x80);
+    extended.extend_from_slice(b") Tj ET");
+    let objects = complete_winansi_font_objects(5, 6, 7, &font_support::foundational_font(), 777);
+    let (mut job, store) = font_job_with_limits(
+        &extended,
+        b"<< /Font << /F0 5 0 R >> >>",
+        &objects,
+        0x94,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("extended WinAnsi byte must render: {outcome:?}"),
+    };
+    let GraphicsCommand::DrawGlyphRun(run) =
+        page.scene().graphics().unwrap().commands()[0].command()
+    else {
+        panic!("extended WinAnsi emits one glyph run")
+    };
+    assert_eq!(run.glyphs()[0].character_code(), 0x80);
 }
 
 #[test]

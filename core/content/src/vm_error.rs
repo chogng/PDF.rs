@@ -672,7 +672,7 @@ pub enum ContentUnsupportedKind {
     FontProfileRequired,
     /// The selected Page Font or embedded program is outside the registered subset.
     FontResource,
-    /// A decoded text string contains a byte outside printable WinAnsi ASCII.
+    /// A decoded text string contains a control byte outside the registered WinAnsi profile.
     TextEncoding,
     /// A text rendering mode other than fill mode zero was selected.
     TextRenderMode,

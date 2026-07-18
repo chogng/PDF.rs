@@ -2466,7 +2466,7 @@ fn seal_text_items(
 
     match input {
         TextItemsInput::String(value) => {
-            validate_printable_text(value.bytes(), snapshot, byte_source, cancellation, source)?;
+            validate_winansi_text(value.bytes(), snapshot, byte_source, cancellation, source)?;
         }
         TextItemsInput::Array(values) => {
             for (index, value) in values.iter().enumerate() {
@@ -2475,7 +2475,7 @@ fn seal_text_items(
                         .map_err(TextPlanningTerminal::Failed)?;
                 }
                 match value.value() {
-                    ContentOperand::String(value) => validate_printable_text(
+                    ContentOperand::String(value) => validate_winansi_text(
                         value.bytes(),
                         snapshot,
                         byte_source,
@@ -2620,7 +2620,7 @@ fn push_text_string_item(
     clippy::result_large_err,
     reason = "text validation preserves structured unsupported and VM guard failures"
 )]
-fn validate_printable_text(
+fn validate_winansi_text(
     bytes: &[u8],
     snapshot: SourceSnapshot,
     byte_source: &dyn ByteSource,
@@ -2630,7 +2630,7 @@ fn validate_printable_text(
     for chunk in bytes.chunks(256) {
         runtime_guard(snapshot, byte_source, cancellation, Some(source))
             .map_err(TextPlanningTerminal::Failed)?;
-        if !chunk.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+        if !chunk.iter().all(|byte| *byte >= 0x20) {
             return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
                 ContentUnsupportedKind::TextEncoding,
                 source,
@@ -4980,8 +4980,8 @@ impl TextExecutor {
             .map_err(ContentVmFailure::Vm)?;
 
         let mut segment_count = 0_u64;
-        let mut planned_codes = [None::<u16>; 95];
-        let mut planned_outlines = [None::<(u16, u64)>; 95];
+        let mut planned_codes = [None::<u16>; 224];
+        let mut planned_outlines = [None::<(u16, u64)>; 224];
         let mut planned_outline_count = 0_usize;
         let mut probed = 0_u64;
         for item in items {
@@ -5047,7 +5047,7 @@ impl TextExecutor {
         self.preflight_glyph_candidate(runtime, 0, glyph_retained, source)
             .map_err(ContentVmFailure::Vm)?;
         let mut outline_retained = 0_u64;
-        let mut outline_cache: [Option<(u16, GlyphOutline)>; 95] = std::array::from_fn(|_| None);
+        let mut outline_cache: [Option<(u16, GlyphOutline)>; 224] = std::array::from_fn(|_| None);
         let mut outline_cache_len = 0_usize;
         let mut probed = 0_u64;
         for item in items {
