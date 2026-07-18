@@ -40,7 +40,7 @@ pub enum ImageXObjectUnsupportedKind {
     ExplicitMask,
     /// The image declares a soft mask.
     SoftMask,
-    /// The image color space is outside direct DeviceGray, DeviceRGB, and DeviceCMYK.
+    /// The image color space is outside direct or one-level indirect device color spaces.
     UnsupportedColorSpace,
     /// The image component width is outside the registered 1-, 2-, 4-, 8-, and 16-bit profile.
     UnsupportedBitsPerComponent,
@@ -52,7 +52,7 @@ pub enum ImageXObjectUnsupportedKind {
     UnsupportedFilter,
     /// The image filter parameters are recognized but outside the registered default profile.
     UnsupportedDecodeParameters,
-    /// Required image metadata is stored through an indirect reference.
+    /// Required image metadata other than one registered device ColorSpace is indirect.
     IndirectMetadata,
 }
 
@@ -202,6 +202,8 @@ impl ImageXObjectJobContext {
 pub enum ImageXObjectPhase {
     /// The selected indirect object is being reopened and its metadata inspected.
     Object,
+    /// A one-level indirect device ColorSpace object is being reopened.
+    ColorSpace,
     /// The exact encoded stream payload is being acquired and decoded.
     Payload,
     /// A proof-bearing decoded image was published.
@@ -271,6 +273,7 @@ impl ImageXObjectStats {
 pub struct AcquiredImageXObject {
     proof: PageXObjectReference,
     object: AttestedObject,
+    color_space_object: Option<AttestedObject>,
     width: u32,
     height: u32,
     color_space: ImageXObjectColorSpace,
@@ -296,6 +299,11 @@ impl AcquiredImageXObject {
     /// Borrows the proof-bound reopened stream object.
     pub const fn object(&self) -> &AttestedObject {
         &self.object
+    }
+
+    /// Borrows the proof-bound indirect device ColorSpace object, when present.
+    pub const fn color_space_object(&self) -> Option<&AttestedObject> {
+        self.color_space_object.as_ref()
     }
 
     /// Returns positive pixel columns.
@@ -369,6 +377,13 @@ impl fmt::Debug for AcquiredImageXObject {
         formatter
             .debug_struct("AcquiredImageXObject")
             .field("reference", &self.reference())
+            .field(
+                "color_space_reference",
+                &self
+                    .color_space_object
+                    .as_ref()
+                    .map(AttestedObject::reference),
+            )
             .field("width", &self.width)
             .field("height", &self.height)
             .field("color_space", &self.color_space)
@@ -461,12 +476,22 @@ struct ImageDecodeAdmission {
 
 struct ActiveImage {
     object: AttestedObject,
+    color_space_object: Option<AttestedObject>,
     metadata: ImageMetadata,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChildKind {
+    Image,
+    ColorSpace,
+}
+
 struct ChildState {
+    kind: ChildKind,
     job: OpenAttestedObjectJob,
     work_caps: ObjectWorkCaps,
+    base_read_bytes: u64,
+    base_parse_bytes: u64,
 }
 
 enum ImageJobState {
@@ -478,6 +503,7 @@ enum ImageJobState {
 
 enum MetadataOutcome {
     Ready(ImageMetadata),
+    IndirectColorSpace(ObjectRef),
     Unsupported(ImageXObjectUnsupported),
 }
 
@@ -512,6 +538,7 @@ pub struct AcquireImageXObjectJob {
     context: ImageXObjectJobContext,
     limits: ImageXObjectLimits,
     child: Option<ChildState>,
+    image_object: Option<AttestedObject>,
     active: Option<ActiveImage>,
     stats: ImageXObjectStats,
     state: ImageJobState,
@@ -550,7 +577,12 @@ impl AcquireImageXObjectJob {
             ImageJobState::Unsupported(_) => ImageXObjectPhase::Unsupported,
             ImageJobState::Failed(_) => ImageXObjectPhase::Failed,
             ImageJobState::Active if self.active.is_some() => ImageXObjectPhase::Payload,
-            ImageJobState::Active => ImageXObjectPhase::Object,
+            ImageJobState::Active => match &self.child {
+                Some(child) if matches!(child.kind, ChildKind::ColorSpace) => {
+                    ImageXObjectPhase::ColorSpace
+                }
+                Some(_) | None => ImageXObjectPhase::Object,
+            },
         }
     }
 
@@ -572,73 +604,182 @@ impl AcquireImageXObjectJob {
             return self.fail(error);
         }
 
-        if self.active.is_some() {
-            return match self.poll_payload(source, cancellation) {
-                PayloadOutcome::Ready(image) => self.ready(image),
-                PayloadOutcome::Pending { ticket, missing } => ImageXObjectPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint: self.context.payload_checkpoint(),
-                },
-                PayloadOutcome::Unsupported(unsupported) => self.unsupported(unsupported),
-                PayloadOutcome::Failed(error) => {
-                    let error = self.prioritize_runtime_error(source, cancellation, error);
-                    self.fail(error)
-                }
-            };
-        }
-
-        let Some(child) = self.child.as_mut() else {
-            return self.fail(DocumentError::for_code(
-                DocumentErrorCode::InternalState,
-                Some(self.proof.target()),
-                self.current_offset(),
-            ));
-        };
-        let outcome = child.job.poll(source, cancellation);
-        self.stats.object_read_bytes = child.job.stats().read_bytes();
-        self.stats.object_parse_bytes = child.job.stats().parse_bytes();
-        self.stats.peak_retained_bytes = self
-            .stats
-            .peak_retained_bytes
-            .max(child.job.stats().retained_heap_bytes());
-        if let Err(error) = self.runtime_guard(source, cancellation, self.current_offset()) {
-            return self.fail(error);
-        }
-
-        match outcome {
-            AttestedObjectPoll::Pending {
-                ticket,
-                missing,
-                checkpoint,
-            } => ImageXObjectPoll::Pending {
-                ticket,
-                missing,
-                checkpoint,
-            },
-            AttestedObjectPoll::Failed(error) => {
-                let error = self.map_child_error(error);
-                let error = self.prioritize_runtime_error(source, cancellation, error);
-                self.fail(error)
-            }
-            AttestedObjectPoll::Ready(object) => {
-                self.child = None;
-                match self.inspect_object(&object, source, cancellation) {
-                    Ok(MetadataOutcome::Ready(metadata)) => {
-                        self.stats.peak_retained_bytes = self
-                            .stats
-                            .peak_retained_bytes
-                            .max(object.syntax_heap_bytes());
-                        self.active = Some(ActiveImage { object, metadata });
-                        self.poll(source, cancellation)
-                    }
-                    Ok(MetadataOutcome::Unsupported(unsupported)) => self.unsupported(unsupported),
-                    Err(error) => {
+        loop {
+            if self.active.is_some() {
+                return match self.poll_payload(source, cancellation) {
+                    PayloadOutcome::Ready(image) => self.ready(image),
+                    PayloadOutcome::Pending { ticket, missing } => ImageXObjectPoll::Pending {
+                        ticket,
+                        missing,
+                        checkpoint: self.context.payload_checkpoint(),
+                    },
+                    PayloadOutcome::Unsupported(unsupported) => self.unsupported(unsupported),
+                    PayloadOutcome::Failed(error) => {
                         let error = self.prioritize_runtime_error(source, cancellation, error);
                         self.fail(error)
                     }
+                };
+            }
+
+            let retained_objects = self.retained_object_bytes();
+            let Some(child) = self.child.as_mut() else {
+                return self.fail(self.internal_error(None));
+            };
+            let outcome = child.job.poll(source, cancellation);
+            let read = child
+                .base_read_bytes
+                .checked_add(child.job.stats().read_bytes());
+            let parse = child
+                .base_parse_bytes
+                .checked_add(child.job.stats().parse_bytes());
+            let retained = retained_objects.checked_add(child.job.stats().retained_heap_bytes());
+            match (read, parse, retained) {
+                (Some(read), Some(parse), Some(retained)) => {
+                    self.stats.object_read_bytes = read;
+                    self.stats.object_parse_bytes = parse;
+                    self.stats.peak_retained_bytes = self.stats.peak_retained_bytes.max(retained);
+                }
+                _ => return self.fail(self.internal_error(None)),
+            }
+            if let Err(error) = self.runtime_guard(source, cancellation, self.current_offset()) {
+                return self.fail(error);
+            }
+
+            match outcome {
+                AttestedObjectPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => {
+                    return ImageXObjectPoll::Pending {
+                        ticket,
+                        missing,
+                        checkpoint,
+                    };
+                }
+                AttestedObjectPoll::Failed(error) => {
+                    let error = self.map_child_error(error);
+                    let error = self.prioritize_runtime_error(source, cancellation, error);
+                    return self.fail(error);
+                }
+                AttestedObjectPoll::Ready(object) => {
+                    let kind = self.child.as_ref().expect("child produced object").kind;
+                    self.child = None;
+                    match self.accept_object(kind, object, source, cancellation) {
+                        Ok(Ok(())) => continue,
+                        Ok(Err(unsupported)) => return self.unsupported(unsupported),
+                        Err(error) => {
+                            let error = self.prioritize_runtime_error(source, cancellation, error);
+                            return self.fail(error);
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    fn accept_object(
+        &mut self,
+        kind: ChildKind,
+        object: AttestedObject,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<(), ImageXObjectUnsupported>, DocumentError> {
+        if object.snapshot() != self.snapshot
+            || object.revision_id() != self.proof.revision_id()
+            || object.revision_startxref() != self.proof.revision_startxref()
+        {
+            return Err(self.internal_error(Some(object.object_span().start())));
+        }
+        match kind {
+            ChildKind::Image => match self.inspect_object(&object, None, source, cancellation)? {
+                MetadataOutcome::Ready(metadata) => {
+                    self.active = Some(ActiveImage {
+                        object,
+                        color_space_object: None,
+                        metadata,
+                    });
+                    Ok(Ok(()))
+                }
+                MetadataOutcome::IndirectColorSpace(reference) => {
+                    if reference == object.reference() {
+                        return Err(invalid_image(reference, object.object_span().start()));
+                    }
+                    self.image_object = Some(object);
+                    self.start_child(reference, ChildKind::ColorSpace)?;
+                    Ok(Ok(()))
+                }
+                MetadataOutcome::Unsupported(unsupported) => Ok(Err(unsupported)),
+            },
+            ChildKind::ColorSpace => {
+                let color_space =
+                    match self.inspect_color_space_object(&object, source, cancellation)? {
+                        Ok(color_space) => color_space,
+                        Err(unsupported) => return Ok(Err(unsupported)),
+                    };
+                let Some(image_object) = self.image_object.take() else {
+                    return Err(self.internal_error(Some(object.object_span().start())));
+                };
+                match self.inspect_object(
+                    &image_object,
+                    Some((object.reference(), color_space)),
+                    source,
+                    cancellation,
+                )? {
+                    MetadataOutcome::Ready(metadata) => {
+                        self.active = Some(ActiveImage {
+                            object: image_object,
+                            color_space_object: Some(object),
+                            metadata,
+                        });
+                        Ok(Ok(()))
+                    }
+                    MetadataOutcome::IndirectColorSpace(_) => {
+                        Err(self.internal_error(Some(image_object.object_span().start())))
+                    }
+                    MetadataOutcome::Unsupported(unsupported) => Ok(Err(unsupported)),
+                }
+            }
+        }
+    }
+
+    fn inspect_color_space_object(
+        &mut self,
+        object: &AttestedObject,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<ImageXObjectColorSpace, ImageXObjectUnsupported>, DocumentError> {
+        let reference = object.reference();
+        let value = match object.value() {
+            IndirectObjectValue::Direct(value) => value,
+            IndirectObjectValue::Stream(stream) => {
+                return Err(invalid_image(reference, stream.dictionary().span().start()));
+            }
+        };
+        self.charge_metadata(reference, value.span().start())?;
+        self.runtime_guard(source, cancellation, Some(value.span().start()))?;
+        match value.value() {
+            SyntaxObject::Name(name) => match name.bytes() {
+                b"DeviceGray" => Ok(Ok(ImageXObjectColorSpace::DeviceGray)),
+                b"DeviceRGB" => Ok(Ok(ImageXObjectColorSpace::DeviceRgb)),
+                b"DeviceCMYK" => Ok(Ok(ImageXObjectColorSpace::DeviceCmyk)),
+                _ => Ok(Err(ImageXObjectUnsupported::new(
+                    ImageXObjectUnsupportedKind::UnsupportedColorSpace,
+                    reference,
+                    value.span().start(),
+                ))),
+            },
+            SyntaxObject::Reference(_) => Ok(Err(ImageXObjectUnsupported::new(
+                ImageXObjectUnsupportedKind::IndirectMetadata,
+                reference,
+                value.span().start(),
+            ))),
+            SyntaxObject::Array(_) => Ok(Err(ImageXObjectUnsupported::new(
+                ImageXObjectUnsupportedKind::UnsupportedColorSpace,
+                reference,
+                value.span().start(),
+            ))),
+            _ => Err(invalid_image(reference, value.span().start())),
         }
     }
 
@@ -737,7 +878,18 @@ impl AcquireImageXObjectJob {
                 ));
             }
         };
-        let object_heap = active.object.syntax_heap_bytes();
+        let object_heap = match active.color_space_object.as_ref().map_or(
+            Some(active.object.syntax_heap_bytes()),
+            |object| {
+                active
+                    .object
+                    .syntax_heap_bytes()
+                    .checked_add(object.syntax_heap_bytes())
+            },
+        ) {
+            Some(value) => value,
+            None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
+        };
         let preallocated = match object_heap.checked_add(plan_upper) {
             Some(value) => value,
             None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
@@ -870,6 +1022,7 @@ impl AcquireImageXObjectJob {
         let image = AcquiredImageXObject {
             proof: self.proof,
             object: active.object,
+            color_space_object: active.color_space_object,
             width: active.metadata.width,
             height: active.metadata.height,
             color_space: active.metadata.color_space,
@@ -886,6 +1039,7 @@ impl AcquireImageXObjectJob {
     fn inspect_object(
         &mut self,
         object: &AttestedObject,
+        resolved_color_space: Option<(ObjectRef, ImageXObjectColorSpace)>,
         source: &(dyn ByteSource + '_),
         cancellation: &(dyn DocumentCancellation + '_),
     ) -> Result<MetadataOutcome, DocumentError> {
@@ -1025,9 +1179,11 @@ impl AcquireImageXObjectJob {
                     ));
                 }
             },
-            SyntaxObject::Reference(_) => {
-                return Ok(indirect_metadata(reference, color_value.span().start()));
-            }
+            SyntaxObject::Reference(target) => match resolved_color_space {
+                Some((resolved, color_space)) if resolved == *target => color_space,
+                Some(_) => return Err(self.internal_error(Some(color_value.span().start()))),
+                None => return Ok(MetadataOutcome::IndirectColorSpace(*target)),
+            },
             SyntaxObject::Array(_) => {
                 return Ok(unsupported(
                     ImageXObjectUnsupportedKind::UnsupportedColorSpace,
@@ -1383,6 +1539,106 @@ impl AcquireImageXObjectJob {
         Ok(())
     }
 
+    fn retained_object_bytes(&self) -> u64 {
+        self.image_object
+            .as_ref()
+            .map_or(0, AttestedObject::syntax_heap_bytes)
+    }
+
+    fn start_child(&mut self, reference: ObjectRef, kind: ChildKind) -> Result<(), DocumentError> {
+        let authority = self.authority.as_attested();
+        let offset = authority.attestation(reference)?.xref_offset();
+        if reference == self.proof.target()
+            || self
+                .image_object
+                .as_ref()
+                .is_some_and(|object| object.reference() == reference)
+        {
+            return Err(invalid_image(reference, offset));
+        }
+        let read_remaining = self
+            .limits
+            .max_object_read_bytes()
+            .checked_sub(self.stats.object_read_bytes)
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        if read_remaining == 0 {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectObjectReadBytes,
+                self.limits.max_object_read_bytes(),
+                self.stats.object_read_bytes,
+                1,
+                reference,
+                Some(offset),
+            ));
+        }
+        let parse_remaining = self
+            .limits
+            .max_object_parse_bytes()
+            .checked_sub(self.stats.object_parse_bytes)
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        if parse_remaining == 0 {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectObjectParseBytes,
+                self.limits.max_object_parse_bytes(),
+                self.stats.object_parse_bytes,
+                1,
+                reference,
+                Some(offset),
+            ));
+        }
+        let retained_objects = self.retained_object_bytes();
+        let retained_remaining = self
+            .limits
+            .max_retained_bytes()
+            .checked_sub(retained_objects)
+            .ok_or_else(|| {
+                DocumentError::image_xobject_resource(
+                    DocumentLimitKind::ImageXObjectRetainedBytes,
+                    self.limits.max_retained_bytes(),
+                    retained_objects,
+                    1,
+                    reference,
+                    Some(offset),
+                )
+            })?;
+        if retained_remaining == 0 {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectRetainedBytes,
+                self.limits.max_retained_bytes(),
+                retained_objects,
+                1,
+                reference,
+                Some(offset),
+            ));
+        }
+        let syntax = authority.syntax_limits();
+        let intrinsic_retained = syntax
+            .max_owned_bytes()
+            .checked_add(syntax.max_container_bytes())
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        let work_caps = ObjectWorkCaps::new_with_retained_bytes(
+            read_remaining.min(authority.object_limits().max_total_read_bytes()),
+            parse_remaining.min(authority.object_limits().max_total_parse_bytes()),
+            retained_remaining.min(intrinsic_retained),
+        )
+        .map_err(|error| DocumentError::from_object_access_constructor(error, reference, offset))?;
+        let context = AttestedObjectJobContext::new(
+            self.context.job(),
+            self.context.object_envelope_checkpoint(),
+            self.context.object_boundary_checkpoint(),
+            self.context.priority(),
+        );
+        let job = authority.open_object(reference, context, work_caps)?;
+        self.child = Some(ChildState {
+            kind,
+            job,
+            work_caps,
+            base_read_bytes: self.stats.object_read_bytes,
+            base_parse_bytes: self.stats.object_parse_bytes,
+        });
+        Ok(())
+    }
+
     fn check_payload_geometry(
         &self,
         metadata: ImageMetadata,
@@ -1495,6 +1751,11 @@ impl AcquireImageXObjectJob {
     }
 
     fn map_child_error(&self, error: DocumentError) -> DocumentError {
+        let reference = self
+            .child
+            .as_ref()
+            .map_or(self.proof.target(), |child| child.job.reference());
+        let retained_prefix = self.retained_object_bytes();
         let Some(lower) = error.object_error() else {
             return error;
         };
@@ -1516,16 +1777,15 @@ impl AcquireImageXObjectJob {
             return DocumentError::image_xobject_resource(
                 DocumentLimitKind::ImageXObjectRetainedBytes,
                 self.limits.max_retained_bytes(),
-                syntax_limit.consumed(),
+                retained_prefix.saturating_add(syntax_limit.consumed()),
                 syntax_limit.attempted(),
-                self.proof.target(),
+                reference,
                 error.offset().or_else(|| self.current_offset()),
             );
         }
         let Some(limit) = lower.limit() else {
             return error;
         };
-        let reference = self.proof.target();
         let offset = error.offset().or_else(|| self.current_offset());
         match limit.kind() {
             ObjectLimitKind::TotalReadBytes
@@ -1727,9 +1987,13 @@ impl AcquireImageXObjectJob {
     }
 
     fn current_offset(&self) -> Option<u64> {
+        let reference = self
+            .child
+            .as_ref()
+            .map_or(self.proof.target(), |child| child.job.reference());
         self.authority
             .as_attested()
-            .attestation(self.proof.target())
+            .attestation(reference)
             .ok()
             .map(crate::ObjectAttestation::xref_offset)
     }
@@ -1839,7 +2103,14 @@ impl SharedAttestedRevisionIndex {
             proof,
             context,
             limits,
-            child: Some(ChildState { job, work_caps }),
+            child: Some(ChildState {
+                kind: ChildKind::Image,
+                job,
+                work_caps,
+                base_read_bytes: 0,
+                base_parse_bytes: 0,
+            }),
+            image_object: None,
             active: None,
             stats: ImageXObjectStats::default(),
             state: ImageJobState::Active,

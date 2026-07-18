@@ -542,6 +542,73 @@ fn direct_lookup_and_identity_acquisition_preserve_proof_and_replay_ready() {
 }
 
 #[test]
+fn one_level_indirect_device_color_space_is_proof_bound_and_decoded() {
+    let fixture = resource_fixture(
+        b"<< /XObject << /Im0 4 0 R >> >>",
+        vec![
+            (
+                4,
+                stream_body(
+                    4,
+                    b"/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace 5 0 R /BitsPerComponent 8",
+                    RGB_2X2,
+                ),
+            ),
+            (5, b"5 0 obj\n/DeviceRGB\nendobj\n".to_vec()),
+        ],
+        6,
+        0xd2,
+    );
+    let prepared = prepare(&fixture, 12_381);
+    let color_space_offset = offset_of(&fixture.bytes, b"5 0 obj");
+    let partial = RangeStore::new(fixture.snapshot, Default::default()).unwrap();
+    let prefix = ByteRange::new(0, color_space_offset).unwrap();
+    partial
+        .supply(
+            RangeResponse::new(
+                fixture.snapshot,
+                prefix,
+                fixture.bytes[..usize::try_from(color_space_offset).unwrap()].to_vec(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut job = prepared
+        .authority
+        .acquire_image_xobject(
+            lookup_image(&prepared),
+            image_context(12_391),
+            ImageXObjectLimits::default(),
+        )
+        .expect("valid indirect ColorSpace image job");
+    match job.poll(&partial, &DocumentNeverCancelled) {
+        ImageXObjectPoll::Pending { checkpoint, .. } => assert!(
+            checkpoint == job.context().object_envelope_checkpoint()
+                || checkpoint == job.context().object_boundary_checkpoint()
+        ),
+        other => panic!("missing indirect ColorSpace object must suspend: {other:?}"),
+    }
+    assert_eq!(job.phase(), ImageXObjectPhase::ColorSpace);
+    let image = match job.poll(&prepared.store, &DocumentNeverCancelled) {
+        ImageXObjectPoll::Ready(image) => image,
+        other => panic!("supplied ColorSpace object must resume to Ready: {other:?}"),
+    };
+
+    assert_eq!(image.reference(), object_ref(4));
+    assert_eq!(
+        image
+            .color_space_object()
+            .expect("indirect ColorSpace proof remains owned")
+            .reference(),
+        object_ref(5)
+    );
+    assert_eq!(image.color_space(), ImageXObjectColorSpace::DeviceRgb);
+    assert_eq!(image.decoded_bytes(), RGB_2X2);
+    assert_eq!(image.stats().metadata_entries(), 15);
+    assert!(image.stats().retained_bytes() >= u64::try_from(RGB_2X2.len()).unwrap());
+}
+
+#[test]
 fn flate_default_decode_and_all_direct_device_color_spaces_are_registered() {
     let flate = image_fixture(
         b"/Type /XObject /Subtype /Image /Width 2 /Height 3 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Decode [0.0 1.0 0 1 0e2 0.1e1] /Filter /FlateDecode /DecodeParms << /Predictor 1 /Colors 3 /BitsPerComponent 8 /Columns 2 >>",
