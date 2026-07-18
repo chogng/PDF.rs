@@ -132,9 +132,10 @@ coverage claim.
   `/XRefStm`. A base hybrid permits `XRefStm < current startxref`; an incremental hybrid additionally
   requires `Prev < XRefStm`. Traditional-base completeness is the union of its primary table and
   validated supplement, while object zero remains a generation-65535 free primary-table entry.
-  Primary xref-stream
-  candidates prove a typed self entry at their own anchor; hybrid anchors may be defined by the
-  current table or supplement. Supplemental `/Prev` is retained but never drives the primary chain.
+  Primary and hybrid xref-stream candidates may omit their own row because the source-framed
+  container already owns that anchor; when either table contains the self row, it must be the exact
+  uncompressed container generation and anchor. Supplemental `/Prev` is retained but never drives
+  the primary chain.
 - Lookup checks the current primary before its hybrid supplement and only then visits the older
   revision. A free or null winning row hides every older definition. Each candidate retains an
   optional explicit `/Root`; the oldest base must provide one, while updates may omit it and inherit

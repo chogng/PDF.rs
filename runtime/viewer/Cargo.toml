@@ -10,6 +10,7 @@ pdf-rs-bytes = { path = "../../core/bytes" }
 pdf-rs-content = { path = "../../core/content" }
 pdf-rs-document = { path = "../../core/document" }
 pdf-rs-fast-raster = { path = "../../core/fast-raster" }
+pdf-rs-filters = { path = "../../core/filters" }
 pdf-rs-policy = { path = "../policy" }
 pdf-rs-raster = { path = "../../core/raster" }
 pdf-rs-scene = { path = "../../core/scene" }

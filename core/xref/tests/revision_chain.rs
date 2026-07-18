@@ -257,7 +257,6 @@ fn a_primary_stream_can_be_the_newest_incremental_revision() {
         Some(300),
         vec![
             RevisionEntry::compressed(1, 8, 0),
-            RevisionEntry::uncompressed(7, 900, 0),
             RevisionEntry::uncompressed(8, 820, 0),
         ],
     );

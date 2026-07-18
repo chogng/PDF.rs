@@ -316,6 +316,7 @@ dependencies = [
  "pdf-rs-content",
  "pdf-rs-document",
  "pdf-rs-fast-raster",
+ "pdf-rs-filters",
  "pdf-rs-object",
  "pdf-rs-policy",
  "pdf-rs-raster",

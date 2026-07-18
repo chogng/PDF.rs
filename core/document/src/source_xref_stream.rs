@@ -160,7 +160,7 @@ pub enum SourceXrefStreamErrorCode {
     SourceGeometryMismatch,
     /// Framing returned a non-stream or inconsistent xref-stream container.
     InvalidContainer,
-    /// A primary stream lacks its exact uncompressed self entry, or a present hybrid self entry is wrong.
+    /// A present stream self entry is inconsistent with the framed container or source anchor.
     InvalidSelfEntry,
     /// Decoded xref-stream validation failed.
     XrefStreamFailure,
@@ -1694,12 +1694,7 @@ impl OpenSourceXrefStreamJob {
             }
         };
         self.stats.xref_stream = Some(xref_stream.stats());
-        if !valid_self_entry(
-            &xref_stream,
-            self.container,
-            self.startxref,
-            self.revision_startxref == self.startxref,
-        ) {
+        if !valid_self_entry(&xref_stream, self.container, self.startxref) {
             return self.fail(SourceXrefStreamError::for_code(
                 SourceXrefStreamErrorCode::InvalidSelfEntry,
                 Some(self.container),
@@ -2167,12 +2162,7 @@ fn validate_container(
     Some(stream)
 }
 
-fn valid_self_entry(
-    stream: &XrefStream,
-    container: ObjectRef,
-    startxref: u64,
-    required: bool,
-) -> bool {
+fn valid_self_entry(stream: &XrefStream, container: ObjectRef, startxref: u64) -> bool {
     if container.number() >= stream.declared_size() {
         return false;
     }
@@ -2187,6 +2177,6 @@ fn valid_self_entry(
             XrefStreamEntryKind::Uncompressed { offset, generation }
                 if offset == startxref && generation == container.generation()
         ),
-        None => !required,
+        None => true,
     }
 }

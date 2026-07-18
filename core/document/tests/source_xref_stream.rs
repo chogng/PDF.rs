@@ -658,6 +658,19 @@ fn dictionary_filter_container_and_self_failures_remain_distinct() {
         "completed child-parser work remains cumulative on a later proof failure"
     );
 
+    let omitted_self = fixture(
+        vec![0, 0, 0, 255],
+        |length| format!("<< /Type /XRef /Size 10 /W [1 2 1] /Index [0 1] /Length {length} >>"),
+        true,
+        0x83,
+    );
+    let store = supplied_store(&omitted_self);
+    let ready = match job(&omitted_self).poll(&store, &NeverCancelSourceXrefStream) {
+        SourceXrefStreamPoll::Ready(ready) => ready,
+        other => panic!("omitted self entry should retain framed-container authority: {other:?}"),
+    };
+    assert_eq!(ready.container(), omitted_self.container);
+
     let hybrid_outside_size = fixture(
         vec![0, 0, 0, 255],
         |length| format!("<< /Type /XRef /Size 1 /W [1 2 1] /Index [0 1] /Length {length} >>"),

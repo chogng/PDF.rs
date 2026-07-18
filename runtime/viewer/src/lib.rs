@@ -21,18 +21,23 @@ use pdf_rs_content::{
     ContentImageProfile, ContentLimits, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
-    DocumentError, DocumentErrorCategory, FontResourceJobContext, FontResourceLimits,
-    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelled, OpenStrictBaseRevisionJob,
-    PageContentJobContext, PageContentLimits, PageContentPoll, PageFontLookupLimits, PageIndex,
-    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
-    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
-    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionId, SharedAttestedRevisionIndex, StrictBaseOpenContext,
-    StrictBaseOpenError, StrictBaseOpenLimits, StrictBaseOpenPoll,
+    AcquiredObjectJobContext, AcquiredPageCountPoll, DocumentError, DocumentErrorCategory,
+    FontResourceJobContext, FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits,
+    NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
+    OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits, PageContentPoll,
+    PageFontLookupLimits, PageIndex, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
+    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
+    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionId,
+    SharedAttestedRevisionIndex, SourceAcquiredDocument, SourceAcquiredDocumentLimits,
+    SourceRevisionChainError, SourceRevisionChainErrorCategory, SourceRevisionChainJobContext,
+    SourceRevisionChainLimits, SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError,
+    StrictBaseOpenLimits, StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
 };
+use pdf_rs_filters::DecodeLimits;
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_policy::{
     CapabilityEvaluator, CapabilityProfile, DeviceRect, NeverCancelled as NeverPolicyCancelled,
@@ -45,7 +50,10 @@ use pdf_rs_raster::reference::{
 };
 use pdf_rs_scene::{GraphicsSceneLimits, PageRotation, Scene, SceneRect, SceneScalar};
 use pdf_rs_syntax::SyntaxLimits;
-use pdf_rs_xref::{XrefErrorCategory, XrefJobContext, XrefLimits};
+use pdf_rs_xref::{
+    RevisionLimits, XrefAnchorLimits, XrefErrorCategory, XrefJobContext, XrefLimits,
+    XrefStreamLimits,
+};
 
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_OUTPUT_WIDTH: u32 = 4_096;
@@ -131,6 +139,19 @@ fn strict_open_failure(error: StrictBaseOpenError) -> NativeViewerError {
     }
 }
 
+fn source_chain_failure(error: SourceRevisionChainError) -> NativeViewerError {
+    let code = match error.category() {
+        SourceRevisionChainErrorCategory::Syntax => NativeViewerErrorCode::Document,
+        SourceRevisionChainErrorCategory::Source => NativeViewerErrorCode::Source,
+        SourceRevisionChainErrorCategory::Unsupported => NativeViewerErrorCode::Unsupported,
+        SourceRevisionChainErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+        SourceRevisionChainErrorCategory::Configuration
+        | SourceRevisionChainErrorCategory::Cancellation
+        | SourceRevisionChainErrorCategory::Internal => NativeViewerErrorCode::Internal,
+    };
+    NativeViewerError::new(code)
+}
+
 /// Native raster implementation that produced a complete viewer surface.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeRendererKind {
@@ -202,13 +223,27 @@ impl NativePageSurface {
 pub struct NativeDocument {
     source: Arc<Vec<u8>>,
     snapshot: SourceSnapshot,
-    authority: SharedAttestedRevisionIndex,
-    page_index: PageIndex,
+    authority: NativeDocumentAuthority,
+    page_count: u32,
     next_job: u64,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "move-only acquired source proofs remain inline so their accounted ownership is not hidden behind an untracked allocation"
+)]
+enum NativeDocumentAuthority {
+    Strict {
+        authority: SharedAttestedRevisionIndex,
+        page_index: PageIndex,
+    },
+    Acquired {
+        _authority: SourceAcquiredDocument,
+    },
+}
+
 impl NativeDocument {
-    /// Strictly opens an immutable local PDF and publishes its page index.
+    /// Opens an immutable local PDF and publishes its validated logical page count.
     pub fn open(source: Vec<u8>) -> Result<Self, NativeViewerError> {
         let source_len = u64::try_from(source.len())
             .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
@@ -217,98 +252,50 @@ impl NativeDocument {
         }
         let snapshot = source_snapshot(&source, source_len);
         let source = Arc::new(source);
-        let open_job = JobId::new(1);
-        let mut open = OpenStrictBaseRevisionJob::new(
-            snapshot,
-            RevisionId::new(1),
-            StrictBaseOpenContext::new(
-                XrefJobContext::new(
-                    open_job,
-                    ResumeCheckpoint::new(1_001),
-                    ResumeCheckpoint::new(1_002),
-                ),
-                RevisionAttestationJobContext::new(
-                    open_job,
-                    ResumeCheckpoint::new(1_003),
-                    ResumeCheckpoint::new(1_004),
-                    ResumeCheckpoint::new(1_005),
-                    RequestPriority::VisiblePage,
-                ),
-            ),
-            StrictBaseOpenLimits::new(
-                XrefLimits::default(),
-                pdf_rs_document::DocumentLimits::default(),
-                RevisionAttestationLimits::default(),
-                ObjectLimits::default(),
-                SyntaxLimits::default(),
-            ),
-        )
-        .map_err(strict_open_failure)?;
-        let open_store = range_store(snapshot)?;
-        let authority = loop {
-            match open.poll(&open_store, &NeverCancelled) {
-                StrictBaseOpenPoll::Ready(authority) => break authority.into_shared(),
-                StrictBaseOpenPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => complete_pending(
-                    &open_store,
-                    snapshot,
-                    &source,
-                    open_job,
-                    ticket,
-                    &missing,
-                    checkpoint,
-                )?,
-                StrictBaseOpenPoll::Failed(error) => return Err(strict_open_failure(error)),
+        let (authority, page_count) = match open_strict_document(snapshot, &source) {
+            Ok((authority, page_index)) => {
+                let page_count = page_index.len();
+                (
+                    NativeDocumentAuthority::Strict {
+                        authority,
+                        page_index,
+                    },
+                    page_count,
+                )
             }
-        };
-
-        let build_job = JobId::new(2);
-        let tree_limits = PageTreeLimits::default();
-        let mut build = authority
-            .build_page_index_owned(
-                page_tree_context(build_job, 2_100),
-                tree_limits,
-                PageIndexLimits::default(),
-            )
-            .map_err(document_failure)?;
-        let build_store = range_store(snapshot)?;
-        let page_index = loop {
-            match build.poll(&build_store, &NeverCancelled) {
-                PageIndexBuildPoll::Ready(index) => break index,
-                PageIndexBuildPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => complete_pending(
-                    &build_store,
-                    snapshot,
-                    &source,
-                    build_job,
-                    ticket,
-                    &missing,
-                    checkpoint,
-                )?,
-                PageIndexBuildPoll::Failed(error) => return Err(document_failure(error)),
+            Err(error)
+                if matches!(
+                    error.code(),
+                    NativeViewerErrorCode::Unsupported | NativeViewerErrorCode::Document
+                ) =>
+            {
+                match open_acquired_document(snapshot, &source) {
+                    Ok((authority, page_count)) => (
+                        NativeDocumentAuthority::Acquired {
+                            _authority: authority,
+                        },
+                        page_count,
+                    ),
+                    Err(_) => return Err(error),
+                }
             }
+            Err(error) => return Err(error),
         };
-        if page_index.is_empty() {
+        if page_count == 0 {
             return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
         }
         Ok(Self {
             source,
             snapshot,
             authority,
-            page_index,
+            page_count,
             next_job: 10,
         })
     }
 
-    /// Returns the strict document's declared logical page count.
+    /// Returns the validated logical page count.
     pub const fn page_count(&self) -> u32 {
-        self.page_index.len()
+        self.page_count
     }
 
     /// Interprets and renders one page at the requested output width.
@@ -336,213 +323,27 @@ impl NativeDocument {
             return Err(NativeViewerError::new(NativeViewerErrorCode::InvalidInput));
         }
         let ids = self.allocate_render_jobs()?;
-        let tree_limits = PageTreeLimits::default();
-        let mut lookup = self
-            .authority
-            .lookup_page_owned(
-                &self.page_index,
+        let snapshot = self.snapshot;
+        let source = Arc::clone(&self.source);
+        let (authority, page_index_state) = match &mut self.authority {
+            NativeDocumentAuthority::Strict {
+                authority,
                 page_index,
-                page_tree_context(ids.lookup, ids.base + 100),
-                tree_limits,
-            )
-            .map_err(document_failure)?;
-        let lookup_store = range_store(self.snapshot)?;
-        let lookup = loop {
-            match lookup.poll(&lookup_store, &NeverCancelled) {
-                PageLookupPoll::Ready(lookup) => break lookup,
-                PageLookupPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => complete_pending(
-                    &lookup_store,
-                    self.snapshot,
-                    &self.source,
-                    ids.lookup,
-                    ticket,
-                    &missing,
-                    checkpoint,
-                )?,
-                PageLookupPoll::Failed(error) => return Err(document_failure(error)),
+            } => (authority, page_index),
+            NativeDocumentAuthority::Acquired { .. } => {
+                return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
             }
         };
-        let (refined_index, handle) = lookup.into_parts();
-        self.page_index = refined_index;
-
-        let mut materialize = self
-            .authority
-            .materialize_page_owned(
-                &self.page_index,
-                handle,
-                PageMaterializationJobContext::new(
-                    ids.materialize,
-                    ResumeCheckpoint::new(ids.base + 201),
-                    ResumeCheckpoint::new(ids.base + 202),
-                    RequestPriority::VisiblePage,
-                ),
-                PageMaterializationLimits::default(),
-            )
-            .map_err(document_failure)?;
-        let materialize_store = range_store(self.snapshot)?;
-        let page = loop {
-            match materialize.poll(&materialize_store, &NeverCancelled) {
-                PageMaterializationPoll::Ready(page) => break page,
-                PageMaterializationPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => complete_pending(
-                    &materialize_store,
-                    self.snapshot,
-                    &self.source,
-                    ids.materialize,
-                    ticket,
-                    &missing,
-                    checkpoint,
-                )?,
-                PageMaterializationPoll::Failed(error) => return Err(document_failure(error)),
-            }
-        };
-
-        let mut content = self
-            .authority
-            .acquire_page_content_owned(
-                &self.page_index,
-                page,
-                PageContentJobContext::new(
-                    ids.content,
-                    ResumeCheckpoint::new(ids.base + 301),
-                    ResumeCheckpoint::new(ids.base + 302),
-                    ResumeCheckpoint::new(ids.base + 303),
-                    RequestPriority::VisiblePage,
-                ),
-                PageContentLimits::default(),
-            )
-            .map_err(document_failure)?;
-        let content_store = range_store(self.snapshot)?;
-        let acquired = loop {
-            match content.poll(&content_store, &NeverCancelled) {
-                PageContentPoll::Ready(acquired) => break acquired,
-                PageContentPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => complete_pending(
-                    &content_store,
-                    self.snapshot,
-                    &self.source,
-                    ids.content,
-                    ticket,
-                    &missing,
-                    checkpoint,
-                )?,
-                PageContentPoll::Failed(error) => return Err(document_failure(error)),
-            }
-        };
-
-        let image_profile = ContentImageProfile::new(
-            self.authority.clone(),
-            PageXObjectLookupLimits::default(),
-            ImageXObjectJobContext::new(
-                ids.image,
-                ResumeCheckpoint::new(ids.base + 401),
-                ResumeCheckpoint::new(ids.base + 402),
-                ResumeCheckpoint::new(ids.base + 403),
-                RequestPriority::FirstViewportResource,
-            ),
-            ImageXObjectLimits::default(),
-            ContentImageLimits::default(),
-        );
-        let font_profile = ContentFontProfile::new(
-            self.authority.clone(),
-            PageFontLookupLimits::default(),
-            FontResourceJobContext::new(
-                ids.font,
-                ResumeCheckpoint::new(ids.base + 501),
-                ResumeCheckpoint::new(ids.base + 502),
-                ResumeCheckpoint::new(ids.base + 503),
-                ResumeCheckpoint::new(ids.base + 504),
-                ResumeCheckpoint::new(ids.base + 505),
-                ResumeCheckpoint::new(ids.base + 506),
-                ResumeCheckpoint::new(ids.base + 507),
-                RequestPriority::FirstViewportResource,
-            ),
-            FontResourceLimits::default(),
-            ContentFontLimits::default(),
-        );
-        let mut vm = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
-            acquired,
-            ContentLimits::default(),
-            ContentVmLimits::default(),
-            ContentGraphicsLimits::default(),
-            PagePropertyLookupLimits::default(),
-            image_profile,
-            font_profile,
-            GraphicsSceneLimits::default(),
-        );
-        let vm_store = range_store(self.snapshot)?;
-        let interpreted = loop {
-            match vm.poll(&vm_store, &NeverCancelled) {
-                ContentVmPoll::Ready(page) => break page,
-                ContentVmPoll::Unsupported(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
-                }
-                ContentVmPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
-                }
-                ContentVmPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => {
-                    let job = vm_pending_job(checkpoint, ids);
-                    complete_pending(
-                        &vm_store,
-                        self.snapshot,
-                        &self.source,
-                        job,
-                        ticket,
-                        &missing,
-                        checkpoint,
-                    )?;
-                }
-            }
-        };
-
-        let scene = interpreted.scene_arc();
-        let height = output_height(
-            scene.geometry().crop_box(),
-            scene.geometry().rotation(),
+        render_strict_page(
+            authority,
+            page_index_state,
+            snapshot,
+            &source,
+            page_index,
             width,
-        )?;
-        match renderer {
-            NativeRendererKind::ReferenceCpu => {
-                let config = ReferenceRenderConfig::opaque_srgb(width, height)
-                    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
-                let mut render =
-                    ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
-                let pixels = match render.poll(&NeverRasterCancelled) {
-                    ReferenceRenderPoll::Ready(pixels) => pixels,
-                    ReferenceRenderPoll::Unsupported(_) => {
-                        return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
-                    }
-                    ReferenceRenderPoll::Failed(_) => {
-                        return Err(NativeViewerError::new(NativeViewerErrorCode::Render));
-                    }
-                };
-                let stride = u32::try_from(pixels.stride_bytes())
-                    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-                Ok(NativePageSurface {
-                    page_index,
-                    renderer,
-                    width: pixels.width(),
-                    height: pixels.height(),
-                    stride,
-                    pixels: pixels.rgba().to_vec(),
-                })
-            }
-            NativeRendererKind::FastCpu => render_fast_page(page_index, width, height, &scene),
-        }
+            renderer,
+            ids,
+        )
     }
 
     fn allocate_render_jobs(&mut self) -> Result<RenderJobs, NativeViewerError> {
@@ -559,6 +360,399 @@ impl NativeDocument {
             image: JobId::new(base + 4),
             font: JobId::new(base + 5),
         })
+    }
+}
+
+fn open_strict_document(
+    snapshot: SourceSnapshot,
+    source: &[u8],
+) -> Result<(SharedAttestedRevisionIndex, PageIndex), NativeViewerError> {
+    let open_job = JobId::new(1);
+    let mut open = OpenStrictBaseRevisionJob::new(
+        snapshot,
+        RevisionId::new(1),
+        StrictBaseOpenContext::new(
+            XrefJobContext::new(
+                open_job,
+                ResumeCheckpoint::new(1_001),
+                ResumeCheckpoint::new(1_002),
+            ),
+            RevisionAttestationJobContext::new(
+                open_job,
+                ResumeCheckpoint::new(1_003),
+                ResumeCheckpoint::new(1_004),
+                ResumeCheckpoint::new(1_005),
+                RequestPriority::VisiblePage,
+            ),
+        ),
+        StrictBaseOpenLimits::new(
+            XrefLimits::default(),
+            pdf_rs_document::DocumentLimits::default(),
+            RevisionAttestationLimits::default(),
+            ObjectLimits::default(),
+            SyntaxLimits::default(),
+        ),
+    )
+    .map_err(strict_open_failure)?;
+    let open_store = range_store(snapshot)?;
+    let authority = loop {
+        match open.poll(&open_store, &NeverCancelled) {
+            StrictBaseOpenPoll::Ready(authority) => break authority.into_shared(),
+            StrictBaseOpenPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &open_store,
+                snapshot,
+                source,
+                open_job,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            StrictBaseOpenPoll::Failed(error) => return Err(strict_open_failure(error)),
+        }
+    };
+
+    let build_job = JobId::new(2);
+    let tree_limits = PageTreeLimits::default();
+    let mut build = authority
+        .build_page_index_owned(
+            page_tree_context(build_job, 2_100),
+            tree_limits,
+            PageIndexLimits::default(),
+        )
+        .map_err(document_failure)?;
+    let build_store = range_store(snapshot)?;
+    let page_index = loop {
+        match build.poll(&build_store, &NeverCancelled) {
+            PageIndexBuildPoll::Ready(index) => break index,
+            PageIndexBuildPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &build_store,
+                snapshot,
+                source,
+                build_job,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            PageIndexBuildPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+    if page_index.is_empty() {
+        return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
+    }
+    Ok((authority, page_index))
+}
+
+fn open_acquired_document(
+    snapshot: SourceSnapshot,
+    source: &[u8],
+) -> Result<(SourceAcquiredDocument, u32), NativeViewerError> {
+    let open_job = JobId::new(1);
+    let mut open = OpenSourceRevisionChainJob::new_with_decode_limits(
+        snapshot,
+        SourceRevisionChainJobContext::new(
+            open_job,
+            ResumeCheckpoint::new(1_001),
+            ResumeCheckpoint::new(1_002),
+            ResumeCheckpoint::new(1_003),
+            ResumeCheckpoint::new(1_004),
+            ResumeCheckpoint::new(1_005),
+            ResumeCheckpoint::new(1_006),
+        ),
+        SourceRevisionChainLimits::default(),
+        XrefLimits::default(),
+        XrefAnchorLimits::default(),
+        ObjectLimits::default(),
+        SyntaxLimits::default(),
+        XrefStreamLimits::default(),
+        DecodeLimits::default(),
+        RevisionLimits::default(),
+    )
+    .map_err(source_chain_failure)?;
+    let open_store = range_store(snapshot)?;
+    let acquisition = loop {
+        match open.poll(&open_store, &NeverCancelSourceRevisionChain) {
+            SourceRevisionChainPoll::Ready(acquisition) => break acquisition,
+            SourceRevisionChainPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &open_store,
+                snapshot,
+                source,
+                open_job,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            SourceRevisionChainPoll::Failed(error) => return Err(source_chain_failure(error)),
+        }
+    };
+    let authority = SourceAcquiredDocument::new(
+        acquisition,
+        SourceAcquiredDocumentLimits::default(),
+        &NeverCancelled,
+    )
+    .map_err(document_failure)?;
+    let count_job = JobId::new(2);
+    let mut count = authority
+        .count_acquired_pages(
+            AcquiredObjectJobContext::new(
+                count_job,
+                ResumeCheckpoint::new(2_001),
+                ResumeCheckpoint::new(2_002),
+                ResumeCheckpoint::new(2_003),
+                ResumeCheckpoint::new(2_004),
+                ResumeCheckpoint::new(2_005),
+                RequestPriority::VisiblePage,
+            ),
+            PageTreeLimits::default(),
+        )
+        .map_err(document_failure)?;
+    let count_store = range_store(snapshot)?;
+    let page_count = loop {
+        match count.poll(&count_store, &NeverCancelled) {
+            AcquiredPageCountPoll::Ready(result) => break result.page_count(),
+            AcquiredPageCountPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &count_store,
+                snapshot,
+                source,
+                count_job,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            AcquiredPageCountPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+    let page_count = u32::try_from(page_count)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    Ok((authority, page_count))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the strict rendering branch receives explicit immutable source and job ownership"
+)]
+fn render_strict_page(
+    authority: &SharedAttestedRevisionIndex,
+    page_index_state: &mut PageIndex,
+    snapshot: SourceSnapshot,
+    source: &[u8],
+    page_index: u32,
+    width: u32,
+    renderer: NativeRendererKind,
+    ids: RenderJobs,
+) -> Result<NativePageSurface, NativeViewerError> {
+    let tree_limits = PageTreeLimits::default();
+    let mut lookup = authority
+        .lookup_page_owned(
+            page_index_state,
+            page_index,
+            page_tree_context(ids.lookup, ids.base + 100),
+            tree_limits,
+        )
+        .map_err(document_failure)?;
+    let lookup_store = range_store(snapshot)?;
+    let lookup = loop {
+        match lookup.poll(&lookup_store, &NeverCancelled) {
+            PageLookupPoll::Ready(lookup) => break lookup,
+            PageLookupPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &lookup_store,
+                snapshot,
+                source,
+                ids.lookup,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            PageLookupPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+    let (refined_index, handle) = lookup.into_parts();
+    *page_index_state = refined_index;
+
+    let mut materialize = authority
+        .materialize_page_owned(
+            page_index_state,
+            handle,
+            PageMaterializationJobContext::new(
+                ids.materialize,
+                ResumeCheckpoint::new(ids.base + 201),
+                ResumeCheckpoint::new(ids.base + 202),
+                RequestPriority::VisiblePage,
+            ),
+            PageMaterializationLimits::default(),
+        )
+        .map_err(document_failure)?;
+    let materialize_store = range_store(snapshot)?;
+    let page = loop {
+        match materialize.poll(&materialize_store, &NeverCancelled) {
+            PageMaterializationPoll::Ready(page) => break page,
+            PageMaterializationPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &materialize_store,
+                snapshot,
+                source,
+                ids.materialize,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            PageMaterializationPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+
+    let mut content = authority
+        .acquire_page_content_owned(
+            page_index_state,
+            page,
+            PageContentJobContext::new(
+                ids.content,
+                ResumeCheckpoint::new(ids.base + 301),
+                ResumeCheckpoint::new(ids.base + 302),
+                ResumeCheckpoint::new(ids.base + 303),
+                RequestPriority::VisiblePage,
+            ),
+            PageContentLimits::default(),
+        )
+        .map_err(document_failure)?;
+    let content_store = range_store(snapshot)?;
+    let acquired = loop {
+        match content.poll(&content_store, &NeverCancelled) {
+            PageContentPoll::Ready(acquired) => break acquired,
+            PageContentPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &content_store,
+                snapshot,
+                source,
+                ids.content,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            PageContentPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+
+    let image_profile = ContentImageProfile::new(
+        authority.clone(),
+        PageXObjectLookupLimits::default(),
+        ImageXObjectJobContext::new(
+            ids.image,
+            ResumeCheckpoint::new(ids.base + 401),
+            ResumeCheckpoint::new(ids.base + 402),
+            ResumeCheckpoint::new(ids.base + 403),
+            RequestPriority::FirstViewportResource,
+        ),
+        ImageXObjectLimits::default(),
+        ContentImageLimits::default(),
+    );
+    let font_profile = ContentFontProfile::new(
+        authority.clone(),
+        PageFontLookupLimits::default(),
+        FontResourceJobContext::new(
+            ids.font,
+            ResumeCheckpoint::new(ids.base + 501),
+            ResumeCheckpoint::new(ids.base + 502),
+            ResumeCheckpoint::new(ids.base + 503),
+            ResumeCheckpoint::new(ids.base + 504),
+            ResumeCheckpoint::new(ids.base + 505),
+            ResumeCheckpoint::new(ids.base + 506),
+            ResumeCheckpoint::new(ids.base + 507),
+            RequestPriority::FirstViewportResource,
+        ),
+        FontResourceLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let mut vm = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
+        acquired,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile,
+        font_profile,
+        GraphicsSceneLimits::default(),
+    );
+    let vm_store = range_store(snapshot)?;
+    let interpreted = loop {
+        match vm.poll(&vm_store, &NeverCancelled) {
+            ContentVmPoll::Ready(page) => break page,
+            ContentVmPoll::Unsupported(_) => {
+                return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
+            }
+            ContentVmPoll::Failed(_) => {
+                return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
+            }
+            ContentVmPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => {
+                let job = vm_pending_job(checkpoint, ids);
+                complete_pending(
+                    &vm_store, snapshot, source, job, ticket, &missing, checkpoint,
+                )?;
+            }
+        }
+    };
+
+    let scene = interpreted.scene_arc();
+    let height = output_height(
+        scene.geometry().crop_box(),
+        scene.geometry().rotation(),
+        width,
+    )?;
+    match renderer {
+        NativeRendererKind::ReferenceCpu => {
+            let config = ReferenceRenderConfig::opaque_srgb(width, height)
+                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
+            let mut render =
+                ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
+            let pixels = match render.poll(&NeverRasterCancelled) {
+                ReferenceRenderPoll::Ready(pixels) => pixels,
+                ReferenceRenderPoll::Unsupported(_) => {
+                    return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
+                }
+                ReferenceRenderPoll::Failed(_) => {
+                    return Err(NativeViewerError::new(NativeViewerErrorCode::Render));
+                }
+            };
+            let stride = u32::try_from(pixels.stride_bytes())
+                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+            Ok(NativePageSurface {
+                page_index,
+                renderer,
+                width: pixels.width(),
+                height: pixels.height(),
+                stride,
+                pixels: pixels.rgba().to_vec(),
+            })
+        }
+        NativeRendererKind::FastCpu => render_fast_page(page_index, width, height, &scene),
     }
 }
 

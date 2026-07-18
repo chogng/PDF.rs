@@ -1199,7 +1199,7 @@ fn validate_stream_anchor(
 ) -> Result<(), RevisionError> {
     let entry = find_entry(primary_entries, container.number())
         .or_else(|| find_entry(supplement_entries, container.number()));
-    let valid = entry.is_some_and(|entry| {
+    let valid = entry.is_none_or(|entry| {
         matches!(
             entry.kind,
             RevisionEntryKind::Uncompressed { offset, generation }

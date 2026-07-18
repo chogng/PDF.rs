@@ -933,7 +933,7 @@ Source-xref-stream tests cover primary and hybrid geometry, exact direct Length 
 compatibility filtered-stream Unsupported policy, Flate decoding, Flate predictor parameters,
 filter arrays with matching parameter arrays, exact encoded/decoded proof retention, duplicate,
 unknown, indirect, and mismatched filter metadata, decoder cancellation/output/input limits,
-malformed Type/container/self evidence, single-ticket Pending replay with boundary bytes delivered
+malformed Type/container/present-self evidence, omitted-self compatibility, single-ticket Pending replay with boundary bytes delivered
 before payload bytes, source change, lower byte-source failure preservation, stable terminal replay,
 and object/xref size and work limits.
 Source-revision-chain tests cover traditional, primary-stream, hybrid, and two-revision `/Prev`

@@ -12,16 +12,16 @@ fn minimal_traditional_pdf_still_opens() {
 }
 
 #[test]
-fn unsupported_xref_representations_remain_capability_outcomes() {
-    let xref_stream = NativeDocument::open(xref_stream_pdf())
-        .err()
-        .expect("xref stream stays outside the strict viewer profile");
-    assert_eq!(xref_stream.code(), NativeViewerErrorCode::Unsupported);
-
-    let incremental = NativeDocument::open(traditional_pdf(0, Some(9)))
-        .err()
-        .expect("incremental revision stays outside the strict viewer profile");
-    assert_eq!(incremental.code(), NativeViewerErrorCode::Unsupported);
+fn acquired_xref_representations_publish_page_counts() {
+    for bytes in [xref_stream_pdf(), incremental_pdf()] {
+        let mut document =
+            NativeDocument::open(bytes).expect("source-acquired xref representation opens");
+        assert_eq!(document.page_count(), 1);
+        let error = document
+            .render_page(0, 100)
+            .expect_err("acquired page rendering is the next compatibility boundary");
+        assert_eq!(error.code(), NativeViewerErrorCode::Unsupported);
+    }
 }
 
 #[test]
@@ -74,14 +74,92 @@ fn traditional_pdf(boundary_padding: usize, previous: Option<u64>) -> Vec<u8> {
 
 fn xref_stream_pdf() -> Vec<u8> {
     let mut pdf = b"%PDF-1.7\n%\x80\x81\x82\x83\n".to_vec();
+    let mut offsets = Vec::new();
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        1,
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+    );
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        2,
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    );
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        3,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /Contents 4 0 R >>",
+    );
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        4,
+        b"<< /Length 0 >>\nstream\n\nendstream",
+    );
+    let xref_offset = pdf.len();
+    offsets.push(xref_offset);
+    let mut payload = Vec::new();
+    append_xref_stream_entry(&mut payload, 0, 0, u16::MAX);
+    for offset in offsets {
+        append_xref_stream_entry(
+            &mut payload,
+            1,
+            u32::try_from(offset).expect("fixture offset fits u32"),
+            0,
+        );
+    }
+    write!(
+        pdf,
+        "5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W [1 4 2] /Length {} >>\nstream\n",
+        payload.len()
+    )
+    .expect("xref stream fixture");
+    pdf.extend_from_slice(&payload);
+    write!(
+        pdf,
+        "\nendstream\nendobj\nstartxref\n{xref_offset}\n%%EOF\n"
+    )
+    .expect("xref stream trailer");
+    pdf
+}
+
+fn incremental_pdf() -> Vec<u8> {
+    let mut pdf = traditional_pdf(0, None);
+    let marker = b"startxref\n";
+    let marker_start = pdf
+        .windows(marker.len())
+        .rposition(|window| window == marker)
+        .expect("base startxref");
+    let value_start = marker_start + marker.len();
+    let value_end = pdf[value_start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map(|offset| value_start + offset)
+        .expect("base startxref end");
+    let previous = std::str::from_utf8(&pdf[value_start..value_end])
+        .expect("ASCII base xref")
+        .parse::<u64>()
+        .expect("numeric base xref");
+    let object_offset = pdf.len();
+    pdf.extend_from_slice(b"5 0 obj\n42\nendobj\n");
     let xref_offset = pdf.len();
     write!(
         pdf,
-        "4 0 obj\n<< /Type /XRef /Size 5 /Root 1 0 R /W [1 2 1] /Length 0 >>\n\
-         stream\n\nendstream\nendobj\nstartxref\n{xref_offset}\n%%EOF\n"
+        "xref\n5 1\n{object_offset:010} 00000 n \n\
+         trailer\n<< /Size 6 /Root 1 0 R /Prev {previous} >>\n\
+         startxref\n{xref_offset}\n%%EOF\n"
     )
-    .expect("xref stream fixture");
+    .expect("incremental revision");
     pdf
+}
+
+fn append_xref_stream_entry(payload: &mut Vec<u8>, kind: u8, field_two: u32, field_three: u16) {
+    payload.push(kind);
+    payload.extend_from_slice(&field_two.to_be_bytes());
+    payload.extend_from_slice(&field_three.to_be_bytes());
 }
 
 fn append_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, number: u32, body: &[u8]) {
