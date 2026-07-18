@@ -96,6 +96,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-fast-raster"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-policy",
+ "pdf-rs-scene",
+]
+
+[[package]]
 name = "pdf-rs-filters"
 version = "0.1.0"
 dependencies = [
@@ -117,6 +125,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-policy"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-protocol",
+ "pdf-rs-scene",
+]
+
+[[package]]
+name = "pdf-rs-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-quality-fuzz"
 version = "0.1.0"
 dependencies = [
@@ -124,10 +145,29 @@ dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-cache",
  "pdf-rs-document",
+ "pdf-rs-fast-raster",
  "pdf-rs-object",
+ "pdf-rs-policy",
+ "pdf-rs-raster",
+ "pdf-rs-scene",
  "pdf-rs-session",
  "pdf-rs-syntax",
  "pdf-rs-xref",
+]
+
+[[package]]
+name = "pdf-rs-raster"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-scene",
+]
+
+[[package]]
+name = "pdf-rs-scene"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-syntax",
 ]
 
 [[package]]

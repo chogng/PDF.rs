@@ -1,0 +1,69 @@
+schema = 1
+evidence_id = "m4.fast-cpu-canary.fuzz-replay.v1"
+evidence_kind = "fixed-seed-libfuzzer-replay"
+status = "passed"
+completed_at = 2026-07-18
+target = "m4fastraster"
+target_sha256 = "60f054d9065798429f75174c10f121e2685465ab57138515229972dac7809285"
+manifest_sha256 = "4b899409d25d4710c9ad8b6aec099b8b52b6f809322acc582e6a012a3b5934c7"
+lockfile_sha256 = "833acf370ca6e54b21fdca936d4d56640d93af40a3fa92e848f726f7b576a02b"
+gate_test = "tools/quality/tests/m4_fast_raster_fuzz.rs"
+gate_test_sha256 = "c1ffbb640812f05b965ca1084ab4fc1bd52510e948d0c895cf529a0a3ad7aeae"
+
+[environment]
+os = "macOS 26.4.1"
+build = "25E253"
+architecture = "arm64"
+rustc = "1.93.0 (254b59607 2026-01-19)"
+llvm = "21.1.8"
+cargo_fuzz = "0.13.2"
+libfuzzer_sys = "0.4.13"
+sanitizer = "none"
+
+[replay]
+command = "cargo test --locked --package pdf-rs-quality --test m4_fast_raster_fuzz -- --nocapture"
+libfuzzer_seed = 20260718
+runs = 64
+max_input_bytes = 256
+timeout_seconds = 1
+rss_limit_megabytes = 512
+initial_corpus_files = 4
+initial_corpus_bytes = 110
+final_corpus_files = 19
+final_corpus_bytes = 380
+edge_coverage = 1619
+feature_coverage = 2263
+crash_artifacts = 0
+panics = 0
+timeouts = 0
+partial_tile_sets = 0
+pixel_mismatches = 0
+
+[seeds.fill]
+file = "tools/quality/fuzz/corpus/m4_fast_raster/fill"
+sha256 = "2f374278cedec5cbc4e8e40234c8cc4bcee7e41483ad2cc3930ed3a842a31915"
+
+[seeds.clip]
+file = "tools/quality/fuzz/corpus/m4_fast_raster/clip"
+sha256 = "28c774733d0b1908b63b900db9f801a20c004c6d884d900ec7688172a8ca2a4b"
+
+[seeds.image]
+file = "tools/quality/fuzz/corpus/m4_fast_raster/image"
+sha256 = "877e3774fcb52363064906c07aecbe5206df3991c71f4bb8bb8f6b2cb3901368"
+
+[seeds.glyph]
+file = "tools/quality/fuzz/corpus/m4_fast_raster/glyph"
+sha256 = "5b3f1fa2c02d9d0657e0658d21b6dabb25e9ad6b165a8ca5bbc4233a29b047dd"
+
+[invariants]
+families = ["fill", "clip", "image", "outline glyph"]
+tile_orders = 8
+expected_tiles_per_page = 4
+expected_pixels_per_page = 256
+reference = "pdf-rs-raster Reference CPU"
+product = "pdf-rs-fast-raster Fast CPU"
+comparison = "Exact RGBA8 equality after complete atomic tile publication."
+
+[scope]
+source_boundary = "Coverage-guided mutation selects parameters for bounded, valid immutable GraphicsScene values after parsing and interpretation."
+limitations = "This replay does not fuzz PDF syntax, parsing, color management, arbitrary Scene features, process IPC, or the Electron UI. Sanitizers are disabled for this bounded local replay; panic, timeout, publication, and exact differential invariants remain active."
