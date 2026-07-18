@@ -29,6 +29,13 @@ fn ready(bytes: &[u8], limits: FontLimits) -> TrueTypeFont {
     }
 }
 
+fn ready_with_profile(bytes: &[u8], profile: FontProfile, limits: FontLimits) -> TrueTypeFont {
+    match parse_truetype(bytes, profile, limits, &NeverCancelled).into_outcome() {
+        FontParseOutcome::Ready(font) => font,
+        outcome => panic!("expected ready font, got {outcome:?}"),
+    }
+}
+
 fn limit_kind(bytes: &[u8], config: FontLimitConfig) -> FontLimitKind {
     let limits = FontLimits::validate(config).expect("test limits are valid");
     match parse(bytes, limits).into_outcome() {
@@ -88,6 +95,23 @@ fn registered_profile_publishes_ascii_metrics_and_exact_outlines() {
     assert_eq!(font.stats().path_segments(), 16);
     assert!(font.stats().retained_bytes() > 0);
     assert!(font.stats().peak_retained_bytes() >= font.stats().retained_bytes());
+}
+
+#[test]
+fn complete_winansi_profile_admits_extended_codes_without_changing_legacy_ascii() {
+    let bytes = foundational_font();
+    let full = ready_with_profile(
+        &bytes,
+        FontProfile::SimpleTrueTypeWinAnsiV1,
+        FontLimits::default(),
+    );
+    assert_eq!(full.profile().identifier(), "m4.simple-truetype-winansi.v1");
+    assert_eq!(full.glyph_id_for_winansi(0x80), Some(GlyphId::new(0)));
+    assert_eq!(full.glyph_id_for_winansi(0xff), Some(GlyphId::new(0)));
+    assert_eq!(full.glyph_id_for_winansi(0x1f), None);
+
+    let legacy = ready(&bytes, FontLimits::default());
+    assert_eq!(legacy.glyph_id_for_winansi(0x80), None);
 }
 
 #[test]

@@ -8,6 +8,8 @@ pub enum FontProfile {
     /// TrueType outlines, Windows Unicode format 4, and printable WinAnsi ASCII mapping.
     #[default]
     SimpleTrueTypeWinAnsiAsciiV1,
+    /// TrueType outlines, Windows Unicode format 4, and the complete PDF WinAnsi mapping.
+    SimpleTrueTypeWinAnsiV1,
 }
 
 impl FontProfile {
@@ -15,6 +17,7 @@ impl FontProfile {
     pub const fn identifier(self) -> &'static str {
         match self {
             Self::SimpleTrueTypeWinAnsiAsciiV1 => "m3.simple-truetype-winansi-ascii.v1",
+            Self::SimpleTrueTypeWinAnsiV1 => "m4.simple-truetype-winansi.v1",
         }
     }
 }
@@ -255,7 +258,7 @@ pub struct TrueTypeFont {
     pub(crate) limits: FontLimits,
     pub(crate) stats: FontStats,
     pub(crate) units_per_em: u16,
-    pub(crate) ascii_glyphs: [GlyphId; 95],
+    pub(crate) winansi_glyphs: [GlyphId; 224],
     pub(crate) glyphs: Arc<Vec<GlyphRecord>>,
     pub(crate) segments: Arc<Vec<OutlineSegment>>,
 }
@@ -282,13 +285,17 @@ impl TrueTypeFont {
         self.glyphs.len() as u16
     }
 
-    /// Maps one printable WinAnsi ASCII byte to its selected TrueType glyph.
+    /// Maps one byte admitted by the selected WinAnsi profile to its TrueType glyph.
     ///
-    /// Bytes outside `0x20..=0x7e` are outside the registered profile and return `None`. A missing
-    /// format 4 mapping follows TrueType semantics and returns glyph zero.
+    /// Both profiles reject control bytes below `0x20`; the legacy ASCII profile also rejects
+    /// bytes above `0x7e`. A missing format 4 mapping follows TrueType semantics and returns glyph
+    /// zero.
     pub fn glyph_id_for_winansi(&self, byte: u8) -> Option<GlyphId> {
+        if self.profile == FontProfile::SimpleTrueTypeWinAnsiAsciiV1 && byte > 0x7e {
+            return None;
+        }
         let index = byte.checked_sub(0x20)?;
-        self.ascii_glyphs.get(usize::from(index)).copied()
+        self.winansi_glyphs.get(usize::from(index)).copied()
     }
 
     /// Returns the unscaled horizontal advance for one valid glyph identifier.

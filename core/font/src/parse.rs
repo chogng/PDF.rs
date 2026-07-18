@@ -108,7 +108,7 @@ struct Metadata {
     glyph_count: u16,
     long_loca: bool,
     number_of_h_metrics: u16,
-    ascii_glyphs: [GlyphId; 95],
+    winansi_glyphs: [GlyphId; 224],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -357,7 +357,7 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
             limits: self.limits,
             stats,
             units_per_em: metadata.units_per_em,
-            ascii_glyphs: metadata.ascii_glyphs,
+            winansi_glyphs: metadata.winansi_glyphs,
             glyphs: Arc::new(glyphs),
             segments: Arc::new(segments),
         })
@@ -528,14 +528,19 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
         }
 
         let cmap = self.parse_cmap(tables.cmap, glyph_count)?;
-        let ascii_glyphs = self.map_ascii(&cmap, glyph_count)?;
+        let winansi_glyphs = match self.profile {
+            FontProfile::SimpleTrueTypeWinAnsiAsciiV1 => {
+                self.map_winansi_ascii(&cmap, glyph_count)?
+            }
+            FontProfile::SimpleTrueTypeWinAnsiV1 => self.map_winansi(&cmap, glyph_count)?,
+        };
         Ok(Metadata {
             tables,
             units_per_em,
             glyph_count,
             long_loca,
             number_of_h_metrics,
-            ascii_glyphs,
+            winansi_glyphs,
         })
     }
 
@@ -693,10 +698,28 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
         Ok(parsed)
     }
 
-    fn map_ascii(&mut self, cmap: &CmapFormat4, glyph_count: u16) -> ParseResult<[GlyphId; 95]> {
-        let mut mapped = [GlyphId::new(0); 95];
+    fn map_winansi_ascii(
+        &mut self,
+        cmap: &CmapFormat4,
+        glyph_count: u16,
+    ) -> ParseResult<[GlyphId; 224]> {
+        let mut mapped = [GlyphId::new(0); 224];
         for (index, code) in (0x20_u16..=0x7e).enumerate() {
             let glyph = self.cmap_glyph(cmap, code)?;
+            if glyph >= glyph_count {
+                return Err(self.error(FontErrorCode::InvalidCmap, None));
+            }
+            mapped[index] = GlyphId::new(glyph);
+        }
+        Ok(mapped)
+    }
+
+    fn map_winansi(&mut self, cmap: &CmapFormat4, glyph_count: u16) -> ParseResult<[GlyphId; 224]> {
+        let mut mapped = [GlyphId::new(0); 224];
+        for (index, byte) in (0x20_u8..=u8::MAX).enumerate() {
+            let unicode = winansi_unicode(byte)
+                .ok_or_else(|| self.error(FontErrorCode::InternalState, None))?;
+            let glyph = self.cmap_glyph(cmap, unicode)?;
             if glyph >= glyph_count {
                 return Err(self.error(FontErrorCode::InvalidCmap, None));
             }
@@ -2049,6 +2072,43 @@ fn try_reserve_exact<T>(
     })
 }
 
+const fn winansi_unicode(byte: u8) -> Option<u16> {
+    Some(match byte {
+        0x00..=0x1f => return None,
+        0x20..=0x7e => byte as u16,
+        0x7f | 0x81 | 0x8d | 0x8f | 0x90 | 0x95 | 0x9d => 0x2022,
+        0x80 => 0x20ac,
+        0x82 => 0x201a,
+        0x83 => 0x0192,
+        0x84 => 0x201e,
+        0x85 => 0x2026,
+        0x86 => 0x2020,
+        0x87 => 0x2021,
+        0x88 => 0x02c6,
+        0x89 => 0x2030,
+        0x8a => 0x0160,
+        0x8b => 0x2039,
+        0x8c => 0x0152,
+        0x8e => 0x017d,
+        0x91 => 0x2018,
+        0x92 => 0x2019,
+        0x93 => 0x201c,
+        0x94 => 0x201d,
+        0x96 => 0x2013,
+        0x97 => 0x2014,
+        0x98 => 0x02dc,
+        0x99 => 0x2122,
+        0x9a => 0x0161,
+        0x9b => 0x203a,
+        0x9c => 0x0153,
+        0x9e => 0x017e,
+        0x9f => 0x0178,
+        0xa0 => 0x0020,
+        0xad => 0x002d,
+        0xa1..=0xff => byte as u16,
+    })
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     let value: [u8; 2] = bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
     Some(u16::from_be_bytes(value))
@@ -2062,4 +2122,22 @@ fn read_i16(bytes: &[u8], offset: usize) -> Option<i16> {
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let value: [u8; 4] = bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_be_bytes(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::winansi_unicode;
+
+    #[test]
+    fn complete_pdf_winansi_mapping_handles_special_and_reassigned_codes() {
+        assert_eq!(winansi_unicode(0x1f), None);
+        assert_eq!(winansi_unicode(b'A'), Some(u16::from(b'A')));
+        assert_eq!(winansi_unicode(0x7f), Some(0x2022));
+        assert_eq!(winansi_unicode(0x80), Some(0x20ac));
+        assert_eq!(winansi_unicode(0x8c), Some(0x0152));
+        assert_eq!(winansi_unicode(0x95), Some(0x2022));
+        assert_eq!(winansi_unicode(0xa0), Some(0x0020));
+        assert_eq!(winansi_unicode(0xad), Some(0x002d));
+        assert_eq!(winansi_unicode(0xff), Some(0x00ff));
+    }
 }
