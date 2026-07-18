@@ -991,6 +991,11 @@ export class BrowserViewer {
       this.#publishLocalFailure("InvalidWorkerFault");
       return;
     }
+    // The client has already made the old Worker epoch terminal. Release every
+    // adopted handle before exposing the fault so no stale page remains visible
+    // during reopen and one release failure cannot block the remaining cleanup.
+    this.#releaseAllSurfaces();
+    this.#clearPresentation();
     this.#publishFailure(Object.freeze({
       source: "WorkerFault",
       kind: kindForWorkerFault(code),

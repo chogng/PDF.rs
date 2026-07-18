@@ -661,11 +661,13 @@ test("three rapid generations release out-of-order stale surfaces and present on
 });
 
 test("capability, engine, transport, and Worker failures map only by stable codes", () => {
+  const log: string[] = [];
   const {
     viewer,
     client,
     frames,
-  } = fixture();
+    presentation,
+  } = fixture(DEFAULT_LIMITS, initialState(), log);
   viewer.mount();
   frames.runNext();
 
@@ -699,7 +701,17 @@ test("capability, engine, transport, and Worker failures map only by stable code
     assert.equal(failure?.code, code);
   }
 
+  client.emitSurface(surface(77n, viewer.currentGeneration));
+  assert.equal(viewer.adoptedSurfaceCount, 1);
+  log.length = 0;
   client.emitWorkerFault("WorkerMessageError");
+  assert.deepEqual(log, [
+    "client:release:77",
+    "presentation:clear",
+    "presentation:failure:WorkerFault:WorkerMessageError",
+  ]);
+  assert.equal(viewer.adoptedSurfaceCount, 0);
+  assert.equal(presentation.current.size, 0);
   assert.deepEqual(viewer.failure, {
     source: "WorkerFault",
     kind: "Worker",
