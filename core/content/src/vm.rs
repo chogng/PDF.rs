@@ -5293,6 +5293,18 @@ fn build_scene_glyph_outline(
                 )
                 .map_err(ContentVmFailure::Scene)?;
             }
+            OutlineSegment::CubicTo {
+                control_1,
+                control_2,
+                end,
+            } => {
+                path.try_push(PathSegment::CubicTo {
+                    control_1: scene_font_point(control_1).map_err(ContentVmFailure::Scene)?,
+                    control_2: scene_font_point(control_2).map_err(ContentVmFailure::Scene)?,
+                    end: scene_font_point(end).map_err(ContentVmFailure::Scene)?,
+                })
+                .map_err(ContentVmFailure::Scene)?;
+            }
             OutlineSegment::CloseContour => path
                 .try_push(PathSegment::ClosePath)
                 .map_err(ContentVmFailure::Scene)?,

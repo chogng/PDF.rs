@@ -143,6 +143,15 @@ pub enum OutlineSegment {
         /// Exact segment endpoint.
         end: FontPoint,
     },
+    /// Appends one cubic Bézier segment.
+    CubicTo {
+        /// Exact first cubic control point.
+        control_1: FontPoint,
+        /// Exact second cubic control point.
+        control_2: FontPoint,
+        /// Exact segment endpoint.
+        end: FontPoint,
+    },
     /// Closes the active contour.
     CloseContour,
 }

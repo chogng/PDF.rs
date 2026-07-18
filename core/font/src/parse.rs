@@ -1607,6 +1607,15 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
                     include_emitted_point(&mut actual, control);
                     include_emitted_point(&mut actual, end);
                 }
+                OutlineSegment::CubicTo {
+                    control_1,
+                    control_2,
+                    end,
+                } => {
+                    include_emitted_point(&mut actual, control_1);
+                    include_emitted_point(&mut actual, control_2);
+                    include_emitted_point(&mut actual, end);
+                }
                 OutlineSegment::CloseContour => {}
             }
         }
