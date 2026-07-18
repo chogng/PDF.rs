@@ -19,25 +19,26 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_content::{
     ContentExtGStateProfile, ContentExtGStateResource, ContentFontLimits, ContentFontProfile,
-    ContentGraphicsLimits, ContentImageLimits, ContentImageProfile, ContentLimits, ContentOperand,
-    ContentVmLimits, ContentVmPoll, DecodedContentStream, InterpretPageJob,
-    NeverCancelled as NeverContentCancelled, OperatorKind, scan_content_streams,
+    ContentFormProfile, ContentGraphicsLimits, ContentImageLimits, ContentImageProfile,
+    ContentLimits, ContentOperand, ContentVmLimits, ContentVmPoll, DecodedContentStream,
+    InterpretPageJob, NeverCancelled as NeverContentCancelled, OperatorKind, scan_content_streams,
 };
 use pdf_rs_document::{
     AcquiredObjectJobContext, AcquiredPageContent, AcquiredPageCountPoll, AttestRevisionJob,
     AttestedObjectJobContext, AttestedObjectPoll, CandidateRevisionIndex, DocumentError,
     DocumentErrorCategory, DocumentLimits, FontResourceJobContext, FontResourceLimits,
-    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelSourceRevisionChain, NeverCancelled,
-    OpenSourceRevisionChainJob, OpenStrictBaseRevisionJob, PageContentJobContext,
-    PageContentLimits, PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex,
-    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
-    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
-    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
-    SourceAcquiredDocument, SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain,
-    SourceRevisionChainError, SourceRevisionChainErrorCategory, SourceRevisionChainJobContext,
-    SourceRevisionChainLimits, SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError,
-    StrictBaseOpenLimits, StrictBaseOpenPoll,
+    FormXObjectJobContext, ImageXObjectJobContext, ImageXObjectLimits,
+    NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
+    OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits, PageContentPoll,
+    PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex, PageIndexBuildPoll,
+    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
+    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits,
+    PageXObjectLookupLimits, RevisionAttestationJobContext, RevisionAttestationLimits,
+    RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex, SourceAcquiredDocument,
+    SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain, SourceRevisionChainError,
+    SourceRevisionChainErrorCategory, SourceRevisionChainJobContext, SourceRevisionChainLimits,
+    SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
+    StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
@@ -359,6 +360,7 @@ impl NativeDocument {
             content: JobId::new(base + 3),
             image: JobId::new(base + 4),
             font: JobId::new(base + 5),
+            form: JobId::new(base + 6),
         })
     }
 }
@@ -788,6 +790,25 @@ fn render_strict_page(
     );
     let ext_gstate_profile =
         acquire_ext_gstate_profile(&acquired, authority, snapshot, source, ids)?;
+    let form_profile = ContentFormProfile::new(
+        authority.clone(),
+        FormXObjectJobContext::new(
+            ids.form,
+            ResumeCheckpoint::new(ids.base + 9_001),
+            ResumeCheckpoint::new(ids.base + 9_002),
+            ResumeCheckpoint::new(ids.base + 9_003),
+            RequestPriority::FirstViewportResource,
+        ),
+        64,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile.clone(),
+        font_profile.clone(),
+        GraphicsSceneLimits::default(),
+    )
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
     let mut vm = InterpretPageJob::new_graphics_v2_with_resources(
         acquired,
         ContentLimits::default(),
@@ -798,7 +819,9 @@ fn render_strict_page(
         font_profile,
         ext_gstate_profile,
         GraphicsSceneLimits::default(),
-    );
+    )
+    .with_forms(form_profile)
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
     let vm_store = range_store(snapshot)?;
     let interpreted = loop {
         match vm.poll(&vm_store, &NeverCancelled) {
@@ -866,6 +889,7 @@ struct RenderJobs {
     content: JobId,
     image: JobId,
     font: JobId,
+    form: JobId,
 }
 
 fn acquire_ext_gstate_profile(
@@ -1100,6 +1124,8 @@ fn vm_pending_job(checkpoint: ResumeCheckpoint, jobs: RenderJobs) -> JobId {
         jobs.image
     } else if (501..=507).contains(&local) {
         jobs.font
+    } else if (9_001..=9_003).contains(&local) {
+        jobs.form
     } else {
         jobs.content
     }
