@@ -265,8 +265,8 @@ fn build_font(glyphs: Vec<Vec<u8>>, glyph_ids: [u16; 95]) -> Vec<u8> {
 fn block_glyph(rows: [u8; 7]) -> Vec<u8> {
     let mut cells = [[false; 5]; 7];
     for (row, bits) in rows.into_iter().enumerate() {
-        for column in 0..5 {
-            cells[row][column] = bits & (1 << (4 - column)) != 0;
+        for (column, cell) in cells[row].iter_mut().enumerate() {
+            *cell = bits & (1 << (4 - column)) != 0;
         }
     }
 
