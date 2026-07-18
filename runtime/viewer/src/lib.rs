@@ -21,18 +21,19 @@ use pdf_rs_content::{
     ContentImageProfile, ContentLimits, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
-    AcquiredObjectJobContext, AcquiredPageCountPoll, DocumentError, DocumentErrorCategory,
-    FontResourceJobContext, FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits,
-    NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
-    OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits, PageContentPoll,
-    PageFontLookupLimits, PageIndex, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
-    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
-    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits,
-    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionId,
-    SharedAttestedRevisionIndex, SourceAcquiredDocument, SourceAcquiredDocumentLimits,
-    SourceRevisionChainError, SourceRevisionChainErrorCategory, SourceRevisionChainJobContext,
-    SourceRevisionChainLimits, SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError,
-    StrictBaseOpenLimits, StrictBaseOpenPoll,
+    AcquiredObjectJobContext, AcquiredPageCountPoll, AttestRevisionJob, CandidateRevisionIndex,
+    DocumentError, DocumentErrorCategory, DocumentLimits, FontResourceJobContext,
+    FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits, NeverCancelSourceRevisionChain,
+    NeverCancelled, OpenSourceRevisionChainJob, OpenStrictBaseRevisionJob, PageContentJobContext,
+    PageContentLimits, PageContentPoll, PageFontLookupLimits, PageIndex, PageIndexBuildPoll,
+    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
+    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits,
+    PageXObjectLookupLimits, RevisionAttestationJobContext, RevisionAttestationLimits,
+    RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex, SourceAcquiredDocument,
+    SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain, SourceRevisionChainError,
+    SourceRevisionChainErrorCategory, SourceRevisionChainJobContext, SourceRevisionChainLimits,
+    SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
+    StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
@@ -270,12 +271,7 @@ impl NativeDocument {
                 ) =>
             {
                 match open_acquired_document(snapshot, &source) {
-                    Ok((authority, page_count)) => (
-                        NativeDocumentAuthority::Acquired {
-                            _authority: authority,
-                        },
-                        page_count,
-                    ),
+                    Ok((authority, page_count)) => (authority, page_count),
                     Err(_) => return Err(error),
                 }
             }
@@ -453,7 +449,7 @@ fn open_strict_document(
 fn open_acquired_document(
     snapshot: SourceSnapshot,
     source: &[u8],
-) -> Result<(SourceAcquiredDocument, u32), NativeViewerError> {
+) -> Result<(NativeDocumentAuthority, u32), NativeViewerError> {
     let open_job = JobId::new(1);
     let mut open = OpenSourceRevisionChainJob::new_with_decode_limits(
         snapshot,
@@ -496,6 +492,18 @@ fn open_acquired_document(
             SourceRevisionChainPoll::Failed(error) => return Err(source_chain_failure(error)),
         }
     };
+    if let Ok((authority, page_index)) =
+        attest_single_stream_document(snapshot, source, &acquisition)
+    {
+        let page_count = page_index.len();
+        return Ok((
+            NativeDocumentAuthority::Strict {
+                authority,
+                page_index,
+            },
+            page_count,
+        ));
+    }
     let authority = SourceAcquiredDocument::new(
         acquisition,
         SourceAcquiredDocumentLimits::default(),
@@ -539,7 +547,94 @@ fn open_acquired_document(
     };
     let page_count = u32::try_from(page_count)
         .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-    Ok((authority, page_count))
+    Ok((
+        NativeDocumentAuthority::Acquired {
+            _authority: authority,
+        },
+        page_count,
+    ))
+}
+
+fn attest_single_stream_document(
+    snapshot: SourceSnapshot,
+    source: &[u8],
+    acquisition: &SourceAcquiredRevisionChain,
+) -> Result<(SharedAttestedRevisionIndex, PageIndex), NativeViewerError> {
+    let candidate = CandidateRevisionIndex::from_single_stream_revision(
+        acquisition,
+        RevisionId::new(1),
+        DocumentLimits::default(),
+        &NeverCancelled,
+    )
+    .map_err(document_failure)?;
+    let attest_job = JobId::new(2);
+    let mut attest = AttestRevisionJob::new(
+        candidate,
+        RevisionAttestationJobContext::new(
+            attest_job,
+            ResumeCheckpoint::new(2_001),
+            ResumeCheckpoint::new(2_002),
+            ResumeCheckpoint::new(2_003),
+            RequestPriority::Metadata,
+        ),
+        RevisionAttestationLimits::default(),
+        ObjectLimits::default(),
+        SyntaxLimits::default(),
+    )
+    .map_err(document_failure)?;
+    let attest_store = range_store(snapshot)?;
+    let authority = loop {
+        match attest.poll(&attest_store, &NeverCancelled) {
+            RevisionAttestationPoll::Ready(authority) => break authority.into_shared(),
+            RevisionAttestationPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &attest_store,
+                snapshot,
+                source,
+                attest_job,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            RevisionAttestationPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+
+    let build_job = JobId::new(3);
+    let mut build = authority
+        .build_page_index_owned(
+            page_tree_context(build_job, 3_100),
+            PageTreeLimits::default(),
+            PageIndexLimits::default(),
+        )
+        .map_err(document_failure)?;
+    let build_store = range_store(snapshot)?;
+    let page_index = loop {
+        match build.poll(&build_store, &NeverCancelled) {
+            PageIndexBuildPoll::Ready(index) => break index,
+            PageIndexBuildPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => complete_pending(
+                &build_store,
+                snapshot,
+                source,
+                build_job,
+                ticket,
+                &missing,
+                checkpoint,
+            )?,
+            PageIndexBuildPoll::Failed(error) => return Err(document_failure(error)),
+        }
+    };
+    if page_index.is_empty() {
+        return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
+    }
+    Ok((authority, page_index))
 }
 
 #[allow(

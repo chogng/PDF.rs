@@ -35,8 +35,11 @@
 //! job discovers the final marker, classifies and acquires traditional,
 //! primary-stream, and hybrid sections newest-to-oldest, and publishes only
 //! after pure revision composition succeeds. Both jobs still reject indirect
-//! Length, and neither integrates the chain into the strict attestation opener
-//! or a Session.
+//! Length. A constrained compatibility bridge can normalize one non-hybrid base
+//! xref stream containing only free and uncompressed rows into the ordinary
+//! candidate index, which must then pass the unchanged consuming attestation
+//! job. Incremental, hybrid, null, and object-stream rows do not cross that
+//! bridge, and this crate still does not own a Session.
 //! An explicit local-repair planning surface can instead retain xref and
 //! object-offset proof, rebuild every effective interval atomically, and
 //! publish only an explicitly unauthenticated wrapper. A consuming sibling

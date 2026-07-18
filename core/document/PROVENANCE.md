@@ -368,9 +368,12 @@ repair or publish partially attested state.
   capacities. Every checked addition and allocation can fail before work or publication.
 - This coordinator supports unfiltered direct-Length xref streams through the compatibility
   constructor and strict foundational filtered xref streams through the explicit decode
-  constructor. It does not resolve indirect xref-stream Length, invoke R1 repair, attest the
-  resulting object geometry, schedule object-stream decoding, provide page or outline services, or
-  own a Range store, scheduler, or Session. It is a source-acquisition component and does not establish M1 exit.
+  constructor. `CandidateRevisionIndex::from_single_stream_revision` can normalize one non-hybrid
+  base stream containing only traditional-equivalent free and uncompressed rows; the result remains
+  unauthenticated until the unchanged consuming attestation job succeeds. Incremental, hybrid,
+  null, and compressed rows remain outside that bridge. The coordinator does not resolve indirect
+  xref-stream Length, invoke R1 repair, schedule object-stream decoding, own a Range store,
+  scheduler, or Session.
 
 ## Source-acquired objects and basic document services
 
@@ -1016,14 +1019,14 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
 
 # Known deviations and unsupported cases
 
-- The product strict-open path still accepts only one traditional base revision. A separate
+- The formal strict-base opener still accepts only one traditional base revision. A separate
   already-composed-chain resolver implements latest-wins uncompressed lookup and binds validated
   unfiltered object streams. The source coordinator can opt into foundational filtered
-  direct-Length `/Prev` and `/XRefStm` chains, but indirect-Length xref streams and product
-  attestation of that chain remain unsupported there. That coordinator itself does not own
-  object-stream scheduling or services; the separate source-acquired owner now provides bounded
-  filtered/unfiltered object-stream scheduling plus page-count and outline integration without
-  converting the acquired chain into strict or repaired typestate.
+  direct-Length `/Prev` and `/XRefStm` chains. Only a single non-hybrid stream revision with free
+  and uncompressed rows can be converted into a candidate for normal strict attestation;
+  incremental, hybrid, null, compressed, and indirect-Length xref-stream cases remain outside that
+  bridge. The separate source-acquired owner provides bounded filtered/unfiltered object-stream
+  scheduling plus page-count and outline integration for the wider acquired profile.
 - The formal opening entry remains a synchronous resumable core job. It does not own a Range store,
   physical transport, scheduler, session lifecycle, or parser requeue loop, and therefore does not
   by itself establish M1 exit.
@@ -1158,3 +1161,6 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
   acquired-object, and page/outline limit promotion conditional on the actual binding ceiling,
   centralized exact target classification before service budgets, and added latest-wins indirect
   Length plus exact decoder/payload/service accounting regressions.
+- 2026-07-18: Added a constrained single-revision xref-stream normalization bridge into the
+  existing candidate index and strict attestation path, retaining fail-closed handling for hybrid,
+  incremental, null, compressed, and self-row container geometry.

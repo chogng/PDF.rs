@@ -1,12 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pdf_rs_syntax::ObjectRef;
-use pdf_rs_xref::{LocallyParsedXrefSection, XrefEntry, XrefEntryKind, XrefSection};
+use pdf_rs_xref::{
+    LocallyParsedXrefSection, XrefEntryKind, XrefSection, XrefStream, XrefStreamEntryKind,
+};
 
 use crate::model::{LogicalEntry, LogicalEntryState};
 use crate::{
     CandidateRevisionIndex, DocumentError, DocumentErrorCode, DocumentIndexStats,
     DocumentLimitKind, DocumentLimits, EffectiveObjectOffset, PhysicalObjectInterval, RevisionId,
+    SourceAcquiredRevisionChain,
 };
 
 const CANCELLATION_INTERVAL: u64 = 256;
@@ -39,7 +42,23 @@ trait CandidateXrefView {
     fn snapshot(&self) -> pdf_rs_bytes::SourceSnapshot;
     fn startxref(&self) -> u64;
     fn root(&self) -> ObjectRef;
-    fn entries(&self) -> &[XrefEntry];
+    fn entry_count(&self) -> usize;
+    fn entry(&self, index: usize) -> CandidateXrefEntry;
+}
+
+#[derive(Clone, Copy)]
+enum CandidateXrefEntryKind {
+    Free,
+    InUse { offset: u64 },
+    Unsupported,
+    Compressed,
+}
+
+#[derive(Clone, Copy)]
+struct CandidateXrefEntry {
+    object_number: u32,
+    generation: u16,
+    kind: CandidateXrefEntryKind,
 }
 
 impl CandidateXrefView for XrefSection {
@@ -55,8 +74,21 @@ impl CandidateXrefView for XrefSection {
         self.root()
     }
 
-    fn entries(&self) -> &[XrefEntry] {
-        self.entries()
+    fn entry_count(&self) -> usize {
+        self.entries().len()
+    }
+
+    fn entry(&self, index: usize) -> CandidateXrefEntry {
+        let entry = self.entries()[index];
+        let kind = match entry.kind() {
+            XrefEntryKind::Free { .. } => CandidateXrefEntryKind::Free,
+            XrefEntryKind::InUse { offset } => CandidateXrefEntryKind::InUse { offset },
+        };
+        CandidateXrefEntry {
+            object_number: entry.object_number(),
+            generation: entry.generation(),
+            kind,
+        }
     }
 }
 
@@ -73,8 +105,64 @@ impl CandidateXrefView for LocallyParsedXrefSection {
         self.root()
     }
 
-    fn entries(&self) -> &[XrefEntry] {
-        self.entries()
+    fn entry_count(&self) -> usize {
+        self.entries().len()
+    }
+
+    fn entry(&self, index: usize) -> CandidateXrefEntry {
+        let entry = self.entries()[index];
+        let kind = match entry.kind() {
+            XrefEntryKind::Free { .. } => CandidateXrefEntryKind::Free,
+            XrefEntryKind::InUse { offset } => CandidateXrefEntryKind::InUse { offset },
+        };
+        CandidateXrefEntry {
+            object_number: entry.object_number(),
+            generation: entry.generation(),
+            kind,
+        }
+    }
+}
+
+struct SingleStreamXrefView<'a> {
+    stream: &'a XrefStream,
+    startxref: u64,
+    root: ObjectRef,
+}
+
+impl CandidateXrefView for SingleStreamXrefView<'_> {
+    fn snapshot(&self) -> pdf_rs_bytes::SourceSnapshot {
+        self.stream.snapshot()
+    }
+
+    fn startxref(&self) -> u64 {
+        self.startxref
+    }
+
+    fn root(&self) -> ObjectRef {
+        self.root
+    }
+
+    fn entry_count(&self) -> usize {
+        self.stream.entries().len()
+    }
+
+    fn entry(&self, index: usize) -> CandidateXrefEntry {
+        let entry = self.stream.entries()[index];
+        let (generation, kind) = match entry.kind() {
+            XrefStreamEntryKind::Null { .. } => (0, CandidateXrefEntryKind::Unsupported),
+            XrefStreamEntryKind::Free { generation, .. } => {
+                (generation, CandidateXrefEntryKind::Free)
+            }
+            XrefStreamEntryKind::Uncompressed { offset, generation } => {
+                (generation, CandidateXrefEntryKind::InUse { offset })
+            }
+            XrefStreamEntryKind::Compressed { .. } => (0, CandidateXrefEntryKind::Compressed),
+        };
+        CandidateXrefEntry {
+            object_number: entry.object_number(),
+            generation,
+            kind,
+        }
     }
 }
 
@@ -103,6 +191,55 @@ impl CandidateRevisionIndex {
         Self::from_xref_view(section, revision_id, limits, cancellation)
     }
 
+    /// Builds a strict-attestation candidate from one proof-retained primary xref-stream revision.
+    ///
+    /// This compatibility bridge accepts only a single non-hybrid base revision whose xref rows
+    /// are traditional-equivalent free or uncompressed entries. Object-stream rows and unknown
+    /// entry types remain unsupported. The returned value is still unauthenticated and must pass
+    /// the normal consuming revision-attestation job before any object can be opened.
+    pub fn from_single_stream_revision(
+        acquisition: &SourceAcquiredRevisionChain,
+        revision_id: RevisionId,
+        limits: DocumentLimits,
+        cancellation: &(dyn DocumentCancellation + '_),
+    ) -> Result<Self, DocumentError> {
+        let [proof] = acquisition.proofs() else {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::UnsupportedXrefStreamContainer,
+                None,
+                None,
+            ));
+        };
+        if proof.hybrid().is_some() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::UnsupportedXrefStreamContainer,
+                None,
+                None,
+            ));
+        }
+        let primary = proof.primary();
+        let stream = primary.stream().ok_or_else(|| {
+            DocumentError::for_code(
+                DocumentErrorCode::UnsupportedXrefStreamContainer,
+                None,
+                None,
+            )
+        })?;
+        if stream.previous().is_some() {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::UnsupportedXrefStreamContainer,
+                None,
+                None,
+            ));
+        }
+        let view = SingleStreamXrefView {
+            stream: stream.xref_stream(),
+            startxref: primary.anchor().startxref(),
+            root: acquisition.root(),
+        };
+        Self::from_xref_view(&view, revision_id, limits, cancellation)
+    }
+
     fn from_xref_view(
         section: &impl CandidateXrefView,
         revision_id: RevisionId,
@@ -111,8 +248,7 @@ impl CandidateRevisionIndex {
     ) -> Result<Self, DocumentError> {
         check_cancelled(cancellation)?;
 
-        let entries = section.entries();
-        let total_entries = u64::try_from(entries.len()).map_err(|_| {
+        let total_entries = u64::try_from(section.entry_count()).map_err(|_| {
             DocumentError::resource(
                 DocumentLimitKind::TotalEntries,
                 limits.max_total_entries,
@@ -132,18 +268,35 @@ impl CandidateRevisionIndex {
         }
 
         let mut in_use_entries = 0_u64;
-        for (index, entry) in entries.iter().enumerate() {
+        for index in 0..section.entry_count() {
             probe_loop(cancellation, index)?;
-            if matches!(entry.kind(), XrefEntryKind::InUse { .. }) {
-                in_use_entries = in_use_entries.checked_add(1).ok_or_else(|| {
-                    DocumentError::resource(
-                        DocumentLimitKind::InUseEntries,
-                        limits.max_in_use_entries,
-                        0,
-                        u64::MAX,
+            match section.entry(index).kind {
+                CandidateXrefEntryKind::InUse { .. } => {
+                    in_use_entries = in_use_entries.checked_add(1).ok_or_else(|| {
+                        DocumentError::resource(
+                            DocumentLimitKind::InUseEntries,
+                            limits.max_in_use_entries,
+                            0,
+                            u64::MAX,
+                            None,
+                        )
+                    })?;
+                }
+                CandidateXrefEntryKind::Compressed => {
+                    return Err(DocumentError::for_code(
+                        DocumentErrorCode::UnsupportedCompressedObject,
                         None,
-                    )
-                })?;
+                        None,
+                    ));
+                }
+                CandidateXrefEntryKind::Unsupported => {
+                    return Err(DocumentError::for_code(
+                        DocumentErrorCode::NullObject,
+                        None,
+                        None,
+                    ));
+                }
+                CandidateXrefEntryKind::Free => {}
             }
         }
         check_cancelled(cancellation)?;
@@ -179,7 +332,7 @@ impl CandidateRevisionIndex {
 
         let mut logical_entries = Vec::new();
         logical_entries
-            .try_reserve_exact(entries.len())
+            .try_reserve_exact(section.entry_count())
             .map_err(|_| {
                 DocumentError::resource(
                     DocumentLimitKind::Allocation,
@@ -281,22 +434,22 @@ impl CandidateRevisionIndex {
             ));
         }
 
-        for (logical_slot, entry) in entries.iter().enumerate() {
+        for logical_slot in 0..section.entry_count() {
             probe_loop(cancellation, logical_slot)?;
-            let state = match entry.kind() {
-                XrefEntryKind::Free { .. } => LogicalEntryState::Free,
-                XrefEntryKind::InUse { offset } => {
+            let entry = section.entry(logical_slot);
+            let state = match entry.kind {
+                CandidateXrefEntryKind::Free => LogicalEntryState::Free,
+                CandidateXrefEntryKind::InUse { offset } => {
                     if offset >= section.startxref() {
-                        let reference =
-                            ObjectRef::new(entry.object_number(), entry.generation()).ok();
+                        let reference = ObjectRef::new(entry.object_number, entry.generation).ok();
                         return Err(DocumentError::for_code(
                             DocumentErrorCode::InvalidPhysicalOffset,
                             reference,
                             Some(offset),
                         ));
                     }
-                    let reference = ObjectRef::new(entry.object_number(), entry.generation())
-                        .map_err(|_| {
+                    let reference =
+                        ObjectRef::new(entry.object_number, entry.generation).map_err(|_| {
                             DocumentError::for_code(
                                 DocumentErrorCode::InvalidXrefEntry,
                                 None,
@@ -321,10 +474,13 @@ impl CandidateRevisionIndex {
                         physical_index: u32::MAX,
                     }
                 }
+                CandidateXrefEntryKind::Unsupported | CandidateXrefEntryKind::Compressed => {
+                    unreachable!("unsupported rows are rejected during the bounded first pass")
+                }
             };
             logical_entries.push(LogicalEntry {
-                object_number: entry.object_number(),
-                generation: entry.generation(),
+                object_number: entry.object_number,
+                generation: entry.generation,
                 state,
             });
         }

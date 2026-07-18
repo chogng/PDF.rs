@@ -13,7 +13,7 @@ fn minimal_traditional_pdf_still_opens() {
 
 #[test]
 fn acquired_xref_representations_publish_page_counts() {
-    for bytes in [xref_stream_pdf(), incremental_pdf()] {
+    for bytes in [xref_stream_pdf(true), incremental_pdf()] {
         let mut document =
             NativeDocument::open(bytes).expect("source-acquired xref representation opens");
         assert_eq!(document.page_count(), 1);
@@ -22,6 +22,17 @@ fn acquired_xref_representations_publish_page_counts() {
             .expect_err("acquired page rendering is the next compatibility boundary");
         assert_eq!(error.code(), NativeViewerErrorCode::Unsupported);
     }
+}
+
+#[test]
+fn uncompressed_single_revision_xref_stream_reuses_strict_rendering() {
+    let mut document = NativeDocument::open(xref_stream_pdf(false))
+        .expect("traditional-equivalent xref stream opens through strict attestation");
+    assert_eq!(document.page_count(), 1);
+    let surface = document
+        .render_page(0, 100)
+        .expect("strict-attested blank page renders");
+    assert_eq!((surface.width(), surface.height()), (100, 100));
 }
 
 #[test]
@@ -72,7 +83,7 @@ fn traditional_pdf(boundary_padding: usize, previous: Option<u64>) -> Vec<u8> {
     pdf
 }
 
-fn xref_stream_pdf() -> Vec<u8> {
+fn xref_stream_pdf(include_self_row: bool) -> Vec<u8> {
     let mut pdf = b"%PDF-1.7\n%\x80\x81\x82\x83\n".to_vec();
     let mut offsets = Vec::new();
     append_object(
@@ -100,7 +111,9 @@ fn xref_stream_pdf() -> Vec<u8> {
         b"<< /Length 0 >>\nstream\n\nendstream",
     );
     let xref_offset = pdf.len();
-    offsets.push(xref_offset);
+    if include_self_row {
+        offsets.push(xref_offset);
+    }
     let mut payload = Vec::new();
     append_xref_stream_entry(&mut payload, 0, 0, u16::MAX);
     for offset in offsets {
@@ -113,7 +126,12 @@ fn xref_stream_pdf() -> Vec<u8> {
     }
     write!(
         pdf,
-        "5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W [1 4 2] /Length {} >>\nstream\n",
+        "5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W [1 4 2]{} /Length {} >>\nstream\n",
+        if include_self_row {
+            ""
+        } else {
+            " /Index [0 5]"
+        },
         payload.len()
     )
     .expect("xref stream fixture");
