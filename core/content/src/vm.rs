@@ -1267,6 +1267,16 @@ impl TextAction {
             | Self::Show { source, .. } => *source,
         }
     }
+
+    const fn requires_active_text_object(&self) -> bool {
+        matches!(
+            self,
+            Self::MovePosition { .. }
+                | Self::SetMatrix { .. }
+                | Self::NextLine { .. }
+                | Self::Show { .. }
+        )
+    }
 }
 
 enum ExecutionAction {
@@ -4804,7 +4814,7 @@ impl TextExecutor {
         materialization_peak: &mut u64,
     ) -> Result<(), ContentVmFailure> {
         let source = action.source();
-        if !self.active {
+        if action.requires_active_text_object() && !self.active {
             return Err(ContentVmFailure::Vm(vm_error(
                 ContentVmErrorCode::InternalState,
                 source,
@@ -5210,8 +5220,7 @@ fn font_outline<'a>(
     source: ContentOperatorSource,
 ) -> Result<pdf_rs_font::GlyphOutline<'a>, ContentVmFailure> {
     let glyph_id = font
-        .font()
-        .glyph_id_for_winansi(byte)
+        .glyph_id_for_code(byte)
         .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))?;
     font.font()
         .glyph_outline(glyph_id)

@@ -2923,6 +2923,25 @@ fn q_restores_complete_text_parameters_but_not_text_matrices() {
 }
 
 #[test]
+fn text_parameters_set_before_bt_apply_inside_the_text_object() {
+    let page = font_ready(b"/F0 10 Tf 1 Tc BT (AA) Tj ET", 0x84);
+    let graphics = page.scene().graphics().expect("graphics-v2 scene");
+    let GraphicsCommand::DrawGlyphRun(run) = graphics.commands()[0].command() else {
+        panic!("text must publish one glyph run");
+    };
+    assert_eq!(run.glyphs().len(), 2);
+    assert_eq!(
+        run.glyphs()[0].transform().components()[4],
+        SceneScalar::ZERO
+    );
+    assert_eq!(
+        run.glyphs()[1].transform().components()[4],
+        SceneScalar::from_scaled(8_770_000_000),
+        "Tf and Tc set before BT must remain active for text showing"
+    );
+}
+
+#[test]
 fn bt_resets_only_text_matrices_and_quadratics_are_canonical_cubics() {
     let program = font_support::build_font(vec![Vec::new(), font_support::quadratic_glyph()]);
     let objects = embedded_font_objects(5, 6, 7, &program, 500);

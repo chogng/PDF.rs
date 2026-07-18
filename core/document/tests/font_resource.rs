@@ -23,7 +23,7 @@ use pdf_rs_document::{
 use pdf_rs_filters::{DecodeLimitConfig, DecodeLimits};
 use pdf_rs_font::{
     FontLimit, FontLimitConfig, FontLimitKind, FontLimits, FontParseOutcome, FontProfile,
-    FontUnsupportedKind, NeverCancelled as FontNeverCancelled, parse_truetype,
+    FontProgram, FontUnsupportedKind, NeverCancelled as FontNeverCancelled, parse_truetype,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
@@ -133,6 +133,99 @@ fn widths(first: u8, last: u8, ascii_a: u32) -> String {
         .map(|value| value.to_string())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(items.len() as u16).to_be_bytes());
+    if items.is_empty() {
+        return bytes;
+    }
+    bytes.push(1);
+    let mut offset = 1_u8;
+    bytes.push(offset);
+    for item in items {
+        offset = offset.checked_add(item.len() as u8).unwrap();
+        bytes.push(offset);
+    }
+    for item in items {
+        bytes.extend_from_slice(item);
+    }
+    bytes
+}
+
+fn cff_dict_integer(bytes: &mut Vec<u8>, value: usize) {
+    bytes.push(29);
+    bytes.extend_from_slice(&(value as i32).to_be_bytes());
+}
+
+fn type2_integer(bytes: &mut Vec<u8>, value: i16) {
+    match value {
+        -107..=107 => bytes.push((value + 139) as u8),
+        108..=1_131 => {
+            let adjusted = value - 108;
+            bytes.push((247 + adjusted / 256) as u8);
+            bytes.push((adjusted % 256) as u8);
+        }
+        -1_131..=-108 => {
+            let adjusted = -value - 108;
+            bytes.push((251 + adjusted / 256) as u8);
+            bytes.push((adjusted % 256) as u8);
+        }
+        _ => {
+            bytes.push(28);
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+}
+
+fn foundational_cff() -> Vec<u8> {
+    let name = cff_index(&[b"DocumentCff".to_vec()]);
+    let strings = cff_index(&[]);
+    let global_subrs = cff_index(&[]);
+    let charset = vec![0, 0, 34, 0, 200];
+
+    let notdef = vec![14];
+    let mut letter_a = Vec::new();
+    type2_integer(&mut letter_a, 500);
+    type2_integer(&mut letter_a, 100);
+    type2_integer(&mut letter_a, 100);
+    letter_a.push(21);
+    for value in [300, 700, 300, -700, -600, 0] {
+        type2_integer(&mut letter_a, value);
+    }
+    letter_a.extend_from_slice(&[5, 14]);
+    let mut aacute = Vec::new();
+    type2_integer(&mut aacute, 500);
+    type2_integer(&mut aacute, 100);
+    type2_integer(&mut aacute, 100);
+    aacute.push(21);
+    for value in [300, 700, 300, -700, -600, 0] {
+        type2_integer(&mut aacute, value);
+    }
+    aacute.extend_from_slice(&[5, 14]);
+    let charstrings = cff_index(&[notdef, letter_a, aacute]);
+
+    let top_len = 12_usize;
+    let top_index_len = 2 + 1 + 2 + top_len;
+    let prefix = 4 + name.len() + top_index_len + strings.len() + global_subrs.len();
+    let charset_offset = prefix;
+    let charstrings_offset = charset_offset + charset.len();
+    let mut top = Vec::new();
+    cff_dict_integer(&mut top, charset_offset);
+    top.push(15);
+    cff_dict_integer(&mut top, charstrings_offset);
+    top.push(17);
+    assert_eq!(top.len(), top_len);
+
+    let mut bytes = vec![1, 0, 4, 4];
+    bytes.extend_from_slice(&name);
+    bytes.extend_from_slice(&cff_index(&[top]));
+    bytes.extend_from_slice(&strings);
+    bytes.extend_from_slice(&global_subrs);
+    bytes.extend_from_slice(&charset);
+    bytes.extend_from_slice(&charstrings);
+    bytes
 }
 
 fn font_dictionary(descriptor: &str) -> Vec<u8> {
@@ -688,6 +781,35 @@ fn direct_lookup_and_identity_acquisition_preserve_pdf_metrics_proof_and_replay(
 }
 
 #[test]
+fn type1c_fontfile3_acquisition_maps_standard_and_difference_glyph_names() {
+    let program = foundational_cff();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 \
+         /Encoding << /BaseEncoding /StandardEncoding /Differences [65 /A 97 /aacute] >> \
+         /FirstChar 32 /LastChar 126 /Widths [{}] /FontDescriptor 5 0 R >>",
+        widths(32, 126, 777)
+    );
+    let fixture = custom_font_fixture(
+        font.as_bytes(),
+        Some(b"<< /Type /FontDescriptor /FontFile3 6 0 R >>"),
+        Some(stream_body(6, b"/Subtype /Type1C", &program)),
+        0xe1,
+    );
+    let prepared = prepare(&fixture, 18_501);
+    let ready = acquire_ready(&prepared, FontResourceLimits::default(), 18_541);
+
+    let FontProgram::Type1C(cff) = ready.font() else {
+        panic!("Type1C program expected");
+    };
+    assert_eq!(cff.glyph_count(), 3);
+    assert_eq!(ready.glyph_id_for_code(b'A').unwrap().get(), 1);
+    assert_eq!(ready.glyph_id_for_code(b'a').unwrap().get(), 2);
+    assert_eq!(ready.pdf_width_for_winansi(b'A'), Some(777));
+    assert_eq!(ready.decoded_program().bytes(), program);
+    assert_eq!(ready.font().profile(), FontProfile::SimpleType1CStandardV1);
+}
+
+#[test]
 fn complete_winansi_acquisition_retains_extended_pdf_widths_and_glyph_mapping() {
     let program = font_support::foundational_font();
     let font = format!(
@@ -855,27 +977,19 @@ fn unsupported_pdf_and_truetype_capabilities_are_typed_before_publication() {
         FontResourceUnsupportedKind::UnsupportedWidths
     );
 
-    for (index, (first, last)) in [(33_u8, 126_u8), (32, 125)].into_iter().enumerate() {
-        let range_font = format!(
-            "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
-             /FirstChar {first} /LastChar {last} /Widths [{}] /FontDescriptor 5 0 R >>",
-            widths(first, last, 777)
-        );
-        let range_fixture = custom_font_fixture(
-            range_font.as_bytes(),
-            None,
-            None,
-            0xd0 + u8::try_from(index).unwrap(),
-        );
-        let index = u64::try_from(index).unwrap();
-        let prepared = prepare(&range_fixture, 19_051 + index * 20);
-        let unsupported = acquire_unsupported(&prepared, 19_061 + index * 20);
-        assert_eq!(
-            unsupported.kind(),
-            FontResourceUnsupportedKind::UnsupportedCharacterRange
-        );
-        assert_eq!(unsupported.diagnostic_id(), "RPE-DOCUMENT-FONT-0014");
-    }
+    let range_font = format!(
+        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
+         /FirstChar 31 /LastChar 126 /Widths [{}] /FontDescriptor 5 0 R >>",
+        widths(31, 126, 777)
+    );
+    let range_fixture = custom_font_fixture(range_font.as_bytes(), None, None, 0xd0);
+    let prepared = prepare(&range_fixture, 19_051);
+    let unsupported = acquire_unsupported(&prepared, 19_061);
+    assert_eq!(
+        unsupported.kind(),
+        FontResourceUnsupportedKind::UnsupportedCharacterRange
+    );
+    assert_eq!(unsupported.diagnostic_id(), "RPE-DOCUMENT-FONT-0014");
 
     let missing_program = custom_font_fixture(
         format!(
@@ -1806,8 +1920,8 @@ fn widths_and_poll_limits_fail_at_independent_valid_minimums() {
     let program = font_support::foundational_font();
     let wider_font = format!(
         "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
-         /FirstChar 31 /LastChar 126 /Widths [{}] /FontDescriptor 5 0 R >>",
-        widths(31, 126, 777)
+         /FirstChar 32 /LastChar 127 /Widths [{}] /FontDescriptor 5 0 R >>",
+        widths(32, 127, 777)
     );
     let fixture = custom_font_fixture(
         wider_font.as_bytes(),
