@@ -3890,6 +3890,35 @@ fn build_execution_plan(
                     let ValidatedOperands::NameAndProperty { tag, property } = validated else {
                         unreachable!("validated BDC operands have tag/property shape");
                     };
+                    if let PropertyOperand::Dictionary = &property
+                        && matches!(profile, ContentVmProfile::GraphicsV2 { .. })
+                    {
+                        if let Err(error) =
+                            preflight_marked_depth(marked_depth, vm_limits, operator_source)
+                        {
+                            return prioritize_vm(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                operator_source,
+                                error,
+                            );
+                        }
+                        marked_depth = match marked_depth.checked_add(1) {
+                            Some(value) => value,
+                            None => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    vm_error(ContentVmErrorCode::InternalState, operator_source),
+                                );
+                            }
+                        };
+                        accounting.max_marked_depth = accounting.max_marked_depth.max(marked_depth);
+                        continue;
+                    }
                     let PropertyOperand::Name(property_name) = property else {
                         return prioritize(
                             snapshot,

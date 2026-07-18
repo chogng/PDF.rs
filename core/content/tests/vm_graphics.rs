@@ -356,6 +356,26 @@ fn graphics_ready(content: &[u8], salt: u8) -> Arc<pdf_rs_content::InterpretedPa
     }
 }
 
+#[test]
+fn direct_marked_content_properties_are_pixel_neutral_in_graphics_profile() {
+    let page = graphics_ready(
+        b"/Span << /ActualText (replacement) /MCID 7 >> BDC 0 0 10 10 re f EMC",
+        0x04,
+    );
+
+    assert!(page.property_uses().is_empty());
+    assert_eq!(page.property_stats().lookups(), 0);
+    assert_eq!(page.vm_stats().max_marked_content_depth(), 1);
+    assert_eq!(
+        page.scene()
+            .graphics()
+            .expect("graphics-v2 Scene")
+            .commands()
+            .len(),
+        1
+    );
+}
+
 fn image_object(number: u32, dictionary_entries: &[u8], decoded: &[u8]) -> Vec<u8> {
     let mut object = format!(
         "{number} 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 1 \
