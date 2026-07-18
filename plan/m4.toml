@@ -210,8 +210,9 @@ acceptance = [
 id = "M4-10"
 title = "Electron UI with PDF.rs Native reading vertical slice"
 lane = "desktop"
-status = "in_progress"
+status = "complete"
 started_at = 2026-07-18
+completed_at = 2026-07-18
 depends_on = ["M4-08"]
 outcome = "One local-development Electron target completes local open, PDF.rs-owned parsing and raster, first-page display, zoom, resize, close, and shutdown through a narrow process bridge."
 selected_target_record = "platform/electron/electron-target.toml"
@@ -221,7 +222,8 @@ progress = [
   "A deterministic two-page readable PDF with a project-authored embedded TrueType font has Rust open-to-pixel coverage for both pages, including renderer identity, visible-content evidence, and page/output bound rejection.",
   "A source-only Electron project now uses a context-isolated sandboxed renderer, a narrow preload API, and an Electron-main bridge controller to open local PDFs and present only Rust-produced RGBA8 pixels in Canvas.",
   "The renderer identity is carried across the Rust viewer, stdio protocol, and Electron bridge so the current Reference CPU surface cannot be mistaken for the later Fast CPU handoff.",
-  "The Electron smoke gate opens the readable two-page PDF, waits through Canvas presentation and browser composition, captures the actual readable first page, and shuts down without packaging or signing.",
+  "The Electron smoke gate opens the readable two-page PDF and sequentially proves its composited first page, page-two navigation, a replacement 125-percent surface, window-resize replacement, close-to-empty state, bridge exit, and clean shutdown without packaging or signing.",
+  "Bridge integration rejects a malformed xref as document failure and a valid interpolated-image document as unsupported without browser or external-engine fallback.",
 ]
 acceptance = [
   "The selected M4 desktop OS, UI mechanism, IPC mechanism, sandbox boundary, and shared-memory format are recorded before implementation evidence is accepted.",

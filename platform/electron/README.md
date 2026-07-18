@@ -24,9 +24,12 @@ npm run smoke
 ```
 
 `npm test` exercises both pages of the deterministic readable PDF through the
-persistent bridge. `npm run smoke` starts Electron with that PDF, waits for a
-real Canvas presentation, captures `target/electron-preview-smoke.png`, and
-exits.
+persistent bridge and verifies structured invalid/unsupported outcomes.
+`npm run smoke` starts Electron with that PDF and drives the source application
+through its normal renderer controls. It captures the readable first page,
+page two, 125% replacement, resized window, and closed state under
+`target/electron-preview-smoke*.png`, then verifies bridge exit and clean
+application shutdown.
 
 ## Current compatibility
 

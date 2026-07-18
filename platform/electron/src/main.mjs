@@ -7,11 +7,34 @@ import { PdfRsBridge, PdfRsBridgeError } from "./bridge.mjs";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const smokeScreenshot = process.env.PDF_RS_ELECTRON_SMOKE_SCREENSHOT;
+const smokeEvidence = smokeScreenshot
+  ? Object.freeze({
+      firstPage: smokeScreenshot,
+      pageTwo: resolve(
+        dirname(smokeScreenshot),
+        `${basename(smokeScreenshot, ".png")}-page-2.png`,
+      ),
+      zoom: resolve(
+        dirname(smokeScreenshot),
+        `${basename(smokeScreenshot, ".png")}-zoom-125.png`,
+      ),
+      resize: resolve(
+        dirname(smokeScreenshot),
+        `${basename(smokeScreenshot, ".png")}-resized.png`,
+      ),
+      closed: resolve(
+        dirname(smokeScreenshot),
+        `${basename(smokeScreenshot, ".png")}-closed.png`,
+      ),
+    })
+  : undefined;
 let bridge;
 let mainWindow;
 let currentDocument;
 let quitting = false;
 let smokeCaptured = false;
+let smokeHandling = false;
+let smokeStage = 0;
 
 const assertMainFrame = (event) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) {
@@ -23,6 +46,140 @@ const safeFailure = (error) => ({
   ok: false,
   code: error instanceof PdfRsBridgeError ? error.code : "host",
 });
+
+const smokeSnapshot = async () =>
+  mainWindow.webContents.executeJavaScript(`(() => {
+    const canvas = document.querySelector("#page");
+    return {
+      pageLabel: document.querySelector("#page-label")?.textContent,
+      zoomLabel: document.querySelector("#zoom-label")?.textContent,
+      documentName: document.querySelector("#document-name")?.textContent,
+      status: document.querySelector("#status")?.textContent,
+      pageShellHidden: document.querySelector("#page-shell")?.hidden,
+      emptyHidden: document.querySelector("#empty")?.hidden,
+      closeDisabled: document.querySelector("#close")?.disabled,
+      canvasWidth: canvas?.width,
+      canvasHeight: canvas?.height,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+    };
+  })()`);
+
+const assertSmoke = (condition, message) => {
+  if (!condition) {
+    throw new Error(`smoke-${message}`);
+  }
+};
+
+const assertRenderedSnapshot = (snapshot, pageLabel, zoomLabel, width) => {
+  assertSmoke(snapshot.pageLabel === pageLabel, `page-label-${snapshot.pageLabel}`);
+  assertSmoke(snapshot.zoomLabel === zoomLabel, `zoom-label-${snapshot.zoomLabel}`);
+  assertSmoke(snapshot.documentName === "readable-preview.pdf", "document-name");
+  assertSmoke(snapshot.pageShellHidden === false, "page-hidden");
+  assertSmoke(snapshot.emptyHidden === true, "empty-visible");
+  assertSmoke(snapshot.closeDisabled === false, "close-disabled");
+  assertSmoke(snapshot.canvasWidth === width, `canvas-width-${snapshot.canvasWidth}`);
+  assertSmoke(snapshot.canvasHeight > width, `canvas-height-${snapshot.canvasHeight}`);
+  assertSmoke(snapshot.status.includes("RGBA8 · Reference CPU"), "renderer-status");
+};
+
+const captureSmoke = async (path) => {
+  const image = await mainWindow.webContents.capturePage();
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, image.toPNG());
+};
+
+const clickSmokeControl = async (selector) => {
+  const clicked = await mainWindow.webContents.executeJavaScript(`(() => {
+    const control = document.querySelector(${JSON.stringify(selector)});
+    if (!(control instanceof HTMLButtonElement) || control.disabled) {
+      return false;
+    }
+    control.click();
+    return true;
+  })()`);
+  assertSmoke(clicked, `control-${selector}`);
+};
+
+const waitForClosedSnapshot = async () => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const snapshot = await smokeSnapshot();
+    if (snapshot.pageShellHidden && !snapshot.emptyHidden) {
+      await mainWindow.webContents.executeJavaScript(
+        "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+      return smokeSnapshot();
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  throw new Error("smoke-close-timeout");
+};
+
+const handleSmokePreview = async () => {
+  if (
+    !smokeEvidence
+    || smokeCaptured
+    || smokeHandling
+    || !mainWindow
+  ) {
+    return;
+  }
+  smokeHandling = true;
+  try {
+    const snapshot = await smokeSnapshot();
+    if (smokeStage === 0) {
+      assertRenderedSnapshot(snapshot, "Page 1 / 2", "100%", 384);
+      await captureSmoke(smokeEvidence.firstPage);
+      console.log(`PDF_RS_ELECTRON_FIRST_PAGE_READY ${smokeEvidence.firstPage}`);
+      smokeStage = 1;
+      await clickSmokeControl("#next");
+      return;
+    }
+    if (smokeStage === 1) {
+      assertRenderedSnapshot(snapshot, "Page 2 / 2", "100%", 384);
+      await captureSmoke(smokeEvidence.pageTwo);
+      console.log(`PDF_RS_ELECTRON_PAGE_TWO_READY ${smokeEvidence.pageTwo}`);
+      smokeStage = 2;
+      await clickSmokeControl("#zoom-in");
+      return;
+    }
+    if (smokeStage === 2) {
+      assertRenderedSnapshot(snapshot, "Page 2 / 2", "125%", 480);
+      await captureSmoke(smokeEvidence.zoom);
+      console.log(`PDF_RS_ELECTRON_ZOOM_READY ${smokeEvidence.zoom}`);
+      smokeStage = 3;
+      mainWindow.setContentSize(900, 700);
+      return;
+    }
+    if (smokeStage === 3) {
+      assertRenderedSnapshot(snapshot, "Page 2 / 2", "125%", 480);
+      assertSmoke(snapshot.innerWidth === 900, `inner-width-${snapshot.innerWidth}`);
+      assertSmoke(snapshot.innerHeight === 700, `inner-height-${snapshot.innerHeight}`);
+      await captureSmoke(smokeEvidence.resize);
+      console.log(`PDF_RS_ELECTRON_RESIZE_READY ${smokeEvidence.resize}`);
+      smokeStage = 4;
+      await clickSmokeControl("#close");
+      const closed = await waitForClosedSnapshot();
+      assertSmoke(closed.pageLabel === "No document", "close-page-label");
+      assertSmoke(closed.zoomLabel === "100%", "close-zoom-label");
+      assertSmoke(closed.documentName === "Local development preview", "close-document-name");
+      assertSmoke(closed.status === "Ready", "close-status");
+      assertSmoke(closed.closeDisabled === true, "close-enabled");
+      assertSmoke(closed.canvasWidth === 0, "close-canvas-width");
+      assertSmoke(closed.canvasHeight === 0, "close-canvas-height");
+      await captureSmoke(smokeEvidence.closed);
+      console.log(`PDF_RS_ELECTRON_CLOSE_READY ${smokeEvidence.closed}`);
+      smokeCaptured = true;
+      console.log(`PDF_RS_ELECTRON_SMOKE_READY ${smokeEvidence.firstPage}`);
+      app.quit();
+    }
+  } catch (error) {
+    console.error(`PDF_RS_ELECTRON_SMOKE_FAILED ${error?.message ?? "unknown"}`);
+    app.exit(1);
+  } finally {
+    smokeHandling = false;
+  }
+};
 
 const openPath = async (path) => {
   if (currentDocument) {
@@ -158,19 +315,7 @@ ipcMain.on("pdf-rs:preview-ready", async (event) => {
   if (smokeScreenshot) {
     console.log("PDF_RS_ELECTRON_PREVIEW_READY");
   }
-  if (!smokeScreenshot || smokeCaptured || !mainWindow) {
-    return;
-  }
-  smokeCaptured = true;
-  try {
-    const image = await mainWindow.webContents.capturePage();
-    await mkdir(dirname(smokeScreenshot), { recursive: true });
-    await writeFile(smokeScreenshot, image.toPNG());
-    console.log(`PDF_RS_ELECTRON_SMOKE_READY ${smokeScreenshot}`);
-    app.quit();
-  } catch {
-    app.exit(1);
-  }
+  await handleSmokePreview();
 });
 
 app.whenReady().then(async () => {

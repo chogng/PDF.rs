@@ -1,7 +1,8 @@
 schema = 1
 target_id = "m4-electron-local-preview-v1"
 selected = true
-status = "in_progress"
+status = "complete"
+completed_at = 2026-07-18
 
 [platform]
 os = "macos"
@@ -56,3 +57,18 @@ forbidden = ["PDFium", "PDF.js", "MuPDF", "Chromium PDF plugin", "external PDF s
 record = "platform/desktop/macos/sandbox-target.toml"
 purpose = "authenticated native worker and future Electron-free Rust UI"
 blocks_selected_target = false
+
+[verification]
+commands = [
+  "cargo test --locked --package pdf-rs-generate",
+  "cargo test --locked --package pdf-rs-viewer --all-targets",
+  "cd platform/electron && npm test",
+  "cd platform/electron && npm run smoke",
+]
+smoke_evidence = [
+  "target/electron-preview-smoke.png",
+  "target/electron-preview-smoke-page-2.png",
+  "target/electron-preview-smoke-zoom-125.png",
+  "target/electron-preview-smoke-resized.png",
+  "target/electron-preview-smoke-closed.png",
+]

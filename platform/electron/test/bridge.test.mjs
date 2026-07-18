@@ -8,6 +8,14 @@ const readablePdf = resolve(
   import.meta.dirname,
   "../../../tests/desktop/readable-preview.pdf",
 );
+const unsupportedPdf = resolve(
+  import.meta.dirname,
+  "../../../tests/cases/raster/m3-reference/producer-unsupported-interpolated-image/input.pdf",
+);
+const invalidPdf = resolve(
+  import.meta.dirname,
+  "../../../tests/cases/raster/m3-reference/strict-invalid-xref/input.pdf",
+);
 
 test("persistent bridge opens and renders a readable two-page PDF", async () => {
   const bridge = new PdfRsBridge();
@@ -42,6 +50,16 @@ test("bridge returns structured errors for unsupported ownership", async () => {
       bridge.render(999, 0, 128),
       (error) => error?.code === "unknown-document",
     );
+    await assert.rejects(
+      bridge.open(invalidPdf),
+      (error) => error?.code === "document",
+    );
+    const opened = await bridge.open(unsupportedPdf);
+    await assert.rejects(
+      bridge.render(opened.documentId, 0, 128),
+      (error) => error?.code === "unsupported",
+    );
+    await bridge.close(opened.documentId);
   } finally {
     await bridge.shutdown();
   }
