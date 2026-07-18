@@ -5,6 +5,30 @@
 //! drives the Native engine through bounded turns, and publishes immutable
 //! Surfaces through epoch-bound read-only shared-memory capabilities.
 
+#![cfg_attr(
+    not(feature = "transport-fixture"),
+    doc = r#"
+The default product feature graph does not expose direct transport-fixture
+launch entry points.
+
+```compile_fail
+use pdf_rs_desktop::DesktopEpochManager;
+
+let mut epochs = DesktopEpochManager::new();
+let _ = epochs.spawn_transport_fixture("/fixture-only-worker");
+```
+
+```compile_fail
+use pdf_rs_desktop::{DesktopChildSupervisor, DesktopSupervisorConfig};
+
+let _ = DesktopChildSupervisor::start_transport_fixture(
+    "/fixture-only-worker",
+    DesktopSupervisorConfig::default(),
+    (),
+);
+```
+"#
+)]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 

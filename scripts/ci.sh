@@ -27,6 +27,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo test --locked --package pdf-rs-desktop --all-targets --features transport-fixture
+cargo test --locked --doc --package pdf-rs-desktop --no-default-features
 cargo run --quiet --package pdf-rs-protocol-codegen -- --check .
 cargo run --quiet --package pdf-rs-generate -- \
     tests/cases/infrastructure/synthetic-failure-bundle-001/source.dsl \
@@ -138,6 +139,7 @@ cargo run --quiet --package pdf-rs-quality -- \
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --locked \
     --release \
+    --no-default-features \
     --lib \
     --package pdf-rs-bytes \
     --package pdf-rs-filters \
@@ -161,6 +163,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --locked \
     --release \
+    --no-default-features \
     --package pdf-rs-desktop \
     --bin pdf-rs-desktop-worker
 cargo run --quiet --package pdf-rs-quality -- \

@@ -76,17 +76,41 @@ environment_attestation_accepted = false
 unsigned_binary_accepted = false
 transport_fixture_is_product = false
 
+[product_feature_closure]
+closure_scope = "package_prerequisite"
+prerequisite_complete = true
+cargo_package = "pdf-rs-desktop"
+cargo_binary = "pdf-rs-desktop-worker"
+release_profile = true
+default_features_enabled = false
+forbidden_features = ["transport-fixture"]
+required_fingerprint_features = "[]"
+required_declared_features = ["default", "transport-fixture"]
+fresh_external_target_required = true
+required_desktop_fingerprint_directories = 2
+single_library_fingerprint_required = true
+single_worker_fingerprint_required = true
+worker_feature_marker_required = "no_default_features_v1"
+worker_fixture_marker_forbidden = "transport_fixture_v1"
+worker_cargo_filename_association_required = true
+matching_worker_sha256_observation_required = true
+worker_content_provenance_proved = false
+fixture_launch_api_product_visible = false
+product_package_produced = false
+universal_binary_proof = false
+signed_package_proof = false
+
 [required_closure]
 items = [
   "signed parent .app with the exact host entitlement set",
   "embedded helper signed on copy with the exact worker entitlement set",
   "codesign verification of identifiers, hardened runtime, nested code, and exact entitlements",
-  "product Cargo feature closure rejects transport-fixture",
   "real child denial probes for a host-readable PowerBox file and a live loopback network listener",
   "real child success probes for the inherited authenticated socket and read-only shared-memory transfer",
   "recorded sandbox Surface backend proving inherited parent-app TMPDIR fallback when POSIX shared memory is denied",
   "read-only reopen, unlink-before-SCM_RIGHTS, receiver validation, and zero residual shared objects after child exit",
   "no app-group or temporary-exception widening for /pdf-rs-* shared-memory names",
+  "signed universal helper content provenance, bytes, and both architecture slices bound to the validated feature-free release worker SHA-256, including resistance to crafted paired substitution",
   "package and CI artifact hashes bound to the selected universal macOS target",
 ]
 

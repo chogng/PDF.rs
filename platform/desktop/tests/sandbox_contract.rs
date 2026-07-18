@@ -16,6 +16,8 @@ const HOST_ENTITLEMENTS: &str = include_str!("../macos/host.entitlements");
 const WORKER_ENTITLEMENTS: &str = include_str!("../macos/worker.entitlements");
 const TARGET: &str = include_str!("../macos/sandbox-target.toml");
 const M4_PLAN: &str = include_str!("../../../plan/m4.toml");
+const CI: &str = include_str!("../../../scripts/ci.sh");
+const WORKER_ENTRY: &str = include_str!("../src/main.rs");
 
 const EXPECTED_HOST_ENTITLEMENTS: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
@@ -108,9 +110,83 @@ fn selected_target_and_entitlements_are_exact_and_narrow() {
         "caller_attestation_accepted = false",
         "environment_attestation_accepted = false",
         "transport_fixture_is_product = false",
+        "closure_scope = \"package_prerequisite\"",
+        "prerequisite_complete = true",
+        "cargo_package = \"pdf-rs-desktop\"",
+        "cargo_binary = \"pdf-rs-desktop-worker\"",
+        "release_profile = true",
+        "default_features_enabled = false",
+        "forbidden_features = [\"transport-fixture\"]",
+        "required_fingerprint_features = \"[]\"",
+        "required_declared_features = [\"default\", \"transport-fixture\"]",
+        "fresh_external_target_required = true",
+        "required_desktop_fingerprint_directories = 2",
+        "single_library_fingerprint_required = true",
+        "single_worker_fingerprint_required = true",
+        "worker_feature_marker_required = \"no_default_features_v1\"",
+        "worker_fixture_marker_forbidden = \"transport_fixture_v1\"",
+        "worker_cargo_filename_association_required = true",
+        "matching_worker_sha256_observation_required = true",
+        "worker_content_provenance_proved = false",
+        "fixture_launch_api_product_visible = false",
+        "product_package_produced = false",
+        "universal_binary_proof = false",
+        "signed_package_proof = false",
     ] {
         assert_unique_assignment(TARGET, exact);
     }
+    assert!(TARGET.contains(
+        "signed universal helper content provenance, bytes, and both architecture slices bound to the validated feature-free release worker SHA-256, including resistance to crafted paired substitution"
+    ));
+}
+
+#[test]
+fn product_release_commands_disable_default_features_explicitly() {
+    let release_closure = CI
+        .split("prepare-product-build-proof")
+        .nth(1)
+        .expect("product proof preparation")
+        .split("check-product-build-closure")
+        .next()
+        .expect("product closure check");
+    let build_marker = "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=\"$product_target\" cargo build \\\n";
+    let build_blocks = release_closure
+        .split(build_marker)
+        .skip(1)
+        .map(|block| {
+            block
+                .split(build_marker)
+                .next()
+                .expect("bounded product build block")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(build_blocks.len(), 2, "fresh product release build count");
+    for block in build_blocks {
+        assert!(
+            block.contains("    --no-default-features \\\n"),
+            "product release build did not disable default features: {block}"
+        );
+    }
+    assert_eq!(
+        CI.matches("cargo test --locked --doc --package pdf-rs-desktop --no-default-features")
+            .count(),
+        1,
+        "default product API compile-fail gate"
+    );
+}
+
+#[test]
+fn macos_signal_restore_remains_before_feature_marker_observation() {
+    let restore = WORKER_ENTRY
+        .find("pdf_rs_macos_spawn::restore_desktop_worker_signal_state()")
+        .expect("macOS worker signal restore hook");
+    let marker = WORKER_ENTRY
+        .find("std::hint::black_box(DESKTOP_WORKER_FEATURE_CLOSURE_MARKER)")
+        .expect("worker feature marker observation");
+    assert!(
+        restore < marker,
+        "macOS signal restore must remain the worker's first safe entry hook"
+    );
 }
 
 #[test]
@@ -151,7 +227,11 @@ fn plan_keeps_isolation_open_and_transport_fixture_explicit() {
         m4_09.contains("selected_target_record = \"platform/desktop/macos/sandbox-target.toml\"")
     );
     assert!(m4_09.contains("signed parent app"));
-    assert!(m4_09.contains("reject the transport-fixture Cargo feature"));
+    assert!(m4_09.contains("fresh external release graph with --no-default-features"));
+    assert!(m4_09.contains("This does not prove adversarial content provenance"));
+    assert!(m4_09.contains("is not signed, universal, or packaged-app evidence"));
+    assert!(m4_09.contains("signed universal product package"));
+    assert!(m4_09.contains("crafted paired substitution"));
     assert!(m4_09.contains("Darwin default-close spawn file actions"));
     assert!(m4_09.contains("real inherited-FD allowlist probe"));
     assert!(m4_09.contains("safe desktop crate retains forbid(unsafe_code)"));

@@ -186,6 +186,18 @@ fn main() -> ExitCode {
                     println!("release_product_packages={}", report.product_packages);
                     println!("release_product_binaries={}", report.product_binaries);
                     println!(
+                        "release_desktop_feature_fingerprints={}",
+                        report.desktop_feature_fingerprints
+                    );
+                    println!(
+                        "release_desktop_fingerprint_directories={}",
+                        report.desktop_fingerprint_directories
+                    );
+                    println!(
+                        "release_desktop_worker_sha256={}",
+                        report.desktop_worker_sha256
+                    );
+                    println!(
                         "release_registered_third_party_packages={}",
                         report.registered_third_party_packages
                     );

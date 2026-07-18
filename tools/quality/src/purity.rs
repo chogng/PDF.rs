@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +14,16 @@ const MAX_PROOF_AGE: Duration = Duration::from_secs(60 * 60);
 const CARGO_HASH_LENGTH: usize = 16;
 const DESKTOP_WORKER_BINARY: &str = "pdf-rs-desktop-worker";
 const DESKTOP_WORKER_CRATE: &str = "pdf_rs_desktop_worker";
+const DESKTOP_WORKER_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const DESKTOP_WORKER_PRODUCT_FEATURE_MARKER: &[u8] =
+    b"PDF_RS_DESKTOP_FEATURE_CLOSURE:NO_DEFAULT_FEATURES:v1";
+const DESKTOP_WORKER_FIXTURE_FEATURE_MARKER: &[u8] =
+    b"PDF_RS_DESKTOP_FEATURE_CLOSURE:TRANSPORT_FIXTURE:v1";
+const DESKTOP_MANIFEST_PATH: &str = "platform/desktop/Cargo.toml";
+const DESKTOP_SANDBOX_TARGET_PATH: &str = "platform/desktop/macos/sandbox-target.toml";
+#[cfg(test)]
+const DESKTOP_SANDBOX_TARGET_CONTENT: &str =
+    include_str!("../../../platform/desktop/macos/sandbox-target.toml");
 const THIRD_PARTY_REGISTRY_PATH: &str = "platform/desktop/product-dependency-registry.toml";
 const THIRD_PARTY_REGISTRY_CONTENT: &str =
     include_str!("../../../platform/desktop/product-dependency-registry.toml");
@@ -227,6 +238,9 @@ pub struct ProductBuildPreparation {
 pub struct ProductBuildClosureReport {
     pub product_packages: usize,
     pub product_binaries: usize,
+    pub desktop_feature_fingerprints: usize,
+    pub desktop_fingerprint_directories: usize,
+    pub desktop_worker_sha256: String,
     pub registered_third_party_packages: usize,
     pub depfiles: usize,
     pub artifact_files: usize,
@@ -305,6 +319,7 @@ pub fn check_product_manifests(
         }
     }
     violations.extend(validate_third_party_product_registry(repository));
+    violations.extend(validate_desktop_product_feature_policy(repository));
 
     if violations.is_empty() {
         Ok(ProductManifestReport {
@@ -646,6 +661,159 @@ fn validate_third_party_product_registry(repository: &Path) -> Vec<PurityViolati
     violations
 }
 
+fn validate_desktop_product_feature_policy(repository: &Path) -> Vec<PurityViolation> {
+    let manifest_path = repository.join(DESKTOP_MANIFEST_PATH);
+    let target_path = repository.join(DESKTOP_SANDBOX_TARGET_PATH);
+    let mut violations = Vec::new();
+
+    let expected_features = BTreeMap::from([
+        ("default".to_owned(), "[]".to_owned()),
+        ("transport-fixture".to_owned(), "[]".to_owned()),
+    ]);
+    match fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|input| single_line_table_assignments(&input, "features"))
+    {
+        Some(features) if features == expected_features => {}
+        Some(_) => violations.push(PurityViolation {
+            code: "RPE-PURITY-0006",
+            manifest: manifest_path.clone(),
+            token: "desktop-feature-table-drift".into(),
+        }),
+        None => violations.push(PurityViolation {
+            code: "RPE-PURITY-0006",
+            manifest: manifest_path,
+            token: "missing-or-malformed-desktop-feature-table".into(),
+        }),
+    }
+
+    let expected_closure = BTreeMap::from([
+        (
+            "closure_scope".to_owned(),
+            "\"package_prerequisite\"".to_owned(),
+        ),
+        ("prerequisite_complete".to_owned(), "true".to_owned()),
+        ("cargo_package".to_owned(), "\"pdf-rs-desktop\"".to_owned()),
+        (
+            "cargo_binary".to_owned(),
+            "\"pdf-rs-desktop-worker\"".to_owned(),
+        ),
+        ("release_profile".to_owned(), "true".to_owned()),
+        ("default_features_enabled".to_owned(), "false".to_owned()),
+        (
+            "forbidden_features".to_owned(),
+            "[\"transport-fixture\"]".to_owned(),
+        ),
+        (
+            "required_fingerprint_features".to_owned(),
+            "\"[]\"".to_owned(),
+        ),
+        (
+            "required_declared_features".to_owned(),
+            "[\"default\",\"transport-fixture\"]".to_owned(),
+        ),
+        (
+            "fresh_external_target_required".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "required_desktop_fingerprint_directories".to_owned(),
+            "2".to_owned(),
+        ),
+        (
+            "single_library_fingerprint_required".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "single_worker_fingerprint_required".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "worker_feature_marker_required".to_owned(),
+            "\"no_default_features_v1\"".to_owned(),
+        ),
+        (
+            "worker_fixture_marker_forbidden".to_owned(),
+            "\"transport_fixture_v1\"".to_owned(),
+        ),
+        (
+            "worker_cargo_filename_association_required".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "matching_worker_sha256_observation_required".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "worker_content_provenance_proved".to_owned(),
+            "false".to_owned(),
+        ),
+        (
+            "fixture_launch_api_product_visible".to_owned(),
+            "false".to_owned(),
+        ),
+        ("product_package_produced".to_owned(), "false".to_owned()),
+        ("universal_binary_proof".to_owned(), "false".to_owned()),
+        ("signed_package_proof".to_owned(), "false".to_owned()),
+    ]);
+    match fs::read_to_string(&target_path)
+        .ok()
+        .and_then(|input| single_line_table_assignments(&input, "product_feature_closure"))
+    {
+        Some(closure) if closure == expected_closure => {}
+        Some(_) => violations.push(PurityViolation {
+            code: "RPE-PURITY-0006",
+            manifest: target_path.clone(),
+            token: "product-feature-closure-declaration-drift".into(),
+        }),
+        None => violations.push(PurityViolation {
+            code: "RPE-PURITY-0006",
+            manifest: target_path,
+            token: "missing-or-malformed-product-feature-closure".into(),
+        }),
+    }
+
+    violations
+}
+
+fn single_line_table_assignments(input: &str, table: &str) -> Option<BTreeMap<String, String>> {
+    let expected_header = format!("[{table}]");
+    let mut in_table = false;
+    let mut found = false;
+    let mut assignments = BTreeMap::new();
+    for line in input.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            if line == expected_header {
+                if found {
+                    return None;
+                }
+                found = true;
+                in_table = true;
+            } else {
+                in_table = false;
+            }
+            continue;
+        }
+        if !in_table || line.is_empty() {
+            continue;
+        }
+        let (key, value) = line.split_once('=')?;
+        let key = key.trim();
+        if key.is_empty() {
+            return None;
+        }
+        let value = value
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect::<String>();
+        if value.is_empty() || assignments.insert(key.to_owned(), value).is_some() {
+            return None;
+        }
+    }
+    found.then_some(assignments)
+}
+
 fn cargo_lock_package_fields(input: &str, package_name: &str) -> Option<BTreeMap<String, String>> {
     input
         .split("[[package]]")
@@ -719,7 +887,11 @@ fn scan_build_inventory(
     let mut third_party_fingerprint_packages = BTreeSet::new();
     let mut third_party_build_packages = BTreeSet::new();
     let mut observed_third_party_packages = BTreeSet::new();
-    let mut product_binary_artifacts = BTreeSet::new();
+    let mut product_binary_artifacts =
+        BTreeMap::<ProductBinaryArtifact, Vec<ProductBinaryArtifactObservation>>::new();
+    let mut desktop_feature_fingerprints =
+        BTreeMap::<DesktopFeatureFingerprint, Vec<DesktopFeatureFingerprintObservation>>::new();
+    let mut desktop_fingerprint_directories = BTreeMap::<String, PathBuf>::new();
     let mut artifact_files = 0;
     let mut build_script_artifacts = 0;
     let mut native_artifacts = 0;
@@ -737,6 +909,14 @@ fn scan_build_inventory(
                 ));
             } else if let Some(package) = package_from_fingerprint(fingerprint) {
                 fingerprint_packages.insert(package.package_name);
+                if package.package_name == "pdf-rs-desktop" {
+                    desktop_fingerprint_directories.insert(
+                        fingerprint_cargo_hash(fingerprint)
+                            .expect("validated product fingerprint directory")
+                            .to_owned(),
+                        target.join(directory),
+                    );
+                }
             } else if let Some(package) = third_party_package_from_fingerprint(fingerprint) {
                 third_party_fingerprint_packages.insert(package.package_name);
                 observed_third_party_packages.insert(package.package_name);
@@ -834,7 +1014,9 @@ fn scan_build_inventory(
             }
             continue;
         }
-        if let Some(binary_artifact) = classify_product_binary_artifact(&relative_text) {
+        if let Some((binary_artifact, cargo_hash)) =
+            classify_product_binary_artifact(&relative_text)
+        {
             artifact_files += 1;
             if binary_artifact.is_depfile() {
                 validate_depfile(
@@ -846,7 +1028,13 @@ fn scan_build_inventory(
             } else {
                 validate_product_binary_executable(&path, &mut violations);
             }
-            product_binary_artifacts.insert(binary_artifact);
+            product_binary_artifacts
+                .entry(binary_artifact)
+                .or_default()
+                .push(ProductBinaryArtifactObservation {
+                    path,
+                    cargo_hash: cargo_hash.map(str::to_owned),
+                });
             continue;
         }
         if is_native_artifact(&path) {
@@ -915,10 +1103,39 @@ fn scan_build_inventory(
             };
             match package_from_fingerprint(fingerprint) {
                 Some(package) if allowed_product_fingerprint_file(file_name, package) => {
+                    if let Some(feature_fingerprint) =
+                        classify_desktop_feature_fingerprint(file_name, package)
+                    {
+                        let metadata = validate_desktop_feature_fingerprint(
+                            &path,
+                            feature_fingerprint,
+                            &mut violations,
+                        );
+                        desktop_feature_fingerprints
+                            .entry(feature_fingerprint)
+                            .or_default()
+                            .push(DesktopFeatureFingerprintObservation {
+                                path: path.clone(),
+                                cargo_hash: fingerprint_cargo_hash(fingerprint)
+                                    .expect("validated product fingerprint directory")
+                                    .to_owned(),
+                                metadata,
+                            });
+                    }
                     if let Some(binary_artifact) =
                         classify_product_binary_fingerprint(file_name, package)
                     {
-                        product_binary_artifacts.insert(binary_artifact);
+                        product_binary_artifacts
+                            .entry(binary_artifact)
+                            .or_default()
+                            .push(ProductBinaryArtifactObservation {
+                                path: path.clone(),
+                                cargo_hash: Some(
+                                    fingerprint_cargo_hash(fingerprint)
+                                        .expect("validated product fingerprint directory")
+                                        .to_owned(),
+                                ),
+                            });
                     }
                 }
                 Some(_) => {
@@ -999,14 +1216,56 @@ fn scan_build_inventory(
         }
     }
     for required in ProductBinaryArtifact::ALL {
-        if !product_binary_artifacts.contains(&required) {
-            violations.push(build_violation(
+        match product_binary_artifacts.get(&required).map(Vec::len) {
+            None | Some(0) => violations.push(build_violation(
                 "RPE-PURITY-0109",
                 &target.join("release"),
                 &format!("missing-product-binary-artifact={}", required.label()),
-            ));
+            )),
+            Some(1) => {}
+            Some(count) => violations.push(build_violation(
+                "RPE-PURITY-0113",
+                &target.join("release"),
+                &format!(
+                    "duplicate-product-binary-artifact={}:count={count}",
+                    required.label()
+                ),
+            )),
         }
     }
+    for required in DesktopFeatureFingerprint::ALL {
+        match desktop_feature_fingerprints.get(&required).map(Vec::len) {
+            None | Some(0) => violations.push(build_violation(
+                "RPE-PURITY-0112",
+                &target.join("release/.fingerprint"),
+                &format!(
+                    "missing-desktop-product-feature-fingerprint={}",
+                    required.label()
+                ),
+            )),
+            Some(1) => {}
+            Some(count) => violations.push(build_violation(
+                "RPE-PURITY-0112",
+                &target.join("release/.fingerprint"),
+                &format!(
+                    "duplicate-desktop-product-feature-fingerprint={}:count={count}",
+                    required.label()
+                ),
+            )),
+        }
+    }
+    validate_desktop_fingerprint_directories(
+        &desktop_fingerprint_directories,
+        &desktop_feature_fingerprints,
+        target,
+        &mut violations,
+    );
+    validate_desktop_fingerprint_pair(&desktop_feature_fingerprints, &mut violations);
+    let desktop_worker_sha256 = validate_desktop_worker_artifact_association(
+        &product_binary_artifacts,
+        &desktop_feature_fingerprints,
+        &mut violations,
+    );
     let expected_third_party: Vec<_> = expected_third_party_packages().collect();
     let expected_third_party_names: BTreeSet<_> = expected_third_party
         .iter()
@@ -1057,6 +1316,10 @@ fn scan_build_inventory(
         Ok(ProductBuildClosureReport {
             product_packages: PRODUCT_PACKAGES.len(),
             product_binaries: 1,
+            desktop_feature_fingerprints: desktop_feature_fingerprints.values().map(Vec::len).sum(),
+            desktop_fingerprint_directories: desktop_fingerprint_directories.len(),
+            desktop_worker_sha256: desktop_worker_sha256
+                .expect("valid desktop closure has a bound worker digest"),
             registered_third_party_packages: observed_third_party_packages.len(),
             depfiles: depfile_crates.len(),
             artifact_files,
@@ -1301,6 +1564,39 @@ enum DepArtifactKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum DesktopFeatureFingerprint {
+    Library,
+    WorkerBinary,
+}
+
+impl DesktopFeatureFingerprint {
+    const ALL: [Self; 2] = [Self::Library, Self::WorkerBinary];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Library => "desktop-library",
+            Self::WorkerBinary => "desktop-worker",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DesktopFeatureFingerprintMetadata {
+    rustc: u64,
+    profile: u64,
+    target: u64,
+    path: u64,
+    config: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DesktopFeatureFingerprintObservation {
+    path: PathBuf,
+    cargo_hash: String,
+    metadata: Option<DesktopFeatureFingerprintMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ProductBinaryArtifact {
     TopLevelExecutable,
     TopLevelDepfile,
@@ -1339,27 +1635,639 @@ impl ProductBinaryArtifact {
     }
 }
 
-fn classify_product_binary_artifact(relative: &str) -> Option<ProductBinaryArtifact> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProductBinaryArtifactObservation {
+    path: PathBuf,
+    cargo_hash: Option<String>,
+}
+
+fn classify_desktop_feature_fingerprint(
+    file: &str,
+    package: &ProductPackage,
+) -> Option<DesktopFeatureFingerprint> {
+    if package.package_name != "pdf-rs-desktop" {
+        return None;
+    }
+    match file {
+        "lib-pdf_rs_desktop.json" => Some(DesktopFeatureFingerprint::Library),
+        "bin-pdf-rs-desktop-worker.json" => Some(DesktopFeatureFingerprint::WorkerBinary),
+        _ => None,
+    }
+}
+
+fn validate_desktop_feature_fingerprint(
+    path: &Path,
+    fingerprint: DesktopFeatureFingerprint,
+    violations: &mut Vec<BuildClosureViolation>,
+) -> Option<DesktopFeatureFingerprintMetadata> {
+    let input = match fs::read_to_string(path) {
+        Ok(input) if input.len() <= 1024 * 1024 => input,
+        Ok(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0112",
+                path,
+                "desktop-feature-fingerprint-hard-byte-cap",
+            ));
+            return None;
+        }
+        Err(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0112",
+                path,
+                "unreadable-desktop-feature-fingerprint",
+            ));
+            return None;
+        }
+    };
+
+    match json_string_field(&input, "features") {
+        Some(features) if features == "[]" => {}
+        Some(features) => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-enabled-features={features}", fingerprint.label()),
+        )),
+        None => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-missing-enabled-features", fingerprint.label()),
+        )),
+    }
+    match json_string_field(&input, "declared_features") {
+        Some(features) if features == "[\"default\", \"transport-fixture\"]" => {}
+        Some(features) => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-declared-feature-drift={features}", fingerprint.label()),
+        )),
+        None => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-missing-declared-features", fingerprint.label()),
+        )),
+    }
+
+    let expected_dependencies = expected_desktop_fingerprint_dependencies(fingerprint);
+    match json_cargo_dependency_names(&input, "deps") {
+        Some(dependencies) if dependencies == expected_dependencies => {}
+        Some(dependencies) => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!(
+                "{}-dependency-drift={}",
+                fingerprint.label(),
+                dependencies.into_iter().collect::<Vec<_>>().join(",")
+            ),
+        )),
+        None => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-missing-dependency-graph", fingerprint.label()),
+        )),
+    }
+
+    match json_array_is_empty(&input, "rustflags") {
+        Some(true) => {}
+        Some(false) => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-nonempty-rustflags", fingerprint.label()),
+        )),
+        None => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-missing-or-malformed-rustflags", fingerprint.label()),
+        )),
+    }
+    match json_u64_field(&input, "compile_kind") {
+        Some(0) => {}
+        Some(value) => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-non-native-compile-kind={value}", fingerprint.label()),
+        )),
+        None => violations.push(build_violation(
+            "RPE-PURITY-0112",
+            path,
+            &format!("{}-missing-or-malformed-compile-kind", fingerprint.label()),
+        )),
+    }
+
+    let rustc = required_nonzero_fingerprint_field(&input, path, fingerprint, "rustc", violations);
+    let profile =
+        required_nonzero_fingerprint_field(&input, path, fingerprint, "profile", violations);
+    let target =
+        required_nonzero_fingerprint_field(&input, path, fingerprint, "target", violations);
+    let source_path =
+        required_nonzero_fingerprint_field(&input, path, fingerprint, "path", violations);
+    let config =
+        required_nonzero_fingerprint_field(&input, path, fingerprint, "config", violations);
+    Some(DesktopFeatureFingerprintMetadata {
+        rustc: rustc?,
+        profile: profile?,
+        target: target?,
+        path: source_path?,
+        config: config?,
+    })
+}
+
+fn required_nonzero_fingerprint_field(
+    input: &str,
+    path: &Path,
+    fingerprint: DesktopFeatureFingerprint,
+    field: &str,
+    violations: &mut Vec<BuildClosureViolation>,
+) -> Option<u64> {
+    match json_u64_field(input, field) {
+        Some(value) if value != 0 => Some(value),
+        Some(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0112",
+                path,
+                &format!("{}-zero-{field}", fingerprint.label()),
+            ));
+            None
+        }
+        None => {
+            violations.push(build_violation(
+                "RPE-PURITY-0112",
+                path,
+                &format!("{}-missing-or-malformed-{field}", fingerprint.label()),
+            ));
+            None
+        }
+    }
+}
+
+fn expected_desktop_fingerprint_dependencies(
+    fingerprint: DesktopFeatureFingerprint,
+) -> BTreeSet<String> {
+    let mut dependencies = BTreeSet::from([
+        "pdf_rs_bytes".to_owned(),
+        "pdf_rs_engine".to_owned(),
+        "pdf_rs_policy".to_owned(),
+        "pdf_rs_protocol".to_owned(),
+        "pdf_rs_raster".to_owned(),
+        "pdf_rs_scene".to_owned(),
+        "pdf_rs_surface".to_owned(),
+        "pdf_rs_syntax".to_owned(),
+        "rustix".to_owned(),
+    ]);
+    if cfg!(target_os = "macos") {
+        dependencies.insert("pdf_rs_macos_spawn".to_owned());
+    }
+    if fingerprint == DesktopFeatureFingerprint::WorkerBinary {
+        dependencies.insert("pdf_rs_desktop".to_owned());
+    }
+    dependencies
+}
+
+fn json_string_field(input: &str, field: &str) -> Option<String> {
+    let start = json_field_value_start(input, field)?;
+    let bytes = input.as_bytes();
+    let (value, end) = parse_json_string(bytes, start)?;
+    json_value_has_top_level_terminator(bytes, end).then_some(value)
+}
+
+fn json_cargo_dependency_names(input: &str, field: &str) -> Option<BTreeSet<String>> {
+    let start = json_field_value_start(input, field)?;
+    let bytes = input.as_bytes();
+    let mut cursor = start;
+    consume_json_byte(bytes, &mut cursor, b'[')?;
+    skip_json_whitespace(bytes, &mut cursor);
+    let mut values = BTreeSet::new();
+    if bytes.get(cursor) == Some(&b']') {
+        cursor += 1;
+        return json_value_has_top_level_terminator(bytes, cursor).then_some(values);
+    }
+    loop {
+        consume_json_byte(bytes, &mut cursor, b'[')?;
+        parse_json_u64_at(bytes, &mut cursor)?;
+        consume_json_byte(bytes, &mut cursor, b',')?;
+        skip_json_whitespace(bytes, &mut cursor);
+        let (dependency, next) = parse_json_string(bytes, cursor)?;
+        cursor = next;
+        if !values.insert(dependency) {
+            return None;
+        }
+        consume_json_byte(bytes, &mut cursor, b',')?;
+        consume_json_literal(bytes, &mut cursor, b"false")?;
+        consume_json_byte(bytes, &mut cursor, b',')?;
+        parse_json_u64_at(bytes, &mut cursor)?;
+        consume_json_byte(bytes, &mut cursor, b']')?;
+        skip_json_whitespace(bytes, &mut cursor);
+        match bytes.get(cursor) {
+            Some(b',') => {
+                cursor += 1;
+                skip_json_whitespace(bytes, &mut cursor);
+            }
+            Some(b']') => {
+                cursor += 1;
+                break;
+            }
+            _ => return None,
+        }
+    }
+    json_value_has_top_level_terminator(bytes, cursor).then_some(values)
+}
+
+fn json_array_is_empty(input: &str, field: &str) -> Option<bool> {
+    let start = json_field_value_start(input, field)?;
+    let bytes = input.as_bytes();
+    let mut cursor = start;
+    consume_json_byte(bytes, &mut cursor, b'[')?;
+    skip_json_whitespace(bytes, &mut cursor);
+    if bytes.get(cursor) != Some(&b']') {
+        return Some(false);
+    }
+    cursor += 1;
+    json_value_has_top_level_terminator(bytes, cursor).then_some(true)
+}
+
+fn json_u64_field(input: &str, field: &str) -> Option<u64> {
+    let start = json_field_value_start(input, field)?;
+    let bytes = input.as_bytes();
+    let mut cursor = start;
+    let value = parse_json_u64_at(bytes, &mut cursor)?;
+    json_value_has_top_level_terminator(bytes, cursor).then_some(value)
+}
+
+fn json_field_value_start(input: &str, field: &str) -> Option<usize> {
+    let needle = format!("\"{field}\"");
+    let mut matches = input.match_indices(&needle);
+    let (first, _) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let bytes = input.as_bytes();
+    let mut cursor = first + needle.len();
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    if bytes.get(cursor) != Some(&b':') {
+        return None;
+    }
+    cursor += 1;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    Some(cursor)
+}
+
+fn parse_json_u64_at(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
+    skip_json_whitespace(bytes, cursor);
+    let start = *cursor;
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_digit) {
+        *cursor += 1;
+    }
+    if *cursor == start {
+        return None;
+    }
+    std::str::from_utf8(&bytes[start..*cursor])
+        .ok()?
+        .parse()
+        .ok()
+}
+
+fn consume_json_byte(bytes: &[u8], cursor: &mut usize, expected: u8) -> Option<()> {
+    skip_json_whitespace(bytes, cursor);
+    if bytes.get(*cursor) != Some(&expected) {
+        return None;
+    }
+    *cursor += 1;
+    Some(())
+}
+
+fn consume_json_literal(bytes: &[u8], cursor: &mut usize, expected: &[u8]) -> Option<()> {
+    skip_json_whitespace(bytes, cursor);
+    if !bytes.get(*cursor..)?.starts_with(expected) {
+        return None;
+    }
+    *cursor += expected.len();
+    Some(())
+}
+
+fn skip_json_whitespace(bytes: &[u8], cursor: &mut usize) {
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
+        *cursor += 1;
+    }
+}
+
+fn json_value_has_top_level_terminator(bytes: &[u8], mut cursor: usize) -> bool {
+    skip_json_whitespace(bytes, &mut cursor);
+    matches!(bytes.get(cursor), Some(b',' | b'}'))
+}
+
+fn parse_json_string(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+    if bytes.get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut output = String::new();
+    let mut cursor = start + 1;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' => return Some((output, cursor + 1)),
+            b'\\' => {
+                cursor += 1;
+                let escaped = match *bytes.get(cursor)? {
+                    b'"' => '"',
+                    b'\\' => '\\',
+                    b'/' => '/',
+                    b'b' => '\u{0008}',
+                    b'f' => '\u{000c}',
+                    b'n' => '\n',
+                    b'r' => '\r',
+                    b't' => '\t',
+                    _ => return None,
+                };
+                output.push(escaped);
+            }
+            byte if byte.is_ascii_control() || !byte.is_ascii() => return None,
+            byte => output.push(char::from(byte)),
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn validate_desktop_fingerprint_directories(
+    directories: &BTreeMap<String, PathBuf>,
+    fingerprints: &BTreeMap<DesktopFeatureFingerprint, Vec<DesktopFeatureFingerprintObservation>>,
+    target: &Path,
+    violations: &mut Vec<BuildClosureViolation>,
+) {
+    if directories.len() != DesktopFeatureFingerprint::ALL.len() {
+        violations.push(build_violation(
+            "RPE-PURITY-0112",
+            &target.join("release/.fingerprint"),
+            &format!(
+                "desktop-product-fingerprint-directory-count={}:expected={}",
+                directories.len(),
+                DesktopFeatureFingerprint::ALL.len()
+            ),
+        ));
+    }
+    let observed_unit_hashes = fingerprints
+        .values()
+        .filter(|observations| observations.len() == 1)
+        .map(|observations| observations[0].cargo_hash.as_str())
+        .collect::<BTreeSet<_>>();
+    for (hash, path) in directories {
+        if !observed_unit_hashes.contains(hash.as_str()) {
+            violations.push(build_violation(
+                "RPE-PURITY-0112",
+                path,
+                "desktop-product-fingerprint-directory-without-feature-record",
+            ));
+        }
+    }
+}
+
+fn validate_desktop_fingerprint_pair(
+    fingerprints: &BTreeMap<DesktopFeatureFingerprint, Vec<DesktopFeatureFingerprintObservation>>,
+    violations: &mut Vec<BuildClosureViolation>,
+) {
+    let Some(library) =
+        single_desktop_feature_fingerprint(fingerprints, DesktopFeatureFingerprint::Library)
+    else {
+        return;
+    };
+    let Some(worker) =
+        single_desktop_feature_fingerprint(fingerprints, DesktopFeatureFingerprint::WorkerBinary)
+    else {
+        return;
+    };
+    let (Some(library_metadata), Some(worker_metadata)) = (&library.metadata, &worker.metadata)
+    else {
+        return;
+    };
+
+    if library.cargo_hash == worker.cargo_hash {
+        violations.push(build_violation(
+            "RPE-PURITY-0112",
+            &worker.path,
+            "desktop-lib-worker-fingerprint-hash-collision",
+        ));
+    }
+    for (field, same) in [
+        ("rustc", library_metadata.rustc == worker_metadata.rustc),
+        (
+            "release-profile",
+            library_metadata.profile == worker_metadata.profile,
+        ),
+        (
+            "cargo-config",
+            library_metadata.config == worker_metadata.config,
+        ),
+    ] {
+        if !same {
+            violations.push(build_violation(
+                "RPE-PURITY-0112",
+                &worker.path,
+                &format!("desktop-lib-worker-{field}-mismatch"),
+            ));
+        }
+    }
+    if library_metadata.target == worker_metadata.target {
+        violations.push(build_violation(
+            "RPE-PURITY-0112",
+            &worker.path,
+            "desktop-lib-worker-target-identity-collision",
+        ));
+    }
+    if library_metadata.path == worker_metadata.path {
+        violations.push(build_violation(
+            "RPE-PURITY-0112",
+            &worker.path,
+            "desktop-lib-worker-source-path-identity-collision",
+        ));
+    }
+}
+
+fn validate_desktop_worker_artifact_association(
+    artifacts: &BTreeMap<ProductBinaryArtifact, Vec<ProductBinaryArtifactObservation>>,
+    fingerprints: &BTreeMap<DesktopFeatureFingerprint, Vec<DesktopFeatureFingerprintObservation>>,
+    violations: &mut Vec<BuildClosureViolation>,
+) -> Option<String> {
+    let worker_fingerprint =
+        single_desktop_feature_fingerprint(fingerprints, DesktopFeatureFingerprint::WorkerBinary)?;
+    let fingerprint_json =
+        single_product_binary_artifact(artifacts, ProductBinaryArtifact::FingerprintJson)?;
+    if fingerprint_json.path != worker_fingerprint.path {
+        violations.push(build_violation(
+            "RPE-PURITY-0113",
+            &fingerprint_json.path,
+            "desktop-worker-feature-fingerprint-path-mismatch",
+        ));
+    }
+
+    for kind in [
+        ProductBinaryArtifact::HashedExecutable,
+        ProductBinaryArtifact::HashedDepfile,
+        ProductBinaryArtifact::FingerprintExecutable,
+        ProductBinaryArtifact::FingerprintJson,
+        ProductBinaryArtifact::FingerprintDependency,
+    ] {
+        let Some(observation) = single_product_binary_artifact(artifacts, kind) else {
+            continue;
+        };
+        if observation.cargo_hash.as_deref() != Some(worker_fingerprint.cargo_hash.as_str()) {
+            violations.push(build_violation(
+                "RPE-PURITY-0113",
+                &observation.path,
+                &format!("desktop-worker-cargo-hash-mismatch={}", kind.label()),
+            ));
+        }
+    }
+
+    let top_level =
+        single_product_binary_artifact(artifacts, ProductBinaryArtifact::TopLevelExecutable)?;
+    let hashed =
+        single_product_binary_artifact(artifacts, ProductBinaryArtifact::HashedExecutable)?;
+    let top_level_inspection = match inspect_desktop_worker(&top_level.path) {
+        Ok(inspection) => inspection,
+        Err(token) => {
+            violations.push(build_violation("RPE-PURITY-0113", &top_level.path, token));
+            return None;
+        }
+    };
+    let hashed_inspection = match inspect_desktop_worker(&hashed.path) {
+        Ok(inspection) => inspection,
+        Err(token) => {
+            violations.push(build_violation("RPE-PURITY-0113", &hashed.path, token));
+            return None;
+        }
+    };
+    validate_desktop_worker_feature_marker(
+        top_level,
+        ProductBinaryArtifact::TopLevelExecutable,
+        &top_level_inspection,
+        violations,
+    );
+    validate_desktop_worker_feature_marker(
+        hashed,
+        ProductBinaryArtifact::HashedExecutable,
+        &hashed_inspection,
+        violations,
+    );
+    if top_level_inspection.sha256 != hashed_inspection.sha256 {
+        violations.push(build_violation(
+            "RPE-PURITY-0113",
+            &top_level.path,
+            "desktop-worker-top-level-hash-mismatch",
+        ));
+        return None;
+    }
+    Some(top_level_inspection.sha256)
+}
+
+fn single_desktop_feature_fingerprint(
+    fingerprints: &BTreeMap<DesktopFeatureFingerprint, Vec<DesktopFeatureFingerprintObservation>>,
+    kind: DesktopFeatureFingerprint,
+) -> Option<&DesktopFeatureFingerprintObservation> {
+    let observations = fingerprints.get(&kind)?;
+    (observations.len() == 1).then(|| &observations[0])
+}
+
+fn single_product_binary_artifact(
+    artifacts: &BTreeMap<ProductBinaryArtifact, Vec<ProductBinaryArtifactObservation>>,
+    kind: ProductBinaryArtifact,
+) -> Option<&ProductBinaryArtifactObservation> {
+    let observations = artifacts.get(&kind)?;
+    (observations.len() == 1).then(|| &observations[0])
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DesktopWorkerBinaryInspection {
+    sha256: String,
+    has_product_feature_marker: bool,
+    has_fixture_feature_marker: bool,
+}
+
+fn inspect_desktop_worker(path: &Path) -> Result<DesktopWorkerBinaryInspection, &'static str> {
+    let metadata =
+        fs::metadata(path).map_err(|_| "unreadable-desktop-worker-for-feature-inspection")?;
+    if metadata.len() > DESKTOP_WORKER_MAX_BYTES {
+        return Err("desktop-worker-feature-inspection-hard-byte-cap");
+    }
+    let file = File::open(path).map_err(|_| "unreadable-desktop-worker-for-feature-inspection")?;
+    let mut input = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .map_err(|_| "desktop-worker-feature-inspection-hard-byte-cap")?,
+    );
+    file.take(DESKTOP_WORKER_MAX_BYTES + 1)
+        .read_to_end(&mut input)
+        .map_err(|_| "unreadable-desktop-worker-for-feature-inspection")?;
+    let input_len = u64::try_from(input.len())
+        .map_err(|_| "desktop-worker-feature-inspection-hard-byte-cap")?;
+    if input_len > DESKTOP_WORKER_MAX_BYTES {
+        return Err("desktop-worker-feature-inspection-hard-byte-cap");
+    }
+    let digest =
+        pdf_rs_digest::sha256(&input).map_err(|_| "desktop-worker-hash-length-overflow")?;
+    Ok(DesktopWorkerBinaryInspection {
+        sha256: pdf_rs_digest::hex_digest(&digest),
+        has_product_feature_marker: input
+            .windows(DESKTOP_WORKER_PRODUCT_FEATURE_MARKER.len())
+            .any(|window| window == DESKTOP_WORKER_PRODUCT_FEATURE_MARKER),
+        has_fixture_feature_marker: input
+            .windows(DESKTOP_WORKER_FIXTURE_FEATURE_MARKER.len())
+            .any(|window| window == DESKTOP_WORKER_FIXTURE_FEATURE_MARKER),
+    })
+}
+
+fn validate_desktop_worker_feature_marker(
+    artifact: &ProductBinaryArtifactObservation,
+    kind: ProductBinaryArtifact,
+    inspection: &DesktopWorkerBinaryInspection,
+    violations: &mut Vec<BuildClosureViolation>,
+) {
+    if !inspection.has_product_feature_marker {
+        violations.push(build_violation(
+            "RPE-PURITY-0113",
+            &artifact.path,
+            &format!(
+                "desktop-worker-missing-product-feature-marker={}",
+                kind.label()
+            ),
+        ));
+    }
+    if inspection.has_fixture_feature_marker {
+        violations.push(build_violation(
+            "RPE-PURITY-0113",
+            &artifact.path,
+            &format!(
+                "desktop-worker-forbidden-fixture-feature-marker={}",
+                kind.label()
+            ),
+        ));
+    }
+}
+
+fn classify_product_binary_artifact(
+    relative: &str,
+) -> Option<(ProductBinaryArtifact, Option<&str>)> {
     let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
     if relative == format!("release/{DESKTOP_WORKER_BINARY}{executable_suffix}") {
-        return Some(ProductBinaryArtifact::TopLevelExecutable);
+        return Some((ProductBinaryArtifact::TopLevelExecutable, None));
     }
     if relative == format!("release/{DESKTOP_WORKER_BINARY}.d") {
-        return Some(ProductBinaryArtifact::TopLevelDepfile);
+        return Some((ProductBinaryArtifact::TopLevelDepfile, None));
     }
 
     let file = relative.strip_prefix("release/deps/")?;
     if let Some(stem) = file.strip_suffix(".d") {
-        return (strip_cargo_hash(stem) == Some(DESKTOP_WORKER_CRATE))
-            .then_some(ProductBinaryArtifact::HashedDepfile);
+        let (name, hash) = split_cargo_hash(stem)?;
+        return (name == DESKTOP_WORKER_CRATE)
+            .then_some((ProductBinaryArtifact::HashedDepfile, Some(hash)));
     }
     let stem = if cfg!(windows) {
         file.strip_suffix(".exe")?
     } else {
         file
     };
-    (strip_cargo_hash(stem) == Some(DESKTOP_WORKER_CRATE))
-        .then_some(ProductBinaryArtifact::HashedExecutable)
+    let (name, hash) = split_cargo_hash(stem)?;
+    (name == DESKTOP_WORKER_CRATE).then_some((ProductBinaryArtifact::HashedExecutable, Some(hash)))
 }
 
 fn classify_product_binary_fingerprint(
@@ -1384,16 +2292,24 @@ fn classify_top_level_rust_artifact(relative: &str) -> Option<&str> {
 }
 
 fn strip_cargo_hash(stem: &str) -> Option<&str> {
+    split_cargo_hash(stem).map(|(name, _)| name)
+}
+
+fn split_cargo_hash(stem: &str) -> Option<(&str, &str)> {
     let (name, hash) = stem.rsplit_once('-')?;
-    (hash.len() == CARGO_HASH_LENGTH && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then_some(name)
+    (hash.len() == CARGO_HASH_LENGTH
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some((name, hash))
+}
+
+fn fingerprint_cargo_hash(value: &str) -> Option<&str> {
+    split_cargo_hash(value).map(|(_, hash)| hash)
 }
 
 fn package_from_fingerprint(value: &str) -> Option<&'static ProductPackage> {
-    let (package, hash) = value.rsplit_once('-')?;
-    if hash.len() != CARGO_HASH_LENGTH || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
+    let (package, _) = split_cargo_hash(value)?;
     PRODUCT_PACKAGES
         .iter()
         .find(|candidate| candidate.package_name == package)
@@ -1412,10 +2328,7 @@ fn product_package_by_name(package_name: &str) -> Option<&'static ProductPackage
 }
 
 fn third_party_package_from_fingerprint(value: &str) -> Option<&'static ThirdPartyProductPackage> {
-    let (package, hash) = value.rsplit_once('-')?;
-    if hash.len() != CARGO_HASH_LENGTH || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
+    let (package, _) = split_cargo_hash(value)?;
     THIRD_PARTY_PRODUCT_PACKAGES
         .iter()
         .find(|candidate| candidate.package_name == package)
@@ -1700,6 +2613,8 @@ mod tests {
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
     const HASH: &str = "0123456789abcdef";
+    const DESKTOP_LIBRARY_HASH: &str = "1111111111111111";
+    const ALT_HASH: &str = "fedcba9876543210";
 
     #[test]
     fn ignores_tool_only_baseline_and_accepts_native_product_manifests() {
@@ -1849,6 +2764,45 @@ mod tests {
     }
 
     #[test]
+    fn rejects_desktop_default_feature_drift() {
+        let root = temp_dir("desktop-default-feature-drift");
+        write_product_manifests(&root);
+        let manifest = root.join(DESKTOP_MANIFEST_PATH);
+        let input = fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("default = []", "default = [\"transport-fixture\"]");
+        fs::write(&manifest, input).unwrap();
+
+        let violations = check_product_manifests(&root).unwrap_err();
+        assert!(violations.iter().any(|violation| {
+            violation.code == "RPE-PURITY-0006"
+                && violation.manifest == manifest
+                && violation.token == "desktop-feature-table-drift"
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_desktop_product_feature_closure_declaration_drift() {
+        let root = temp_dir("desktop-product-feature-declaration-drift");
+        write_product_manifests(&root);
+        let target = root.join(DESKTOP_SANDBOX_TARGET_PATH);
+        let input = fs::read_to_string(&target).unwrap().replace(
+            "signed_package_proof = false",
+            "signed_package_proof = true",
+        );
+        fs::write(&target, input).unwrap();
+
+        let violations = check_product_manifests(&root).unwrap_err();
+        assert!(violations.iter().any(|violation| {
+            violation.code == "RPE-PURITY-0006"
+                && violation.manifest == target
+                && violation.token == "product-feature-closure-declaration-drift"
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_product_manifest_not_in_bidirectional_allowlist() {
         let root = temp_dir("unexpected-product");
         write_product_manifests(&root);
@@ -1905,6 +2859,21 @@ mod tests {
         assert_eq!(report.product_packages, PRODUCT_PACKAGES.len());
         assert_eq!(report.product_binaries, 1);
         assert_eq!(
+            report.desktop_feature_fingerprints,
+            DesktopFeatureFingerprint::ALL.len()
+        );
+        assert_eq!(
+            report.desktop_fingerprint_directories,
+            DesktopFeatureFingerprint::ALL.len()
+        );
+        assert_eq!(
+            report.desktop_worker_sha256,
+            pdf_rs_digest::hex_digest(
+                &pdf_rs_digest::sha256(&synthetic_desktop_worker_bytes())
+                    .expect("bounded synthetic worker")
+            )
+        );
+        assert_eq!(
             report.registered_third_party_packages,
             expected_third_party_packages().count()
         );
@@ -1920,6 +2889,262 @@ mod tests {
         assert_eq!(report.native_artifacts, 0);
         assert_eq!(report.unknown_artifacts, 0);
 
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_desktop_fingerprint_feature_and_declaration_drift() {
+        let root = temp_dir("desktop-fingerprint-feature-drift-repository");
+        let proof_root = temp_dir("desktop-fingerprint-feature-drift-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-feature-drift").unwrap();
+        write_valid_build_inventory(&target);
+
+        let library = target.join(format!(
+            "release/.fingerprint/pdf-rs-desktop-{DESKTOP_LIBRARY_HASH}/lib-pdf_rs_desktop.json"
+        ));
+        let input = fs::read_to_string(&library).unwrap().replace(
+            r#""declared_features":"[\"default\", \"transport-fixture\"]""#,
+            r#""declared_features":"[]""#,
+        );
+        fs::write(&library, input).unwrap();
+        let worker = target.join(format!(
+            "release/.fingerprint/pdf-rs-desktop-{HASH}/bin-pdf-rs-desktop-worker.json"
+        ));
+        let input = fs::read_to_string(&worker).unwrap().replace(
+            r#""features":"[]""#,
+            r#""features":"[\"transport-fixture\"]""#,
+        );
+        fs::write(&worker, input).unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-feature-drift").unwrap_err();
+        assert!(violations.iter().any(|violation| {
+            violation.code == "RPE-PURITY-0112"
+                && violation
+                    .token
+                    .starts_with("desktop-library-declared-feature-drift=")
+        }));
+        assert!(violations.iter().any(|violation| {
+            violation.code == "RPE-PURITY-0112"
+                && violation
+                    .token
+                    .starts_with("desktop-worker-enabled-features=")
+        }));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_desktop_fingerprint_dependency_rustflags_and_profile_drift() {
+        let root = temp_dir("desktop-fingerprint-metadata-drift-repository");
+        let proof_root = temp_dir("desktop-fingerprint-metadata-drift-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-metadata-drift").unwrap();
+        write_valid_build_inventory(&target);
+
+        let worker = target.join(format!(
+            "release/.fingerprint/pdf-rs-desktop-{HASH}/bin-pdf-rs-desktop-worker.json"
+        ));
+        let input = fs::read_to_string(&worker)
+            .unwrap()
+            .replace(
+                r#""deps":["#,
+                r#""deps":[[999,"transport_fixture_launcher",false,999],"#,
+            )
+            .replace(
+                r#""rustflags":[]"#,
+                r#""rustflags":["--cfg","transport_fixture"]"#,
+            )
+            .replace(r#""profile":2"#, r#""profile":999"#);
+        fs::write(&worker, input).unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-metadata-drift").unwrap_err();
+        for token in [
+            "desktop-worker-dependency-drift=",
+            "desktop-worker-nonempty-rustflags",
+            "desktop-lib-worker-release-profile-mismatch",
+        ] {
+            assert!(
+                violations.iter().any(|violation| {
+                    violation.code == "RPE-PURITY-0112"
+                        && (violation.token == token || violation.token.starts_with(token))
+                }),
+                "missing desktop fingerprint mutation violation {token:?}: {violations:?}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_desktop_feature_fingerprint_configuration() {
+        let root = temp_dir("duplicate-desktop-fingerprint-repository");
+        let proof_root = temp_dir("duplicate-desktop-fingerprint-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-duplicate-fingerprint").unwrap();
+        write_valid_build_inventory(&target);
+
+        let duplicate = target.join(format!("release/.fingerprint/pdf-rs-desktop-{ALT_HASH}"));
+        fs::create_dir_all(&duplicate).unwrap();
+        fs::write(
+            duplicate.join("lib-pdf_rs_desktop.json"),
+            synthetic_desktop_fingerprint_json(DesktopFeatureFingerprint::Library),
+        )
+        .unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-duplicate-fingerprint").unwrap_err();
+        assert!(violations.iter().any(|violation| {
+            violation.code == "RPE-PURITY-0112"
+                && violation.token
+                    == "duplicate-desktop-product-feature-fingerprint=desktop-library:count=2"
+        }));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_desktop_fingerprint_directory_without_feature_record() {
+        let root = temp_dir("orphan-desktop-fingerprint-directory-repository");
+        let proof_root = temp_dir("orphan-desktop-fingerprint-directory-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-orphan-fingerprint-directory").unwrap();
+        write_valid_build_inventory(&target);
+
+        let orphan = target.join(format!("release/.fingerprint/pdf-rs-desktop-{ALT_HASH}"));
+        fs::create_dir_all(&orphan).unwrap();
+        fs::write(orphan.join("invoked.timestamp"), b"fresh").unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-orphan-fingerprint-directory")
+                .unwrap_err();
+        for token in [
+            "desktop-product-fingerprint-directory-count=3:expected=2",
+            "desktop-product-fingerprint-directory-without-feature-record",
+        ] {
+            assert!(
+                violations.iter().any(|violation| {
+                    violation.code == "RPE-PURITY-0112" && violation.token == token
+                }),
+                "missing orphan fingerprint directory violation {token:?}: {violations:?}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_substituted_top_level_desktop_worker() {
+        let root = temp_dir("substituted-desktop-worker-repository");
+        let proof_root = temp_dir("substituted-desktop-worker-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-worker-substitution").unwrap();
+        write_valid_build_inventory(&target);
+        let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+        fs::write(
+            target.join(format!(
+                "release/{DESKTOP_WORKER_BINARY}{executable_suffix}"
+            )),
+            b"substituted desktop worker",
+        )
+        .unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-worker-substitution").unwrap_err();
+        assert!(violations.iter().any(|violation| {
+            violation.code == "RPE-PURITY-0113"
+                && violation.token == "desktop-worker-top-level-hash-mismatch"
+        }));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_paired_fixture_worker_substitution_even_when_hashes_match() {
+        let root = temp_dir("paired-fixture-worker-substitution-repository");
+        let proof_root = temp_dir("paired-fixture-worker-substitution-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-paired-worker-substitution").unwrap();
+        write_valid_build_inventory(&target);
+        let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+        let mut fixture_worker = b"paired substituted worker\0".to_vec();
+        fixture_worker.extend_from_slice(DESKTOP_WORKER_FIXTURE_FEATURE_MARKER);
+        for worker in [
+            target.join(format!(
+                "release/{DESKTOP_WORKER_BINARY}{executable_suffix}"
+            )),
+            target.join(format!(
+                "release/deps/{DESKTOP_WORKER_CRATE}-{HASH}{executable_suffix}"
+            )),
+        ] {
+            fs::write(worker, &fixture_worker).unwrap();
+        }
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-paired-worker-substitution")
+                .unwrap_err();
+        assert!(
+            !violations.iter().any(|violation| {
+                violation.code == "RPE-PURITY-0113"
+                    && violation.token == "desktop-worker-top-level-hash-mismatch"
+            }),
+            "paired mutation must exercise marker rejection, not hash inequality: {violations:?}"
+        );
+        for artifact in ["desktop-worker", "desktop-worker-hashed"] {
+            for token in [
+                format!("desktop-worker-missing-product-feature-marker={artifact}"),
+                format!("desktop-worker-forbidden-fixture-feature-marker={artifact}"),
+            ] {
+                assert!(
+                    violations.iter().any(|violation| {
+                        violation.code == "RPE-PURITY-0113" && violation.token == token
+                    }),
+                    "missing paired fixture substitution violation {token:?}: {violations:?}"
+                );
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_desktop_worker_cargo_hash_suffix_drift() {
+        let root = temp_dir("desktop-worker-hash-suffix-drift-repository");
+        let proof_root = temp_dir("desktop-worker-hash-suffix-drift-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-worker-hash-suffix").unwrap();
+        write_valid_build_inventory(&target);
+        let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+        for suffix in [executable_suffix, ".d"] {
+            fs::rename(
+                target.join(format!(
+                    "release/deps/{DESKTOP_WORKER_CRATE}-{HASH}{suffix}"
+                )),
+                target.join(format!(
+                    "release/deps/{DESKTOP_WORKER_CRATE}-{ALT_HASH}{suffix}"
+                )),
+            )
+            .unwrap();
+        }
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-worker-hash-suffix").unwrap_err();
+        for artifact in ["desktop-worker-hashed", "desktop-worker-hashed-depfile"] {
+            assert!(violations.iter().any(|violation| {
+                violation.code == "RPE-PURITY-0113"
+                    && violation.token == format!("desktop-worker-cargo-hash-mismatch={artifact}")
+            }));
+        }
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(proof_root).unwrap();
     }
@@ -2162,11 +3387,20 @@ mod tests {
 
     fn write_product_manifests(root: &Path) {
         for package in PRODUCT_PACKAGES {
+            let features = if package.package_name == "pdf-rs-desktop" {
+                "\n[features]\ndefault = []\ntransport-fixture = []\n"
+            } else {
+                ""
+            };
             write_manifest(
                 &root.join(package.manifest),
-                &format!("[package]\nname = \"{}\"\n", package.package_name),
+                &format!("[package]\nname = \"{}\"\n{features}", package.package_name),
             );
         }
+        write_manifest(
+            &root.join(DESKTOP_SANDBOX_TARGET_PATH),
+            DESKTOP_SANDBOX_TARGET_CONTENT,
+        );
         write_manifest(
             &root.join(THIRD_PARTY_REGISTRY_PATH),
             THIRD_PARTY_REGISTRY_CONTENT,
@@ -2198,7 +3432,8 @@ mod tests {
         let desktop_worker = target.join(format!(
             "release/{DESKTOP_WORKER_BINARY}{executable_suffix}"
         ));
-        fs::write(&desktop_worker, b"desktop worker").unwrap();
+        let desktop_worker_bytes = synthetic_desktop_worker_bytes();
+        fs::write(&desktop_worker, &desktop_worker_bytes).unwrap();
         fs::write(
             target.join(format!("release/{DESKTOP_WORKER_BINARY}.d")),
             "target: platform/desktop/src/main.rs\n",
@@ -2207,7 +3442,7 @@ mod tests {
         let hashed_desktop_worker = target.join(format!(
             "release/deps/{DESKTOP_WORKER_CRATE}-{HASH}{executable_suffix}"
         ));
-        fs::write(&hashed_desktop_worker, b"hashed desktop worker").unwrap();
+        fs::write(&hashed_desktop_worker, &desktop_worker_bytes).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -2222,13 +3457,21 @@ mod tests {
         )
         .unwrap();
         for package in PRODUCT_PACKAGES {
+            let package_hash = if package.package_name == "pdf-rs-desktop" {
+                DESKTOP_LIBRARY_HASH
+            } else {
+                HASH
+            };
             let source_root = Path::new(package.manifest).parent().unwrap();
             let source = source_root.join("src/lib.rs");
-            let depfile = target.join(format!("release/deps/{}-{HASH}.d", package.crate_name));
+            let depfile = target.join(format!(
+                "release/deps/{}-{package_hash}.d",
+                package.crate_name
+            ));
             fs::write(&depfile, format!("target: {}\n", source.display())).unwrap();
             fs::write(
                 target.join(format!(
-                    "release/deps/lib{}-{HASH}.rlib",
+                    "release/deps/lib{}-{package_hash}.rlib",
                     package.crate_name
                 )),
                 b"rlib",
@@ -2236,14 +3479,14 @@ mod tests {
             .unwrap();
             fs::write(
                 target.join(format!(
-                    "release/deps/lib{}-{HASH}.rmeta",
+                    "release/deps/lib{}-{package_hash}.rmeta",
                     package.crate_name
                 )),
                 b"rmeta",
             )
             .unwrap();
             let fingerprint = target.join(format!(
-                "release/.fingerprint/{}-{HASH}",
+                "release/.fingerprint/{}-{package_hash}",
                 package.package_name
             ));
             fs::create_dir_all(&fingerprint).unwrap();
@@ -2255,19 +3498,33 @@ mod tests {
             .unwrap();
             fs::write(
                 fingerprint.join(format!("lib-{}.json", package.crate_name)),
-                b"{}",
+                if package.package_name == "pdf-rs-desktop" {
+                    synthetic_desktop_fingerprint_json(DesktopFeatureFingerprint::Library)
+                        .into_bytes()
+                } else {
+                    b"{}".to_vec()
+                },
             )
             .unwrap();
-            if package.package_name == "pdf-rs-desktop" {
-                for file in [
-                    "bin-pdf-rs-desktop-worker",
-                    "bin-pdf-rs-desktop-worker.json",
-                    "dep-bin-pdf-rs-desktop-worker",
-                ] {
-                    fs::write(fingerprint.join(file), b"fingerprint").unwrap();
-                }
-            }
         }
+        let worker_fingerprint = target.join(format!("release/.fingerprint/pdf-rs-desktop-{HASH}"));
+        fs::create_dir_all(&worker_fingerprint).unwrap();
+        fs::write(worker_fingerprint.join("invoked.timestamp"), b"fresh").unwrap();
+        fs::write(
+            worker_fingerprint.join("bin-pdf-rs-desktop-worker"),
+            b"fingerprint",
+        )
+        .unwrap();
+        fs::write(
+            worker_fingerprint.join("bin-pdf-rs-desktop-worker.json"),
+            synthetic_desktop_fingerprint_json(DesktopFeatureFingerprint::WorkerBinary),
+        )
+        .unwrap();
+        fs::write(
+            worker_fingerprint.join("dep-bin-pdf-rs-desktop-worker"),
+            b"fingerprint",
+        )
+        .unwrap();
         for package in expected_third_party_packages() {
             let registry_source = format!(
                 "/synthetic/.cargo/registry/src/index/{0}-{1}/src/lib.rs",
@@ -2316,6 +3573,31 @@ mod tests {
                 fs::write(build.join("invoked.timestamp"), b"fresh").unwrap();
             }
         }
+    }
+
+    fn synthetic_desktop_fingerprint_json(fingerprint: DesktopFeatureFingerprint) -> String {
+        let dependencies = expected_desktop_fingerprint_dependencies(fingerprint)
+            .into_iter()
+            .enumerate()
+            .map(|(index, dependency)| {
+                let identity = index + 1;
+                format!("[{identity},\"{dependency}\",false,{identity}]")
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let (target, path) = match fingerprint {
+            DesktopFeatureFingerprint::Library => (101_u64, 201_u64),
+            DesktopFeatureFingerprint::WorkerBinary => (102_u64, 202_u64),
+        };
+        format!(
+            "{{\"rustc\":1,\"features\":\"[]\",\"declared_features\":\"[\\\"default\\\", \\\"transport-fixture\\\"]\",\"target\":{target},\"profile\":2,\"path\":{path},\"deps\":[{dependencies}],\"local\":[],\"rustflags\":[],\"config\":3,\"compile_kind\":0}}"
+        )
+    }
+
+    fn synthetic_desktop_worker_bytes() -> Vec<u8> {
+        let mut worker = b"synthetic desktop worker\0".to_vec();
+        worker.extend_from_slice(DESKTOP_WORKER_PRODUCT_FEATURE_MARKER);
+        worker
     }
 
     fn write_manifest(path: &Path, content: &str) {

@@ -35,10 +35,40 @@ probe_scope = "non-CLOEXEC fd 200/201 rejection plus exact child FD enumeration,
 owner_cleanup = "post-spawn cleanup and final Host/Supervisor Drop abort instead of discarding an owned child when reap cannot be proven, including a real-Child subprocess SIGABRT probe; launch identities are consumed before each attempt"
 security_claim = "FD hygiene only; not App Sandbox enforcement or denial evidence"
 
+[product_feature_closure]
+captured_at = 2026-07-18
+scope = "unsigned host-native release worker package prerequisite"
+fresh_external_target = true
+release_profile = true
+default_features_enabled = false
+enabled_fingerprint_features = "[]"
+declared_fingerprint_features = ["default", "transport-fixture"]
+desktop_feature_fingerprints = 2
+desktop_fingerprint_directories = 2
+single_library_fingerprint = true
+single_worker_fingerprint = true
+fingerprint_directory_association_exact = true
+dependency_graph_exact = true
+rustflags_empty = true
+native_compile_kind = true
+product_feature_marker_observed = "no_default_features_v1"
+fixture_feature_marker_absent = "transport_fixture_v1"
+cargo_filename_suffix_associated = true
+matching_worker_sha256_observed = true
+observed_worker_sha256 = "d24fe695849fe306ac4fb923e65cbede4f2d0cf757f61acc41358cdd0a5bafaf"
+fixture_launch_api_product_visible = false
+mutation_tests = ["default feature drift", "enabled and declared feature drift", "dependency, rustflags, and profile drift", "duplicate and orphan fingerprint directories", "Cargo filename hash suffix drift", "top-level worker substitution", "paired fixture-marker worker substitution"]
+worker_content_provenance_proved = false
+product_package_produced = false
+universal_binary_proof = false
+signed_package_proof = false
+evidence_boundary = "The marker, Cargo filename association, and matching SHA-256 describe one ephemeral host-native release invocation. A crafted paired executable containing the product marker is not excluded without signed package provenance; this is neither an app/package hash nor codesign, entitlement, universal-slice, notarization, or App Sandbox evidence."
+
 [open_gates]
 items = [
   "signed parent app and embedded helper packaging",
   "exact codesign and entitlement verification",
+  "signed universal helper content provenance, both architecture slices, and the package/CI artifact hash bound to the validated feature-free release worker SHA-256, including resistance to crafted paired substitution",
   "live child filesystem and network denial probes",
   "live inherited authenticated socket and read-only shared-memory success probes",
   "recorded sandbox Surface backend, inherited parent-app TMPDIR fallback, read-only reopen, unlink-before-SCM_RIGHTS, and zero residual objects without app-group widening",
