@@ -288,6 +288,76 @@ fn every_graphics_family_is_serialized_and_resources_follow_first_command_use() 
 }
 
 #[test]
+fn compatible_scene_import_replays_commands_and_reinterns_resources() {
+    let mut child = builder();
+    child
+        .append_fill(
+            path(),
+            FillRule::Nonzero,
+            black(),
+            Matrix::IDENTITY,
+            bounds("5"),
+            source(10),
+        )
+        .unwrap();
+    child
+        .draw_image(
+            ImageResource::new(
+                GraphicsResourceSource::new(ObjectRef::new(12, 0).unwrap(), 42, 7),
+                1,
+                1,
+                ImageColorSpace::DeviceRgb,
+                8,
+                false,
+                vec![8, 9, 10],
+            )
+            .unwrap(),
+            Matrix::IDENTITY,
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(11),
+        )
+        .unwrap();
+    let child = child.finish().unwrap();
+
+    let mut parent = builder();
+    parent
+        .append_fill(
+            path(),
+            FillRule::EvenOdd,
+            black(),
+            Matrix::IDENTITY,
+            bounds("5"),
+            source(0),
+        )
+        .unwrap();
+    parent.append_scene(&child).unwrap();
+    let imported = parent.finish().unwrap();
+    let graphics = imported.graphics().unwrap();
+
+    assert_eq!(graphics.commands().len(), 3);
+    assert_eq!(graphics.resources().len(), 2);
+    assert_eq!(graphics.commands()[1].source(), source(10));
+    assert_eq!(graphics.commands()[2].source(), source(11));
+    assert!(matches!(
+        graphics.commands()[1].command(),
+        GraphicsCommand::Fill { path, .. } if path.value() == 0
+    ));
+    assert!(matches!(
+        graphics.commands()[2].command(),
+        GraphicsCommand::DrawImage { image, .. } if image.value() == 1
+    ));
+
+    let mut mismatched =
+        GraphicsSceneBuilder::new_v2(binding(2), geometry(), GraphicsSceneLimits::default());
+    assert_eq!(
+        mismatched.append_scene(&child).unwrap_err().code(),
+        SceneErrorCode::InvalidCommandSequence
+    );
+}
+
+#[test]
 fn failed_append_does_not_consume_a_resource_identifier_or_command_slot() {
     let limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
         max_resources: 1,

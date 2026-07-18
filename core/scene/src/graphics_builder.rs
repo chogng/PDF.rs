@@ -605,6 +605,128 @@ impl GraphicsSceneBuilder {
         Ok(())
     }
 
+    /// Replays one compatible graphics Scene into this builder with fresh resource interning.
+    ///
+    /// The imported Scene must have the same page binding and geometry and contain only supported
+    /// graphics-v2 semantics. Each imported command is revalidated against this builder's
+    /// remaining limits, and referenced paths, images, and glyph outlines receive IDs in this
+    /// builder's first-use order. Callers must discard the builder if this method returns an error,
+    /// because an already validated command prefix may have been appended.
+    pub fn append_scene(&mut self, scene: &Scene) -> Result<(), SceneError> {
+        if scene.binding() != self.binding || scene.geometry() != self.geometry {
+            return Err(SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                self.next_command_index().ok(),
+            ));
+        }
+        let graphics = scene.graphics().ok_or_else(|| {
+            SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                self.next_command_index().ok(),
+            )
+        })?;
+        if !graphics.is_supported() {
+            return Err(SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                self.next_command_index().ok(),
+            ));
+        }
+        for record in graphics.commands() {
+            let bounds = record.bounds();
+            let source = record.source();
+            match record.command() {
+                GraphicsCommand::Save => self.append_save(bounds, source)?,
+                GraphicsCommand::Restore => self.append_restore(bounds, source)?,
+                GraphicsCommand::Clip {
+                    path,
+                    rule,
+                    transform,
+                } => self.append_clip(
+                    imported_path(graphics, *path)?,
+                    *rule,
+                    *transform,
+                    bounds,
+                    source,
+                )?,
+                GraphicsCommand::Fill {
+                    path,
+                    rule,
+                    paint,
+                    transform,
+                } => self.append_fill(
+                    imported_path(graphics, *path)?,
+                    *rule,
+                    *paint,
+                    *transform,
+                    bounds,
+                    source,
+                )?,
+                GraphicsCommand::Stroke {
+                    path,
+                    paint,
+                    style,
+                    transform,
+                } => self.append_stroke(
+                    imported_path(graphics, *path)?,
+                    *paint,
+                    style.clone(),
+                    *transform,
+                    bounds,
+                    source,
+                )?,
+                GraphicsCommand::FillStroke {
+                    path,
+                    rule,
+                    fill,
+                    stroke,
+                    style,
+                    transform,
+                } => self.append_fill_stroke(
+                    imported_path(graphics, *path)?,
+                    *rule,
+                    *fill,
+                    *stroke,
+                    style.clone(),
+                    *transform,
+                    bounds,
+                    source,
+                )?,
+                GraphicsCommand::DrawImage {
+                    image,
+                    transform,
+                    alpha,
+                    blend_mode,
+                } => self.draw_image(
+                    imported_image(graphics, *image)?,
+                    *transform,
+                    *alpha,
+                    *blend_mode,
+                    bounds,
+                    source,
+                )?,
+                GraphicsCommand::DrawGlyphRun(run) => {
+                    let mut glyphs = Vec::new();
+                    glyphs
+                        .try_reserve_exact(run.glyphs().len())
+                        .map_err(|_| allocation(self.limits.max_retained_bytes()))?;
+                    for glyph in run.glyphs() {
+                        glyphs.push(GlyphUse::new(
+                            imported_glyph(graphics, glyph.outline())?,
+                            glyph.transform(),
+                            glyph.character_code(),
+                        ));
+                    }
+                    self.draw_glyph_run(glyphs, run.paint(), bounds, source)?;
+                }
+                GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
+                    self.begin_group(*alpha, *blend_mode, bounds, source)?;
+                }
+                GraphicsCommand::EndIsolatedGroup => self.end_group(bounds, source)?,
+            }
+        }
+        Ok(())
+    }
+
     /// Adds one explicit capability requirement.
     ///
     /// Dependencies must be unique identifiers already present in this builder. That strict
@@ -1251,6 +1373,48 @@ impl GraphicsSceneBuilder {
             u32::try_from(self.requirements.len()).map_err(|_| internal())?,
         ))
     }
+}
+
+fn imported_resource(
+    graphics: &GraphicsScene,
+    id: GraphicsResourceId,
+) -> Result<&GraphicsResource, SceneError> {
+    let entry = usize::try_from(id.value())
+        .ok()
+        .and_then(|index| graphics.resources().get(index))
+        .filter(|entry| entry.id() == id)
+        .ok_or_else(internal)?;
+    Ok(entry.resource())
+}
+
+fn imported_path(
+    graphics: &GraphicsScene,
+    id: GraphicsResourceId,
+) -> Result<PathResource, SceneError> {
+    let GraphicsResource::Path(path) = imported_resource(graphics, id)? else {
+        return Err(internal());
+    };
+    Ok(path.clone())
+}
+
+fn imported_image(
+    graphics: &GraphicsScene,
+    id: GraphicsResourceId,
+) -> Result<ImageResource, SceneError> {
+    let GraphicsResource::Image(image) = imported_resource(graphics, id)? else {
+        return Err(internal());
+    };
+    Ok(image.clone())
+}
+
+fn imported_glyph(
+    graphics: &GraphicsScene,
+    id: GraphicsResourceId,
+) -> Result<crate::GlyphOutline, SceneError> {
+    let GraphicsResource::GlyphOutline(glyph) = imported_resource(graphics, id)? else {
+        return Err(internal());
+    };
+    Ok(glyph.clone())
 }
 
 fn paint_capabilities(
