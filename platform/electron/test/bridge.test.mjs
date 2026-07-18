@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { PdfRsBridge } from "../src/bridge.mjs";
+import {
+  FAST_CPU_CANARY_COHORT,
+  PdfRsBridge,
+  PdfRsBridgeError,
+} from "../src/bridge.mjs";
 
 const readablePdf = resolve(
   import.meta.dirname,
@@ -62,5 +66,48 @@ test("bridge returns structured errors for unsupported ownership", async () => {
     await bridge.close(opened.documentId);
   } finally {
     await bridge.shutdown();
+  }
+});
+
+test("Fast CPU CANARY rolls back to Reference without changing unsupported", async () => {
+  assert.throws(
+    () => new PdfRsBridge({ rendererCohort: "unregistered-cohort" }),
+    (error) =>
+      error instanceof PdfRsBridgeError
+      && error.code === "invalid-renderer-cohort",
+  );
+
+  const canary = new PdfRsBridge({ rendererCohort: FAST_CPU_CANARY_COHORT });
+  try {
+    const opened = await canary.open(readablePdf);
+    const surface = await canary.render(opened.documentId, 0, 128);
+    assert.equal(surface.renderer, "fast-cpu-v1");
+    await canary.close(opened.documentId);
+
+    const unsupported = await canary.open(unsupportedPdf);
+    await assert.rejects(
+      canary.render(unsupported.documentId, 0, 128),
+      (error) => error?.code === "unsupported",
+    );
+    await canary.close(unsupported.documentId);
+  } finally {
+    await canary.shutdown();
+  }
+
+  const rolledBack = new PdfRsBridge();
+  try {
+    const opened = await rolledBack.open(readablePdf);
+    const surface = await rolledBack.render(opened.documentId, 0, 128);
+    assert.equal(surface.renderer, "reference-cpu-v1");
+    await rolledBack.close(opened.documentId);
+
+    const unsupported = await rolledBack.open(unsupportedPdf);
+    await assert.rejects(
+      rolledBack.render(unsupported.documentId, 0, 128),
+      (error) => error?.code === "unsupported",
+    );
+    await rolledBack.close(unsupported.documentId);
+  } finally {
+    await rolledBack.shutdown();
   }
 });

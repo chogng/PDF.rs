@@ -206,6 +206,55 @@ impl FlatPath {
     pub(crate) const fn retained_bytes(&self) -> u64 {
         self.retained_bytes
     }
+
+    pub(crate) fn coverage_window(
+        &self,
+        rect: WorkRect,
+        work: &mut dyn KernelWork,
+    ) -> Result<Option<CoverageWindow>, FastRasterError> {
+        let mut minimum_x = i64::MAX;
+        let mut minimum_y = i64::MAX;
+        let mut maximum_x = i64::MIN;
+        let mut maximum_y = i64::MIN;
+        let mut has_point = false;
+        for subpath in &self.subpaths {
+            work.step()?;
+            for point in &subpath.points {
+                work.step()?;
+                minimum_x = minimum_x.min(point.x);
+                minimum_y = minimum_y.min(point.y);
+                maximum_x = maximum_x.max(point.x);
+                maximum_y = maximum_y.max(point.y);
+                has_point = true;
+            }
+        }
+        if !has_point {
+            return Ok(None);
+        }
+        let Some((column_start, column_end)) =
+            coverage_axis(minimum_x, maximum_x, rect.x, rect.width)?
+        else {
+            return Ok(None);
+        };
+        let Some((row_start, row_end)) = coverage_axis(minimum_y, maximum_y, rect.y, rect.height)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(CoverageWindow {
+            column_start,
+            column_end,
+            row_start,
+            row_end,
+        }))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CoverageWindow {
+    column_start: u32,
+    column_end: u32,
+    row_start: u32,
+    row_end: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -689,6 +738,8 @@ impl Coverage {
     pub(crate) fn union(
         &mut self,
         other: &Self,
+        rect: WorkRect,
+        window: CoverageWindow,
         work: &mut dyn KernelWork,
     ) -> Result<(), FastRasterError> {
         if self.masks.len() != other.masks.len() {
@@ -696,9 +747,12 @@ impl Coverage {
                 FastRasterErrorCode::IdentityMismatch,
             ));
         }
-        for (target, incoming) in self.masks.iter_mut().zip(&other.masks) {
-            *target |= *incoming;
-            work.step()?;
+        for row in window.row_start..window.row_end {
+            for column in window.column_start..window.column_end {
+                let index = coverage_index(rect, row, column)?;
+                self.masks[index] |= other.masks[index];
+                work.step()?;
+            }
         }
         Ok(())
     }
@@ -711,9 +765,21 @@ pub(crate) fn fill_coverage(
     base_intermediate: u64,
     work: &mut dyn KernelWork,
 ) -> Result<Coverage, FastRasterError> {
-    coverage(rect, base_intermediate, work, |point, work| {
+    Ok(fill_coverage_bounded(path, rect, rule, base_intermediate, work)?.0)
+}
+
+pub(crate) fn fill_coverage_bounded(
+    path: &FlatPath,
+    rect: WorkRect,
+    rule: FillRule,
+    base_intermediate: u64,
+    work: &mut dyn KernelWork,
+) -> Result<(Coverage, Option<CoverageWindow>), FastRasterError> {
+    let window = path.coverage_window(rect, work)?;
+    let operation = bounded_coverage(rect, window, base_intermediate, work, |point, work| {
         point_in_path(path, point, rule, work)
-    })
+    })?;
+    Ok((operation, window))
 }
 
 pub(crate) fn coverage(
@@ -747,6 +813,73 @@ pub(crate) fn coverage(
         masks,
         retained_bytes,
     })
+}
+
+fn bounded_coverage(
+    rect: WorkRect,
+    window: Option<CoverageWindow>,
+    base_intermediate: u64,
+    work: &mut dyn KernelWork,
+    mut contains: impl FnMut(Point, &mut dyn KernelWork) -> Result<bool, FastRasterError>,
+) -> Result<Coverage, FastRasterError> {
+    let mut coverage = Coverage::empty(rect, base_intermediate, work)?;
+    let Some(window) = window else {
+        return Ok(coverage);
+    };
+    for row in window.row_start..window.row_end {
+        for column in window.column_start..window.column_end {
+            let mut mask = 0_u16;
+            for sample_y in 0..SAMPLE_SIDE {
+                for sample_x in 0..SAMPLE_SIDE {
+                    let x = sample_coordinate(rect.x, column, sample_x)?;
+                    let y = sample_coordinate(rect.y, row, sample_y)?;
+                    if contains(Point { x, y }, work)? {
+                        let bit = u32::try_from(sample_y * SAMPLE_SIDE + sample_x)
+                            .map_err(|_| numeric())?;
+                        mask |= 1_u16.checked_shl(bit).ok_or_else(numeric)?;
+                    }
+                    work.step()?;
+                }
+            }
+            let index = coverage_index(rect, row, column)?;
+            coverage.masks[index] = mask;
+        }
+    }
+    Ok(coverage)
+}
+
+fn coverage_axis(
+    minimum: i64,
+    maximum: i64,
+    origin: i64,
+    length: u32,
+) -> Result<Option<(u32, u32)>, FastRasterError> {
+    let rect_end = origin.checked_add(i64::from(length)).ok_or_else(numeric)?;
+    let candidate_start = minimum
+        .div_euclid(FIXED_ONE)
+        .checked_sub(1)
+        .ok_or_else(numeric)?;
+    let candidate_end = maximum
+        .div_euclid(FIXED_ONE)
+        .checked_add(2)
+        .ok_or_else(numeric)?;
+    let start = candidate_start.max(origin);
+    let end = candidate_end.min(rect_end);
+    if start >= end {
+        return Ok(None);
+    }
+    Ok(Some((
+        u32::try_from(start.checked_sub(origin).ok_or_else(numeric)?).map_err(|_| numeric())?,
+        u32::try_from(end.checked_sub(origin).ok_or_else(numeric)?).map_err(|_| numeric())?,
+    )))
+}
+
+fn coverage_index(rect: WorkRect, row: u32, column: u32) -> Result<usize, FastRasterError> {
+    u64::from(row)
+        .checked_mul(u64::from(rect.width))
+        .and_then(|value| value.checked_add(u64::from(column)))
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(numeric)
 }
 
 fn sample_coordinate(origin: i64, pixel: u32, sample: i64) -> Result<i64, FastRasterError> {

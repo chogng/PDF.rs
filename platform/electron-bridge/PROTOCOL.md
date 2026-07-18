@@ -21,4 +21,10 @@ Responses are ASCII lines except for a `SURFACE` payload:
 Paths, source bytes, page indices, output dimensions, line lengths, and Surface
 lengths are bounded before allocation or access. The raw Surface is top-down
 straight-alpha sRGB RGBA8. `renderer` is a stable PDF.rs Native renderer
-identifier such as `reference-cpu-v1`.
+identifier such as `reference-cpu-v1` or `fast-cpu-v1`.
+
+The bridge starts in Reference CPU mode. The versioned M4 CANARY cohort
+`m4-r0-basic-page-local-v1` selects Fast CPU only when Electron main passes it
+through the private `PDF_RS_FAST_CPU_CANARY_V1` child environment entry.
+Removing the cohort returns the next bridge process to Reference CPU without
+changing request syntax or unsupported outcomes.

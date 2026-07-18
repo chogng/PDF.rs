@@ -4,7 +4,9 @@ This crate is a repository-owned composition layer over PDF.rs core crates.
 It does not contain, link, invoke, or recover through an external PDF engine.
 
 The initial profile opens strict traditional-xref PDFs, materializes one page
-at a time, interprets the registered graphics-v2 subset, and renders through
-the independently reviewed PDF.rs Reference CPU backend. Unsupported content
-remains a structured terminal result. The surface records its renderer
-identity so a later Fast CPU handoff does not change the UI-neutral API.
+at a time, and interprets the registered graphics-v2 subset. Reference CPU
+remains the default while the UI-neutral qualification API can explicitly
+select the product-tiled PDF.rs Fast CPU backend. Both paths preserve
+structured unsupported terminals and record the renderer identity on every
+surface. Electron enables Fast only through the versioned, default-off M4
+CANARY cohort, so rollback starts the same bridge API on Reference CPU.

@@ -3,6 +3,7 @@ import { access, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import electron from "electron";
+import { FAST_CPU_CANARY_COHORT } from "../src/bridge.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const fixture = resolve(root, "tests/desktop/readable-preview.pdf");
@@ -22,6 +23,7 @@ const child = spawn(electron, ["."], {
   env: {
     ...process.env,
     PDF_RS_ELECTRON_OPEN: fixture,
+    PDF_RS_ELECTRON_RENDERER_COHORT: FAST_CPU_CANARY_COHORT,
     PDF_RS_ELECTRON_SMOKE_SCREENSHOT: screenshot,
   },
   stdio: ["ignore", "pipe", "inherit"],

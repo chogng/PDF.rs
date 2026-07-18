@@ -11,7 +11,8 @@ use pdf_rs_scene::{FillRule, GraphicsCommand, GraphicsScene, Matrix, Paint, Scen
 
 use crate::fast::kernels::{
     Coverage, FlatPath, KernelWork, PageMap, Pixel, WorkRect, composite_coverage, draw_image,
-    fill_coverage, flatten_path, lookup_glyph, lookup_image, lookup_path, vector_bytes,
+    fill_coverage, fill_coverage_bounded, flatten_path, lookup_glyph, lookup_image, lookup_path,
+    vector_bytes,
 };
 use crate::fast::limits::checked_total;
 use crate::fast::stroke::stroke_coverage;
@@ -401,14 +402,16 @@ impl<'a> FastRasterJob<'a> {
                             add(base, union.retained_bytes())?,
                             work,
                         )?;
-                        let coverage = fill_coverage(
+                        let (coverage, window) = fill_coverage_bounded(
                             &flat,
                             rect,
                             FillRule::Nonzero,
                             add(add(base, union.retained_bytes())?, flat.retained_bytes())?,
                             work,
                         )?;
-                        union.union(&coverage, work)?;
+                        if let Some(window) = window {
+                            union.union(&coverage, rect, window, work)?;
+                        }
                     }
                     composite_coverage(&mut surface, &union, &clip, run.paint(), work)?;
                 }

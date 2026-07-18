@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const MAX_SURFACE_BYTES = 256 * 1024 * 1024;
+export const FAST_CPU_CANARY_COHORT = "m4-r0-basic-page-local-v1";
 
 export class PdfRsBridgeError extends Error {
   constructor(code) {
@@ -25,7 +26,22 @@ export class PdfRsBridge {
     const program = options.program
       ?? process.env.PDF_RS_ELECTRON_BRIDGE
       ?? resolve(moduleDirectory, "../../../target/debug/pdf-rs-electron-bridge");
+    const rendererCohort = options.rendererCohort
+      ?? process.env.PDF_RS_ELECTRON_RENDERER_COHORT;
+    if (
+      rendererCohort !== undefined
+      && rendererCohort !== FAST_CPU_CANARY_COHORT
+    ) {
+      throw new PdfRsBridgeError("invalid-renderer-cohort");
+    }
+    const environment = { ...process.env };
+    if (rendererCohort === FAST_CPU_CANARY_COHORT) {
+      environment.PDF_RS_FAST_CPU_CANARY_V1 = rendererCohort;
+    } else {
+      delete environment.PDF_RS_FAST_CPU_CANARY_V1;
+    }
     this.#child = spawn(program, ["--stdio"], {
+      env: environment,
       stdio: ["pipe", "pipe", "inherit"],
       windowsHide: true,
     });

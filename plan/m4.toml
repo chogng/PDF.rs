@@ -238,9 +238,16 @@ acceptance = [
 id = "M4-11"
 title = "R0 basic-page differential and CANARY gate"
 lane = "quality"
-status = "planned"
+status = "in_progress"
+started_at = 2026-07-18
 depends_on = ["M4-04", "M4-08", "M4-10"]
 outcome = "The explicitly registered basic-page Fast CPU profile advances through DIFFERENTIAL evidence and a bounded CANARY cohort without widening the supported feature set."
+progress = [
+  "Fast fill and outline-glyph coverage now samples and unions only a conservative flattened-path device window, reducing the readable 306-by-396 qualification page from over 60 seconds to approximately 2.5 seconds in a local debug test while preserving every existing Fast tile, differential, cancellation, and resource-boundary test.",
+  "The UI-neutral viewer now exposes an explicit Fast CPU qualification path while retaining Reference CPU as its default and binding the producing renderer to every surface.",
+  "The Electron bridge accepts only the exact default-off m4-r0-basic-page-local-v1 cohort, proves rollback to Reference in a new process, and preserves Unsupported semantics in both modes.",
+  "The full Electron open, readable-page, navigation, zoom, resize, close, and shutdown smoke now runs through Fast CPU and visibly reports Fast CPU on each surface.",
+]
 acceptance = [
   "Registered O0/O1/O3 cases, tile metamorphics, Fast-versus-Reference geometry and pixel diffs, lifecycle faults, and fixed-seed fuzz replay pass with no open critical or major finding.",
   "At least 1,000 eligible holdout pages complete without panic, hang, partial pixels, unexpected unsupported, or external-engine fallback; denominators and exclusions are recorded.",

@@ -29,12 +29,20 @@ use pdf_rs_document::{
     PageXObjectLookupLimits, RevisionAttestationJobContext, RevisionAttestationLimits, RevisionId,
     SharedAttestedRevisionIndex, StrictBaseOpenContext, StrictBaseOpenLimits, StrictBaseOpenPoll,
 };
+use pdf_rs_fast_raster::fast::{
+    FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
+};
 use pdf_rs_object::ObjectLimits;
+use pdf_rs_policy::{
+    CapabilityEvaluator, CapabilityProfile, DeviceRect, NeverCancelled as NeverPolicyCancelled,
+    OptionalContentIdentity, PolicyLimits, RenderConfig, RenderConfigInput, RenderPlanOutcome,
+    RenderPlanRequest, RendererEpoch, ZoomRatio, create_render_plan,
+};
 use pdf_rs_raster::reference::{
     ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
     ReferenceRenderPoll,
 };
-use pdf_rs_scene::{GraphicsSceneLimits, PageRotation, SceneRect};
+use pdf_rs_scene::{GraphicsSceneLimits, PageRotation, Scene, SceneRect, SceneScalar};
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{XrefJobContext, XrefLimits};
 
@@ -94,6 +102,8 @@ impl std::error::Error for NativeViewerError {}
 pub enum NativeRendererKind {
     /// Independently reviewed PDF.rs Reference CPU rasterizer.
     ReferenceCpu,
+    /// Product-tiled PDF.rs Fast CPU rasterizer.
+    FastCpu,
 }
 
 impl NativeRendererKind {
@@ -101,6 +111,7 @@ impl NativeRendererKind {
     pub const fn identifier(self) -> &'static str {
         match self {
             Self::ReferenceCpu => "reference-cpu-v1",
+            Self::FastCpu => "fast-cpu-v1",
         }
     }
 }
@@ -277,6 +288,19 @@ impl NativeDocument {
         &mut self,
         page_index: u32,
         width: u32,
+    ) -> Result<NativePageSurface, NativeViewerError> {
+        self.render_page_with_renderer(page_index, width, NativeRendererKind::ReferenceCpu)
+    }
+
+    /// Interprets and renders one page with an explicitly selected PDF.rs Native renderer.
+    ///
+    /// This qualification boundary keeps the Reference and Fast CPU implementations observable
+    /// without changing the default renderer before the Fast profile completes its CANARY gate.
+    pub fn render_page_with_renderer(
+        &mut self,
+        page_index: u32,
+        width: u32,
+        renderer: NativeRendererKind,
     ) -> Result<NativePageSurface, NativeViewerError> {
         if page_index >= self.page_count() || width == 0 || width > MAX_OUTPUT_WIDTH {
             return Err(NativeViewerError::new(NativeViewerErrorCode::InvalidInput));
@@ -467,28 +491,34 @@ impl NativeDocument {
             scene.geometry().rotation(),
             width,
         )?;
-        let config = ReferenceRenderConfig::opaque_srgb(width, height)
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
-        let mut render = ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
-        let pixels = match render.poll(&NeverRasterCancelled) {
-            ReferenceRenderPoll::Ready(pixels) => pixels,
-            ReferenceRenderPoll::Unsupported(_) => {
-                return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
+        match renderer {
+            NativeRendererKind::ReferenceCpu => {
+                let config = ReferenceRenderConfig::opaque_srgb(width, height)
+                    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
+                let mut render =
+                    ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
+                let pixels = match render.poll(&NeverRasterCancelled) {
+                    ReferenceRenderPoll::Ready(pixels) => pixels,
+                    ReferenceRenderPoll::Unsupported(_) => {
+                        return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
+                    }
+                    ReferenceRenderPoll::Failed(_) => {
+                        return Err(NativeViewerError::new(NativeViewerErrorCode::Render));
+                    }
+                };
+                let stride = u32::try_from(pixels.stride_bytes())
+                    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+                Ok(NativePageSurface {
+                    page_index,
+                    renderer,
+                    width: pixels.width(),
+                    height: pixels.height(),
+                    stride,
+                    pixels: pixels.rgba().to_vec(),
+                })
             }
-            ReferenceRenderPoll::Failed(_) => {
-                return Err(NativeViewerError::new(NativeViewerErrorCode::Render));
-            }
-        };
-        let stride = u32::try_from(pixels.stride_bytes())
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-        Ok(NativePageSurface {
-            page_index,
-            renderer: NativeRendererKind::ReferenceCpu,
-            width: pixels.width(),
-            height: pixels.height(),
-            stride,
-            pixels: pixels.rgba().to_vec(),
-        })
+            NativeRendererKind::FastCpu => render_fast_page(page_index, width, height, &scene),
+        }
     }
 
     fn allocate_render_jobs(&mut self) -> Result<RenderJobs, NativeViewerError> {
@@ -649,4 +679,161 @@ fn output_height(
         .filter(|value| *value > 0 && *value <= MAX_OUTPUT_HEIGHT)
         .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
     Ok(height)
+}
+
+fn render_fast_page(
+    page_index: u32,
+    width: u32,
+    height: u32,
+    scene: &Scene,
+) -> Result<NativePageSurface, NativeViewerError> {
+    let decision = CapabilityEvaluator::new(
+        CapabilityProfile::m3_reference_v1(),
+        PolicyLimits::default(),
+    )
+    .evaluate(scene, 1, &NeverPolicyCancelled)
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    let config = RenderConfig::validate(RenderConfigInput::fast_cpu_full())
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    let request = RenderPlanRequest::new(
+        1,
+        DeviceRect::new(0, 0, width, height)
+            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?,
+        output_zoom(
+            scene.geometry().crop_box(),
+            scene.geometry().rotation(),
+            width,
+        )?,
+        1_000,
+        PageRotation::Degrees0,
+        OptionalContentIdentity::new(1),
+        1,
+    )
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
+    let plan = match create_render_plan(
+        scene,
+        decision,
+        config,
+        request,
+        RendererEpoch::new(1).expect("fixed Fast renderer epoch is nonzero"),
+        PolicyLimits::default(),
+        &NeverPolicyCancelled,
+    )
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?
+    {
+        RenderPlanOutcome::Ready(plan) => plan,
+        RenderPlanOutcome::NotPublishable(_) => {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
+        }
+    };
+    let order = (0..plan.tiles().len())
+        .map(|ordinal| {
+            u32::try_from(ordinal)
+                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let job = FastRasterJob::new(
+        scene,
+        &plan,
+        FastRasterLimits::default(),
+        &NeverFastCancelled,
+    )
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    let tiles = job
+        .render_all(&order, &NeverFastCancelled)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    let stride = width
+        .checked_mul(4)
+        .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    let pixel_len = u64::from(stride)
+        .checked_mul(u64::from(height))
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(pixel_len)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    pixels.resize(pixel_len, 0);
+    for tile in tiles.tiles() {
+        let rect = tile.identity().content_key().tile();
+        let x = u32::try_from(rect.x())
+            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+        let y = u32::try_from(rect.y())
+            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+        let row_bytes = rect
+            .width()
+            .checked_mul(4)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+        for row in 0..rect.height() {
+            let source_start = u64::from(row)
+                .checked_mul(u64::from(tile.stride()))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+            let target_start = u64::from(
+                y.checked_add(row)
+                    .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::Internal))?,
+            )
+            .checked_mul(u64::from(stride))
+            .and_then(|value| {
+                u64::from(x)
+                    .checked_mul(4)
+                    .and_then(|offset| value.checked_add(offset))
+            })
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+            let source = tile
+                .pixels()
+                .get(source_start..source_start + row_bytes)
+                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+            let target = pixels
+                .get_mut(target_start..target_start + row_bytes)
+                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+            target.copy_from_slice(source);
+        }
+    }
+    Ok(NativePageSurface {
+        page_index,
+        renderer: NativeRendererKind::FastCpu,
+        width,
+        height,
+        stride,
+        pixels,
+    })
+}
+
+fn output_zoom(
+    crop: SceneRect,
+    rotation: PageRotation,
+    width: u32,
+) -> Result<ZoomRatio, NativeViewerError> {
+    let page_width = match rotation {
+        PageRotation::Degrees0 | PageRotation::Degrees180 => crop.width(),
+        PageRotation::Degrees90 | PageRotation::Degrees270 => crop.height(),
+    }
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?
+    .scaled();
+    let page_width = u64::try_from(page_width)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?;
+    let scene_one = u64::try_from(SceneScalar::ONE.scaled())
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+    let numerator = u64::from(width)
+        .checked_mul(scene_one)
+        .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    let divisor = gcd(numerator, page_width);
+    let numerator = u32::try_from(numerator / divisor)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    let denominator = u32::try_from(page_width / divisor)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    ZoomRatio::new(numerator, denominator)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))
+}
+
+const fn gcd(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
 }

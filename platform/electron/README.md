@@ -16,6 +16,17 @@ and the Rust bridge process. The context-isolated preload exposes only
 `openPdf`, `renderPage`, `closePdf`, and status helpers. The sandboxed renderer
 receives validated RGBA8 pixels and presents them with Canvas.
 
+Reference CPU remains the default renderer. The exact default-off M4 CANARY can
+be selected for a local run with:
+
+```sh
+PDF_RS_ELECTRON_RENDERER_COHORT=m4-r0-basic-page-local-v1 npm run dev
+```
+
+Removing that environment entry starts the next bridge on Reference CPU. The
+application status bar always names the renderer that produced the current
+surface.
+
 ## Verify
 
 ```sh
@@ -25,9 +36,9 @@ npm run smoke
 
 `npm test` exercises both pages of the deterministic readable PDF through the
 persistent bridge and verifies structured invalid/unsupported outcomes.
-`npm run smoke` starts Electron with that PDF and drives the source application
-through its normal renderer controls. It captures the readable first page,
-page two, 125% replacement, resized window, and closed state under
+`npm run smoke` starts Electron with that PDF under the Fast CPU CANARY and
+drives the source application through its normal renderer controls. It captures
+the readable first page, page two, 125% replacement, resized window, and closed state under
 `target/electron-preview-smoke*.png`, then verifies bridge exit and clean
 application shutdown.
 

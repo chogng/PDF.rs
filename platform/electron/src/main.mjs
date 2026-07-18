@@ -7,6 +7,9 @@ import { PdfRsBridge, PdfRsBridgeError } from "./bridge.mjs";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const smokeScreenshot = process.env.PDF_RS_ELECTRON_SMOKE_SCREENSHOT;
+const smokeExpectedRenderer = process.env.PDF_RS_ELECTRON_RENDERER_COHORT
+  ? "Fast CPU"
+  : "Reference CPU";
 const smokeEvidence = smokeScreenshot
   ? Object.freeze({
       firstPage: smokeScreenshot,
@@ -80,7 +83,10 @@ const assertRenderedSnapshot = (snapshot, pageLabel, zoomLabel, width) => {
   assertSmoke(snapshot.closeDisabled === false, "close-disabled");
   assertSmoke(snapshot.canvasWidth === width, `canvas-width-${snapshot.canvasWidth}`);
   assertSmoke(snapshot.canvasHeight > width, `canvas-height-${snapshot.canvasHeight}`);
-  assertSmoke(snapshot.status.includes("RGBA8 · Reference CPU"), "renderer-status");
+  assertSmoke(
+    snapshot.status.includes(`RGBA8 · ${smokeExpectedRenderer}`),
+    "renderer-status",
+  );
 };
 
 const captureSmoke = async (path) => {

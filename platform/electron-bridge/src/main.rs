@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
-use pdf_rs_viewer::{NativeDocument, NativeViewerErrorCode};
+use pdf_rs_viewer::{NativeDocument, NativeRendererKind, NativeViewerErrorCode};
 
 const MAX_COMMAND_BYTES: usize = 16 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
+const FAST_CPU_CANARY_ENV: &str = "PDF_RS_FAST_CPU_CANARY_V1";
+const FAST_CPU_CANARY_COHORT: &str = "m4-r0-basic-page-local-v1";
 
 fn main() {
     if std::env::args().nth(1).as_deref() != Some("--stdio") {
@@ -24,6 +26,7 @@ fn run_stdio() -> io::Result<()> {
     let mut input = BufReader::new(stdin.lock());
     let mut output = BufWriter::new(stdout.lock());
     let mut documents = BTreeMap::<u64, NativeDocument>::new();
+    let renderer = selected_renderer();
     let mut next_document = 1_u64;
     let mut line = Vec::new();
     loop {
@@ -109,7 +112,7 @@ fn run_stdio() -> io::Result<()> {
                     write_error(&mut output, request, "unknown-document")?;
                     continue;
                 };
-                let surface = match document.render_page(page, width) {
+                let surface = match document.render_page_with_renderer(page, width, renderer) {
                     Ok(surface) => surface,
                     Err(error) => {
                         write_error(&mut output, request, error_code(error.code()))?;
@@ -156,6 +159,13 @@ fn run_stdio() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn selected_renderer() -> NativeRendererKind {
+    match std::env::var(FAST_CPU_CANARY_ENV) {
+        Ok(value) if value == FAST_CPU_CANARY_COHORT => NativeRendererKind::FastCpu,
+        _ => NativeRendererKind::ReferenceCpu,
+    }
 }
 
 fn parse_u64(value: Option<&str>) -> Option<u64> {

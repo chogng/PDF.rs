@@ -46,6 +46,12 @@ and admitted using allocator-reported capacity before use. Published tiles retai
 admitted vector allocation behind a read-only API, avoiding an infallible shrink or copy at the
 publication boundary.
 
+Fill and outline-glyph coverage derives a conservative device-pixel window from the already
+flattened path. Masks keep their complete tile-sized, resource-accounted representation, while
+sample tests and glyph-union work touch only that window; glyphs outside one tile skip coverage
+allocation entirely. This preserves tile pixels and atomic accounting while avoiding
+glyph-count-by-whole-tile sampling on normal reading pages.
+
 `FastRasterJob::render_all` accepts only a complete tile-order permutation. It renders every tile
 into job-private storage, crops the halo into a complete exact-length RGBA8 value, performs a final
 cancellation probe, and returns the `FastTileSet` only after all tiles succeed. Any invalid

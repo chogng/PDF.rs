@@ -74,3 +74,47 @@ fn readable_two_page_document_renders_text_and_layout() {
         );
     }
 }
+
+#[test]
+fn readable_page_renders_through_explicit_fast_cpu_qualification_path() {
+    let mut document = NativeDocument::open(READABLE_PDF.to_vec()).expect("strict Native open");
+    let surface = document
+        .render_page_with_renderer(0, 306, NativeRendererKind::FastCpu)
+        .expect("readable page renders through Fast CPU");
+    assert_eq!(surface.page_index(), 0);
+    assert_eq!(surface.renderer(), NativeRendererKind::FastCpu);
+    assert_eq!(surface.width(), 306);
+    assert_eq!(surface.height(), 396);
+    assert_eq!(surface.stride(), 1_224);
+    assert!(
+        surface
+            .pixels()
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] < 80 && pixel[1] < 80 && pixel[2] < 100),
+        "Fast CPU page must retain dark text pixels"
+    );
+    let reference = document
+        .render_page_with_renderer(0, 306, NativeRendererKind::ReferenceCpu)
+        .expect("readable page renders through Reference CPU");
+    let maximum_delta = surface
+        .pixels()
+        .iter()
+        .zip(reference.pixels())
+        .map(|(fast, reference)| fast.abs_diff(*reference))
+        .max()
+        .expect("surface is nonempty");
+    let changed_channels = surface
+        .pixels()
+        .iter()
+        .zip(reference.pixels())
+        .filter(|(fast, reference)| fast != reference)
+        .count();
+    assert!(
+        maximum_delta <= 64,
+        "Fast coverage must stay within the reviewed readable-page channel bound: {maximum_delta}"
+    );
+    assert!(
+        changed_channels <= 12_500,
+        "Fast coverage changed too much of the readable page: {changed_channels} channels"
+    );
+}
