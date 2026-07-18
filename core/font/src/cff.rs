@@ -16,9 +16,10 @@ const CFF_ISO_ADOBE_GLYPHS: usize = 229;
 
 /// Parses and atomically publishes one standalone non-CID CFF1 font.
 ///
-/// The foundational profile owns CFF INDEX, DICT, charset, StandardEncoding, Type 2 subroutine,
-/// hint-mask, line, and cubic-curve semantics. It rejects CID-keyed, CFF2, ExpertEncoding, custom
-/// encoding, non-default FontMatrix, and escaped Type 2 operators as typed unsupported outcomes.
+/// The foundational profile owns CFF INDEX, DICT, charset, StandardEncoding, bounded custom
+/// Encoding validation, Type 2 subroutine, hint-mask, line, and cubic-curve semantics. It rejects
+/// CID-keyed, CFF2, ExpertEncoding, non-default FontMatrix, and escaped Type 2 operators as typed
+/// unsupported outcomes.
 pub fn parse_cff<C: FontCancellation + ?Sized>(
     bytes: &[u8],
     profile: FontProfile,
@@ -188,12 +189,6 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
             .item(0)
             .ok_or_else(|| self.error(FontErrorCode::InvalidCff, None))?;
         let top = self.parse_top_dict(top_range)?;
-        if top.encoding_offset != 0 {
-            return Err(Stop::Unsupported(FontUnsupported::new(
-                FontUnsupportedKind::CffEncoding,
-                None,
-            )));
-        }
         let charstrings = self.parse_index(
             top.charstrings_offset
                 .ok_or_else(|| self.error(FontErrorCode::InvalidCff, None))?,
@@ -212,6 +207,14 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
         }
 
         let charset = self.parse_charset(top.charset_offset, charstrings.len())?;
+        self.validate_encoding(top.encoding_offset, charstrings.len(), &charset)?;
+        if top.encoding_offset > 1 {
+            self.stats.tables_visited = self
+                .stats
+                .tables_visited
+                .checked_add(1)
+                .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+        }
         let (private, local_subrs) = self.parse_private(top.private_range)?;
         let glyph_data_bytes = charstrings.items.iter().try_fold(0_u64, |total, range| {
             total.checked_add(u64::try_from(range.len()).ok()?)
@@ -592,6 +595,116 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
         Ok(sids)
     }
 
+    fn validate_encoding(&self, offset: usize, glyph_count: usize, charset: &[u16]) -> Result<()> {
+        if offset == 0 {
+            return Ok(());
+        }
+        if offset == 1 {
+            return Err(Stop::Unsupported(FontUnsupported::new(
+                FontUnsupportedKind::CffEncoding,
+                None,
+            )));
+        }
+        let format = *self.bytes.get(offset).ok_or_else(|| self.invalid_cff())?;
+        let base_format = format & 0x7f;
+        if base_format > 1 {
+            return Err(self.invalid_cff());
+        }
+        let mut position = offset
+            .checked_add(1)
+            .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+        let mut seen = [false; 256];
+        seen[0] = true;
+        let mut encoded_glyphs = 1_usize;
+        match base_format {
+            0 => {
+                let count =
+                    usize::from(*self.bytes.get(position).ok_or_else(|| self.invalid_cff())?);
+                position = position
+                    .checked_add(1)
+                    .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                if count > glyph_count.saturating_sub(1) {
+                    return Err(self.invalid_cff());
+                }
+                for code in self
+                    .bytes
+                    .get(
+                        position
+                            ..position
+                                .checked_add(count)
+                                .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?,
+                    )
+                    .ok_or_else(|| self.invalid_cff())?
+                {
+                    if seen[usize::from(*code)] {
+                        return Err(self.invalid_cff());
+                    }
+                    seen[usize::from(*code)] = true;
+                    encoded_glyphs = encoded_glyphs
+                        .checked_add(1)
+                        .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                }
+                position = position
+                    .checked_add(count)
+                    .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+            }
+            1 => {
+                let range_count =
+                    usize::from(*self.bytes.get(position).ok_or_else(|| self.invalid_cff())?);
+                position = position
+                    .checked_add(1)
+                    .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                for _ in 0..range_count {
+                    let first = *self.bytes.get(position).ok_or_else(|| self.invalid_cff())?;
+                    let left = *self
+                        .bytes
+                        .get(position + 1)
+                        .ok_or_else(|| self.invalid_cff())?;
+                    position = position
+                        .checked_add(2)
+                        .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                    let last = first.checked_add(left).ok_or_else(|| self.invalid_cff())?;
+                    let range_glyphs = usize::from(left) + 1;
+                    encoded_glyphs = encoded_glyphs
+                        .checked_add(range_glyphs)
+                        .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                    if encoded_glyphs > glyph_count {
+                        return Err(self.invalid_cff());
+                    }
+                    for code in first..=last {
+                        if seen[usize::from(code)] {
+                            return Err(self.invalid_cff());
+                        }
+                        seen[usize::from(code)] = true;
+                    }
+                }
+            }
+            _ => return Err(self.invalid_cff()),
+        }
+        if encoded_glyphs > glyph_count {
+            return Err(self.invalid_cff());
+        }
+        if format & 0x80 != 0 {
+            let supplement_count =
+                usize::from(*self.bytes.get(position).ok_or_else(|| self.invalid_cff())?);
+            position = position
+                .checked_add(1)
+                .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+            for _ in 0..supplement_count {
+                let code = *self.bytes.get(position).ok_or_else(|| self.invalid_cff())?;
+                let sid = read_u16(self.bytes, position + 1).ok_or_else(|| self.invalid_cff())?;
+                position = position
+                    .checked_add(3)
+                    .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                if seen[usize::from(code)] || !charset.contains(&sid) {
+                    return Err(self.invalid_cff());
+                }
+                seen[usize::from(code)] = true;
+            }
+        }
+        Ok(())
+    }
+
     fn build_glyph_names(&self, charset: &[u16], strings: &Index) -> Result<Vec<Option<Box<str>>>> {
         let mut names = Vec::new();
         names
@@ -711,13 +824,13 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
                 }
                 11 => return Ok(Flow::Return),
                 12 => {
-                    let _escaped = *data
+                    let escaped = *data
                         .get(position)
                         .ok_or_else(|| self.invalid_charstring(glyph_id))?;
-                    return Err(Stop::Unsupported(FontUnsupported::new(
-                        FontUnsupportedKind::CffCharStringOperator,
-                        Some(glyph_id),
-                    )));
+                    position = position
+                        .checked_add(1)
+                        .ok_or_else(|| self.numeric(glyph_id))?;
+                    self.execute_escaped_operator(escaped, context, segments, glyph_id)?;
                 }
                 14 => {
                     if context.width.is_none() && context.stack.len() == 1 {
@@ -1010,6 +1123,89 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
         Ok(())
     }
 
+    fn execute_escaped_operator(
+        &mut self,
+        operator: u8,
+        context: &mut GlyphContext,
+        segments: &mut Vec<OutlineSegment>,
+        glyph_id: u16,
+    ) -> Result<()> {
+        let values = std::mem::take(&mut context.stack);
+        match operator {
+            34 if values.len() == 7 => {
+                let negative_dy = values[2]
+                    .checked_neg()
+                    .ok_or_else(|| self.numeric(glyph_id))?;
+                self.curve_by(
+                    &[values[0], 0, values[1], values[2], values[3], 0],
+                    context,
+                    segments,
+                    glyph_id,
+                )?;
+                self.curve_by(
+                    &[values[4], 0, values[5], negative_dy, values[6], 0],
+                    context,
+                    segments,
+                    glyph_id,
+                )
+            }
+            35 if values.len() == 13 => {
+                self.curve_by(&values[..6], context, segments, glyph_id)?;
+                self.curve_by(&values[6..12], context, segments, glyph_id)
+            }
+            36 if values.len() == 9 => {
+                let dy6 = values[1]
+                    .checked_add(values[3])
+                    .and_then(|value| value.checked_add(values[7]))
+                    .and_then(i64::checked_neg)
+                    .ok_or_else(|| self.numeric(glyph_id))?;
+                self.curve_by(
+                    &[values[0], values[1], values[2], values[3], values[4], 0],
+                    context,
+                    segments,
+                    glyph_id,
+                )?;
+                self.curve_by(
+                    &[values[5], 0, values[6], values[7], values[8], dy6],
+                    context,
+                    segments,
+                    glyph_id,
+                )
+            }
+            37 if values.len() == 11 => {
+                let dx = checked_sum(&[values[0], values[2], values[4], values[6], values[8]])
+                    .ok_or_else(|| self.numeric(glyph_id))?;
+                let dy = checked_sum(&[values[1], values[3], values[5], values[7], values[9]])
+                    .ok_or_else(|| self.numeric(glyph_id))?;
+                let (dx6, dy6) = if dx.checked_abs().ok_or_else(|| self.numeric(glyph_id))?
+                    > dy.checked_abs().ok_or_else(|| self.numeric(glyph_id))?
+                {
+                    (
+                        values[10],
+                        dy.checked_neg().ok_or_else(|| self.numeric(glyph_id))?,
+                    )
+                } else {
+                    (
+                        dx.checked_neg().ok_or_else(|| self.numeric(glyph_id))?,
+                        values[10],
+                    )
+                };
+                self.curve_by(&values[..6], context, segments, glyph_id)?;
+                self.curve_by(
+                    &[values[6], values[7], values[8], values[9], dx6, dy6],
+                    context,
+                    segments,
+                    glyph_id,
+                )
+            }
+            34..=37 => Err(self.invalid_charstring(glyph_id)),
+            _ => Err(Stop::Unsupported(FontUnsupported::new(
+                FontUnsupportedKind::CffCharStringOperator,
+                Some(glyph_id),
+            ))),
+        }
+    }
+
     fn move_by(
         &mut self,
         dx: i64,
@@ -1297,6 +1493,12 @@ fn fixed_to_u16(value: i64) -> Option<u16> {
     }
     let rounded = value.checked_add(FIXED_ONE / 2)? / FIXED_ONE;
     u16::try_from(rounded).ok()
+}
+
+fn checked_sum(values: &[i64]) -> Option<i64> {
+    values
+        .iter()
+        .try_fold(0_i64, |total, value| total.checked_add(*value))
 }
 
 fn fixed_point(x: i64, y: i64) -> Option<FontPoint> {

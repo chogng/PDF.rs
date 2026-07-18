@@ -12,7 +12,7 @@ pub enum FontProfile {
     SimpleTrueTypeWinAnsiV1,
     /// TrueType outlines addressed directly by CID-to-GID identity mapping.
     CidFontType2IdentityV1,
-    /// Standalone CFF1 Type 2 outlines with the standard non-CID encoding model.
+    /// Standalone non-CID CFF1 Type 2 outlines with standard or bounded custom Encoding data.
     SimpleType1CStandardV1,
 }
 

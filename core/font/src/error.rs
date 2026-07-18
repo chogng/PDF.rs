@@ -353,7 +353,7 @@ pub enum FontUnsupportedKind {
     ProfileMismatch,
     /// A CFF CID-keyed font is outside the foundational Type1C profile.
     CffCidFont,
-    /// A CFF ExpertEncoding or custom Encoding is outside the foundational profile.
+    /// A predefined CFF ExpertEncoding or Expert charset is outside the foundational profile.
     CffEncoding,
     /// A non-default CFF FontMatrix is outside the foundational profile.
     CffFontMatrix,

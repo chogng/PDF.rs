@@ -49,7 +49,7 @@ fn type2_integer(bytes: &mut Vec<u8>, value: i16) {
     }
 }
 
-fn fixture() -> Vec<u8> {
+fn fixture_with_encoding(encoding: Option<&[u8]>) -> Vec<u8> {
     let name = index(&[b"TestCff".to_vec()]);
     let strings = index(&[]);
 
@@ -76,7 +76,11 @@ fn fixture() -> Vec<u8> {
     type2_integer(&mut aacute, 0);
     aacute.push(21);
     type2_integer(&mut aacute, -107);
-    aacute.extend_from_slice(&[10, 14]);
+    aacute.push(10);
+    for value in [10, 5, 10, 5, 10, 10, 10, 5, 10] {
+        type2_integer(&mut aacute, value);
+    }
+    aacute.extend_from_slice(&[12, 36, 14]);
     let charstrings = index(&[notdef, letter_a, aacute]);
 
     let mut local_subr = Vec::new();
@@ -93,12 +97,13 @@ fn fixture() -> Vec<u8> {
     private.push(19);
     assert_eq!(private.len(), 9);
 
-    let top_len = 23_usize;
+    let top_len = if encoding.is_some() { 29 } else { 23 };
     let top_index_len = 2 + 1 + 2 + top_len;
     let prefix = 4 + name.len() + top_index_len + strings.len() + global_subrs.len();
     let charset_offset = prefix;
     let charstrings_offset = charset_offset + charset.len();
     let private_offset = charstrings_offset + charstrings.len();
+    let encoding_offset = private_offset + private.len() + local_subrs.len();
 
     let mut top = Vec::new();
     dict_i32(&mut top, charset_offset);
@@ -108,6 +113,10 @@ fn fixture() -> Vec<u8> {
     dict_i32(&mut top, private.len());
     dict_i32(&mut top, private_offset);
     top.push(18);
+    if encoding.is_some() {
+        dict_i32(&mut top, encoding_offset);
+        top.push(16);
+    }
     assert_eq!(top.len(), top_len);
 
     let mut bytes = vec![1, 0, 4, 4];
@@ -119,7 +128,14 @@ fn fixture() -> Vec<u8> {
     bytes.extend_from_slice(&charstrings);
     bytes.extend_from_slice(&private);
     bytes.extend_from_slice(&local_subrs);
+    if let Some(encoding) = encoding {
+        bytes.extend_from_slice(encoding);
+    }
     bytes
+}
+
+fn fixture() -> Vec<u8> {
+    fixture_with_encoding(None)
 }
 
 #[test]
@@ -196,5 +212,49 @@ fn malformed_index_and_profile_mismatch_are_typed() {
     match malformed.into_outcome() {
         CffParseOutcome::Failed(error) => assert_eq!(error.code(), FontErrorCode::InvalidCff),
         outcome => panic!("truncated INDEX must fail, got {outcome:?}"),
+    }
+}
+
+#[test]
+fn bounded_custom_encoding_formats_are_validated_without_overriding_pdf_name_mapping() {
+    for encoding in [
+        vec![0, 2, b'A', 0xe1],
+        vec![1, 2, b'A', 0, 0xe1, 0],
+        vec![0x80, 1, b'A', 1, 0xe1, 0, 200],
+    ] {
+        let bytes = fixture_with_encoding(Some(&encoding));
+        let outcome = parse_cff(
+            &bytes,
+            FontProfile::SimpleType1CStandardV1,
+            FontLimits::default(),
+            &NeverCancelled,
+        )
+        .into_outcome();
+        let CffParseOutcome::Ready(font) = outcome else {
+            panic!("bounded custom Encoding must publish: {outcome:?}");
+        };
+        assert_eq!(font.glyph_id_for_standard_code(b'A').unwrap().get(), 1);
+        assert_eq!(font.glyph_id_for_winansi_code(0xe1).unwrap().get(), 2);
+    }
+
+    for malformed in [
+        vec![0, 3, b'A', b'B'],
+        vec![0, 2, b'A', b'A'],
+        vec![1, 1, 0xff, 1],
+        vec![0x80, 1, b'A', 1, b'A', 0, 34],
+        vec![0x80, 1, b'A', 1, b'B', 0xff, 0xff],
+    ] {
+        let bytes = fixture_with_encoding(Some(&malformed));
+        match parse_cff(
+            &bytes,
+            FontProfile::SimpleType1CStandardV1,
+            FontLimits::default(),
+            &NeverCancelled,
+        )
+        .into_outcome()
+        {
+            CffParseOutcome::Failed(error) => assert_eq!(error.code(), FontErrorCode::InvalidCff),
+            outcome => panic!("malformed custom Encoding must fail: {outcome:?}"),
+        }
     }
 }
