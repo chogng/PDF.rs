@@ -1,0 +1,16 @@
+[package]
+name = "pdf-rs-viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-content = { path = "../../core/content" }
+pdf-rs-document = { path = "../../core/document" }
+pdf-rs-raster = { path = "../../core/raster" }
+pdf-rs-scene = { path = "../../core/scene" }
+pdf-rs-syntax = { path = "../../core/syntax" }
+pdf-rs-xref = { path = "../../core/xref" }
+pdf-rs-object = { path = "../../core/object" }

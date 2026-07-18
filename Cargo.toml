@@ -13,6 +13,8 @@ members = [
     "runtime/session",
     "runtime/surface",
     "runtime/tile-cache",
+    "runtime/viewer",
+    "platform/electron-bridge",
     "tools/*",
 ]
 

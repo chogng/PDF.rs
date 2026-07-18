@@ -1,0 +1,16 @@
+[package]
+name = "pdf-rs-electron-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "pdf-rs-electron-bridge"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+pdf-rs-viewer = { path = "../../runtime/viewer" }

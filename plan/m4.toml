@@ -15,6 +15,8 @@ principles = [
   "Make viewport replacement, cancellation, backpressure, Surface release, session close, and Worker restart explicit deterministic state transitions.",
   "Publish only complete Native surfaces; unsupported, rejected, cancelled, stale, source-changed, and resource-limited work never becomes a partial display result.",
   "Keep PDFium and every other external PDF engine outside product dependencies, runtime recovery, IPC, desktop packaging, and user-visible pixels.",
+  "Use a local-development Electron shell for the selected M4 reading target while keeping PDF parsing, Scene production, and raster work behind a reusable Rust interface.",
+  "Retain the authenticated macOS native-worker and AppKit-facing interfaces as a future fully Rust UI path; signing and packaged App Sandbox evidence do not block the selected Electron development target.",
   "Interpret the three logical lanes as dependency and review limits; M4 and M5 may proceed in parallel only after M4-01 freezes their shared contract.",
 ]
 
@@ -32,6 +34,7 @@ excluded_scope = [
   "GPU rendering, WebGPU, native shared textures, platform color management, system-font fallback, and graphics capabilities outside the registered M3 subset.",
   "Selection, copy, search, links, annotations, forms, saving, accessibility, advanced text, and the complete M6 release-r0-v1 experience.",
   "Persistent cross-user cache, distributed rendering, unbounded work stealing, speculative network access, and arbitrary filesystem access by the engine worker.",
+  "Electron application packaging, notarization, signing, auto-update, and release distribution for the selected local-development target.",
   "DEFAULT or STABLE promotion, broad PDF compatibility, and any product fallback to an external PDF engine.",
 ]
 
@@ -177,6 +180,7 @@ lane = "desktop"
 status = "in_progress"
 started_at = 2026-07-17
 depends_on = ["M4-01", "M4-07", "M4-08"]
+blocking_selected_electron_target = false
 outcome = "An authenticated length-bounded desktop transport starts an isolated Native worker, serves immutable source bytes through the canonical Host-owned Range bridge, transfers shared-memory capabilities, and contains disconnects and faults."
 selected_target_record = "platform/desktop/macos/sandbox-target.toml"
 progress = [
@@ -185,6 +189,7 @@ progress = [
   "A repository-owned macOS-only wrapper now gives the gated product launch path Darwin default-close spawn file actions, fixed argv and minimal environment, deterministic signal state, cached wait ownership, and a real inherited-FD allowlist probe with exact child-FD enumeration and challenged TMPDIR/signal state while the safe desktop crate retains forbid(unsafe_code); desktop launch identities are consumed before attempts and unresolved post-spawn or Drop cleanup aborts instead of discarding child ownership. This is FD hygiene, not sandbox evidence.",
   "The unsigned host-native package prerequisite now builds a fresh external release graph with --no-default-features, rejects feature/dependency/rustflags/fingerprint-directory drift, compile-fail checks fixture-only launch APIs, requires the worker's mutually exclusive no-default marker while rejecting its fixture marker, associates the unique worker fingerprint by Cargo filename suffix, and records matching hashed/top-level SHA-256 bytes. This does not prove adversarial content provenance and is not signed, universal, or packaged-app evidence.",
   "A fail-closed macOS package verifier now requires an absent-by-default external approval record, exact four-file/four-directory PDF.rs.app inventory, fixed Host/helper identifiers and paths, ordered signing-authority equality, all-architecture codesign verification, exact per-slice entitlements and dependencies, exact arm64/x86_64 slices, approved Worker/package SHA-256 anchors, and a final package snapshot recheck. This is verification capability only; no signed universal package or release approval record is present.",
+  "The native macOS IPC and App Sandbox target is retained for a future Electron-free Rust UI, but its external signing/package evidence is no longer a dependency of the selected M4 Electron local-development vertical slice.",
 ]
 remaining = [
   "A signed parent app and embedded signed helper must supply real App Sandbox inheritance evidence; the current unsigned repository workspace cannot acquire the product gate.",
@@ -203,18 +208,25 @@ acceptance = [
 
 [[work_item]]
 id = "M4-10"
-title = "Desktop Native-only reading vertical slice"
+title = "Electron UI with PDF.rs Native reading vertical slice"
 lane = "desktop"
-status = "planned"
-depends_on = ["M4-09"]
-outcome = "One explicitly selected desktop target completes local open, display, scroll, zoom, rotation, resize, release, close, and shutdown against the isolated Native worker."
-selected_target_record = "platform/desktop/macos/sandbox-target.toml"
+status = "in_progress"
+started_at = 2026-07-18
+depends_on = ["M4-08"]
+outcome = "One local-development Electron target completes local open, PDF.rs-owned parsing and raster, first-page display, zoom, resize, close, and shutdown through a narrow process bridge."
+selected_target_record = "platform/electron/electron-target.toml"
+progress = [
+  "A UI-neutral pdf-rs-viewer Rust API now strictly opens an immutable source, builds its page index, materializes and interprets requested pages, and publishes bounded top-down RGBA8 pixels through the PDF.rs Reference renderer.",
+  "A persistent length-bounded pdf-rs-electron-bridge stdio adapter now owns NativeDocument instances and exposes OPEN, RENDER, CLOSE, and SHUTDOWN without putting PDF parsing or raster work into Electron.",
+  "The registered valid-mixed PDF has real proof-backed open-to-pixel tests, including non-white content evidence and page/output bound rejection.",
+]
 acceptance = [
   "The selected M4 desktop OS, UI mechanism, IPC mechanism, sandbox boundary, and shared-memory format are recorded before implementation evidence is accepted.",
-  "The UI process contains no PDF parser, Scene builder, raster backend, or external PDF engine and consumes only generated protocol events and validated Surface handles.",
-  "A deterministic host controller displays only the newest generation, releases every stale or replaced Surface, and exposes structured unsupported and resource outcomes.",
-  "Integration tests cover initial open, first preview, first full viewport, continuous scroll, zoom, rotation, resize, rapid generation replacement, unsupported page, worker disconnect, restart, and clean shutdown.",
-  "Normal close, repeated close, crash, and host exit release or reclaim every Surface and leave zero Worker/session resources.",
+  "Electron main owns native file selection and bridge lifetime; preload exposes only open, render, close, and status methods; the sandboxed renderer owns presentation only.",
+  "The Electron processes contain no PDF parser, Scene builder, raster backend, Chromium PDF plugin, PDF.js, PDFium, MuPDF, or other external PDF engine.",
+  "A deterministic host controller displays only the newest render result and exposes structured unsupported, document, source, and resource outcomes.",
+  "Local integration evidence covers initial open, real first-page pixels, zoom replacement, resize replacement, unsupported input, close, bridge exit, and clean application shutdown.",
+  "The Electron project runs directly from source; package, signature, notarization, and release-distribution evidence are intentionally outside this selected target.",
 ]
 
 [[work_item]]

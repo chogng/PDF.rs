@@ -139,6 +139,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-electron-bridge"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-viewer",
+]
+
+[[package]]
 name = "pdf-rs-engine"
 version = "0.1.0"
 dependencies = [
@@ -297,6 +304,20 @@ dependencies = [
  "pdf-rs-policy",
  "pdf-rs-scene",
  "pdf-rs-syntax",
+]
+
+[[package]]
+name = "pdf-rs-viewer"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-content",
+ "pdf-rs-document",
+ "pdf-rs-object",
+ "pdf-rs-raster",
+ "pdf-rs-scene",
+ "pdf-rs-syntax",
+ "pdf-rs-xref",
 ]
 
 [[package]]

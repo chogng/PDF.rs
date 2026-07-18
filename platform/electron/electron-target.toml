@@ -1,0 +1,58 @@
+schema = 1
+target_id = "m4-electron-local-preview-v1"
+selected = true
+status = "in_progress"
+
+[platform]
+os = "macos"
+runtime = "electron"
+distribution = "local-development-only"
+package_required = false
+signing_required = false
+notarization_required = false
+
+[ownership]
+electron_main = [
+  "native file dialog",
+  "BrowserWindow lifecycle",
+  "Rust bridge process lifecycle",
+  "bounded request correlation",
+]
+electron_preload = [
+  "narrow context-isolated open/render/close/status bridge",
+]
+electron_renderer = [
+  "toolbar interaction",
+  "status presentation",
+  "Canvas RGBA presentation",
+]
+rust = [
+  "immutable PDF source ownership",
+  "strict document open",
+  "page index and materialization",
+  "content interpretation and Scene production",
+  "Native raster and pixel publication",
+]
+
+[security]
+context_isolation = true
+renderer_sandbox = true
+node_integration = false
+remote_module = false
+renderer_filesystem_access = false
+renderer_process_access = false
+
+[bridge]
+transport = "length-bounded persistent stdio"
+protocol = "platform/electron-bridge/PROTOCOL.md"
+pixel_format = "top-down straight-alpha sRGB RGBA8"
+methods = ["open", "render", "close", "shutdown"]
+
+[purity]
+native_engine = "PDF.rs"
+forbidden = ["PDFium", "PDF.js", "MuPDF", "Chromium PDF plugin", "external PDF service"]
+
+[retained_future_target]
+record = "platform/desktop/macos/sandbox-target.toml"
+purpose = "authenticated native worker and future Electron-free Rust UI"
+blocks_selected_target = false
