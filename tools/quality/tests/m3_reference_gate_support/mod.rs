@@ -936,6 +936,8 @@ fn make_vm(
             ResumeCheckpoint::new(ids.base + 7_105),
             ResumeCheckpoint::new(ids.base + 7_106),
             ResumeCheckpoint::new(ids.base + 7_107),
+            ResumeCheckpoint::new(ids.base + 7_108),
+            ResumeCheckpoint::new(ids.base + 7_109),
             RequestPriority::FirstViewportResource,
         ),
         font_resource_limits(contract),

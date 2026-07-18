@@ -140,7 +140,9 @@ fn standalone_cff_publishes_named_line_and_cubic_glyphs() {
     assert_eq!(font.units_per_em(), 1_000);
     assert_eq!(font.glyph_id_for_name("A").unwrap().get(), 1);
     assert_eq!(font.glyph_id_for_standard_code(b'A').unwrap().get(), 1);
+    assert_eq!(font.glyph_id_for_winansi_code(b'A').unwrap().get(), 1);
     assert_eq!(font.glyph_id_for_name("aacute").unwrap().get(), 2);
+    assert_eq!(font.glyph_id_for_winansi_code(0xe1).unwrap().get(), 2);
     assert_eq!(
         font.advance_width(font.glyph_id_for_name("A").unwrap()),
         Some(500)

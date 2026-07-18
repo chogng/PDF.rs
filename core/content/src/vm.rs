@@ -2594,9 +2594,7 @@ fn seal_text_items(
     runtime.admit_text(bytes, adjustments, source)?;
 
     match input {
-        TextItemsInput::String(value) => {
-            validate_winansi_text(value.bytes(), snapshot, byte_source, cancellation, source)?;
-        }
+        TextItemsInput::String(_) => {}
         TextItemsInput::Array(values) => {
             for (index, value) in values.iter().enumerate() {
                 if index.is_multiple_of(256) {
@@ -2604,13 +2602,7 @@ fn seal_text_items(
                         .map_err(TextPlanningTerminal::Failed)?;
                 }
                 match value.value() {
-                    ContentOperand::String(value) => validate_winansi_text(
-                        value.bytes(),
-                        snapshot,
-                        byte_source,
-                        cancellation,
-                        source,
-                    )?,
+                    ContentOperand::String(_) => {}
                     ContentOperand::Integer(_) | ContentOperand::Real(_) => {
                         parse_number(value, source)?;
                     }
@@ -2743,31 +2735,6 @@ fn push_text_string_item(
     retained
         .checked_add(copied_retained)
         .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source).into())
-}
-
-#[allow(
-    clippy::result_large_err,
-    reason = "text validation preserves structured unsupported and VM guard failures"
-)]
-fn validate_winansi_text(
-    bytes: &[u8],
-    snapshot: SourceSnapshot,
-    byte_source: &dyn ByteSource,
-    cancellation: &dyn DocumentCancellation,
-    source: ContentOperatorSource,
-) -> Result<(), TextPlanningTerminal> {
-    for chunk in bytes.chunks(256) {
-        runtime_guard(snapshot, byte_source, cancellation, Some(source))
-            .map_err(TextPlanningTerminal::Failed)?;
-        if !chunk.iter().all(|byte| *byte >= 0x20) {
-            return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
-                ContentUnsupportedKind::TextEncoding,
-                source,
-            )));
-        }
-    }
-    runtime_guard(snapshot, byte_source, cancellation, Some(source))
-        .map_err(TextPlanningTerminal::Failed)
 }
 
 #[allow(
@@ -5329,8 +5296,8 @@ impl TextExecutor {
             .map_err(ContentVmFailure::Vm)?;
 
         let mut segment_count = 0_u64;
-        let mut planned_codes = [None::<u16>; 224];
-        let mut planned_outlines = [None::<(u16, u64)>; 224];
+        let mut planned_codes = [None::<u16>; 256];
+        let mut planned_outlines = [None::<(u16, u64)>; 256];
         let mut planned_outline_count = 0_usize;
         let mut probed = 0_u64;
         for item in items {
@@ -5340,9 +5307,7 @@ impl TextExecutor {
             };
             for &byte in bytes {
                 guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
-                let code_index = usize::from(byte.checked_sub(0x20).ok_or_else(|| {
-                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
-                })?);
+                let code_index = usize::from(byte);
                 if planned_codes[code_index].is_some() {
                     continue;
                 }
@@ -5396,7 +5361,7 @@ impl TextExecutor {
         self.preflight_glyph_candidate(runtime, 0, glyph_retained, source)
             .map_err(ContentVmFailure::Vm)?;
         let mut outline_retained = 0_u64;
-        let mut outline_cache: [Option<(u16, GlyphOutline)>; 224] = std::array::from_fn(|_| None);
+        let mut outline_cache: [Option<(u16, GlyphOutline)>; 256] = std::array::from_fn(|_| None);
         let mut outline_cache_len = 0_usize;
         let mut probed = 0_u64;
         for item in items {
@@ -5411,12 +5376,7 @@ impl TextExecutor {
                             cancellation,
                             source,
                         )?;
-                        let code_index = usize::from(byte.checked_sub(0x20).ok_or_else(|| {
-                            ContentVmFailure::Vm(vm_error(
-                                ContentVmErrorCode::InternalState,
-                                source,
-                            ))
-                        })?);
+                        let code_index = usize::from(byte);
                         let glyph_id = planned_codes[code_index].ok_or_else(|| {
                             ContentVmFailure::Vm(vm_error(
                                 ContentVmErrorCode::InternalState,
@@ -5486,7 +5446,7 @@ impl TextExecutor {
                         let transform =
                             self.glyph_transform(ctm).map_err(ContentVmFailure::Scene)?;
                         glyphs.push(GlyphUse::new(scene_outline, transform, u32::from(byte)));
-                        let width = font.pdf_width_for_winansi(byte).ok_or_else(|| {
+                        let width = font.pdf_width_for_code(byte).ok_or_else(|| {
                             ContentVmFailure::Vm(vm_error(
                                 ContentVmErrorCode::InternalState,
                                 source,

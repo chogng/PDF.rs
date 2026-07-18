@@ -871,6 +871,8 @@ fn render_strict_page(
             ResumeCheckpoint::new(ids.base + 505),
             ResumeCheckpoint::new(ids.base + 506),
             ResumeCheckpoint::new(ids.base + 507),
+            ResumeCheckpoint::new(ids.base + 508),
+            ResumeCheckpoint::new(ids.base + 509),
             RequestPriority::FirstViewportResource,
         ),
         FontResourceLimits::default(),
@@ -1111,7 +1113,7 @@ fn vm_pending_job(checkpoint: ResumeCheckpoint, jobs: RenderJobs) -> JobId {
     let local = checkpoint.value().saturating_sub(jobs.base);
     if (401..=403).contains(&local) {
         jobs.image
-    } else if (501..=507).contains(&local) {
+    } else if (501..=509).contains(&local) {
         jobs.font
     } else if (9_001..=9_003).contains(&local) {
         jobs.form

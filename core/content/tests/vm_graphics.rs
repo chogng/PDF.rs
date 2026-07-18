@@ -577,6 +577,8 @@ fn font_context(seed: u64) -> FontResourceJobContext {
         ResumeCheckpoint::new(seed + 5),
         ResumeCheckpoint::new(seed + 6),
         ResumeCheckpoint::new(seed + 7),
+        ResumeCheckpoint::new(seed + 8),
+        ResumeCheckpoint::new(seed + 9),
         RequestPriority::VisiblePage,
     )
 }
@@ -3181,15 +3183,41 @@ fn td_next_line_quotes_empty_adjustments_and_winansi_boundaries_are_exact() {
     let mut control = b"BT /F0 10 Tf (".to_vec();
     control.push(0x1f);
     control.extend_from_slice(b") Tj ET");
-    let (mut job, store) = default_font_job(&control, 0x93);
-    match job.poll(&store, &DocumentNeverCancelled) {
-        ContentVmPoll::Unsupported(error) => {
-            assert_eq!(error.kind(), ContentUnsupportedKind::TextEncoding)
-        }
-        outcome => panic!("control byte must be unsupported before lookup: {outcome:?}"),
-    }
-    assert_eq!(job.font_stats().lookups(), 0);
-    assert_eq!(job.font_stats().acquisitions(), 0);
+    let control_font = format!(
+        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
+         /FirstChar 0 /LastChar 255 /Widths [{}] /FontDescriptor 6 0 R >>",
+        font_widths_for_range(0, 255, 777)
+    );
+    let control_objects = vec![
+        (5, indirect_object(5, control_font.as_bytes())),
+        (
+            6,
+            indirect_object(6, b"<< /Type /FontDescriptor /FontFile2 7 0 R >>"),
+        ),
+        (
+            7,
+            font_program_object(7, &font_support::foundational_font()),
+        ),
+    ];
+    let (mut job, store) = font_job_with_limits(
+        &control,
+        b"<< /Font << /F0 5 0 R >> >>",
+        &control_objects,
+        0x93,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("font-declared control code must render: {outcome:?}"),
+    };
+    let GraphicsCommand::DrawGlyphRun(run) =
+        page.scene().graphics().unwrap().commands()[0].command()
+    else {
+        panic!("font-declared control code emits one glyph run")
+    };
+    assert_eq!(run.glyphs()[0].character_code(), 0x1f);
 
     let mut extended = b"BT /F0 10 Tf (".to_vec();
     extended.push(0x80);
@@ -3223,13 +3251,13 @@ fn font_payload_pending_does_not_replan_lookup_or_publish_partial_scene() {
     let source = BlockPayloadAfter {
         complete: &store,
         missing: &missing,
-        checkpoint: ResumeCheckpoint::new(32_008),
+        checkpoint: ResumeCheckpoint::new(32_010),
         admitted_payload_polls: 0,
         payload_polls: AtomicUsize::new(0),
     };
     match job.poll(&source, &DocumentNeverCancelled) {
         ContentVmPoll::Pending { checkpoint, .. } => {
-            assert_eq!(checkpoint, ResumeCheckpoint::new(32_008));
+            assert_eq!(checkpoint, ResumeCheckpoint::new(32_010));
         }
         outcome => panic!("font payload must suspend: {outcome:?}"),
     }
@@ -3261,14 +3289,18 @@ fn font_payload_pending_does_not_replan_lookup_or_publish_partial_scene() {
 fn every_font_checkpoint_resumes_the_same_plan_lookup_and_terminal_arc() {
     let mut program = font_support::foundational_font();
     program.resize(5_000, 0);
-    for (offset, checkpoint_value) in (32_002_u64..=32_008).enumerate() {
+    for (offset, checkpoint_value) in
+        [32_002_u64, 32_003, 32_006, 32_007, 32_008, 32_009, 32_010]
+            .into_iter()
+            .enumerate()
+    {
         let mut objects = embedded_font_objects(5, 6, 7, &program, 777);
         let resumes_ready = match checkpoint_value {
             32_003 => {
                 objects = vec![(5, font_program_object(5, &vec![0; 5_000]))];
                 false
             }
-            32_005 => {
+            32_007 => {
                 let descriptor = objects.iter_mut().find(|(number, _)| *number == 6).unwrap();
                 descriptor.1 = font_program_object(6, &vec![0; 5_000]);
                 false
@@ -3804,7 +3836,7 @@ fn combined_text_plan_font_use_and_saved_parameter_stack_retention_is_exact() {
     let blocker = BlockPayloadAfter {
         complete: &store,
         missing: &missing,
-        checkpoint: ResumeCheckpoint::new(32_008),
+        checkpoint: ResumeCheckpoint::new(32_010),
         admitted_payload_polls: 0,
         payload_polls: AtomicUsize::new(0),
     };
@@ -4143,7 +4175,7 @@ fn huge_adjustment_only_tj_guards_execution_and_prioritizes_source_change() {
         let blocker = BlockPayloadAfter {
             complete: &store,
             missing: &missing,
-            checkpoint: ResumeCheckpoint::new(32_008),
+            checkpoint: ResumeCheckpoint::new(32_010),
             admitted_payload_polls: 0,
             payload_polls: AtomicUsize::new(0),
         };
@@ -4175,7 +4207,7 @@ fn huge_adjustment_only_tj_guards_execution_and_prioritizes_source_change() {
         let blocker = BlockPayloadAfter {
             complete: &store,
             missing: &missing,
-            checkpoint: ResumeCheckpoint::new(32_008),
+            checkpoint: ResumeCheckpoint::new(32_010),
             admitted_payload_polls: 0,
             payload_polls: AtomicUsize::new(0),
         };
@@ -4248,7 +4280,7 @@ fn huge_outline_guards_after_allocation_and_prioritizes_source_change() {
         let blocker = BlockPayloadAfter {
             complete: &store,
             missing: &missing,
-            checkpoint: ResumeCheckpoint::new(32_008),
+            checkpoint: ResumeCheckpoint::new(32_010),
             admitted_payload_polls: 0,
             payload_polls: AtomicUsize::new(0),
         };
@@ -4305,7 +4337,7 @@ fn huge_outline_guards_after_allocation_and_prioritizes_source_change() {
             let blocker = BlockPayloadAfter {
                 complete: &store,
                 missing: &missing,
-                checkpoint: ResumeCheckpoint::new(32_008),
+                checkpoint: ResumeCheckpoint::new(32_010),
                 admitted_payload_polls: 0,
                 payload_polls: AtomicUsize::new(0),
             };

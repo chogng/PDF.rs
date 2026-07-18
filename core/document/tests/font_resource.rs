@@ -450,6 +450,8 @@ fn font_context(seed: u64) -> FontResourceJobContext {
         ResumeCheckpoint::new(seed + 5),
         ResumeCheckpoint::new(seed + 6),
         ResumeCheckpoint::new(seed + 7),
+        ResumeCheckpoint::new(seed + 8),
+        ResumeCheckpoint::new(seed + 9),
         RequestPriority::VisiblePage,
     )
 }
@@ -810,6 +812,76 @@ fn type1c_fontfile3_acquisition_maps_standard_and_difference_glyph_names() {
 }
 
 #[test]
+fn indirect_winansi_type1_encoding_admits_all_simple_codes_and_retains_its_proof() {
+    let program = foundational_cff();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 /Encoding 5 0 R \
+         /FirstChar 0 /LastChar 255 /Widths [{}] /FontDescriptor 6 0 R >>",
+        widths(0, 255, 777)
+    );
+    let fixture = resource_fixture(
+        b"<< /Font << /F0 4 0 R >> >>",
+        vec![
+            (4, direct_object(4, font.as_bytes())),
+            (
+                5,
+                direct_object(
+                    5,
+                    b"<< /BaseEncoding /WinAnsiEncoding \
+                       /Differences [25 /A 65 /A 97 /aacute] >>",
+                ),
+            ),
+            (
+                6,
+                direct_object(6, b"<< /Type /FontDescriptor /FontFile3 7 0 R >>"),
+            ),
+            (7, stream_body(7, b"/Subtype /Type1C", &program)),
+        ],
+        8,
+        0xe5,
+    );
+    let prepared = prepare(&fixture, 18_601);
+    let context = font_context(18_641);
+    let missing = RangeStore::new(fixture.snapshot, Default::default()).unwrap();
+    let source = CheckpointMissingSource {
+        complete: &prepared.store,
+        missing: &missing,
+        blocked: context.encoding_envelope_checkpoint(),
+    };
+    let mut job = prepared
+        .authority
+        .acquire_font_resource(
+            lookup_font(&prepared),
+            context,
+            FontResourceLimits::default(),
+        )
+        .unwrap();
+    match job.poll(&source, &DocumentNeverCancelled) {
+        FontResourcePoll::Pending { checkpoint, .. } => {
+            assert_eq!(checkpoint, context.encoding_envelope_checkpoint())
+        }
+        other => panic!("indirect Encoding checkpoint must suspend: {other:?}"),
+    }
+    let ready = match job.poll(&prepared.store, &DocumentNeverCancelled) {
+        FontResourcePoll::Ready(font) => font,
+        other => panic!("indirect Encoding must resume to Ready: {other:?}"),
+    };
+
+    assert_eq!(
+        ready.encoding_object().map(|object| object.reference()),
+        Some(object_ref(5))
+    );
+    assert_eq!(ready.first_char(), 0);
+    assert_eq!(ready.last_char(), 255);
+    assert_eq!(ready.pdf_width_for_code(25), Some(600));
+    assert_eq!(ready.glyph_id_for_code(25).unwrap().get(), 1);
+    assert_eq!(ready.glyph_id_for_code(b'A').unwrap().get(), 1);
+    assert_eq!(ready.glyph_id_for_code(b'a').unwrap().get(), 2);
+    assert_eq!(ready.stats().objects(), 4);
+    assert_eq!(ready.stats().reference_edges(), 3);
+}
+
+#[test]
 fn complete_winansi_acquisition_retains_extended_pdf_widths_and_glyph_mapping() {
     let program = font_support::foundational_font();
     let font = format!(
@@ -976,20 +1048,6 @@ fn unsupported_pdf_and_truetype_capabilities_are_typed_before_publication() {
         acquire_unsupported(&prepared, 19_041).kind(),
         FontResourceUnsupportedKind::UnsupportedWidths
     );
-
-    let range_font = format!(
-        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
-         /FirstChar 31 /LastChar 126 /Widths [{}] /FontDescriptor 5 0 R >>",
-        widths(31, 126, 777)
-    );
-    let range_fixture = custom_font_fixture(range_font.as_bytes(), None, None, 0xd0);
-    let prepared = prepare(&range_fixture, 19_051);
-    let unsupported = acquire_unsupported(&prepared, 19_061);
-    assert_eq!(
-        unsupported.kind(),
-        FontResourceUnsupportedKind::UnsupportedCharacterRange
-    );
-    assert_eq!(unsupported.diagnostic_id(), "RPE-DOCUMENT-FONT-0014");
 
     let missing_program = custom_font_fixture(
         format!(
@@ -1446,6 +1504,8 @@ fn constructor_runtime_priority_and_failed_terminal_replay_are_stable() {
         ResumeCheckpoint::new(21_045),
         ResumeCheckpoint::new(21_046),
         ResumeCheckpoint::new(21_047),
+        ResumeCheckpoint::new(21_048),
+        ResumeCheckpoint::new(21_049),
         RequestPriority::VisiblePage,
     );
     let error = prepared
