@@ -48,11 +48,6 @@ const hello = (endpointRole) => ({
   max_transfer_slots: protocol.MAX_TRANSFER_SLOTS,
 });
 const hostHello = hello(protocol.EndpointRole.Host);
-const connection = protocol.negotiateHandshake(
-  hostHello,
-  hello(protocol.EndpointRole.Engine),
-);
-assert.notEqual(connection, undefined, "fixture handshake must negotiate");
 const supervisorIdentity = Object.freeze({
   worker: 1n,
   workerEpoch: 1n,
@@ -167,8 +162,35 @@ const loader = glue.createNativeWorkerEngineLoader(
   BrowserNativeWorkerLoader,
   runtime,
 );
-const worker = await loader.load(connection, supervisorIdentity);
-const seen = [];
+const worker = await loader.bootstrap(
+  encodeFrame(
+    { type: "Hello", payload: { hello: hostHello } },
+    { worker: supervisorIdentity.worker },
+  ),
+  supervisorIdentity,
+);
+const engineHello = decodeDispatch(worker.engineHello);
+assert.equal(engineHello?.event.type, "EngineHello");
+assert.equal(
+  engineHello.event.payload.hello.endpoint_role,
+  protocol.EndpointRole.Engine,
+);
+const connection = worker.connection;
+const ready = decodeDispatch(worker.accept(
+  encodeFrame(
+    {
+      type: "HelloAccept",
+      payload: {
+        negotiated_minor: connection.minor,
+        schema_hash: protocol.SCHEMA_HASH.slice(),
+      },
+    },
+    { worker: supervisorIdentity.worker },
+  ),
+));
+assert.equal(ready?.event.type, "Ready");
+assert.equal(worker.ready, true);
+const seen = [engineHello, ready];
 const dispatch = (command, correlation, transfers = []) => {
   const event = decodeDispatch(
     worker.dispatch(encodeFrame(command, correlation), transfers),
@@ -202,28 +224,6 @@ const pollUntil = (predicate, label) => {
     `Native Worker exceeded ${MAX_FIXTURE_NATIVE_TURNS} turns waiting for ${label}`,
   );
 };
-
-const engineHello = dispatch(
-  { type: "Hello", payload: { hello: hostHello } },
-  { worker: supervisorIdentity.worker },
-);
-assert.equal(engineHello?.event.type, "EngineHello");
-assert.equal(
-  engineHello.event.payload.hello.endpoint_role,
-  protocol.EndpointRole.Engine,
-);
-
-const ready = dispatch(
-  {
-    type: "HelloAccept",
-    payload: {
-      negotiated_minor: connection.minor,
-      schema_hash: protocol.SCHEMA_HASH.slice(),
-    },
-  },
-  { worker: supervisorIdentity.worker },
-);
-assert.equal(ready?.event.type, "Ready");
 
 const pdf = new TextEncoder().encode("%PDF-1.7\n");
 const source = {

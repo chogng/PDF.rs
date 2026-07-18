@@ -157,15 +157,80 @@ const hostHello = {
   max_message_bytes: protocolModule.MAX_MESSAGE_BYTES,
   max_transfer_slots: protocolModule.MAX_TRANSFER_SLOTS,
 };
-const engineHello = {
-  ...hostHello,
-  schema_hash: protocolModule.SCHEMA_HASH.slice(),
-  endpoint_role: protocolModule.EndpointRole.Engine,
+const supervisorIdentity = Object.freeze({
+  worker: 1n,
+  workerEpoch: 1n,
+  rendererEpoch: 1,
+});
+const unwrap = (result) => {
+  if (!result.ok) {
+    throw new Error("Native Worker smoke protocol codec failed");
+  }
+  return result.value;
 };
-const connection = protocolModule.negotiateHandshake(hostHello, engineHello);
-if (connection === undefined) {
-  throw new Error("Native Worker smoke handshake failed");
-}
+let inputSequence = 1n;
+const encodeCommandFrame = (command) => {
+  const descriptor = protocolModule.MESSAGE_DESCRIPTORS.find(
+    (candidate) =>
+      candidate.kind === "command"
+      && candidate.name === command.type,
+  );
+  if (descriptor === undefined) {
+    throw new Error("Native Worker smoke descriptor missing");
+  }
+  const correlation = { worker: supervisorIdentity.worker };
+  const payload = command.type === "Hello"
+    ? protocolModule.encodeHelloCommandPayload(command.payload)
+    : protocolModule.encodeHelloAcceptCommandPayload(command.payload);
+  const payloadLength = unwrap(
+    protocolModule.encodeCorrelationPayload(correlation),
+  ).byteLength + unwrap(payload).byteLength;
+  const header = {
+    major: protocolModule.PROTOCOL_MAJOR,
+    minor: protocolModule.PROTOCOL_MINOR,
+    message_type: descriptor.id,
+    flags: 0,
+    payload_len: payloadLength,
+    sequence: inputSequence,
+  };
+  inputSequence += 1n;
+  const encoded = unwrap(protocolModule.encodeCommandPayload({
+    header,
+    correlation,
+    command,
+  }));
+  const frame = new Uint8Array(20 + encoded.bytes.byteLength);
+  const view = new DataView(frame.buffer);
+  view.setUint16(0, header.major, true);
+  view.setUint16(2, header.minor, true);
+  view.setUint16(4, header.message_type, true);
+  view.setUint16(6, header.flags, true);
+  view.setUint32(8, header.payload_len, true);
+  view.setBigUint64(12, header.sequence, true);
+  frame.set(encoded.bytes, 20);
+  return frame;
+};
+const decodeEventType = (dispatch) => {
+  const view = new DataView(
+    dispatch.frame.buffer,
+    dispatch.frame.byteOffset,
+    dispatch.frame.byteLength,
+  );
+  const header = {
+    major: view.getUint16(0, true),
+    minor: view.getUint16(2, true),
+    message_type: view.getUint16(4, true),
+    flags: view.getUint16(6, true),
+    payload_len: view.getUint32(8, true),
+    sequence: view.getBigUint64(12, true),
+  };
+  return unwrap(
+    protocolModule.decodeEventPayload(
+      header,
+      dispatch.frame.subarray(20),
+    ),
+  ).event.type;
+};
 const runtime = {
   fetch: async () => ({
     ok: true,
@@ -184,11 +249,26 @@ const loader = glueModule.createNativeWorkerEngineLoader(
   loaderModule.BrowserNativeWorkerLoader,
   runtime,
 );
-const worker = await loader.load(connection, Object.freeze({
-  worker: 1n,
-  workerEpoch: 1n,
-  rendererEpoch: 1,
+const worker = await loader.bootstrap(
+  encodeCommandFrame({
+    type: "Hello",
+    payload: { hello: hostHello },
+  }),
+  supervisorIdentity,
+);
+if (decodeEventType(worker.engineHello) !== "EngineHello") {
+  throw new Error("Native Worker smoke EngineHello missing");
+}
+const ready = worker.accept(encodeCommandFrame({
+  type: "HelloAccept",
+  payload: {
+    negotiated_minor: worker.connection.minor,
+    schema_hash: protocolModule.SCHEMA_HASH.slice(),
+  },
 }));
+if (decodeEventType(ready) !== "Ready" || !worker.ready) {
+  throw new Error("Native Worker smoke Ready missing");
+}
 loader.close();
 await Promise.resolve();
 if (!worker.closed) {

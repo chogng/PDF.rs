@@ -121,7 +121,7 @@
       "src/browser-worker-supervisor.ts",
       "src/native-worker-abi.generated.ts"
     ],
-    "sha256": "a76766433be9da5de3b9155dde9284119ef66438d586aebbc427ce4f320f6ae1"
+    "sha256": "6dff2489dcfb5d4a2c35a0fbdf72dd2fca7bbea5372436bf90b8c90d46cdcdfb"
   },
   "network_manifest": [
     {

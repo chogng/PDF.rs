@@ -2,18 +2,33 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CapabilityProfileId,
   EndpointRole,
+  EnvelopeSequenceTracker,
   KNOWN_ENDPOINT_CAPABILITIES,
   MAX_MESSAGE_BYTES,
   MAX_TRANSFER_SLOTS,
+  MESSAGE_ID_ENGINE_HELLO,
+  MESSAGE_ID_HELLO,
+  MESSAGE_ID_HELLO_ACCEPT,
+  MESSAGE_ID_READY,
+  OutputProfile,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   SCHEMA_HASH_HEX,
   encodeCommandPayload,
   encodeCorrelationPayload,
+  encodeEngineHelloEventPayload,
+  encodeEventPayload,
+  encodeHelloAcceptCommandPayload,
   encodeHelloCommandPayload,
+  encodeReadyEventPayload,
+  type Command,
   type CommandEnvelope,
   type CompatibleHandshake,
+  type Correlation,
+  type Event,
+  type EventEnvelope,
   type PayloadCodecResult,
   type ProtocolHello,
 } from "../generated/engine-protocol.js";
@@ -33,6 +48,9 @@ import {
   nativeWorkerSha256,
   type BrowserNativeWorkerSupervisorIdentity,
 } from "../src/browser-native-worker-loader.js";
+import {
+  decodeBrowserEngineHello,
+} from "../src/browser-event-boundary.js";
 import { negotiateBrowserHello } from "../src/browser-handshake.js";
 
 const uleb = (input: number): number[] => {
@@ -83,6 +101,16 @@ interface TestModuleOptions {
   readonly maximumPages?: number;
   readonly initializeStatus?: number;
   readonly initializeTraps?: boolean;
+  readonly engineHelloStatus?: number;
+  readonly engineHelloTraps?: boolean;
+  readonly engineHelloOutput?: (
+    worker: bigint,
+  ) => Uint8Array<ArrayBuffer> | undefined;
+  readonly readyStatus?: number;
+  readonly readyTraps?: boolean;
+  readonly readyOutput?: (
+    worker: bigint,
+  ) => Uint8Array<ArrayBuffer> | undefined;
   readonly dispatchStatus?: number;
   readonly dispatchTraps?: boolean;
   readonly pollStatus?: number;
@@ -337,22 +365,62 @@ const unwrap = <T>(result: PayloadCodecResult<T>): T => {
   throw new Error(result.error.code);
 };
 
-const helloFrame = (sequence: bigint): Uint8Array<ArrayBuffer> => {
-  const correlation = { worker: 1n };
-  const command = {
-    type: "Hello" as const,
-    payload: { hello: hello(EndpointRole.Host) },
-  };
+const encodedFrame = (
+  messageId: number,
+  payload: Uint8Array,
+  sequence: bigint,
+): Uint8Array<ArrayBuffer> => {
+  const frame = new Uint8Array(20 + payload.byteLength);
+  const header = new DataView(frame.buffer);
+  header.setUint16(0, PROTOCOL_MAJOR, true);
+  header.setUint16(2, PROTOCOL_MINOR, true);
+  header.setUint16(4, messageId, true);
+  header.setUint16(6, 0, true);
+  header.setUint32(8, payload.byteLength, true);
+  header.setBigUint64(12, sequence, true);
+  frame.set(payload, 20);
+  return frame;
+};
+
+const commandRecord = (command: Command): Uint8Array => {
+  switch (command.type) {
+    case "Hello":
+      return unwrap(encodeHelloCommandPayload(command.payload));
+    case "HelloAccept":
+      return unwrap(
+        encodeHelloAcceptCommandPayload(command.payload),
+      );
+    default:
+      throw new Error("unsupported native test command");
+  }
+};
+
+const commandMessageId = (command: Command): number => {
+  switch (command.type) {
+    case "Hello":
+      return MESSAGE_ID_HELLO;
+    case "HelloAccept":
+      return MESSAGE_ID_HELLO_ACCEPT;
+    default:
+      throw new Error("unsupported native test command");
+  }
+};
+
+const commandFrame = (
+  command: Command,
+  worker: bigint,
+  sequence: bigint,
+): Uint8Array<ArrayBuffer> => {
+  const correlation: Correlation = { worker };
+  const record = commandRecord(command);
   const payloadLength = unwrap(
     encodeCorrelationPayload(correlation),
-  ).byteLength + unwrap(
-    encodeHelloCommandPayload(command.payload),
-  ).byteLength;
+  ).byteLength + record.byteLength;
   const envelope: CommandEnvelope = {
     header: {
       major: PROTOCOL_MAJOR,
       minor: PROTOCOL_MINOR,
-      message_type: 1,
+      message_type: commandMessageId(command),
       flags: 0,
       payload_len: payloadLength,
       sequence,
@@ -361,17 +429,123 @@ const helloFrame = (sequence: bigint): Uint8Array<ArrayBuffer> => {
     command,
   };
   const encoded = unwrap(encodeCommandPayload(envelope));
-  const frame = new Uint8Array(20 + encoded.bytes.byteLength);
-  const header = new DataView(frame.buffer);
-  header.setUint16(0, PROTOCOL_MAJOR, true);
-  header.setUint16(2, PROTOCOL_MINOR, true);
-  header.setUint16(4, encoded.messageId, true);
-  header.setUint16(6, 0, true);
-  header.setUint32(8, encoded.bytes.byteLength, true);
-  header.setBigUint64(12, sequence, true);
-  frame.set(encoded.bytes, 20);
-  return frame;
+  return encodedFrame(encoded.messageId, encoded.bytes, sequence);
 };
+
+const helloFrame = (
+  sequence: bigint,
+  worker = 1n,
+): Uint8Array<ArrayBuffer> => commandFrame({
+  type: "Hello",
+  payload: { hello: hello(EndpointRole.Host) },
+}, worker, sequence);
+
+const helloAcceptFrame = (
+  negotiated: CompatibleHandshake,
+  sequence: bigint,
+  worker = 1n,
+): Uint8Array<ArrayBuffer> => commandFrame({
+  type: "HelloAccept",
+  payload: {
+    negotiated_minor: negotiated.minor,
+    schema_hash: schemaHash(),
+  },
+}, worker, sequence);
+
+const eventRecord = (event: Event): Uint8Array => {
+  switch (event.type) {
+    case "EngineHello":
+      return unwrap(encodeEngineHelloEventPayload(event.payload));
+    case "Ready":
+      return unwrap(encodeReadyEventPayload(event.payload));
+    default:
+      throw new Error("unsupported native test event");
+  }
+};
+
+const eventMessageId = (event: Event): number => {
+  switch (event.type) {
+    case "EngineHello":
+      return MESSAGE_ID_ENGINE_HELLO;
+    case "Ready":
+      return MESSAGE_ID_READY;
+    default:
+      throw new Error("unsupported native test event");
+  }
+};
+
+const eventFrame = (
+  event: Event,
+  worker: bigint,
+  sequence: bigint,
+): Uint8Array<ArrayBuffer> => {
+  const correlation: Correlation = { worker };
+  const record = eventRecord(event);
+  const payloadLength = unwrap(
+    encodeCorrelationPayload(correlation),
+  ).byteLength + record.byteLength;
+  const envelope: EventEnvelope = {
+    header: {
+      major: PROTOCOL_MAJOR,
+      minor: PROTOCOL_MINOR,
+      message_type: eventMessageId(event),
+      flags: 0,
+      payload_len: payloadLength,
+      sequence,
+    },
+    correlation,
+    event,
+  };
+  const encoded = unwrap(encodeEventPayload(envelope));
+  return encodedFrame(encoded.messageId, encoded.bytes, sequence);
+};
+
+const engineHelloEvent = (
+  schema = schemaHash(),
+  executionCapabilities = 0n,
+): Event => ({
+  type: "EngineHello",
+  payload: {
+    hello: {
+      ...hello(EndpointRole.Engine),
+      schema_hash: schema,
+    },
+    execution_capabilities: {
+      supported: executionCapabilities,
+    },
+  },
+});
+
+const readyEvent = (
+  worker: bigint,
+  overrides: Readonly<{
+    negotiatedMinor?: number;
+    schema?: Uint8Array;
+    executionCapabilities?: bigint;
+  }> = {},
+): Event => ({
+  type: "Ready",
+  payload: {
+    worker,
+    negotiated_minor: overrides.negotiatedMinor ?? PROTOCOL_MINOR,
+    schema_hash: overrides.schema?.slice() ?? schemaHash(),
+    execution_capabilities: {
+      supported: overrides.executionCapabilities ?? 0n,
+    },
+    capability_profiles: [CapabilityProfileId.BaselineNative],
+    output_profiles: [OutputProfile.Srgb],
+  },
+});
+
+const engineHelloFrame = (
+  worker: bigint,
+  event: Event = engineHelloEvent(),
+): Uint8Array<ArrayBuffer> => eventFrame(event, worker, 1n);
+
+const readyFrame = (
+  worker: bigint,
+  event: Event = readyEvent(worker),
+): Uint8Array<ArrayBuffer> => eventFrame(event, worker, 2n);
 
 const assertCode = (
   operation: () => unknown,
@@ -402,20 +576,189 @@ const deferred = <T>(): Readonly<{
   });
 };
 
+interface NativeTestHarness {
+  readonly instance: WebAssembly.Instance;
+  readonly dispatches: number;
+  readonly shutdowns: number;
+}
+
+type NumericWasmExport = (...values: number[]) => number;
+
+const numericWasmExport = (
+  instance: WebAssembly.Instance,
+  name: string,
+): NumericWasmExport => {
+  const value = instance.exports[name];
+  assert.equal(typeof value, "function");
+  return value as NumericWasmExport;
+};
+
+const joinU64 = (low: number, high: number): bigint =>
+  (BigInt(high >>> 0) << 32n) | BigInt(low >>> 0);
+
+const wrapNativeTestInstance = (
+  wasm: WebAssembly.Instance,
+  options: TestModuleOptions = {},
+): NativeTestHarness => {
+  const memory = wasm.exports.memory;
+  assert.ok(memory instanceof WebAssembly.Memory);
+  const initialize = numericWasmExport(
+    wasm,
+    "pdf_rs_worker_initialize",
+  );
+  const poll = numericWasmExport(wasm, "pdf_rs_worker_poll");
+  const shutdown = numericWasmExport(
+    wasm,
+    "pdf_rs_worker_shutdown",
+  );
+  let worker = 0n;
+  let dispatches = 0;
+  let shutdowns = 0;
+  let outputLength = 0;
+  let transferCount = 0;
+  const clearOutput = (): void => {
+    outputLength = 0;
+    transferCount = 0;
+  };
+  const publish = (
+    output: Uint8Array<ArrayBuffer> | undefined,
+  ): void => {
+    clearOutput();
+    if (output === undefined) {
+      return;
+    }
+    new Uint8Array(
+      memory.buffer,
+      4_096,
+      output.byteLength,
+    ).set(output);
+    outputLength = output.byteLength;
+  };
+  const wrapped = {
+    exports: {
+      ...wasm.exports,
+      pdf_rs_worker_initialize: (
+        workerLow: number,
+        workerHigh: number,
+        workerEpochLow: number,
+        workerEpochHigh: number,
+        rendererEpoch: number,
+      ): number => {
+        worker = joinU64(workerLow, workerHigh);
+        return initialize(
+          workerLow,
+          workerHigh,
+          workerEpochLow,
+          workerEpochHigh,
+          rendererEpoch,
+        );
+      },
+      pdf_rs_worker_dispatch: (): number => {
+        dispatches += 1;
+        clearOutput();
+        if (
+          (dispatches === 1 && options.engineHelloTraps === true)
+          || (dispatches === 2 && options.readyTraps === true)
+          || (dispatches >= 3 && options.dispatchTraps === true)
+        ) {
+          throw new WebAssembly.RuntimeError("native test trap");
+        }
+        const status = dispatches === 1
+          ? options.engineHelloStatus ?? 0
+          : dispatches === 2
+          ? options.readyStatus ?? 0
+          : options.dispatchStatus ?? 0;
+        if (status !== 0) {
+          return status;
+        }
+        if (dispatches === 1) {
+          publish(
+            options.engineHelloOutput === undefined
+              ? engineHelloFrame(worker)
+              : options.engineHelloOutput(worker),
+          );
+        } else if (dispatches === 2) {
+          publish(
+            options.readyOutput === undefined
+              ? readyFrame(worker)
+              : options.readyOutput(worker),
+          );
+        } else {
+          if (options.dispatchGrowsMemory === true) {
+            memory.grow(1);
+          }
+          outputLength = options.outputLength ?? 0;
+          transferCount = options.transferCount ?? 0;
+        }
+        return 0;
+      },
+      pdf_rs_worker_poll: (): number => {
+        clearOutput();
+        return poll();
+      },
+      pdf_rs_worker_output_length: (): number => outputLength,
+      pdf_rs_worker_transfer_count: (): number => transferCount,
+      pdf_rs_worker_shutdown: (): number => {
+        shutdowns += 1;
+        clearOutput();
+        return shutdown();
+      },
+    },
+  } as unknown as WebAssembly.Instance;
+  return Object.freeze({
+    instance: wrapped,
+    get dispatches(): number {
+      return dispatches;
+    },
+    get shutdowns(): number {
+      return shutdowns;
+    },
+  });
+};
+
+const instantiateNativeTestModule = async (
+  module: WebAssembly.Module,
+  options: TestModuleOptions = {},
+): Promise<NativeTestHarness> => wrapNativeTestInstance(
+  await WebAssembly.instantiate(module, {}),
+  options,
+);
+
+const awaitingInstance = async (
+  options: TestModuleOptions = {},
+  identity: BrowserNativeWorkerSupervisorIdentity = supervisorIdentity(),
+): Promise<Readonly<{
+  worker: BrowserNativeWorkerInstance;
+  harness: NativeTestHarness;
+}>> => {
+  const bytes = nativeTestModule(options);
+  const module = await WebAssembly.compile(bytes);
+  const harness = await instantiateNativeTestModule(module, options);
+  return Object.freeze({
+    worker: new BrowserNativeWorkerInstance(
+      helloFrame(1n, identity.worker),
+      identity,
+      harness.instance,
+      1,
+      1_024,
+    ),
+    harness,
+  });
+};
+
 const instance = async (
   options: TestModuleOptions = {},
   identity: BrowserNativeWorkerSupervisorIdentity = supervisorIdentity(),
 ): Promise<BrowserNativeWorkerInstance> => {
-  const bytes = nativeTestModule(options);
-  const module = await WebAssembly.compile(bytes);
-  const wasm = await WebAssembly.instantiate(module, {});
-  return new BrowserNativeWorkerInstance(
-    connection(),
-    identity,
-    wasm,
-    1,
-    1_024,
+  const awaiting = await awaitingInstance(options, identity);
+  awaiting.worker.accept(
+    helloAcceptFrame(
+      awaiting.worker.connection,
+      2n,
+      identity.worker,
+    ),
   );
+  return awaiting.worker;
 };
 
 const artifactResponse = (
@@ -438,6 +781,9 @@ const artifactResponse = (
 
 const loaderFor = async (
   bytes: Uint8Array<ArrayBuffer>,
+  options: TestModuleOptions = {},
+  observeHarness: (harness: NativeTestHarness) => void = () =>
+    undefined,
 ): Promise<BrowserNativeWorkerLoader> =>
   new BrowserNativeWorkerLoader({
     url: "engine.wasm",
@@ -454,8 +800,14 @@ const loaderFor = async (
       crypto.subtle.digest("SHA-256", input.slice()),
     compile: async (input) =>
       WebAssembly.compile(input.slice().buffer),
-    instantiate: async (module, imports) =>
-      WebAssembly.instantiate(module, imports),
+    instantiate: async (module) => {
+      const harness = await instantiateNativeTestModule(
+        module,
+        options,
+      );
+      observeHarness(harness);
+      return harness.instance;
+    },
   });
 
 test("loader admits one exact hash-bound import-free bounded module", async () => {
@@ -482,42 +834,83 @@ test("loader admits one exact hash-bound import-free bounded module", async () =
         crypto.subtle.digest("SHA-256", input.slice()),
       compile: async (input) =>
         WebAssembly.compile(input.slice().buffer),
-      instantiate: async (module, imports) =>
-        WebAssembly.instantiate(module, imports),
+      instantiate: async (module) =>
+        (await instantiateNativeTestModule(module)).instance,
     },
   );
-  const negotiated = connection();
   const identity = supervisorIdentity();
-  const first = await loader.load(negotiated, identity);
-  const second = await loader.load(negotiated, identity);
+  const first = await loader.bootstrap(helloFrame(1n), identity);
+  const second = await loader.bootstrap(
+    helloFrame(1n).slice(),
+    identity,
+  );
   assert.equal(first, second);
   assert.equal(fetches, 1);
-  assert.equal(first.dispatch(helloFrame(1n)), undefined);
+  assert.equal(first.ready, false);
+  assert.deepEqual(first.engineHello.transfers, []);
+  assert.deepEqual(first.engineHello.frame, engineHelloFrame(1n));
+  const decodedEngineHello = decodeBrowserEngineHello(
+    Object.freeze([first.engineHello.frame.buffer]),
+    1n,
+    new EnvelopeSequenceTracker(),
+    () => true,
+  );
+  assert.equal(decodedEngineHello.event.type, "EngineHello");
+  assert.deepEqual(first.connection, connection());
+  assertCode(() => first.dispatch(helloFrame(2n)), "InvalidLifecycle");
+  assertCode(() => first.poll(), "InvalidLifecycle");
+  const ready = first.accept(
+    helloAcceptFrame(first.connection, 2n),
+  );
+  assert.deepEqual(ready.transfers, []);
+  assert.deepEqual(ready.frame, readyFrame(1n));
+  assert.equal(first.ready, true);
   assertCode(
-    () => first.dispatch(helloFrame(1n)),
+    () => first.accept(helloAcceptFrame(first.connection, 3n)),
+    "InvalidLifecycle",
+  );
+  assert.equal(first.dispatch(helloFrame(3n)), undefined);
+  assertCode(
+    () => first.dispatch(helloFrame(3n)),
     "InvalidMessage",
   );
 });
 
 test("instance initializes once with the exact supervisor u64 words before mailbox access", async () => {
   const module = await WebAssembly.compile(nativeTestModule());
-  const wasm = await WebAssembly.instantiate(module, {});
+  const harness = await instantiateNativeTestModule(module);
   const calls: number[][] = [];
   const order: string[] = [];
   let initialized = false;
+  const initialize = numericWasmExport(
+    harness.instance,
+    "pdf_rs_worker_initialize",
+  );
+  const memoryEpoch = numericWasmExport(
+    harness.instance,
+    "pdf_rs_worker_memory_epoch",
+  );
+  const dispatch = numericWasmExport(
+    harness.instance,
+    "pdf_rs_worker_dispatch",
+  );
   const wrapped = {
     exports: {
-      ...wasm.exports,
+      ...harness.instance.exports,
       pdf_rs_worker_initialize: (...values: number[]): number => {
         order.push("initialize");
         calls.push(values);
         initialized = true;
-        return 0;
+        return initialize(...values);
       },
       pdf_rs_worker_memory_epoch: (): number => {
         order.push("memoryEpoch");
         assert.equal(initialized, true);
-        return 1;
+        return memoryEpoch();
+      },
+      pdf_rs_worker_dispatch: (...values: number[]): number => {
+        order.push("dispatch");
+        return dispatch(...values);
       },
     },
   } as unknown as WebAssembly.Instance;
@@ -527,7 +920,7 @@ test("instance initializes once with the exact supervisor u64 words before mailb
     rendererEpoch: 0x7654_3210,
   });
   const worker = new BrowserNativeWorkerInstance(
-    connection(),
+    helloFrame(1n, identity.worker),
     identity,
     wrapped,
     1,
@@ -540,29 +933,39 @@ test("instance initializes once with the exact supervisor u64 words before mailb
     0xfedc_ba98,
     0x7654_3210,
   ]]);
-  assert.deepEqual(order, ["initialize", "memoryEpoch"]);
+  assert.equal(order[0], "initialize");
+  assert.equal(
+    order.filter((operation) => operation === "initialize").length,
+    1,
+  );
+  assert.ok(order.indexOf("memoryEpoch") > 0);
+  assert.ok(order.indexOf("dispatch") > order.indexOf("memoryEpoch"));
   assert.deepEqual(worker.supervisorIdentity, identity);
   worker.shutdown();
 });
 
 test("memory growth during initialize establishes the post-initialize backing", async () => {
   const module = await WebAssembly.compile(nativeTestModule());
-  const wasm = await WebAssembly.instantiate(module, {});
-  const memory = wasm.exports.memory;
+  const harness = await instantiateNativeTestModule(module);
+  const memory = harness.instance.exports.memory;
   assert.ok(memory instanceof WebAssembly.Memory);
   const initialBuffer = memory.buffer;
+  const initialize = numericWasmExport(
+    harness.instance,
+    "pdf_rs_worker_initialize",
+  );
   const wrapped = {
     exports: {
-      ...wasm.exports,
-      pdf_rs_worker_initialize: (): number => {
+      ...harness.instance.exports,
+      pdf_rs_worker_initialize: (...values: number[]): number => {
         assert.equal(memory.grow(1), 1);
-        return 0;
+        return initialize(...values);
       },
       pdf_rs_worker_memory_epoch: (): number => 1,
     },
   } as unknown as WebAssembly.Instance;
   const worker = new BrowserNativeWorkerInstance(
-    connection(),
+    helloFrame(1n),
     supervisorIdentity(),
     wrapped,
     1,
@@ -570,7 +973,8 @@ test("memory growth during initialize establishes the post-initialize backing", 
   );
   assert.notEqual(memory.buffer, initialBuffer);
   assert.equal(memory.buffer.byteLength, 2 * 65_536);
-  assert.equal(worker.dispatch(helloFrame(1n)), undefined);
+  worker.accept(helloAcceptFrame(worker.connection, 2n));
+  assert.equal(worker.dispatch(helloFrame(3n)), undefined);
   worker.shutdown();
 });
 
@@ -598,7 +1002,201 @@ test("initialization rejection, reserved internal unwind, and Wasm trap are fail
   }
 });
 
-test("loader requires negotiation and one exact supervisor identity", async () => {
+test("bootstrap requires one immediate compatible native EngineHello and poisons once", async () => {
+  const incompatibleSchema = schemaHash();
+  incompatibleSchema[0] = (incompatibleSchema[0] ?? 0) ^ 1;
+  const cases: readonly Readonly<{
+    options: TestModuleOptions;
+    code: BrowserNativeWorkerError["code"];
+  }>[] = [
+    {
+      options: {
+        engineHelloOutput: () => undefined,
+      },
+      code: "NegotiationMismatch",
+    },
+    {
+      options: {
+        engineHelloOutput: (worker) => engineHelloFrame(
+          worker,
+          engineHelloEvent(incompatibleSchema),
+        ),
+      },
+      code: "NegotiationMismatch",
+    },
+    {
+      options: {
+        engineHelloOutput: (worker) => eventFrame(
+          readyEvent(worker),
+          worker,
+          1n,
+        ),
+      },
+      code: "InvalidMessage",
+    },
+    {
+      options: {
+        engineHelloOutput: (worker) =>
+          engineHelloFrame(worker + 1n),
+      },
+      code: "InvalidMessage",
+    },
+    {
+      options: {
+        engineHelloStatus: NATIVE_WORKER_STATUS_REJECTED,
+      },
+      code: "EngineRejected",
+    },
+    {
+      options: {
+        engineHelloStatus: NATIVE_WORKER_STATUS_INTERNAL_UNWIND,
+      },
+      code: "EngineTrap",
+    },
+    {
+      options: {
+        engineHelloTraps: true,
+      },
+      code: "EngineTrap",
+    },
+  ];
+
+  for (const { options, code } of cases) {
+    const module = await WebAssembly.compile(
+      nativeTestModule(options),
+    );
+    const harness = await instantiateNativeTestModule(
+      module,
+      options,
+    );
+    assertCode(
+      () => new BrowserNativeWorkerInstance(
+        helloFrame(1n),
+        supervisorIdentity(),
+        harness.instance,
+        1,
+        1_024,
+      ),
+      code,
+    );
+    assert.equal(harness.dispatches, 1);
+    assert.equal(harness.shutdowns, 1);
+  }
+});
+
+test("HelloAccept requires an immediate transcript-matching native Ready", async () => {
+  const cases: readonly Readonly<{
+    options: TestModuleOptions;
+    code: BrowserNativeWorkerError["code"];
+  }>[] = [
+    {
+      options: {
+        readyOutput: () => undefined,
+      },
+      code: "NegotiationMismatch",
+    },
+    {
+      options: {
+        readyOutput: (worker) => readyFrame(
+          worker,
+          readyEvent(worker, { executionCapabilities: 1n }),
+        ),
+      },
+      code: "NegotiationMismatch",
+    },
+    {
+      options: {
+        readyOutput: (worker) => readyFrame(worker + 1n),
+      },
+      code: "NegotiationMismatch",
+    },
+    {
+      options: {
+        readyOutput: (worker) => eventFrame(
+          engineHelloEvent(),
+          worker,
+          2n,
+        ),
+      },
+      code: "NegotiationMismatch",
+    },
+    {
+      options: {
+        readyStatus: NATIVE_WORKER_STATUS_REJECTED,
+      },
+      code: "EngineRejected",
+    },
+    {
+      options: {
+        readyStatus: NATIVE_WORKER_STATUS_INTERNAL_UNWIND,
+      },
+      code: "EngineTrap",
+    },
+    {
+      options: {
+        readyTraps: true,
+      },
+      code: "EngineTrap",
+    },
+  ];
+
+  for (const { options, code } of cases) {
+    const awaiting = await awaitingInstance(options);
+    assert.equal(awaiting.worker.ready, false);
+    assertCode(
+      () => awaiting.worker.accept(
+        helloAcceptFrame(awaiting.worker.connection, 2n),
+      ),
+      code,
+    );
+    assert.equal(awaiting.worker.ready, false);
+    assert.equal(awaiting.worker.closed, true);
+    assert.equal(awaiting.harness.shutdowns, 1);
+  }
+});
+
+test("accept rejects host transcript mismatches without entering Ready", async () => {
+  const wrongCommand = await awaitingInstance();
+  assertCode(
+    () => wrongCommand.worker.accept(helloFrame(2n)),
+    "NegotiationMismatch",
+  );
+  assert.equal(wrongCommand.worker.closed, true);
+  assert.equal(wrongCommand.harness.shutdowns, 1);
+
+  const wrongMinor = await awaitingInstance();
+  const accept: Command = {
+    type: "HelloAccept",
+    payload: {
+      negotiated_minor: wrongMinor.worker.connection.minor + 1,
+      schema_hash: schemaHash(),
+    },
+  };
+  assertCode(
+    () => wrongMinor.worker.accept(commandFrame(accept, 1n, 2n)),
+    "NegotiationMismatch",
+  );
+  assert.equal(wrongMinor.worker.ready, false);
+  assert.equal(wrongMinor.worker.closed, true);
+  assert.equal(wrongMinor.harness.shutdowns, 1);
+});
+
+test("handshake snapshots stay authoritative and shutdown remains idempotent", async () => {
+  const awaiting = await awaitingInstance();
+  awaiting.worker.engineHello.frame.fill(0);
+  const ready = awaiting.worker.accept(
+    helloAcceptFrame(awaiting.worker.connection, 2n),
+  );
+  assert.deepEqual(ready.frame, readyFrame(1n));
+  assert.equal(awaiting.worker.ready, true);
+  awaiting.worker.shutdown();
+  awaiting.worker.shutdown();
+  assert.equal(awaiting.worker.closed, true);
+  assert.equal(awaiting.worker.ready, false);
+  assert.equal(awaiting.harness.shutdowns, 1);
+});
+
+test("loader requires one canonical Host Hello and exact supervisor identity", async () => {
   const bytes = nativeTestModule();
   const loader = new BrowserNativeWorkerLoader({
     url: "engine.wasm",
@@ -615,20 +1213,23 @@ test("loader requires negotiation and one exact supervisor identity", async () =
       crypto.subtle.digest("SHA-256", input.slice()),
     compile: async (input) =>
       WebAssembly.compile(input.slice().buffer),
-    instantiate: async (module, imports) =>
-      WebAssembly.instantiate(module, imports),
+    instantiate: async (module) =>
+      (await instantiateNativeTestModule(module)).instance,
   });
   await assert.rejects(
-    loader.load(
-      {} as CompatibleHandshake,
+    loader.bootstrap(
+      {} as Uint8Array,
       supervisorIdentity(),
     ),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
-      && error.code === "NegotiationRequired",
+      && error.code === "InvalidMessage",
   );
   await assert.rejects(
-    loader.load(connection(), {} as BrowserNativeWorkerSupervisorIdentity),
+    loader.bootstrap(
+      helloFrame(1n),
+      {} as BrowserNativeWorkerSupervisorIdentity,
+    ),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "InvalidIdentity",
@@ -659,8 +1260,8 @@ test("loader requires negotiation and one exact supervisor identity", async () =
     },
   });
   await assert.rejects(
-    loader.load(
-      connection(),
+    loader.bootstrap(
+      helloFrame(1n),
       accessorIdentity as BrowserNativeWorkerSupervisorIdentity,
     ),
     (error: unknown) =>
@@ -668,23 +1269,79 @@ test("loader requires negotiation and one exact supervisor identity", async () =
       && error.code === "InvalidIdentity",
   );
   assert.equal(identityReads, 0);
-  const negotiated = connection();
-  await loader.load(negotiated, supervisorIdentity());
   await assert.rejects(
-    loader.load(connection(), supervisorIdentity()),
+    loader.bootstrap(
+      helloFrame(1n, 2n),
+      supervisorIdentity(),
+    ),
+    (error: unknown) =>
+      error instanceof BrowserNativeWorkerError
+      && error.code === "InvalidMessage",
+  );
+
+  const originalHello = helloFrame(1n);
+  const firstLoad = loader.bootstrap(
+    originalHello,
+    supervisorIdentity(),
+  );
+  originalHello.fill(0);
+  const worker = await firstLoad;
+  assert.equal(worker.closed, false);
+  assert.equal(
+    await loader.bootstrap(helloFrame(1n), supervisorIdentity()),
+    worker,
+  );
+  await assert.rejects(
+    loader.bootstrap(helloFrame(2n), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "NegotiationMismatch",
   );
   await assert.rejects(
-    loader.load(
-      negotiated,
+    loader.bootstrap(
+      helloFrame(1n),
       supervisorIdentity({ workerEpoch: 2n }),
     ),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "IdentityMismatch",
   );
+});
+
+test("loader bootstrap failure and close reclaim each native instance once", async () => {
+  const bytes = nativeTestModule();
+  let failedHarness: NativeTestHarness | undefined;
+  const failing = await loaderFor(
+    bytes,
+    {
+      engineHelloOutput: () => undefined,
+    },
+    (harness) => {
+      failedHarness = harness;
+    },
+  );
+  await assert.rejects(
+    failing.bootstrap(helloFrame(1n), supervisorIdentity()),
+    (error: unknown) =>
+      error instanceof BrowserNativeWorkerError
+      && error.code === "NegotiationMismatch",
+  );
+  assert.ok(failedHarness !== undefined);
+  assert.equal(failedHarness.shutdowns, 1);
+
+  let liveHarness: NativeTestHarness | undefined;
+  const live = await loaderFor(bytes, {}, (harness) => {
+    liveHarness = harness;
+  });
+  const worker = await live.bootstrap(
+    helloFrame(1n),
+    supervisorIdentity(),
+  );
+  live.close();
+  await Promise.resolve();
+  assert.ok(liveHarness !== undefined);
+  assert.equal(worker.closed, true);
+  assert.equal(liveHarness.shutdowns, 1);
 });
 
 test("close aborts fetch and body waits and rejects the load immediately", async () => {
@@ -711,8 +1368,8 @@ test("close aborts fetch and body waits and rejects the load immediately", async
     instantiate: async (module, imports) =>
       WebAssembly.instantiate(module, imports),
   });
-  const fetchLoad = fetching.load(
-    connection(),
+  const fetchLoad = fetching.bootstrap(
+    helloFrame(1n),
     supervisorIdentity(),
   );
   await Promise.resolve();
@@ -766,8 +1423,8 @@ test("close aborts fetch and body waits and rejects the load immediately", async
     instantiate: async (module, imports) =>
       WebAssembly.instantiate(module, imports),
   });
-  const bodyLoad = reading.load(
-    connection(),
+  const bodyLoad = reading.bootstrap(
+    helloFrame(1n),
     supervisorIdentity(),
   );
   await bodyEntered.promise;
@@ -832,8 +1489,8 @@ test("close covers digest, compile, and instantiate waits and reclaims a late in
         return WebAssembly.instantiate(module, {});
       },
     });
-    const load = loader.load(
-      connection(),
+    const load = loader.bootstrap(
+      helloFrame(1n),
       supervisorIdentity(),
     );
     await entered.promise;
@@ -902,7 +1559,7 @@ test("artifact and digest inputs are fixed, exact, hash-bound, and capped", asyn
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    loader.load(connection(), supervisorIdentity()),
+    loader.bootstrap(helloFrame(1n), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "ArtifactLengthMismatch",
@@ -927,7 +1584,7 @@ test("artifact and digest inputs are fixed, exact, hash-bound, and capped", asyn
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    mismatched.load(connection(), supervisorIdentity()),
+    mismatched.bootstrap(helloFrame(1n), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "ArtifactLengthMismatch",
@@ -967,7 +1624,7 @@ test("module memory and export surface are exact", async () => {
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    loader.load(connection(), supervisorIdentity()),
+    loader.bootstrap(helloFrame(1n), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "InvalidWasmExports",
@@ -978,8 +1635,8 @@ test("module memory and export surface are exact", async () => {
     nativeTestModule({ wrongAbiHash: true }),
   ]) {
     await assert.rejects(
-      (await loaderFor(invalid)).load(
-        connection(),
+      (await loaderFor(invalid)).bootstrap(
+        helloFrame(1n),
         supervisorIdentity(),
       ),
       (error: unknown) =>
@@ -1022,7 +1679,7 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
   const fixed = await instance();
   const resizable = new ArrayBuffer(1, { maxByteLength: 2 });
   assertCode(
-    () => fixed.dispatch(helloFrame(1n), [resizable]),
+    () => fixed.dispatch(helloFrame(3n), [resizable]),
     "TransferLimit",
   );
   const staleIdentity = await instance(
@@ -1030,7 +1687,7 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
     supervisorIdentity({ worker: 2n }),
   );
   assertCode(
-    () => staleIdentity.dispatch(helloFrame(1n)),
+    () => staleIdentity.dispatch(helloFrame(3n)),
     "InvalidMessage",
   );
 
@@ -1038,7 +1695,7 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
     dispatchStatus: NATIVE_WORKER_STATUS_REJECTED,
   });
   assertCode(
-    () => rejected.dispatch(helloFrame(1n)),
+    () => rejected.dispatch(helloFrame(3n)),
     "EngineRejected",
   );
   assert.equal(rejected.closed, true);
@@ -1049,7 +1706,7 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
   ] as const) {
     const trapped = await instance(options);
     assertCode(
-      () => trapped.dispatch(helloFrame(1n)),
+      () => trapped.dispatch(helloFrame(3n)),
       "EngineTrap",
     );
     assert.equal(trapped.closed, true);
@@ -1057,7 +1714,7 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
 
   const grown = await instance({ dispatchGrowsMemory: true });
   assertCode(
-    () => grown.dispatch(helloFrame(1n)),
+    () => grown.dispatch(helloFrame(3n)),
     "InvalidWasmMemory",
   );
   assert.equal(grown.closed, true);
@@ -1067,7 +1724,7 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
     transferCount: MAX_TRANSFER_SLOTS + 1,
   });
   assertCode(
-    () => tooMany.dispatch(helloFrame(1n)),
+    () => tooMany.dispatch(helloFrame(3n)),
     "TransferLimit",
   );
 });

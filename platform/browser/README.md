@@ -42,22 +42,26 @@ one-generated-glue manifest.
 hash-binds it, and emits exactly one generated loader entry plus a manifest.
 The generated entry has no build-tree imports: application code injects the
 package's exported `BrowserNativeWorkerLoader` into its artifact-bound factory.
-ABI v2 requires `load(connection, supervisorIdentity)`, splits the explicit
-Worker and Worker-epoch `u64` values into the five-`u32` initialize call, and
-rejects every mailbox operation before that one initialization. Polling returns
-an output/pending bit result so the Worker entry can schedule bounded turns
-without blind spinning. Production links with `panic=abort`; a Rust panic is a
-WebAssembly trap and the loader maps it to `EngineTrap` for supervisor restart.
-Status `0xffff` remains reserved only for unwind-capable internal embeddings.
-The Wasm ABI exposes same-instance memory operations only to that glue. Raw
-pointers and `WebAssembly.Memory` never enter a protocol frame or cross a
-Worker realm; every Worker message still uses the generated boundary.
+ABI v2 requires `bootstrap(hostHelloFrame, supervisorIdentity)`, snapshots the
+canonical Host Hello, splits the explicit Worker and Worker-epoch `u64` values
+into the five-`u32` initialize call, and then performs the real two-stage Native
+handshake. Rust must synchronously return EngineHello; only the generated
+negotiator's branded connection is exposed for constructing the actual
+HelloAccept. The instance remains pre-Ready until Rust returns Ready and the
+generated transcript validator accepts all four messages. No injected
+`CompatibleHandshake`, fabricated Engine identity, pre-Ready dispatch, or
+pre-Ready poll is a production path. Handshake mismatch, idle output, rejected
+status, malformed output, and traps poison and shut down the instance.
 
-The current fixture and verifier still inject an already negotiated
-`CompatibleHandshake` into the loader. The production Worker entry that sends
-Host Hello, consumes the Native instance's real EngineHello, and only then
-constructs that handshake is the next M5 integration slice; no fabricated
-Engine identity is accepted as a production bootstrap path.
+Polling returns an output/pending bit result so the Worker entry can schedule
+bounded turns without blind spinning. Production links with `panic=abort`; a
+Rust panic is a WebAssembly trap and the loader maps it to `EngineTrap` for
+supervisor restart. Status `0xffff` remains reserved only for unwind-capable
+internal embeddings. The Wasm ABI exposes same-instance memory operations only
+to that glue. Raw pointers and `WebAssembly.Memory` never enter a protocol frame
+or cross a Worker realm; every Worker message still uses the generated
+boundary. The fixture and verifier exercise this same real EngineHello/Ready
+bootstrap rather than injecting protocol state.
 
 ## Product resource closure
 
