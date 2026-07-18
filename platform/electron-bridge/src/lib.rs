@@ -216,6 +216,7 @@ fn error_code(code: NativeViewerErrorCode) -> &'static str {
         NativeViewerErrorCode::Content => "content",
         NativeViewerErrorCode::Unsupported => "unsupported",
         NativeViewerErrorCode::Render => "render",
+        NativeViewerErrorCode::Cancelled => "cancelled",
         NativeViewerErrorCode::ResourceLimit => "resource-limit",
         NativeViewerErrorCode::Internal => "internal",
     }

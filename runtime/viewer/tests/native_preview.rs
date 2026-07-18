@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
+use std::sync::atomic::AtomicBool;
 
-use pdf_rs_viewer::{NativeDocument, NativeRendererKind};
+use pdf_rs_viewer::{NativeDocument, NativeRendererKind, NativeViewerErrorCode};
 
 const MIXED_PDF: &[u8] =
     include_bytes!("../../../tests/cases/raster/m3-reference/valid-mixed/input.pdf");
@@ -40,6 +41,21 @@ fn page_and_output_bounds_fail_closed() {
     assert!(document.render_page(1, 128).is_err());
     assert!(document.render_page(0, 0).is_err());
     assert!(document.render_page(0, 4_097).is_err());
+}
+
+#[test]
+fn cancelled_render_never_publishes_a_surface() {
+    let mut document = NativeDocument::open(MIXED_PDF.to_vec()).expect("strict Native open");
+    let cancellation = AtomicBool::new(true);
+    let error = document
+        .render_page_with_renderer_and_cancellation(
+            0,
+            128,
+            NativeRendererKind::ReferenceCpu,
+            &cancellation,
+        )
+        .expect_err("pre-cancelled render cannot publish");
+    assert_eq!(error.code(), NativeViewerErrorCode::Cancelled);
 }
 
 #[test]

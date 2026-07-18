@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use pdf_rs_bytes::{
     ByteRange, DataTicket, JobId, RangeResponse, RangeStore, RequestPriority, ResumeCheckpoint,
@@ -18,16 +19,17 @@ use pdf_rs_bytes::{
     SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentExtGStateProfile, ContentExtGStateResource, ContentFontLimits, ContentFontProfile,
-    ContentFormProfile, ContentGraphicsLimits, ContentImageLimits, ContentImageProfile,
-    ContentLimits, ContentOperand, ContentVmLimits, ContentVmPoll, DecodedContentStream,
-    InterpretPageJob, NeverCancelled as NeverContentCancelled, OperatorKind, scan_content_streams,
+    ContentCancellation, ContentErrorCategory, ContentExtGStateProfile, ContentExtGStateResource,
+    ContentFontLimits, ContentFontProfile, ContentFormProfile, ContentGraphicsLimits,
+    ContentImageLimits, ContentImageProfile, ContentLimits, ContentOperand, ContentVmErrorCategory,
+    ContentVmFailure, ContentVmLimits, ContentVmPoll, DecodedContentStream, InterpretPageJob,
+    OperatorKind, scan_content_streams,
 };
 use pdf_rs_document::{
     AcquiredObjectJobContext, AcquiredPageContent, AcquiredPageCountPoll, AttestRevisionJob,
-    AttestedObjectJobContext, AttestedObjectPoll, CandidateRevisionIndex, DocumentError,
-    DocumentErrorCategory, DocumentLimits, FontResourceJobContext, FontResourceLimits,
-    FormXObjectJobContext, ImageXObjectJobContext, ImageXObjectLimits,
+    AttestedObjectJobContext, AttestedObjectPoll, CandidateRevisionIndex, DocumentCancellation,
+    DocumentError, DocumentErrorCategory, DocumentLimits, FontResourceJobContext,
+    FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext, ImageXObjectLimits,
     NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
     OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits, PageContentPoll,
     PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex, PageIndexBuildPoll,
@@ -41,18 +43,18 @@ use pdf_rs_document::{
     StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
-    FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
+    FastRasterCancellation, FastRasterErrorCategory, FastRasterJob, FastRasterLimits,
 };
 use pdf_rs_filters::DecodeLimits;
 use pdf_rs_object::{ObjectLimits, ObjectWorkCaps};
 use pdf_rs_policy::{
-    CapabilityEvaluator, CapabilityProfile, DeviceRect, NeverCancelled as NeverPolicyCancelled,
-    OptionalContentIdentity, PolicyLimits, RenderConfig, RenderConfigInput, RenderPlanOutcome,
-    RenderPlanRequest, RendererEpoch, ZoomRatio, create_render_plan,
+    CapabilityEvaluator, CapabilityProfile, DeviceRect, OptionalContentIdentity,
+    PolicyCancellation, PolicyErrorCategory, PolicyLimits, RenderConfig, RenderConfigInput,
+    RenderPlanOutcome, RenderPlanRequest, RendererEpoch, ZoomRatio, create_render_plan,
 };
 use pdf_rs_raster::reference::{
-    ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
-    ReferenceRenderPoll,
+    ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig,
+    ReferenceRenderErrorCategory, ReferenceRenderJob, ReferenceRenderPoll,
 };
 use pdf_rs_scene::{GraphicsSceneLimits, PageRotation, Scene, SceneRect, SceneScalar};
 use pdf_rs_syntax::SyntaxLimits;
@@ -81,6 +83,8 @@ pub enum NativeViewerErrorCode {
     Unsupported,
     /// Native pixel production failed.
     Render,
+    /// Cooperative cancellation stopped work before publication.
+    Cancelled,
     /// A configured source, work, or output ceiling was exceeded.
     ResourceLimit,
     /// An internal lifecycle invariant failed.
@@ -112,6 +116,59 @@ impl fmt::Display for NativeViewerError {
 
 impl std::error::Error for NativeViewerError {}
 
+/// Cooperative cancellation shared by UI-neutral Native viewer operations.
+pub trait NativeViewerCancellation: Send + Sync {
+    /// Reports whether the current result is no longer useful.
+    fn is_cancelled(&self) -> bool;
+}
+
+impl NativeViewerCancellation for AtomicBool {
+    fn is_cancelled(&self) -> bool {
+        self.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct NeverNativeViewerCancellation;
+
+impl NativeViewerCancellation for NeverNativeViewerCancellation {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+struct CancellationAdapter<'a>(&'a dyn NativeViewerCancellation);
+
+impl ContentCancellation for CancellationAdapter<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
+impl DocumentCancellation for CancellationAdapter<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
+impl FastRasterCancellation for CancellationAdapter<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
+impl PolicyCancellation for CancellationAdapter<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
+impl ReferenceRasterCancellation for CancellationAdapter<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
 fn document_failure(error: DocumentError) -> NativeViewerError {
     let code = match error.category() {
         DocumentErrorCategory::Syntax | DocumentErrorCategory::Lookup => {
@@ -120,9 +177,10 @@ fn document_failure(error: DocumentError) -> NativeViewerError {
         DocumentErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
         DocumentErrorCategory::Source => NativeViewerErrorCode::Source,
         DocumentErrorCategory::Unsupported => NativeViewerErrorCode::Unsupported,
-        DocumentErrorCategory::Configuration
-        | DocumentErrorCategory::Cancellation
-        | DocumentErrorCategory::Internal => NativeViewerErrorCode::Internal,
+        DocumentErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
+        DocumentErrorCategory::Configuration | DocumentErrorCategory::Internal => {
+            NativeViewerErrorCode::Internal
+        }
     };
     NativeViewerError::new(code)
 }
@@ -136,9 +194,10 @@ fn strict_open_failure(error: StrictBaseOpenError) -> NativeViewerError {
                 XrefErrorCategory::Source => NativeViewerErrorCode::Source,
                 XrefErrorCategory::Unsupported => NativeViewerErrorCode::Unsupported,
                 XrefErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
-                XrefErrorCategory::Configuration
-                | XrefErrorCategory::Cancellation
-                | XrefErrorCategory::Internal => NativeViewerErrorCode::Internal,
+                XrefErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
+                XrefErrorCategory::Configuration | XrefErrorCategory::Internal => {
+                    NativeViewerErrorCode::Internal
+                }
             };
             NativeViewerError::new(code)
         }
@@ -151,8 +210,8 @@ fn source_chain_failure(error: SourceRevisionChainError) -> NativeViewerError {
         SourceRevisionChainErrorCategory::Source => NativeViewerErrorCode::Source,
         SourceRevisionChainErrorCategory::Unsupported => NativeViewerErrorCode::Unsupported,
         SourceRevisionChainErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+        SourceRevisionChainErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
         SourceRevisionChainErrorCategory::Configuration
-        | SourceRevisionChainErrorCategory::Cancellation
         | SourceRevisionChainErrorCategory::Internal => NativeViewerErrorCode::Internal,
     };
     NativeViewerError::new(code)
@@ -307,7 +366,12 @@ impl NativeDocument {
         page_index: u32,
         width: u32,
     ) -> Result<NativePageSurface, NativeViewerError> {
-        self.render_page_with_renderer(page_index, width, NativeRendererKind::ReferenceCpu)
+        self.render_page_with_renderer_and_cancellation(
+            page_index,
+            width,
+            NativeRendererKind::ReferenceCpu,
+            &NeverNativeViewerCancellation,
+        )
     }
 
     /// Interprets and renders one page with an explicitly selected PDF.rs Native renderer.
@@ -320,8 +384,31 @@ impl NativeDocument {
         width: u32,
         renderer: NativeRendererKind,
     ) -> Result<NativePageSurface, NativeViewerError> {
+        self.render_page_with_renderer_and_cancellation(
+            page_index,
+            width,
+            renderer,
+            &NeverNativeViewerCancellation,
+        )
+    }
+
+    /// Interprets and renders one page while observing cooperative cancellation.
+    ///
+    /// Cancellation is checked before job ownership changes and at the bounded probe intervals
+    /// owned by document, content, policy, and raster jobs. No Surface is published after
+    /// cancellation is observed.
+    pub fn render_page_with_renderer_and_cancellation(
+        &mut self,
+        page_index: u32,
+        width: u32,
+        renderer: NativeRendererKind,
+        cancellation: &dyn NativeViewerCancellation,
+    ) -> Result<NativePageSurface, NativeViewerError> {
         if page_index >= self.page_count() || width == 0 || width > MAX_OUTPUT_WIDTH {
             return Err(NativeViewerError::new(NativeViewerErrorCode::InvalidInput));
+        }
+        if cancellation.is_cancelled() {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::Cancelled));
         }
         let ids = self.allocate_render_jobs()?;
         let snapshot = self.snapshot;
@@ -344,6 +431,7 @@ impl NativeDocument {
             width,
             renderer,
             ids,
+            cancellation,
         )
     }
 
@@ -656,7 +744,9 @@ fn render_strict_page(
     width: u32,
     renderer: NativeRendererKind,
     ids: RenderJobs,
+    cancellation: &dyn NativeViewerCancellation,
 ) -> Result<NativePageSurface, NativeViewerError> {
+    let cancellation = CancellationAdapter(cancellation);
     let tree_limits = PageTreeLimits::default();
     let mut lookup = authority
         .lookup_page_owned(
@@ -668,7 +758,7 @@ fn render_strict_page(
         .map_err(document_failure)?;
     let lookup_store = range_store(snapshot)?;
     let lookup = loop {
-        match lookup.poll(&lookup_store, &NeverCancelled) {
+        match lookup.poll(&lookup_store, &cancellation) {
             PageLookupPoll::Ready(lookup) => break lookup,
             PageLookupPoll::Pending {
                 ticket,
@@ -704,7 +794,7 @@ fn render_strict_page(
         .map_err(document_failure)?;
     let materialize_store = range_store(snapshot)?;
     let page = loop {
-        match materialize.poll(&materialize_store, &NeverCancelled) {
+        match materialize.poll(&materialize_store, &cancellation) {
             PageMaterializationPoll::Ready(page) => break page,
             PageMaterializationPoll::Pending {
                 ticket,
@@ -739,7 +829,7 @@ fn render_strict_page(
         .map_err(document_failure)?;
     let content_store = range_store(snapshot)?;
     let acquired = loop {
-        match content.poll(&content_store, &NeverCancelled) {
+        match content.poll(&content_store, &cancellation) {
             PageContentPoll::Ready(acquired) => break acquired,
             PageContentPoll::Pending {
                 ticket,
@@ -789,7 +879,7 @@ fn render_strict_page(
         ContentFontLimits::default(),
     );
     let ext_gstate_profile =
-        acquire_ext_gstate_profile(&acquired, authority, snapshot, source, ids)?;
+        acquire_ext_gstate_profile(&acquired, authority, snapshot, source, ids, &cancellation)?;
     let form_profile = ContentFormProfile::new(
         authority.clone(),
         FormXObjectJobContext::new(
@@ -824,13 +914,27 @@ fn render_strict_page(
     .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
     let vm_store = range_store(snapshot)?;
     let interpreted = loop {
-        match vm.poll(&vm_store, &NeverCancelled) {
+        match vm.poll(&vm_store, &cancellation) {
             ContentVmPoll::Ready(page) => break page,
             ContentVmPoll::Unsupported(_) => {
                 return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
             }
-            ContentVmPoll::Failed(_) => {
-                return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
+            ContentVmPoll::Failed(error) => {
+                let code = match error {
+                    ContentVmFailure::Content(error) => match error.category() {
+                        ContentErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
+                        ContentErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+                        _ => NativeViewerErrorCode::Content,
+                    },
+                    ContentVmFailure::Document(error) => return Err(document_failure(error)),
+                    ContentVmFailure::Scene(_) => NativeViewerErrorCode::Content,
+                    ContentVmFailure::Vm(error) => match error.category() {
+                        ContentVmErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
+                        ContentVmErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+                        _ => NativeViewerErrorCode::Content,
+                    },
+                };
+                return Err(NativeViewerError::new(code));
             }
             ContentVmPoll::Pending {
                 ticket,
@@ -857,13 +961,22 @@ fn render_strict_page(
                 .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
             let mut render =
                 ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
-            let pixels = match render.poll(&NeverRasterCancelled) {
+            let pixels = match render.poll(&cancellation) {
                 ReferenceRenderPoll::Ready(pixels) => pixels,
                 ReferenceRenderPoll::Unsupported(_) => {
                     return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
                 }
-                ReferenceRenderPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Render));
+                ReferenceRenderPoll::Failed(error) => {
+                    let code = match error.category() {
+                        ReferenceRenderErrorCategory::Cancellation => {
+                            NativeViewerErrorCode::Cancelled
+                        }
+                        ReferenceRenderErrorCategory::Resource => {
+                            NativeViewerErrorCode::ResourceLimit
+                        }
+                        _ => NativeViewerErrorCode::Render,
+                    };
+                    return Err(NativeViewerError::new(code));
                 }
             };
             let stride = u32::try_from(pixels.stride_bytes())
@@ -877,7 +990,9 @@ fn render_strict_page(
                 pixels: pixels.rgba().to_vec(),
             })
         }
-        NativeRendererKind::FastCpu => render_fast_page(page_index, width, height, &scene),
+        NativeRendererKind::FastCpu => {
+            render_fast_page(page_index, width, height, &scene, &cancellation)
+        }
     }
 }
 
@@ -898,6 +1013,7 @@ fn acquire_ext_gstate_profile(
     snapshot: SourceSnapshot,
     source: &[u8],
     ids: RenderJobs,
+    cancellation: &CancellationAdapter<'_>,
 ) -> Result<ContentExtGStateProfile, NativeViewerError> {
     let decoded = acquired
         .streams()
@@ -913,8 +1029,16 @@ fn acquire_ext_gstate_profile(
             ))
         })
         .collect::<Result<Vec<_>, NativeViewerError>>()?;
-    let program = scan_content_streams(&decoded, ContentLimits::default(), &NeverContentCancelled)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
+    let program = scan_content_streams(&decoded, ContentLimits::default(), cancellation).map_err(
+        |error| {
+            let code = match error.category() {
+                ContentErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
+                ContentErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+                _ => NativeViewerErrorCode::Content,
+            };
+            NativeViewerError::new(code)
+        },
+    )?;
     let ext_gstate_limits = PageExtGStateLookupLimits::default();
     let mut names = BTreeSet::new();
     for operator in program.operators() {
@@ -956,7 +1080,7 @@ fn acquire_ext_gstate_profile(
         .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
     for (index, name) in names.into_iter().enumerate() {
         let proof = resolver
-            .lookup_ext_gstate(&name, &lookup_store, &NeverCancelled)
+            .lookup_ext_gstate(&name, &lookup_store, cancellation)
             .map_err(document_failure)?;
         if proof.snapshot() != authority.as_attested().snapshot()
             || proof.revision_id() != authority.as_attested().revision_id()
@@ -1000,7 +1124,7 @@ fn acquire_ext_gstate_profile(
             )
             .map_err(document_failure)?;
         let object = loop {
-            match open.poll(&lookup_store, &NeverCancelled) {
+            match open.poll(&lookup_store, cancellation) {
                 AttestedObjectPoll::Ready(object) => break object,
                 AttestedObjectPoll::Pending {
                     ticket,
@@ -1025,14 +1149,6 @@ fn acquire_ext_gstate_profile(
     }
     ContentExtGStateProfile::new(resources)
         .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Unsupported))
-}
-
-struct NeverRasterCancelled;
-
-impl ReferenceRasterCancellation for NeverRasterCancelled {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
 }
 
 fn source_snapshot(source: &[u8], source_len: u64) -> SourceSnapshot {
@@ -1167,13 +1283,21 @@ fn render_fast_page(
     width: u32,
     height: u32,
     scene: &Scene,
+    cancellation: &CancellationAdapter<'_>,
 ) -> Result<NativePageSurface, NativeViewerError> {
     let decision = CapabilityEvaluator::new(
         CapabilityProfile::m3_reference_v1(),
         PolicyLimits::default(),
     )
-    .evaluate(scene, 1, &NeverPolicyCancelled)
-    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    .evaluate(scene, 1, cancellation)
+    .map_err(|error| {
+        let code = match error.category() {
+            PolicyErrorCategory::Cancelled => NativeViewerErrorCode::Cancelled,
+            PolicyErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+            _ => NativeViewerErrorCode::Render,
+        };
+        NativeViewerError::new(code)
+    })?;
     let config = RenderConfig::validate(RenderConfigInput::fast_cpu_full())
         .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
     let request = RenderPlanRequest::new(
@@ -1198,10 +1322,16 @@ fn render_fast_page(
         request,
         RendererEpoch::new(1).expect("fixed Fast renderer epoch is nonzero"),
         PolicyLimits::default(),
-        &NeverPolicyCancelled,
+        cancellation,
     )
-    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?
-    {
+    .map_err(|error| {
+        let code = match error.category() {
+            PolicyErrorCategory::Cancelled => NativeViewerErrorCode::Cancelled,
+            PolicyErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+            _ => NativeViewerErrorCode::Render,
+        };
+        NativeViewerError::new(code)
+    })? {
         RenderPlanOutcome::Ready(plan) => plan,
         RenderPlanOutcome::NotPublishable(_) => {
             return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
@@ -1213,16 +1343,24 @@ fn render_fast_page(
                 .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let job = FastRasterJob::new(
-        scene,
-        &plan,
-        FastRasterLimits::default(),
-        &NeverFastCancelled,
-    )
-    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
-    let tiles = job
-        .render_all(&order, &NeverFastCancelled)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    let job = FastRasterJob::new(scene, &plan, FastRasterLimits::default(), cancellation).map_err(
+        |error| {
+            let code = match error.category() {
+                FastRasterErrorCategory::Cancelled => NativeViewerErrorCode::Cancelled,
+                FastRasterErrorCategory::ResourceLimit => NativeViewerErrorCode::ResourceLimit,
+                _ => NativeViewerErrorCode::Render,
+            };
+            NativeViewerError::new(code)
+        },
+    )?;
+    let tiles = job.render_all(&order, cancellation).map_err(|error| {
+        let code = match error.category() {
+            FastRasterErrorCategory::Cancelled => NativeViewerErrorCode::Cancelled,
+            FastRasterErrorCategory::ResourceLimit => NativeViewerErrorCode::ResourceLimit,
+            _ => NativeViewerErrorCode::Render,
+        };
+        NativeViewerError::new(code)
+    })?;
     let stride = width
         .checked_mul(4)
         .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
