@@ -542,6 +542,48 @@ fn embedded_font_objects(
     ]
 }
 
+fn identity_h_cidfont_objects(
+    font_number: u32,
+    descendant_number: u32,
+    descriptor_number: u32,
+    program_number: u32,
+    program: &[u8],
+) -> Vec<(u32, Vec<u8>)> {
+    vec![
+        (
+            font_number,
+            indirect_object(
+                font_number,
+                format!(
+                    "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H \
+                     /DescendantFonts [{descendant_number} 0 R] >>"
+                )
+                .as_bytes(),
+            ),
+        ),
+        (
+            descendant_number,
+            indirect_object(
+                descendant_number,
+                format!(
+                    "<< /Type /Font /Subtype /CIDFontType2 /CIDToGIDMap /Identity \
+                     /DW 1000 /W [1 [777 778] 3 3 779] \
+                     /FontDescriptor {descriptor_number} 0 R >>"
+                )
+                .as_bytes(),
+            ),
+        ),
+        (
+            descriptor_number,
+            indirect_object(
+                descriptor_number,
+                format!("<< /Type /FontDescriptor /FontFile2 {program_number} 0 R >>").as_bytes(),
+            ),
+        ),
+        (program_number, font_program_object(program_number, program)),
+    ]
+}
+
 fn complete_winansi_font_objects(
     font_number: u32,
     descriptor_number: u32,
@@ -579,6 +621,8 @@ fn font_context(seed: u64) -> FontResourceJobContext {
         ResumeCheckpoint::new(seed + 7),
         ResumeCheckpoint::new(seed + 8),
         ResumeCheckpoint::new(seed + 9),
+        ResumeCheckpoint::new(seed + 10),
+        ResumeCheckpoint::new(seed + 11),
         RequestPriority::VisiblePage,
     )
 }
@@ -3109,6 +3153,47 @@ fn text_fill_stroke_stroke_and_invisible_modes_publish_exact_glyph_painting() {
 }
 
 #[test]
+fn identity_h_cidfonttype2_decodes_two_byte_codes_and_uses_pdf_widths() {
+    let objects = identity_h_cidfont_objects(5, 6, 7, 8, &font_support::foundational_font());
+    let (mut job, store) = font_job_with_limits(
+        b"BT /F0 10 Tf <000100020003> Tj ET",
+        b"<< /Font << /F0 5 0 R >> >>",
+        &objects,
+        0x90,
+        ContentVmLimits::default(),
+        ContentFontLimits::default(),
+        GraphicsSceneLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("Identity-H CIDFontType2 text must render: {outcome:?}"),
+    };
+    let graphics = page.scene().graphics().expect("graphics-v2 scene");
+    let GraphicsCommand::DrawGlyphRun(run) = graphics.commands()[0].command() else {
+        panic!("Identity-H text must publish one glyph run");
+    };
+    assert_eq!(
+        run.glyphs()
+            .iter()
+            .map(|glyph| glyph.character_code())
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        run.glyphs()
+            .iter()
+            .map(|glyph| glyph.transform().components()[4])
+            .collect::<Vec<_>>(),
+        [
+            SceneScalar::ZERO,
+            SceneScalar::from_scaled(7_770_000_000),
+            SceneScalar::from_scaled(15_550_000_000),
+        ]
+    );
+    assert_eq!(page.font_stats().glyphs(), 3);
+}
+
+#[test]
 fn td_next_line_quotes_empty_adjustments_and_winansi_boundaries_are_exact() {
     let page = font_ready(
         b"BT /F0 10 Tf 2 TL 3 -4 TD (A) Tj T* (A) Tj (A) ' 1 2 (A) \" \
@@ -3251,13 +3336,13 @@ fn font_payload_pending_does_not_replan_lookup_or_publish_partial_scene() {
     let source = BlockPayloadAfter {
         complete: &store,
         missing: &missing,
-        checkpoint: ResumeCheckpoint::new(32_010),
+        checkpoint: ResumeCheckpoint::new(32_012),
         admitted_payload_polls: 0,
         payload_polls: AtomicUsize::new(0),
     };
     match job.poll(&source, &DocumentNeverCancelled) {
         ContentVmPoll::Pending { checkpoint, .. } => {
-            assert_eq!(checkpoint, ResumeCheckpoint::new(32_010));
+            assert_eq!(checkpoint, ResumeCheckpoint::new(32_012));
         }
         outcome => panic!("font payload must suspend: {outcome:?}"),
     }
@@ -3289,7 +3374,7 @@ fn font_payload_pending_does_not_replan_lookup_or_publish_partial_scene() {
 fn every_font_checkpoint_resumes_the_same_plan_lookup_and_terminal_arc() {
     let mut program = font_support::foundational_font();
     program.resize(5_000, 0);
-    for (offset, checkpoint_value) in [32_002_u64, 32_003, 32_006, 32_007, 32_008, 32_009, 32_010]
+    for (offset, checkpoint_value) in [32_002_u64, 32_003, 32_008, 32_009, 32_010, 32_011, 32_012]
         .into_iter()
         .enumerate()
     {
@@ -3299,7 +3384,7 @@ fn every_font_checkpoint_resumes_the_same_plan_lookup_and_terminal_arc() {
                 objects = vec![(5, font_program_object(5, &vec![0; 5_000]))];
                 false
             }
-            32_007 => {
+            32_009 => {
                 let descriptor = objects.iter_mut().find(|(number, _)| *number == 6).unwrap();
                 descriptor.1 = font_program_object(6, &vec![0; 5_000]);
                 false
@@ -3835,7 +3920,7 @@ fn combined_text_plan_font_use_and_saved_parameter_stack_retention_is_exact() {
     let blocker = BlockPayloadAfter {
         complete: &store,
         missing: &missing,
-        checkpoint: ResumeCheckpoint::new(32_010),
+        checkpoint: ResumeCheckpoint::new(32_012),
         admitted_payload_polls: 0,
         payload_polls: AtomicUsize::new(0),
     };
@@ -4174,7 +4259,7 @@ fn huge_adjustment_only_tj_guards_execution_and_prioritizes_source_change() {
         let blocker = BlockPayloadAfter {
             complete: &store,
             missing: &missing,
-            checkpoint: ResumeCheckpoint::new(32_010),
+            checkpoint: ResumeCheckpoint::new(32_012),
             admitted_payload_polls: 0,
             payload_polls: AtomicUsize::new(0),
         };
@@ -4206,7 +4291,7 @@ fn huge_adjustment_only_tj_guards_execution_and_prioritizes_source_change() {
         let blocker = BlockPayloadAfter {
             complete: &store,
             missing: &missing,
-            checkpoint: ResumeCheckpoint::new(32_010),
+            checkpoint: ResumeCheckpoint::new(32_012),
             admitted_payload_polls: 0,
             payload_polls: AtomicUsize::new(0),
         };
@@ -4279,7 +4364,7 @@ fn huge_outline_guards_after_allocation_and_prioritizes_source_change() {
         let blocker = BlockPayloadAfter {
             complete: &store,
             missing: &missing,
-            checkpoint: ResumeCheckpoint::new(32_010),
+            checkpoint: ResumeCheckpoint::new(32_012),
             admitted_payload_polls: 0,
             payload_polls: AtomicUsize::new(0),
         };
@@ -4336,7 +4421,7 @@ fn huge_outline_guards_after_allocation_and_prioritizes_source_change() {
             let blocker = BlockPayloadAfter {
                 complete: &store,
                 missing: &missing,
-                checkpoint: ResumeCheckpoint::new(32_010),
+                checkpoint: ResumeCheckpoint::new(32_012),
                 admitted_payload_polls: 0,
                 payload_polls: AtomicUsize::new(0),
             };

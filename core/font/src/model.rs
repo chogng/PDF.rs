@@ -10,6 +10,8 @@ pub enum FontProfile {
     SimpleTrueTypeWinAnsiAsciiV1,
     /// TrueType outlines, Windows Unicode format 4, and the complete PDF WinAnsi mapping.
     SimpleTrueTypeWinAnsiV1,
+    /// TrueType outlines addressed directly by CID-to-GID identity mapping.
+    CidFontType2IdentityV1,
     /// Standalone CFF1 Type 2 outlines with the standard non-CID encoding model.
     SimpleType1CStandardV1,
 }
@@ -20,6 +22,7 @@ impl FontProfile {
         match self {
             Self::SimpleTrueTypeWinAnsiAsciiV1 => "m3.simple-truetype-winansi-ascii.v1",
             Self::SimpleTrueTypeWinAnsiV1 => "m4.simple-truetype-winansi.v1",
+            Self::CidFontType2IdentityV1 => "m4.cidfont-type2-identity.v1",
             Self::SimpleType1CStandardV1 => "m4.simple-type1c-standard.v1",
         }
     }
@@ -303,8 +306,12 @@ impl TrueTypeFont {
     /// bytes above `0x7e`. A missing format 4 mapping follows TrueType semantics and returns glyph
     /// zero.
     pub fn glyph_id_for_winansi(&self, byte: u8) -> Option<GlyphId> {
-        if self.profile == FontProfile::SimpleTrueTypeWinAnsiAsciiV1 && byte > 0x7e {
-            return None;
+        match self.profile {
+            FontProfile::SimpleTrueTypeWinAnsiAsciiV1 if byte > 0x7e => return None,
+            FontProfile::CidFontType2IdentityV1 | FontProfile::SimpleType1CStandardV1 => {
+                return None;
+            }
+            FontProfile::SimpleTrueTypeWinAnsiAsciiV1 | FontProfile::SimpleTrueTypeWinAnsiV1 => {}
         }
         let index = byte.checked_sub(0x20)?;
         self.winansi_glyphs.get(usize::from(index)).copied()

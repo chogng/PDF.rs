@@ -268,6 +268,40 @@ fn valid_font_fixture(program: &[u8], flate: bool, direct_descriptor: bool, salt
     resource_fixture(b"<< /Font << /F0 4 0 R >> >>", extras, 7, salt)
 }
 
+fn identity_h_cidfont_fixture(program: &[u8], salt: u8) -> Fixture {
+    resource_fixture(
+        b"<< /Font << /F0 4 0 R >> >>",
+        vec![
+            (
+                4,
+                direct_object(
+                    4,
+                    b"<< /Type /Font /Subtype /Type0 /Encoding /Identity-H \
+                       /DescendantFonts [5 0 R] >>",
+                ),
+            ),
+            (
+                5,
+                direct_object(
+                    5,
+                    b"<< /Type /Font /Subtype /CIDFontType2 /CIDToGIDMap /Identity \
+                       /DW 1000 /W [1 [777 778] 3 3 779] /FontDescriptor 6 0 R >>",
+                ),
+            ),
+            (
+                6,
+                direct_object(6, b"<< /Type /FontDescriptor /FontFile2 7 0 R >>"),
+            ),
+            (
+                7,
+                stream_body(7, format!("/Length1 {}", program.len()).as_bytes(), program),
+            ),
+        ],
+        8,
+        salt,
+    )
+}
+
 fn declared_length_font_fixture(
     program: &[u8],
     flate: bool,
@@ -452,6 +486,8 @@ fn font_context(seed: u64) -> FontResourceJobContext {
         ResumeCheckpoint::new(seed + 7),
         ResumeCheckpoint::new(seed + 8),
         ResumeCheckpoint::new(seed + 9),
+        ResumeCheckpoint::new(seed + 10),
+        ResumeCheckpoint::new(seed + 11),
         RequestPriority::VisiblePage,
     )
 }
@@ -749,8 +785,8 @@ fn direct_lookup_and_identity_acquisition_preserve_pdf_metrics_proof_and_replay(
         Some(object_ref(5))
     );
     assert_eq!(ready.program_object().reference(), object_ref(6));
-    assert_eq!(ready.first_char(), 32);
-    assert_eq!(ready.last_char(), 126);
+    assert_eq!(ready.first_char(), Some(32));
+    assert_eq!(ready.last_char(), Some(126));
     assert_eq!(ready.pdf_width_for_winansi(b'A'), Some(777));
     assert_eq!(ready.pdf_width_for_winansi(0x1f), None);
     let glyph = ready.font().glyph_id_for_winansi(b'A').unwrap();
@@ -780,6 +816,73 @@ fn direct_lookup_and_identity_acquisition_preserve_pdf_metrics_proof_and_replay(
         other => panic!("terminal Ready must replay without runtime work: {other:?}"),
     };
     assert!(Arc::ptr_eq(&ready, &replay));
+}
+
+#[test]
+fn identity_h_cidfonttype2_acquisition_preserves_two_byte_codes_widths_and_proofs() {
+    let program = font_support::foundational_font();
+    let fixture = identity_h_cidfont_fixture(&program, 0xe7);
+    let prepared = prepare(&fixture, 18_451);
+    let context = font_context(18_491);
+    let missing = RangeStore::new(fixture.snapshot, Default::default()).unwrap();
+    let source = CheckpointMissingSource {
+        complete: &prepared.store,
+        missing: &missing,
+        blocked: context.descendant_envelope_checkpoint(),
+    };
+    let mut job = prepared
+        .authority
+        .acquire_font_resource(
+            lookup_font(&prepared),
+            context,
+            FontResourceLimits::default(),
+        )
+        .unwrap();
+    match job.poll(&source, &DocumentNeverCancelled) {
+        FontResourcePoll::Pending { checkpoint, .. } => {
+            assert_eq!(checkpoint, context.descendant_envelope_checkpoint())
+        }
+        other => panic!("Type0 descendant checkpoint must suspend: {other:?}"),
+    }
+    let ready = match job.poll(&prepared.store, &DocumentNeverCancelled) {
+        FontResourcePoll::Ready(font) => font,
+        other => panic!("Identity-H CIDFontType2 must resume to Ready: {other:?}"),
+    };
+
+    assert!(ready.uses_identity_h());
+    assert_eq!(ready.first_char(), None);
+    assert_eq!(ready.last_char(), None);
+    assert_eq!(
+        ready.descendant_object().map(|object| object.reference()),
+        Some(object_ref(5))
+    );
+    assert_eq!(
+        ready.descriptor_object().map(|object| object.reference()),
+        Some(object_ref(6))
+    );
+    assert_eq!(ready.program_object().reference(), object_ref(7));
+    assert_eq!(ready.font().profile(), FontProfile::CidFontType2IdentityV1);
+    assert_eq!(ready.character_code_count(&[0, 1, 0, 2, 0, 3]), Some(3));
+    assert_eq!(ready.character_code_count(&[0, 1, 0]), None);
+    let mut cursor = 0;
+    assert_eq!(
+        ready.decode_next_character_code(&[0, 1, 0, 2], &mut cursor),
+        Some(1)
+    );
+    assert_eq!(
+        ready.decode_next_character_code(&[0, 1, 0, 2], &mut cursor),
+        Some(2)
+    );
+    assert_eq!(cursor, 4);
+    assert_eq!(ready.pdf_width_for_character_code(1), Some(777));
+    assert_eq!(ready.pdf_width_for_character_code(2), Some(778));
+    assert_eq!(ready.pdf_width_for_character_code(3), Some(779));
+    assert_eq!(ready.pdf_width_for_character_code(4), Some(1_000));
+    assert_eq!(ready.glyph_id_for_character_code(1).unwrap().get(), 1);
+    assert_eq!(ready.glyph_id_for_character_code(3).unwrap().get(), 3);
+    assert_eq!(ready.glyph_id_for_character_code(4), None);
+    assert_eq!(ready.stats().objects(), 4);
+    assert_eq!(ready.stats().reference_edges(), 3);
 }
 
 #[test]
@@ -871,8 +974,8 @@ fn indirect_winansi_type1_encoding_admits_all_simple_codes_and_retains_its_proof
         ready.encoding_object().map(|object| object.reference()),
         Some(object_ref(5))
     );
-    assert_eq!(ready.first_char(), 0);
-    assert_eq!(ready.last_char(), 255);
+    assert_eq!(ready.first_char(), Some(0));
+    assert_eq!(ready.last_char(), Some(255));
     assert_eq!(ready.pdf_width_for_code(25), Some(600));
     assert_eq!(ready.glyph_id_for_code(25).unwrap().get(), 1);
     assert_eq!(ready.glyph_id_for_code(b'A').unwrap().get(), 1);
@@ -1017,7 +1120,7 @@ fn unsupported_pdf_and_truetype_capabilities_are_typed_before_publication() {
         FontResourceUnsupportedKind::FontAlias
     );
 
-    let non_truetype = custom_font_fixture(b"<< /Type /Font /Subtype /Type0 >>", None, None, 0xb6);
+    let non_truetype = custom_font_fixture(b"<< /Type /Font /Subtype /Type3 >>", None, None, 0xb6);
     let prepared = prepare(&non_truetype, 18_801);
     assert_eq!(
         acquire_unsupported(&prepared, 18_841).kind(),
@@ -1506,6 +1609,8 @@ fn constructor_runtime_priority_and_failed_terminal_replay_are_stable() {
         ResumeCheckpoint::new(21_047),
         ResumeCheckpoint::new(21_048),
         ResumeCheckpoint::new(21_049),
+        ResumeCheckpoint::new(21_050),
+        ResumeCheckpoint::new(21_051),
         RequestPriority::VisiblePage,
     );
     let error = prepared

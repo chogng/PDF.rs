@@ -533,6 +533,7 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
                 self.map_winansi_ascii(&cmap, glyph_count)?
             }
             FontProfile::SimpleTrueTypeWinAnsiV1 => self.map_winansi(&cmap, glyph_count)?,
+            FontProfile::CidFontType2IdentityV1 => [GlyphId::new(0); 224],
             FontProfile::SimpleType1CStandardV1 => {
                 return Err(ParseStop::Unsupported(FontUnsupported::new(
                     FontUnsupportedKind::ProfileMismatch,

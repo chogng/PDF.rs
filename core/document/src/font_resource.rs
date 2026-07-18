@@ -143,13 +143,15 @@ impl FontResourceUnsupported {
     }
 }
 
-/// Runtime identity and exact checkpoints for Font, encoding, descriptor, program, and payload
-/// acquisition.
+/// Runtime identity and exact checkpoints for Font, descendant, encoding, descriptor, program,
+/// and payload acquisition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FontResourceJobContext {
     job: JobId,
     font_envelope_checkpoint: ResumeCheckpoint,
     font_boundary_checkpoint: ResumeCheckpoint,
+    descendant_envelope_checkpoint: ResumeCheckpoint,
+    descendant_boundary_checkpoint: ResumeCheckpoint,
     encoding_envelope_checkpoint: ResumeCheckpoint,
     encoding_boundary_checkpoint: ResumeCheckpoint,
     descriptor_envelope_checkpoint: ResumeCheckpoint,
@@ -167,6 +169,8 @@ impl FontResourceJobContext {
         job: JobId,
         font_envelope_checkpoint: ResumeCheckpoint,
         font_boundary_checkpoint: ResumeCheckpoint,
+        descendant_envelope_checkpoint: ResumeCheckpoint,
+        descendant_boundary_checkpoint: ResumeCheckpoint,
         encoding_envelope_checkpoint: ResumeCheckpoint,
         encoding_boundary_checkpoint: ResumeCheckpoint,
         descriptor_envelope_checkpoint: ResumeCheckpoint,
@@ -180,6 +184,8 @@ impl FontResourceJobContext {
             job,
             font_envelope_checkpoint,
             font_boundary_checkpoint,
+            descendant_envelope_checkpoint,
+            descendant_boundary_checkpoint,
             encoding_envelope_checkpoint,
             encoding_boundary_checkpoint,
             descriptor_envelope_checkpoint,
@@ -202,6 +208,14 @@ impl FontResourceJobContext {
     /// Returns the selected Font object boundary checkpoint.
     pub const fn font_boundary_checkpoint(self) -> ResumeCheckpoint {
         self.font_boundary_checkpoint
+    }
+    /// Returns the Type0 descendant Font object envelope checkpoint.
+    pub const fn descendant_envelope_checkpoint(self) -> ResumeCheckpoint {
+        self.descendant_envelope_checkpoint
+    }
+    /// Returns the Type0 descendant Font object boundary checkpoint.
+    pub const fn descendant_boundary_checkpoint(self) -> ResumeCheckpoint {
+        self.descendant_boundary_checkpoint
     }
     /// Returns the indirect Encoding object envelope checkpoint.
     pub const fn encoding_envelope_checkpoint(self) -> ResumeCheckpoint {
@@ -236,10 +250,12 @@ impl FontResourceJobContext {
         self.priority
     }
 
-    fn checkpoints(self) -> [ResumeCheckpoint; 9] {
+    fn checkpoints(self) -> [ResumeCheckpoint; 11] {
         [
             self.font_envelope_checkpoint,
             self.font_boundary_checkpoint,
+            self.descendant_envelope_checkpoint,
+            self.descendant_boundary_checkpoint,
             self.encoding_envelope_checkpoint,
             self.encoding_boundary_checkpoint,
             self.descriptor_envelope_checkpoint,
@@ -256,6 +272,8 @@ impl FontResourceJobContext {
 pub enum FontResourcePhase {
     /// The selected simple Font dictionary is being reopened.
     Font,
+    /// A Type0 descendant CIDFontType2 dictionary is being reopened.
+    Descendant,
     /// An indirect simple-font Encoding dictionary is being reopened.
     Encoding,
     /// An indirect FontDescriptor dictionary is being reopened.
@@ -351,17 +369,38 @@ impl FontResourceStats {
 pub struct AcquiredFontResource {
     proof: PageFontReference,
     font_object: AttestedObject,
+    descendant_object: Option<AttestedObject>,
     encoding_object: Option<AttestedObject>,
     descriptor_object: Option<AttestedObject>,
     program_object: AttestedObject,
-    first_char: u8,
-    last_char: u8,
-    simple_widths: [u32; 256],
-    glyph_ids: [GlyphId; 256],
+    codes: AcquiredFontCodes,
     decoded_program: DecodedStream,
     font: FontProgram,
     limits: FontResourceLimits,
     stats: FontResourceStats,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CidWidth {
+    code: u16,
+    width: u32,
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed simple-font maps deliberately avoid a fallible publication allocation"
+)]
+enum AcquiredFontCodes {
+    Simple {
+        first_char: u8,
+        last_char: u8,
+        widths: [u32; 256],
+        glyph_ids: [GlyphId; 256],
+    },
+    IdentityH {
+        default_width: u32,
+        widths: Box<[CidWidth]>,
+    },
 }
 
 impl AcquiredFontResource {
@@ -377,6 +416,10 @@ impl AcquiredFontResource {
     pub const fn font_object(&self) -> &AttestedObject {
         &self.font_object
     }
+    /// Borrows the Type0 descendant CIDFont object, when this is a composite font.
+    pub const fn descendant_object(&self) -> Option<&AttestedObject> {
+        self.descendant_object.as_ref()
+    }
     /// Borrows the indirect Encoding object, or `None` for a direct or predefined encoding.
     pub const fn encoding_object(&self) -> Option<&AttestedObject> {
         self.encoding_object.as_ref()
@@ -389,23 +432,67 @@ impl AcquiredFontResource {
     pub const fn program_object(&self) -> &AttestedObject {
         &self.program_object
     }
-    /// Returns the direct PDF FirstChar value.
-    pub const fn first_char(&self) -> u8 {
-        self.first_char
+    /// Returns the direct simple-font FirstChar value, or `None` for a composite font.
+    pub const fn first_char(&self) -> Option<u8> {
+        match &self.codes {
+            AcquiredFontCodes::Simple { first_char, .. } => Some(*first_char),
+            AcquiredFontCodes::IdentityH { .. } => None,
+        }
     }
-    /// Returns the direct PDF LastChar value.
-    pub const fn last_char(&self) -> u8 {
-        self.last_char
+    /// Returns the direct simple-font LastChar value, or `None` for a composite font.
+    pub const fn last_char(&self) -> Option<u8> {
+        match &self.codes {
+            AcquiredFontCodes::Simple { last_char, .. } => Some(*last_char),
+            AcquiredFontCodes::IdentityH { .. } => None,
+        }
+    }
+    /// Reports whether strings use two-byte big-endian Identity-H character codes.
+    pub const fn uses_identity_h(&self) -> bool {
+        matches!(&self.codes, AcquiredFontCodes::IdentityH { .. })
+    }
+    /// Returns the number of character codes in one PDF string under this font.
+    pub fn character_code_count(&self, bytes: &[u8]) -> Option<usize> {
+        match &self.codes {
+            AcquiredFontCodes::Simple { .. } => Some(bytes.len()),
+            AcquiredFontCodes::IdentityH { .. } => {
+                bytes.len().is_multiple_of(2).then_some(bytes.len() / 2)
+            }
+        }
+    }
+    /// Decodes the next font-owned character code and advances the caller's byte cursor.
+    pub fn decode_next_character_code(&self, bytes: &[u8], cursor: &mut usize) -> Option<u32> {
+        match &self.codes {
+            AcquiredFontCodes::Simple { .. } => {
+                let byte = *bytes.get(*cursor)?;
+                *cursor = (*cursor).checked_add(1)?;
+                Some(u32::from(byte))
+            }
+            AcquiredFontCodes::IdentityH { .. } => {
+                let pair: [u8; 2] = bytes
+                    .get(*cursor..(*cursor).checked_add(2)?)?
+                    .try_into()
+                    .ok()?;
+                *cursor = (*cursor).checked_add(2)?;
+                Some(u32::from(u16::from_be_bytes(pair)))
+            }
+        }
     }
     /// Returns the PDF Widths advance for one represented character byte.
     ///
     /// This intentionally does not consult the embedded program's own metrics: PDF advancement is
     /// governed by the simple Font dictionary's Widths array.
     pub fn pdf_width_for_code(&self, byte: u8) -> Option<u32> {
-        if byte < self.first_char || byte > self.last_char {
-            return None;
+        match &self.codes {
+            AcquiredFontCodes::Simple {
+                first_char,
+                last_char,
+                widths,
+                ..
+            } if byte >= *first_char && byte <= *last_char => {
+                widths.get(usize::from(byte)).copied()
+            }
+            _ => None,
         }
-        self.simple_widths.get(usize::from(byte)).copied()
     }
     /// Returns the PDF Widths advance for one represented WinAnsi character byte.
     ///
@@ -416,10 +503,46 @@ impl AcquiredFontResource {
     }
     /// Resolves one represented PDF character code to the embedded program glyph.
     pub fn glyph_id_for_code(&self, byte: u8) -> Option<GlyphId> {
-        if byte < self.first_char || byte > self.last_char {
-            return None;
+        match &self.codes {
+            AcquiredFontCodes::Simple {
+                first_char,
+                last_char,
+                glyph_ids,
+                ..
+            } if byte >= *first_char && byte <= *last_char => {
+                glyph_ids.get(usize::from(byte)).copied()
+            }
+            _ => None,
         }
-        self.glyph_ids.get(usize::from(byte)).copied()
+    }
+    /// Returns the PDF advance for one font-owned character code.
+    pub fn pdf_width_for_character_code(&self, code: u32) -> Option<u32> {
+        match &self.codes {
+            AcquiredFontCodes::Simple { .. } => self.pdf_width_for_code(u8::try_from(code).ok()?),
+            AcquiredFontCodes::IdentityH {
+                default_width,
+                widths,
+            } => {
+                let code = u16::try_from(code).ok()?;
+                Some(
+                    widths
+                        .binary_search_by_key(&code, |entry| entry.code)
+                        .ok()
+                        .and_then(|index| widths.get(index))
+                        .map_or(*default_width, |entry| entry.width),
+                )
+            }
+        }
+    }
+    /// Resolves one font-owned character code to an embedded glyph.
+    pub fn glyph_id_for_character_code(&self, code: u32) -> Option<GlyphId> {
+        match &self.codes {
+            AcquiredFontCodes::Simple { .. } => self.glyph_id_for_code(u8::try_from(code).ok()?),
+            AcquiredFontCodes::IdentityH { .. } => {
+                let glyph = u16::try_from(code).ok()?;
+                (glyph < self.font.glyph_count()).then_some(GlyphId::new(glyph))
+            }
+        }
     }
     /// Borrows the sealed decoded embedded-program stream proof and bytes.
     pub const fn decoded_program(&self) -> &DecodedStream {
@@ -445,6 +568,13 @@ impl fmt::Debug for AcquiredFontResource {
             .debug_struct("AcquiredFontResource")
             .field("reference", &self.reference())
             .field(
+                "descendant_reference",
+                &self
+                    .descendant_object
+                    .as_ref()
+                    .map(AttestedObject::reference),
+            )
+            .field(
                 "encoding_reference",
                 &self.encoding_object.as_ref().map(AttestedObject::reference),
             )
@@ -456,8 +586,9 @@ impl fmt::Debug for AcquiredFontResource {
                     .map(AttestedObject::reference),
             )
             .field("program_reference", &self.program_object.reference())
-            .field("first_char", &self.first_char)
-            .field("last_char", &self.last_char)
+            .field("first_char", &self.first_char())
+            .field("last_char", &self.last_char())
+            .field("identity_h", &self.uses_identity_h())
             .field("limits", &self.limits)
             .field("stats", &self.stats)
             .field("program", &"[REDACTED]")
@@ -507,6 +638,7 @@ impl fmt::Debug for FontResourcePoll {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChildKind {
     Font,
+    Descendant,
     Encoding,
     Descriptor,
     Program,
@@ -555,15 +687,39 @@ enum Type1EncodingPlan {
     Indirect(ObjectRef),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the bounded fixed simple-font metadata stays allocation-free while it is inspected"
+)]
+enum FontInspection {
+    Ready(PdfFontMetadata),
+    Descendant(ObjectRef),
+}
+
+#[derive(Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed simple-font width map deliberately avoids parser-owned heap state"
+)]
+enum PdfFontCodes {
+    Simple {
+        encoding: SimpleEncoding,
+        pending_encoding: Option<ObjectRef>,
+        first_char: u8,
+        last_char: u8,
+        widths: [u32; 256],
+        type1_differences: Vec<Type1Difference>,
+    },
+    IdentityH {
+        default_width: u32,
+        widths: Vec<CidWidth>,
+    },
+}
+
 #[derive(Clone)]
 struct PdfFontMetadata {
     kind: PdfFontKind,
-    encoding: SimpleEncoding,
-    pending_encoding: Option<ObjectRef>,
-    first_char: u8,
-    last_char: u8,
-    simple_widths: [u32; 256],
-    type1_differences: Vec<Type1Difference>,
+    codes: PdfFontCodes,
     descriptor: DescriptorPlan,
 }
 
@@ -628,6 +784,7 @@ pub struct AcquireFontResourceJob {
     limits: FontResourceLimits,
     child: Option<ChildState>,
     font_object: Option<AttestedObject>,
+    descendant_object: Option<AttestedObject>,
     encoding_object: Option<AttestedObject>,
     descriptor_object: Option<AttestedObject>,
     program_object: Option<AttestedObject>,
@@ -667,6 +824,7 @@ impl AcquireFontResourceJob {
             FontJobState::Active => match self.child.as_ref() {
                 Some(child) => match child.kind {
                     ChildKind::Font => FontResourcePhase::Font,
+                    ChildKind::Descendant => FontResourcePhase::Descendant,
                     ChildKind::Encoding => FontResourcePhase::Encoding,
                     ChildKind::Descriptor => FontResourcePhase::Descriptor,
                     ChildKind::Program => FontResourcePhase::Program,
@@ -795,8 +953,13 @@ impl AcquireFontResourceJob {
         }
         let result = match kind {
             ChildKind::Font => match self.inspect_font(&object, source, cancellation) {
-                Ok(Ok(metadata)) => {
-                    let pending_encoding = metadata.pending_encoding;
+                Ok(Ok(FontInspection::Ready(metadata))) => {
+                    let pending_encoding = match &metadata.codes {
+                        PdfFontCodes::Simple {
+                            pending_encoding, ..
+                        } => *pending_encoding,
+                        PdfFontCodes::IdentityH { .. } => None,
+                    };
                     let descriptor = metadata.descriptor;
                     self.metadata = Some(metadata);
                     self.font_object = Some(object);
@@ -812,9 +975,31 @@ impl AcquireFontResourceJob {
                         },
                     }
                 }
+                Ok(Ok(FontInspection::Descendant(reference))) => {
+                    self.font_object = Some(object);
+                    self.follow_and_start(reference, ChildKind::Descendant)
+                }
                 Ok(Err(value)) => return StageResult::Unsupported(value),
                 Err(error) => return StageResult::Failed(error),
             },
+            ChildKind::Descendant => {
+                let metadata = match self.inspect_descendant(&object, source, cancellation) {
+                    Ok(Ok(metadata)) => metadata,
+                    Ok(Err(value)) => return StageResult::Unsupported(value),
+                    Err(error) => return StageResult::Failed(error),
+                };
+                let descriptor = metadata.descriptor;
+                self.metadata = Some(metadata);
+                self.descendant_object = Some(object);
+                match descriptor {
+                    DescriptorPlan::Indirect(reference) => {
+                        self.follow_and_start(reference, ChildKind::Descriptor)
+                    }
+                    DescriptorPlan::Program(reference) => {
+                        self.follow_and_start(reference, ChildKind::Program)
+                    }
+                }
+            }
             ChildKind::Encoding => {
                 let parsed = match self.inspect_type1_encoding_object(&object, source, cancellation)
                 {
@@ -823,13 +1008,28 @@ impl AcquireFontResourceJob {
                     Err(error) => return StageResult::Failed(error),
                 };
                 let descriptor = match self.metadata.as_mut() {
-                    Some(metadata) if metadata.pending_encoding == Some(object.reference()) => {
-                        metadata.encoding = parsed.encoding;
-                        metadata.type1_differences = parsed.differences;
-                        metadata.pending_encoding = None;
-                        metadata.descriptor
+                    Some(PdfFontMetadata {
+                        codes:
+                            PdfFontCodes::Simple {
+                                encoding,
+                                pending_encoding,
+                                type1_differences,
+                                ..
+                            },
+                        descriptor,
+                        ..
+                    }) if *pending_encoding == Some(object.reference()) => {
+                        *encoding = parsed.encoding;
+                        *type1_differences = parsed.differences;
+                        *pending_encoding = None;
+                        *descriptor
                     }
-                    _ => {
+                    Some(_) => {
+                        return StageResult::Failed(
+                            self.internal_error(Some(object.object_span().start())),
+                        );
+                    }
+                    None => {
                         return StageResult::Failed(
                             self.internal_error(Some(object.object_span().start())),
                         );
@@ -905,6 +1105,10 @@ impl AcquireFontResourceJob {
                 self.context.font_envelope_checkpoint(),
                 self.context.font_boundary_checkpoint(),
             ),
+            ChildKind::Descendant => (
+                self.context.descendant_envelope_checkpoint(),
+                self.context.descendant_boundary_checkpoint(),
+            ),
             ChildKind::Encoding => (
                 self.context.encoding_envelope_checkpoint(),
                 self.context.encoding_boundary_checkpoint(),
@@ -945,6 +1149,10 @@ impl AcquireFontResourceJob {
 
     fn reference_seen(&self, reference: ObjectRef) -> bool {
         self.proof.target() == reference
+            || self
+                .descendant_object
+                .as_ref()
+                .is_some_and(|object| object.reference() == reference)
             || self
                 .encoding_object
                 .as_ref()
@@ -1027,22 +1235,29 @@ impl AcquireFontResourceJob {
         let metadata_bytes = self
             .metadata
             .as_ref()
-            .map_or(Some(0_u64), |metadata| {
-                let entries = metadata
-                    .type1_differences
+            .map_or(Some(0_u64), |metadata| match &metadata.codes {
+                PdfFontCodes::Simple {
+                    type1_differences, ..
+                } => {
+                    let entries = type1_differences
+                        .capacity()
+                        .checked_mul(size_of::<Type1Difference>())?;
+                    type1_differences
+                        .iter()
+                        .try_fold(entries, |total, difference| {
+                            total.checked_add(difference.name.len())
+                        })
+                        .and_then(|bytes| u64::try_from(bytes).ok())
+                }
+                PdfFontCodes::IdentityH { widths, .. } => widths
                     .capacity()
-                    .checked_mul(size_of::<Type1Difference>())?;
-                metadata
-                    .type1_differences
-                    .iter()
-                    .try_fold(entries, |total, difference| {
-                        total.checked_add(difference.name.len())
-                    })
-                    .and_then(|bytes| u64::try_from(bytes).ok())
+                    .checked_mul(size_of::<CidWidth>())
+                    .and_then(|bytes| u64::try_from(bytes).ok()),
             })
             .ok_or_else(|| self.internal_error(self.current_offset()))?;
         [
             self.font_object.as_ref(),
+            self.descendant_object.as_ref(),
             self.encoding_object.as_ref(),
             self.descriptor_object.as_ref(),
             self.program_object.as_ref(),
@@ -1099,7 +1314,7 @@ impl AcquireFontResourceJob {
         object: &AttestedObject,
         source: &dyn ByteSource,
         cancellation: &dyn DocumentCancellation,
-    ) -> Result<Result<PdfFontMetadata, FontResourceUnsupported>, DocumentError> {
+    ) -> Result<Result<FontInspection, FontResourceUnsupported>, DocumentError> {
         let reference = object.reference();
         let value = match object.value() {
             IndirectObjectValue::Stream(stream) => {
@@ -1133,6 +1348,46 @@ impl AcquireFontResourceJob {
             }
         }
         let subtype = required_slot(slots.subtype, reference, dictionary_offset)?;
+        if matches!(
+            subtype.value(),
+            SyntaxObject::Name(name) if name.bytes() == b"Type0"
+        ) {
+            let encoding = required_slot(slots.encoding, reference, dictionary_offset)?;
+            match encoding.value() {
+                SyntaxObject::Name(name) if name.bytes() == b"Identity-H" => {}
+                SyntaxObject::Name(_) | SyntaxObject::Dictionary(_) => {
+                    return Ok(Err(FontResourceUnsupported::new(
+                        FontResourceUnsupportedKind::UnsupportedEncoding,
+                        reference,
+                        encoding.span().start(),
+                    )));
+                }
+                SyntaxObject::Reference(_) => {
+                    return Ok(Err(
+                        self.indirect_metadata(reference, encoding.span().start())
+                    ));
+                }
+                _ => return Err(invalid_font(reference, encoding.span().start())),
+            }
+            let descendants = required_slot(slots.descendant_fonts, reference, dictionary_offset)?;
+            let descendant = match descendants.value() {
+                SyntaxObject::Array(values) => match values.values() {
+                    [value] => match value.value() {
+                        SyntaxObject::Reference(reference) => *reference,
+                        _ => return Err(invalid_font(reference, value.span().start())),
+                    },
+                    _ => return Err(invalid_font(reference, descendants.span().start())),
+                },
+                SyntaxObject::Reference(_) => {
+                    return Ok(Err(
+                        self.indirect_metadata(reference, descendants.span().start())
+                    ));
+                }
+                _ => return Err(invalid_font(reference, descendants.span().start())),
+            };
+            self.runtime_guard(source, cancellation, Some(descendants.span().start()))?;
+            return Ok(Ok(FontInspection::Descendant(descendant)));
+        }
         let kind = match subtype.value() {
             SyntaxObject::Name(name) if name.bytes() == b"TrueType" => PdfFontKind::TrueType,
             SyntaxObject::Name(name) if name.bytes() == b"Type1" => PdfFontKind::Type1C,
@@ -1322,16 +1577,18 @@ impl AcquireFontResourceJob {
             _ => return Err(invalid_font(reference, descriptor_value.span().start())),
         };
         self.runtime_guard(source, cancellation, Some(descriptor_value.span().start()))?;
-        Ok(Ok(PdfFontMetadata {
+        Ok(Ok(FontInspection::Ready(PdfFontMetadata {
             kind,
-            encoding: encoding_kind,
-            pending_encoding,
-            first_char,
-            last_char,
-            simple_widths,
-            type1_differences,
+            codes: PdfFontCodes::Simple {
+                encoding: encoding_kind,
+                pending_encoding,
+                first_char,
+                last_char,
+                widths: simple_widths,
+                type1_differences,
+            },
             descriptor,
-        }))
+        })))
     }
 
     fn inspect_type1_encoding(
@@ -1378,6 +1635,311 @@ impl AcquireFontResourceJob {
             SyntaxObject::Reference(target) => Ok(Ok(Type1EncodingPlan::Indirect(*target))),
             _ => Err(invalid_font(reference, encoding.span().start())),
         }
+    }
+
+    fn inspect_descendant(
+        &mut self,
+        object: &AttestedObject,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<PdfFontMetadata, FontResourceUnsupported>, DocumentError> {
+        let reference = object.reference();
+        let value = match object.value() {
+            IndirectObjectValue::Stream(stream) => {
+                return Err(invalid_font(reference, stream.dictionary().span().start()));
+            }
+            IndirectObjectValue::Direct(value) => value,
+        };
+        let dictionary = match value.value() {
+            SyntaxObject::Dictionary(dictionary) => dictionary,
+            SyntaxObject::Reference(_) => {
+                return Ok(Err(FontResourceUnsupported::new(
+                    FontResourceUnsupportedKind::FontAlias,
+                    reference,
+                    value.span().start(),
+                )));
+            }
+            _ => return Err(invalid_font(reference, value.span().start())),
+        };
+        let dictionary_offset = value.span().start();
+        let slots = self.scan_descendant_metadata(dictionary, reference, source, cancellation)?;
+        if let Some(type_value) = slots.type_value {
+            match type_value.value() {
+                SyntaxObject::Name(name) if name.bytes() == b"Font" => {}
+                SyntaxObject::Reference(_) => {
+                    return Ok(Err(
+                        self.indirect_metadata(reference, type_value.span().start())
+                    ));
+                }
+                _ => return Err(invalid_font(reference, type_value.span().start())),
+            }
+        }
+        let subtype = required_slot(slots.subtype, reference, dictionary_offset)?;
+        match subtype.value() {
+            SyntaxObject::Name(name) if name.bytes() == b"CIDFontType2" => {}
+            SyntaxObject::Name(_) => {
+                return Ok(Err(FontResourceUnsupported::new(
+                    FontResourceUnsupportedKind::NonTrueType,
+                    reference,
+                    subtype.span().start(),
+                )));
+            }
+            SyntaxObject::Reference(_) => {
+                return Ok(Err(
+                    self.indirect_metadata(reference, subtype.span().start())
+                ));
+            }
+            _ => return Err(invalid_font(reference, subtype.span().start())),
+        }
+        let cid_to_gid = required_slot(slots.cid_to_gid_map, reference, dictionary_offset)?;
+        match cid_to_gid.value() {
+            SyntaxObject::Name(name) if name.bytes() == b"Identity" => {}
+            SyntaxObject::Name(_) => {
+                return Ok(Err(FontResourceUnsupported::new(
+                    FontResourceUnsupportedKind::UnsupportedEncoding,
+                    reference,
+                    cid_to_gid.span().start(),
+                )));
+            }
+            SyntaxObject::Reference(_) => {
+                return Ok(Err(
+                    self.indirect_metadata(reference, cid_to_gid.span().start())
+                ));
+            }
+            _ => return Err(invalid_font(reference, cid_to_gid.span().start())),
+        }
+        let default_width = match slots.default_width {
+            None => 1_000,
+            Some(value) => match value.value() {
+                SyntaxObject::Integer(width) => u32::try_from(*width)
+                    .map_err(|_| invalid_font(reference, value.span().start()))?,
+                SyntaxObject::Real(_) => {
+                    return Ok(Err(FontResourceUnsupported::new(
+                        FontResourceUnsupportedKind::UnsupportedWidths,
+                        reference,
+                        value.span().start(),
+                    )));
+                }
+                SyntaxObject::Reference(_) => {
+                    return Ok(Err(self.indirect_metadata(reference, value.span().start())));
+                }
+                _ => return Err(invalid_font(reference, value.span().start())),
+            },
+        };
+        let widths = match slots.widths {
+            None => Vec::new(),
+            Some(value) => match self.parse_cid_widths(value, reference, source, cancellation)? {
+                Ok(widths) => widths,
+                Err(unsupported) => return Ok(Err(unsupported)),
+            },
+        };
+        let descriptor_value = required_slot(slots.font_descriptor, reference, dictionary_offset)?;
+        let descriptor = match descriptor_value.value() {
+            SyntaxObject::Reference(reference) => DescriptorPlan::Indirect(*reference),
+            SyntaxObject::Dictionary(dictionary) => {
+                match self.inspect_descriptor_dictionary(
+                    dictionary,
+                    reference,
+                    descriptor_value.span().start(),
+                    PdfFontKind::TrueType,
+                    source,
+                    cancellation,
+                )? {
+                    Ok(program) => DescriptorPlan::Program(program),
+                    Err(value) => return Ok(Err(value)),
+                }
+            }
+            SyntaxObject::Null => {
+                return Ok(Err(FontResourceUnsupported::new(
+                    FontResourceUnsupportedKind::MissingEmbeddedProgram,
+                    reference,
+                    descriptor_value.span().start(),
+                )));
+            }
+            _ => return Err(invalid_font(reference, descriptor_value.span().start())),
+        };
+        self.runtime_guard(source, cancellation, Some(descriptor_value.span().start()))?;
+        Ok(Ok(PdfFontMetadata {
+            kind: PdfFontKind::TrueType,
+            codes: PdfFontCodes::IdentityH {
+                default_width,
+                widths,
+            },
+            descriptor,
+        }))
+    }
+
+    fn parse_cid_widths(
+        &mut self,
+        value: &Located<SyntaxObject>,
+        reference: ObjectRef,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<Vec<CidWidth>, FontResourceUnsupported>, DocumentError> {
+        let values = match value.value() {
+            SyntaxObject::Array(values) => values.values(),
+            SyntaxObject::Reference(_) => {
+                return Ok(Err(self.indirect_metadata(reference, value.span().start())));
+            }
+            _ => return Err(invalid_font(reference, value.span().start())),
+        };
+        let mut parsed = Vec::new();
+        let mut cursor = 0_usize;
+        let mut previous = None;
+        while cursor < values.len() {
+            let start_value = values
+                .get(cursor)
+                .ok_or_else(|| invalid_font(reference, value.span().start()))?;
+            let start = match start_value.value() {
+                SyntaxObject::Integer(code) => u16::try_from(*code)
+                    .map_err(|_| invalid_font(reference, start_value.span().start()))?,
+                SyntaxObject::Reference(_) => {
+                    return Ok(Err(
+                        self.indirect_metadata(reference, start_value.span().start())
+                    ));
+                }
+                _ => return Err(invalid_font(reference, start_value.span().start())),
+            };
+            cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| self.internal_error(Some(start_value.span().start())))?;
+            let body = values
+                .get(cursor)
+                .ok_or_else(|| invalid_font(reference, start_value.span().start()))?;
+            cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| self.internal_error(Some(body.span().start())))?;
+            match body.value() {
+                SyntaxObject::Array(widths) => {
+                    for (index, width_value) in widths.values().iter().enumerate() {
+                        let code = usize::from(start)
+                            .checked_add(index)
+                            .and_then(|value| u16::try_from(value).ok())
+                            .ok_or_else(|| invalid_font(reference, width_value.span().start()))?;
+                        let width = match width_value.value() {
+                            SyntaxObject::Integer(width) => u32::try_from(*width)
+                                .map_err(|_| invalid_font(reference, width_value.span().start()))?,
+                            SyntaxObject::Real(_) => {
+                                return Ok(Err(FontResourceUnsupported::new(
+                                    FontResourceUnsupportedKind::UnsupportedWidths,
+                                    reference,
+                                    width_value.span().start(),
+                                )));
+                            }
+                            SyntaxObject::Reference(_) => {
+                                return Ok(Err(
+                                    self.indirect_metadata(reference, width_value.span().start())
+                                ));
+                            }
+                            _ => {
+                                return Err(invalid_font(reference, width_value.span().start()));
+                            }
+                        };
+                        self.push_cid_width(
+                            &mut parsed,
+                            &mut previous,
+                            CidWidth { code, width },
+                            reference,
+                            width_value.span().start(),
+                            source,
+                            cancellation,
+                        )?;
+                    }
+                }
+                SyntaxObject::Integer(end) => {
+                    let end = u16::try_from(*end)
+                        .map_err(|_| invalid_font(reference, body.span().start()))?;
+                    if end < start {
+                        return Err(invalid_font(reference, body.span().start()));
+                    }
+                    let width_value = values
+                        .get(cursor)
+                        .ok_or_else(|| invalid_font(reference, body.span().start()))?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or_else(|| self.internal_error(Some(width_value.span().start())))?;
+                    let width = match width_value.value() {
+                        SyntaxObject::Integer(width) => u32::try_from(*width)
+                            .map_err(|_| invalid_font(reference, width_value.span().start()))?,
+                        SyntaxObject::Real(_) => {
+                            return Ok(Err(FontResourceUnsupported::new(
+                                FontResourceUnsupportedKind::UnsupportedWidths,
+                                reference,
+                                width_value.span().start(),
+                            )));
+                        }
+                        SyntaxObject::Reference(_) => {
+                            return Ok(Err(
+                                self.indirect_metadata(reference, width_value.span().start())
+                            ));
+                        }
+                        _ => return Err(invalid_font(reference, width_value.span().start())),
+                    };
+                    for code in start..=end {
+                        self.push_cid_width(
+                            &mut parsed,
+                            &mut previous,
+                            CidWidth { code, width },
+                            reference,
+                            width_value.span().start(),
+                            source,
+                            cancellation,
+                        )?;
+                    }
+                }
+                SyntaxObject::Real(_) => {
+                    return Ok(Err(FontResourceUnsupported::new(
+                        FontResourceUnsupportedKind::UnsupportedWidths,
+                        reference,
+                        body.span().start(),
+                    )));
+                }
+                SyntaxObject::Reference(_) => {
+                    return Ok(Err(self.indirect_metadata(reference, body.span().start())));
+                }
+                _ => return Err(invalid_font(reference, body.span().start())),
+            }
+        }
+        Ok(Ok(parsed))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_cid_width(
+        &mut self,
+        parsed: &mut Vec<CidWidth>,
+        previous: &mut Option<u16>,
+        entry: CidWidth,
+        reference: ObjectRef,
+        offset: u64,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<(), DocumentError> {
+        if previous.is_some_and(|previous| entry.code <= previous) {
+            return Err(invalid_font(reference, offset));
+        }
+        self.charge_width(reference, offset)?;
+        if self
+            .stats
+            .widths
+            .is_multiple_of(METADATA_CANCELLATION_INTERVAL)
+        {
+            self.runtime_guard(source, cancellation, Some(offset))?;
+        }
+        parsed.try_reserve_exact(1).map_err(|_| {
+            DocumentError::font_resource(
+                DocumentLimitKind::FontResourceRetainedBytes,
+                self.limits.max_retained_bytes(),
+                u64::try_from(parsed.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(u64::try_from(size_of::<CidWidth>()).unwrap_or(u64::MAX)),
+                u64::try_from(size_of::<CidWidth>()).unwrap_or(u64::MAX),
+                reference,
+                Some(offset),
+            )
+        })?;
+        parsed.push(entry);
+        *previous = Some(entry.code);
+        Ok(())
     }
 
     fn inspect_type1_encoding_object(
@@ -1801,6 +2363,7 @@ impl AcquireFontResourceJob {
                 b"Type" => Some(&mut slots.type_value),
                 b"Subtype" => Some(&mut slots.subtype),
                 b"Encoding" => Some(&mut slots.encoding),
+                b"DescendantFonts" => Some(&mut slots.descendant_fonts),
                 b"FirstChar" => Some(&mut slots.first_char),
                 b"LastChar" => Some(&mut slots.last_char),
                 b"Widths" => Some(&mut slots.widths),
@@ -1846,6 +2409,49 @@ impl AcquireFontResourceJob {
                 b"FontFile" => Some(&mut slots.font_file),
                 b"FontFile2" => Some(&mut slots.font_file2),
                 b"FontFile3" => Some(&mut slots.font_file3),
+                _ => None,
+            };
+            if let Some(slot) = slot {
+                if slot.is_some() {
+                    return Err(DocumentError::for_code(
+                        DocumentErrorCode::DuplicateStructuralKey,
+                        Some(reference),
+                        Some(offset),
+                    ));
+                }
+                *slot = Some(entry.value());
+            }
+        }
+        self.runtime_guard(
+            source,
+            cancellation,
+            dictionary
+                .entries()
+                .last()
+                .map(|entry| entry.value().span().start()),
+        )?;
+        Ok(slots)
+    }
+
+    fn scan_descendant_metadata<'a>(
+        &mut self,
+        dictionary: &'a PdfDictionary,
+        reference: ObjectRef,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<DescendantSlots<'a>, DocumentError> {
+        let mut slots = DescendantSlots::default();
+        for entry in dictionary.entries() {
+            let offset = entry.key().span().start();
+            self.charge_metadata(reference, offset)?;
+            self.probe_metadata(source, cancellation, offset)?;
+            let slot = match entry.key().value().bytes() {
+                b"Type" => Some(&mut slots.type_value),
+                b"Subtype" => Some(&mut slots.subtype),
+                b"CIDToGIDMap" => Some(&mut slots.cid_to_gid_map),
+                b"DW" => Some(&mut slots.default_width),
+                b"W" => Some(&mut slots.widths),
+                b"FontDescriptor" => Some(&mut slots.font_descriptor),
                 _ => None,
             };
             if let Some(slot) = slot {
@@ -2001,6 +2607,7 @@ struct FontSlots<'a> {
     type_value: Option<&'a Located<SyntaxObject>>,
     subtype: Option<&'a Located<SyntaxObject>>,
     encoding: Option<&'a Located<SyntaxObject>>,
+    descendant_fonts: Option<&'a Located<SyntaxObject>>,
     first_char: Option<&'a Located<SyntaxObject>>,
     last_char: Option<&'a Located<SyntaxObject>>,
     widths: Option<&'a Located<SyntaxObject>>,
@@ -2013,6 +2620,16 @@ struct DescriptorSlots<'a> {
     font_file: Option<&'a Located<SyntaxObject>>,
     font_file2: Option<&'a Located<SyntaxObject>>,
     font_file3: Option<&'a Located<SyntaxObject>>,
+}
+
+#[derive(Default)]
+struct DescendantSlots<'a> {
+    type_value: Option<&'a Located<SyntaxObject>>,
+    subtype: Option<&'a Located<SyntaxObject>>,
+    cid_to_gid_map: Option<&'a Located<SyntaxObject>>,
+    default_width: Option<&'a Located<SyntaxObject>>,
+    widths: Option<&'a Located<SyntaxObject>>,
+    font_descriptor: Option<&'a Located<SyntaxObject>>,
 }
 
 #[derive(Default)]
@@ -2309,9 +2926,16 @@ impl AcquireFontResourceJob {
 
         let font = match metadata.kind {
             PdfFontKind::TrueType => {
+                let profile = match self.metadata.as_ref().map(|metadata| &metadata.codes) {
+                    Some(PdfFontCodes::Simple { .. }) => FontProfile::SimpleTrueTypeWinAnsiV1,
+                    Some(PdfFontCodes::IdentityH { .. }) => FontProfile::CidFontType2IdentityV1,
+                    None => {
+                        return PayloadResult::Failed(self.internal_error(Some(data_span.start())));
+                    }
+                };
                 let report = parse_truetype(
                     decoded.bytes(),
-                    FontProfile::SimpleTrueTypeWinAnsiV1,
+                    profile,
                     self.limits.font_limits(),
                     &FontCancellationAdapter(cancellation),
                 );
@@ -2422,42 +3046,74 @@ impl AcquireFontResourceJob {
         else {
             return PayloadResult::Failed(self.internal_error(Some(data_span.start())));
         };
-        let mut glyph_ids = [GlyphId::new(0); 256];
-        match &font {
-            FontProgram::TrueType(_) => {
-                for code in 0_u8..=u8::MAX {
-                    if let Some(glyph_id) = font.glyph_id_for_winansi(code) {
-                        glyph_ids[usize::from(code)] = glyph_id;
+        let codes = match metadata.codes {
+            PdfFontCodes::Simple {
+                encoding,
+                pending_encoding,
+                first_char,
+                last_char,
+                widths,
+                type1_differences,
+            } => {
+                if pending_encoding.is_some() {
+                    return PayloadResult::Failed(self.internal_error(Some(data_span.start())));
+                }
+                let mut glyph_ids = [GlyphId::new(0); 256];
+                match &font {
+                    FontProgram::TrueType(_) => {
+                        for code in 0_u8..=u8::MAX {
+                            if let Some(glyph_id) = font.glyph_id_for_winansi(code) {
+                                glyph_ids[usize::from(code)] = glyph_id;
+                            }
+                        }
                     }
+                    FontProgram::Type1C(cff) => {
+                        for code in 0_u8..=u8::MAX {
+                            let glyph_id = match encoding {
+                                SimpleEncoding::WinAnsi => cff.glyph_id_for_winansi_code(code),
+                                SimpleEncoding::Type1Standard => {
+                                    cff.glyph_id_for_standard_code(code)
+                                }
+                            };
+                            if let Some(glyph_id) = glyph_id {
+                                glyph_ids[usize::from(code)] = glyph_id;
+                            }
+                        }
+                        for difference in &type1_differences {
+                            if let Some(glyph_id) = cff.glyph_id_for_name(&difference.name) {
+                                glyph_ids[usize::from(difference.code)] = glyph_id;
+                            }
+                        }
+                    }
+                }
+                AcquiredFontCodes::Simple {
+                    first_char,
+                    last_char,
+                    widths,
+                    glyph_ids,
                 }
             }
-            FontProgram::Type1C(cff) => {
-                for code in 0_u8..=u8::MAX {
-                    let glyph_id = match metadata.encoding {
-                        SimpleEncoding::WinAnsi => cff.glyph_id_for_winansi_code(code),
-                        SimpleEncoding::Type1Standard => cff.glyph_id_for_standard_code(code),
-                    };
-                    if let Some(glyph_id) = glyph_id {
-                        glyph_ids[usize::from(code)] = glyph_id;
-                    }
+            PdfFontCodes::IdentityH {
+                default_width,
+                widths,
+            } => {
+                if !matches!(&font, FontProgram::TrueType(_)) {
+                    return PayloadResult::Failed(self.internal_error(Some(data_span.start())));
                 }
-                for difference in &metadata.type1_differences {
-                    if let Some(glyph_id) = cff.glyph_id_for_name(&difference.name) {
-                        glyph_ids[usize::from(difference.code)] = glyph_id;
-                    }
+                AcquiredFontCodes::IdentityH {
+                    default_width,
+                    widths: widths.into_boxed_slice(),
                 }
             }
-        }
+        };
         let acquired = AcquiredFontResource {
             proof: self.proof,
             font_object,
+            descendant_object: self.descendant_object.take(),
             encoding_object: self.encoding_object.take(),
             descriptor_object: self.descriptor_object.take(),
             program_object,
-            first_char: metadata.first_char,
-            last_char: metadata.last_char,
-            simple_widths: metadata.simple_widths,
-            glyph_ids,
+            codes,
             decoded_program: decoded,
             font,
             limits: self.limits,
@@ -2889,6 +3545,7 @@ impl SharedAttestedRevisionIndex {
                 base_parse_bytes: 0,
             }),
             font_object: None,
+            descendant_object: None,
             encoding_object: None,
             descriptor_object: None,
             program_object: None,

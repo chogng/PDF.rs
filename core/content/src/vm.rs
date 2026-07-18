@@ -5281,8 +5281,11 @@ impl TextExecutor {
                 source,
             )?;
             if let TextShowItem::Bytes(bytes) = item {
+                let code_count = font.character_code_count(bytes).ok_or_else(|| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InvalidOperandType, source))
+                })?;
                 glyph_count = glyph_count
-                    .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                    .checked_add(u64::try_from(code_count).map_err(|_| {
                         ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
                     })?)
                     .ok_or_else(|| {
@@ -5296,38 +5299,45 @@ impl TextExecutor {
             .map_err(ContentVmFailure::Vm)?;
 
         let mut segment_count = 0_u64;
-        let mut planned_codes = [None::<u16>; 256];
-        let mut planned_outlines = [None::<(u16, u64)>; 256];
-        let mut planned_outline_count = 0_usize;
+        let mut planned_glyphs = [0_u64; 1_024];
+        let mut planned_outline_count = 0_u64;
         let mut probed = 0_u64;
         for item in items {
             guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
             let TextShowItem::Bytes(bytes) = item else {
                 continue;
             };
-            for &byte in bytes {
+            let mut cursor = 0_usize;
+            while cursor < bytes.len() {
                 guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
-                let code_index = usize::from(byte);
-                if planned_codes[code_index].is_some() {
+                let code = font
+                    .decode_next_character_code(bytes, &mut cursor)
+                    .ok_or_else(|| {
+                        ContentVmFailure::Vm(vm_error(
+                            ContentVmErrorCode::InvalidOperandType,
+                            source,
+                        ))
+                    })?;
+                let outline = font_outline(&font, code, source)?;
+                let glyph_id = outline.glyph_id().get();
+                let word = usize::from(glyph_id / 64);
+                let bit = 1_u64 << u32::from(glyph_id % 64);
+                let known = planned_glyphs.get_mut(word).ok_or_else(|| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                })?;
+                if *known & bit != 0 {
                     continue;
                 }
-                let outline = font_outline(&font, byte, source)?;
-                let glyph_id = outline.glyph_id().get();
-                planned_codes[code_index] = Some(glyph_id);
-                if !planned_outlines[..planned_outline_count]
-                    .iter()
-                    .flatten()
-                    .any(|(known, _)| *known == glyph_id)
-                {
-                    let segments = u64::try_from(outline.segments().len()).map_err(|_| {
-                        ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
-                    })?;
-                    segment_count = segment_count.checked_add(segments).ok_or_else(|| {
-                        ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
-                    })?;
-                    planned_outlines[planned_outline_count] = Some((glyph_id, segments));
-                    planned_outline_count += 1;
-                }
+                *known |= bit;
+                let segments = u64::try_from(outline.segments().len()).map_err(|_| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                })?;
+                segment_count = segment_count.checked_add(segments).ok_or_else(|| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                })?;
+                planned_outline_count = planned_outline_count.checked_add(1).ok_or_else(|| {
+                    ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+                })?;
             }
         }
         runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
@@ -5338,7 +5348,12 @@ impl TextExecutor {
         let glyph_slots = usize::try_from(glyph_count).map_err(|_| {
             ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
         })?;
+        let outline_slots = usize::try_from(planned_outline_count).map_err(|_| {
+            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+        })?;
         let glyph_nominal = byte_width::<GlyphUse>(glyph_slots).map_err(ContentVmFailure::Vm)?;
+        let cache_nominal =
+            byte_width::<(u16, GlyphOutline)>(outline_slots).map_err(ContentVmFailure::Vm)?;
         let path_nominal = segment_count
             .checked_mul(u64::try_from(size_of::<PathSegment>()).map_err(|_| {
                 ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
@@ -5346,9 +5361,12 @@ impl TextExecutor {
             .ok_or_else(|| {
                 ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
             })?;
-        let candidate_nominal = glyph_nominal.checked_add(path_nominal).ok_or_else(|| {
-            ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
-        })?;
+        let candidate_nominal = glyph_nominal
+            .checked_add(cache_nominal)
+            .and_then(|value| value.checked_add(path_nominal))
+            .ok_or_else(|| {
+                ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
+            })?;
         self.preflight_glyph_candidate(runtime, 0, candidate_nominal, source)
             .map_err(ContentVmFailure::Vm)?;
         let mut glyphs = Vec::new();
@@ -5360,15 +5378,34 @@ impl TextExecutor {
         runtime.record_glyph_retained(glyph_retained);
         self.preflight_glyph_candidate(runtime, 0, glyph_retained, source)
             .map_err(ContentVmFailure::Vm)?;
+        self.preflight_glyph_candidate(runtime, glyph_retained, cache_nominal, source)
+            .map_err(ContentVmFailure::Vm)?;
+        let mut outline_cache = Vec::<(u16, GlyphOutline)>::new();
+        outline_cache
+            .try_reserve_exact(outline_slots)
+            .map_err(|_| {
+                ContentVmFailure::Vm(runtime.glyph_allocation_error(
+                    glyph_retained,
+                    cache_nominal,
+                    source,
+                ))
+            })?;
+        let cache_retained = capacity_bytes(&outline_cache).map_err(ContentVmFailure::Vm)?;
+        self.preflight_glyph_candidate(runtime, glyph_retained, cache_retained, source)
+            .map_err(ContentVmFailure::Vm)?;
+        self.observe_glyph_retained(
+            glyph_retained.saturating_add(cache_retained),
+            materialization_peak,
+        );
+        runtime.record_glyph_retained(glyph_retained.saturating_add(cache_retained));
         let mut outline_retained = 0_u64;
-        let mut outline_cache: [Option<(u16, GlyphOutline)>; 256] = std::array::from_fn(|_| None);
-        let mut outline_cache_len = 0_usize;
         let mut probed = 0_u64;
         for item in items {
             guarded_text_probe(&mut probed, snapshot, byte_source, cancellation, source)?;
             match item {
                 TextShowItem::Bytes(bytes) => {
-                    for &byte in bytes {
+                    let mut cursor = 0_usize;
+                    while cursor < bytes.len() {
                         guarded_text_probe(
                             &mut probed,
                             snapshot,
@@ -5376,18 +5413,25 @@ impl TextExecutor {
                             cancellation,
                             source,
                         )?;
-                        let code_index = usize::from(byte);
-                        let glyph_id = planned_codes[code_index].ok_or_else(|| {
-                            ContentVmFailure::Vm(vm_error(
-                                ContentVmErrorCode::InternalState,
-                                source,
-                            ))
-                        })?;
-                        let scene_outline = if let Some((_, cached)) = outline_cache
-                            [..outline_cache_len]
-                            .iter()
-                            .flatten()
-                            .find(|(known, _)| *known == glyph_id)
+                        let code = font
+                            .decode_next_character_code(bytes, &mut cursor)
+                            .ok_or_else(|| {
+                                ContentVmFailure::Vm(vm_error(
+                                    ContentVmErrorCode::InvalidOperandType,
+                                    source,
+                                ))
+                            })?;
+                        let glyph_id = font
+                            .glyph_id_for_character_code(code)
+                            .map(GlyphId::get)
+                            .ok_or_else(|| {
+                                ContentVmFailure::Vm(vm_error(
+                                    ContentVmErrorCode::InternalState,
+                                    source,
+                                ))
+                            })?;
+                        let scene_outline = if let Some((_, cached)) =
+                            outline_cache.iter().find(|(known, _)| *known == glyph_id)
                         {
                             cached.clone()
                         } else {
@@ -5403,7 +5447,8 @@ impl TextExecutor {
                             let nominal = byte_width::<PathSegment>(outline.segments().len())
                                 .map_err(ContentVmFailure::Vm)?;
                             let consumed = glyph_retained
-                                .checked_add(outline_retained)
+                                .checked_add(cache_retained)
+                                .and_then(|value| value.checked_add(outline_retained))
                                 .ok_or_else(|| {
                                     ContentVmFailure::Vm(vm_error(
                                         ContentVmErrorCode::InternalState,
@@ -5436,24 +5481,26 @@ impl TextExecutor {
                                     ))
                                 })?;
                             self.observe_glyph_retained(
-                                glyph_retained.saturating_add(outline_retained),
+                                glyph_retained
+                                    .saturating_add(cache_retained)
+                                    .saturating_add(outline_retained),
                                 materialization_peak,
                             );
-                            outline_cache[outline_cache_len] = Some((glyph_id, built.clone()));
-                            outline_cache_len += 1;
+                            outline_cache.push((glyph_id, built.clone()));
                             built
                         };
                         let transform =
                             self.glyph_transform(ctm).map_err(ContentVmFailure::Scene)?;
-                        glyphs.push(GlyphUse::new(scene_outline, transform, u32::from(byte)));
-                        let width = font.pdf_width_for_code(byte).ok_or_else(|| {
+                        glyphs.push(GlyphUse::new(scene_outline, transform, code));
+                        let width = font.pdf_width_for_character_code(code).ok_or_else(|| {
                             ContentVmFailure::Vm(vm_error(
                                 ContentVmErrorCode::InternalState,
                                 source,
                             ))
                         })?;
-                        let advance = text_advance(&self.parameters, width, byte)
-                            .map_err(ContentVmFailure::Scene)?;
+                        let advance =
+                            text_advance(&self.parameters, width, code, !font.uses_identity_h())
+                                .map_err(ContentVmFailure::Scene)?;
                         self.text_matrix = self
                             .text_matrix
                             .checked_multiply(translation_matrix(advance, SceneScalar::ZERO))
@@ -5472,7 +5519,8 @@ impl TextExecutor {
         }
         runtime_guard(snapshot, byte_source, cancellation, Some(source))?;
         let candidate_retained = glyph_retained
-            .checked_add(outline_retained)
+            .checked_add(cache_retained)
+            .and_then(|value| value.checked_add(outline_retained))
             .ok_or_else(|| {
                 ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source))
             })?;
@@ -5517,11 +5565,11 @@ impl TextExecutor {
 )]
 fn font_outline<'a>(
     font: &'a pdf_rs_document::AcquiredFontResource,
-    byte: u8,
+    code: u32,
     source: ContentOperatorSource,
 ) -> Result<pdf_rs_font::GlyphOutline<'a>, ContentVmFailure> {
     let glyph_id = font
-        .glyph_id_for_code(byte)
+        .glyph_id_for_character_code(code)
         .ok_or_else(|| ContentVmFailure::Vm(vm_error(ContentVmErrorCode::InternalState, source)))?;
     font.font()
         .glyph_outline(glyph_id)
@@ -5656,11 +5704,12 @@ fn translation_matrix(tx: SceneScalar, ty: SceneScalar) -> Matrix {
 fn text_advance(
     parameters: &TextParameters,
     width: u32,
-    byte: u8,
+    code: u32,
+    word_spacing_applies: bool,
 ) -> Result<SceneScalar, SceneError> {
     let width = integer_product_divide(parameters.font_size, u64::from(width), 1_000)?;
     let mut advance = width.checked_add(parameters.character_spacing)?;
-    if byte == 0x20 {
+    if word_spacing_applies && code == 0x20 {
         advance = advance.checked_add(parameters.word_spacing)?;
     }
     advance.checked_mul(parameters.horizontal_scaling)
