@@ -42,7 +42,7 @@ pub enum ImageXObjectUnsupportedKind {
     SoftMask,
     /// The image color space is outside direct DeviceGray, DeviceRGB, and DeviceCMYK.
     UnsupportedColorSpace,
-    /// The image component width is outside the registered eight-bit profile.
+    /// The image component width is outside the registered 1-, 2-, 4-, 8-, and 16-bit profile.
     UnsupportedBitsPerComponent,
     /// The image decode array is not the exact default for its direct device color space.
     UnsupportedDecodeArray,
@@ -274,6 +274,7 @@ pub struct AcquiredImageXObject {
     width: u32,
     height: u32,
     color_space: ImageXObjectColorSpace,
+    bits_per_component: u8,
     stride_bytes: u64,
     decode_context: u64,
     decoded: DecodedStream,
@@ -317,9 +318,9 @@ impl AcquiredImageXObject {
         self.color_space.components()
     }
 
-    /// Returns the registered component width, always eight.
+    /// Returns the registered packed component width.
     pub const fn bits_per_component(&self) -> u8 {
-        8
+        self.bits_per_component
     }
 
     /// Reports the registered nearest-sample interpolation policy, always false.
@@ -444,8 +445,11 @@ struct ImageMetadata {
     width: u32,
     height: u32,
     color_space: ImageXObjectColorSpace,
+    bits_per_component: u8,
     stride_bytes: u64,
     decoded_bytes: u64,
+    layer_output_bytes: u64,
+    total_output_bytes: u64,
     filter: RegisteredFilter,
 }
 
@@ -728,7 +732,7 @@ impl AcquireImageXObjectJob {
                     error,
                     reference,
                     dictionary_span.start(),
-                    active.metadata.decoded_bytes,
+                    active.metadata,
                     None,
                 ));
             }
@@ -756,7 +760,7 @@ impl AcquireImageXObjectJob {
                     error,
                     reference,
                     dictionary_span.start(),
-                    active.metadata.decoded_bytes,
+                    active.metadata,
                     None,
                 ));
             }
@@ -769,7 +773,7 @@ impl AcquireImageXObjectJob {
                     error,
                     reference,
                     dictionary_span.start(),
-                    active.metadata.decoded_bytes,
+                    active.metadata,
                     None,
                 ));
             }
@@ -800,7 +804,7 @@ impl AcquireImageXObjectJob {
                     error,
                     reference,
                     data_span.start(),
-                    active.metadata.decoded_bytes,
+                    active.metadata,
                     Some(decode_admission),
                 ));
             }
@@ -825,7 +829,7 @@ impl AcquireImageXObjectJob {
                     error,
                     reference,
                     data_span.start(),
-                    active.metadata.decoded_bytes,
+                    active.metadata,
                     Some(decode_admission),
                 ));
             }
@@ -869,6 +873,7 @@ impl AcquireImageXObjectJob {
             width: active.metadata.width,
             height: active.metadata.height,
             color_space: active.metadata.color_space,
+            bits_per_component: active.metadata.bits_per_component,
             stride_bytes: active.metadata.stride_bytes,
             decode_context: decode_context(active.metadata),
             decoded,
@@ -1034,20 +1039,22 @@ impl AcquireImageXObjectJob {
         };
 
         let bits_value = required_slot(slots.bits_per_component, reference, dictionary_offset)?;
-        match bits_value.value() {
-            SyntaxObject::Integer(8) => {}
-            SyntaxObject::Integer(_) => {
-                return Ok(unsupported(
-                    ImageXObjectUnsupportedKind::UnsupportedBitsPerComponent,
-                    reference,
-                    bits_value.span().start(),
-                ));
-            }
+        let bits_per_component = match bits_value.value() {
+            SyntaxObject::Integer(value) => match u8::try_from(*value) {
+                Ok(bits @ (1 | 2 | 4 | 8 | 16)) => bits,
+                _ => {
+                    return Ok(unsupported(
+                        ImageXObjectUnsupportedKind::UnsupportedBitsPerComponent,
+                        reference,
+                        bits_value.span().start(),
+                    ));
+                }
+            },
             SyntaxObject::Reference(_) => {
                 return Ok(indirect_metadata(reference, bits_value.span().start()));
             }
             _ => return Err(invalid_image(reference, bits_value.span().start())),
-        }
+        };
 
         if let Some(decode) = slots.decode {
             let SyntaxObject::Array(values) = decode.value() else {
@@ -1113,6 +1120,7 @@ impl AcquireImageXObjectJob {
                                     dictionary,
                                     reference,
                                     color_space,
+                                    bits_per_component,
                                     width,
                                     parameters.span().start(),
                                 )? {
@@ -1163,8 +1171,13 @@ impl AcquireImageXObjectJob {
             reference,
             width_value.span().start(),
         )?;
-        let stride_bytes = u64::from(width)
+        let row_bits = u64::from(width)
             .checked_mul(u64::from(color_space.components()))
+            .and_then(|samples| samples.checked_mul(u64::from(bits_per_component)))
+            .ok_or_else(|| self.internal_error(Some(width_value.span().start())))?;
+        let stride_bytes = row_bits
+            .checked_add(7)
+            .map(|bits| bits / 8)
             .ok_or_else(|| self.internal_error(Some(width_value.span().start())))?;
         check_scalar_limit(
             stride_bytes,
@@ -1183,12 +1196,31 @@ impl AcquireImageXObjectJob {
             reference,
             height_value.span().start(),
         )?;
+        let layer_output_bytes = match filter {
+            RegisteredFilter::Flate {
+                parameters: Some(parameters),
+            } if parameters.predictor() >= 10 => decoded_bytes
+                .checked_add(u64::from(height))
+                .ok_or_else(|| self.internal_error(Some(height_value.span().start())))?,
+            _ => decoded_bytes,
+        };
+        let total_output_bytes = match filter {
+            RegisteredFilter::Flate {
+                parameters: Some(parameters),
+            } if parameters.predictor() != 1 => layer_output_bytes
+                .checked_add(decoded_bytes)
+                .ok_or_else(|| self.internal_error(Some(height_value.span().start())))?,
+            _ => decoded_bytes,
+        };
         Ok(MetadataOutcome::Ready(ImageMetadata {
             width,
             height,
             color_space,
+            bits_per_component,
             stride_bytes,
             decoded_bytes,
+            layer_output_bytes,
+            total_output_bytes,
             filter,
         }))
     }
@@ -1198,6 +1230,7 @@ impl AcquireImageXObjectJob {
         dictionary: &PdfDictionary,
         reference: ObjectRef,
         color_space: ImageXObjectColorSpace,
+        bits_per_component: u8,
         width: u32,
         offset: u64,
     ) -> Result<DecodeParametersOutcome, DocumentError> {
@@ -1236,17 +1269,13 @@ impl AcquireImageXObjectJob {
             };
             *slot = Some((*value, entry.value().span().start()));
         }
-        if predictor.is_some_and(|(value, _)| value != 1)
-            || colors.is_some_and(|(value, _)| value != i64::from(color_space.components()))
-            || bits.is_some_and(|(value, _)| value != 8)
+        if colors.is_some_and(|(value, _)| value != i64::from(color_space.components()))
+            || bits.is_some_and(|(value, _)| value != i64::from(bits_per_component))
             || columns.is_some_and(|(value, _)| value != i64::from(width))
         {
-            let mismatch_offset = predictor
-                .filter(|(value, _)| *value != 1)
-                .or_else(|| {
-                    colors.filter(|(value, _)| *value != i64::from(color_space.components()))
-                })
-                .or_else(|| bits.filter(|(value, _)| *value != 8))
+            let mismatch_offset = colors
+                .filter(|(value, _)| *value != i64::from(color_space.components()))
+                .or_else(|| bits.filter(|(value, _)| *value != i64::from(bits_per_component)))
                 .or_else(|| columns.filter(|(value, _)| *value != i64::from(width)))
                 .map_or(offset, |(_, offset)| offset);
             return Ok(DecodeParametersOutcome::Unsupported(
@@ -1257,9 +1286,21 @@ impl AcquireImageXObjectJob {
                 ),
             ));
         }
-        PredictorParameters::new(1, i64::from(color_space.components()), 8, i64::from(width))
-            .map(DecodeParametersOutcome::Ready)
-            .map_err(|_| self.internal_error(Some(offset)))
+        match PredictorParameters::new(
+            predictor.map_or(1, |(value, _)| value),
+            i64::from(color_space.components()),
+            i64::from(bits_per_component),
+            i64::from(width),
+        ) {
+            Ok(parameters) => Ok(DecodeParametersOutcome::Ready(parameters)),
+            Err(_) => Ok(DecodeParametersOutcome::Unsupported(
+                ImageXObjectUnsupported::new(
+                    ImageXObjectUnsupportedKind::UnsupportedDecodeParameters,
+                    reference,
+                    predictor.map_or(offset, |(_, offset)| offset),
+                ),
+            )),
+        }
     }
 
     fn scan_metadata<'a>(
@@ -1366,16 +1407,26 @@ impl AcquireImageXObjectJob {
                 Some(offset),
             ));
         }
-        let decoded_limit = base
-            .max_layer_output_bytes()
-            .min(base.max_total_output_bytes())
-            .min(base.max_final_output_bytes());
+        let decoded_limit = base.max_final_output_bytes();
         if metadata.decoded_bytes > decoded_limit {
             return Err(DocumentError::image_xobject_resource(
                 DocumentLimitKind::ImageXObjectDecodedBytes,
                 decoded_limit,
                 0,
                 metadata.decoded_bytes,
+                self.proof.target(),
+                Some(offset),
+            ));
+        }
+        if metadata.layer_output_bytes > base.max_layer_output_bytes()
+            || metadata.total_output_bytes > base.max_total_output_bytes()
+        {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectDecodedBytes,
+                base.max_layer_output_bytes()
+                    .min(base.max_total_output_bytes()),
+                0,
+                metadata.layer_output_bytes.max(metadata.total_output_bytes),
                 self.proof.target(),
                 Some(offset),
             ));
@@ -1414,12 +1465,13 @@ impl AcquireImageXObjectJob {
         let effective_total_retained = retained_consumed
             .checked_add(decoder_retained_limit)
             .ok_or_else(|| self.internal_error(Some(offset)))?;
-        if decoder_retained_limit < metadata.decoded_bytes {
+        let peak_decode_bytes = metadata.decoded_bytes.max(metadata.layer_output_bytes);
+        if decoder_retained_limit < peak_decode_bytes {
             return Err(DocumentError::image_xobject_resource(
                 DocumentLimitKind::ImageXObjectRetainedBytes,
                 effective_total_retained,
                 retained_consumed,
-                metadata.decoded_bytes,
+                peak_decode_bytes,
                 self.proof.target(),
                 Some(offset),
             ));
@@ -1428,8 +1480,8 @@ impl AcquireImageXObjectJob {
         let limits = DecodeLimits::validate(DecodeLimitConfig {
             max_input_bytes: encoded_bytes,
             max_filters: 1,
-            max_layer_output_bytes: metadata.decoded_bytes,
-            max_total_output_bytes: metadata.decoded_bytes,
+            max_layer_output_bytes: metadata.layer_output_bytes,
+            max_total_output_bytes: metadata.total_output_bytes,
             max_final_output_bytes: metadata.decoded_bytes,
             max_retained_capacity_bytes: decoder_retained_limit,
             max_fuel: fuel,
@@ -1523,7 +1575,7 @@ impl AcquireImageXObjectJob {
         error: DecodeError,
         reference: ObjectRef,
         offset: u64,
-        expected_decoded_bytes: u64,
+        metadata: ImageMetadata,
         admission: Option<ImageDecodeAdmission>,
     ) -> DocumentError {
         if let Some(limit) = error.limit() {
@@ -1537,10 +1589,16 @@ impl AcquireImageXObjectJob {
                     Some(offset),
                 ),
                 DecodeLimitKind::LayerOutputBytes
-                | DecodeLimitKind::TotalOutputBytes
-                | DecodeLimitKind::FinalOutputBytes
-                    if limit.limit() == expected_decoded_bytes =>
+                    if limit.limit() == metadata.layer_output_bytes =>
                 {
+                    invalid_image(reference, offset)
+                }
+                DecodeLimitKind::TotalOutputBytes
+                    if limit.limit() == metadata.total_output_bytes =>
+                {
+                    invalid_image(reference, offset)
+                }
+                DecodeLimitKind::FinalOutputBytes if limit.limit() == metadata.decoded_bytes => {
                     invalid_image(reference, offset)
                 }
                 DecodeLimitKind::LayerOutputBytes
@@ -1876,7 +1934,7 @@ fn canonical_filter_plan(filter: RegisteredFilter) -> Result<FilterPlan, DecodeE
 fn decode_context(metadata: ImageMetadata) -> u64 {
     (DECODE_CONTEXT_VERSION << 56)
         | (metadata.color_space.context_code() << 48)
-        | (8 << 40)
+        | (u64::from(metadata.bits_per_component) << 40)
         | (metadata.filter.context_code() << 32)
         | (1 << 24)
 }

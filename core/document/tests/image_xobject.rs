@@ -129,6 +129,31 @@ fn stream_body(number: u32, dictionary: &[u8], payload: &[u8]) -> Vec<u8> {
     body
 }
 
+fn zlib_stored(input: &[u8]) -> Vec<u8> {
+    let mut output = vec![0x78, 0x01];
+    let mut position = 0;
+    while position < input.len() {
+        let remaining = input.len() - position;
+        let chunk_len = remaining.min(usize::from(u16::MAX));
+        let final_block = chunk_len == remaining;
+        output.push(u8::from(final_block));
+        let chunk_len = u16::try_from(chunk_len).unwrap();
+        output.extend_from_slice(&chunk_len.to_le_bytes());
+        output.extend_from_slice(&(!chunk_len).to_le_bytes());
+        let end = position + usize::from(chunk_len);
+        output.extend_from_slice(&input[position..end]);
+        position = end;
+    }
+    let mut first = 1_u32;
+    let mut second = 0_u32;
+    for byte in input {
+        first = (first + u32::from(*byte)) % 65_521;
+        second = (second + first) % 65_521;
+    }
+    output.extend_from_slice(&((second << 16) | first).to_be_bytes());
+    output
+}
+
 fn object_ref(number: u32) -> ObjectRef {
     ObjectRef::new(number, 0).expect("test object reference is nonzero")
 }
@@ -565,6 +590,30 @@ fn flate_default_decode_and_all_direct_device_color_spaces_are_registered() {
 }
 
 #[test]
+fn one_bit_gray_png_predictor_preserves_packed_rows_and_metadata() {
+    let predicted = [0, 0b1010_1010, 0, 0b0101_0101];
+    let payload = zlib_stored(&predicted);
+    let fixture = image_fixture(
+        b"/Type /XObject /Subtype /Image /Width 8 /Height 2 /ColorSpace /DeviceGray \
+          /BitsPerComponent 1 /Filter /FlateDecode /DecodeParms \
+          << /Predictor 10 /Colors 1 /BitsPerComponent 1 /Columns 8 >>",
+        &payload,
+        0xd5,
+    );
+    let prepared = prepare(&fixture, 12_501);
+    let image = acquire_ready(&prepared, ImageXObjectLimits::default(), 12_541);
+
+    assert_eq!(image.bits_per_component(), 1);
+    assert_eq!(image.stride_bytes(), 1);
+    assert_eq!(image.decoded_bytes(), &[0b1010_1010, 0b0101_0101]);
+    assert_eq!(image.stats().decoded_bytes(), 2);
+    assert_eq!(
+        image.filter_plan().filters(),
+        &[pdf_rs_filters::StreamFilter::FlateDecode]
+    );
+}
+
+#[test]
 fn payload_pending_uses_only_the_payload_checkpoint_and_resumes() {
     let fixture = image_fixture(
         b"/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8",
@@ -631,7 +680,7 @@ fn unsupported_image_profiles_are_typed_and_never_publish() {
             ImageXObjectUnsupportedKind::UnsupportedColorSpace,
         ),
         (
-            b"/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 4",
+            b"/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 3",
             b"x",
             ImageXObjectUnsupportedKind::UnsupportedBitsPerComponent,
         ),
@@ -651,7 +700,7 @@ fn unsupported_image_profiles_are_typed_and_never_publish() {
             ImageXObjectUnsupportedKind::UnsupportedFilter,
         ),
         (
-            b"/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 2 >>",
+            b"/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 9 >>",
             FLATE_RGB_2X3,
             ImageXObjectUnsupportedKind::UnsupportedDecodeParameters,
         ),
