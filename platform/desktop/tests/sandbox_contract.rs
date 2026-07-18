@@ -132,11 +132,38 @@ fn selected_target_and_entitlements_are_exact_and_narrow() {
         "product_package_produced = false",
         "universal_binary_proof = false",
         "signed_package_proof = false",
+        "package_verifier_implemented = true",
+        "package_verifier_cli = \"pdf-rs-quality verify-macos-package ROOT PDF.rs.app\"",
+        "package_approval_record = \"platform/desktop/macos/package-approval.toml\"",
+        "package_approval_scope = \"external_release_trust_anchor\"",
+        "package_approval_present_by_default = false",
+        "package_bundle_name = \"PDF.rs.app\"",
+        "package_host_executable = \"Contents/MacOS/PDF.rs\"",
+        "package_worker_helper = \"Contents/Helpers/pdf-rs-desktop-worker\"",
+        "package_host_identifier = \"rs.pdf.desktop\"",
+        "package_worker_identifier = \"rs.pdf.desktop.worker\"",
+        "package_exact_directories = 4",
+        "package_exact_files = 4",
+        "package_exact_executables = 2",
+        "package_system_inspections = 18",
+        "package_codesign_all_architectures = true",
+        "package_slice_signing_metadata_exact = true",
+        "package_slice_entitlements_exact = true",
+        "package_slice_dependencies_exact = true",
+        "package_architectures_exact = [\"arm64\", \"x86_64\"]",
+        "package_tree_hash_external_anchor_required = true",
+        "package_worker_hash_external_anchor_required = true",
+        "package_inspection_snapshot_rechecked = true",
+        "package_symlinks_hardlinks_special_files_allowed = false",
+        "package_unknown_executables_allowed = false",
+        "package_content_provenance_proved = false",
+        "package_release_evidence_present = false",
+        "package_verifier_scope = \"verification_capability_not_release_evidence\"",
     ] {
         assert_unique_assignment(TARGET, exact);
     }
     assert!(TARGET.contains(
-        "signed universal helper content provenance, bytes, and both architecture slices bound to the validated feature-free release worker SHA-256, including resistance to crafted paired substitution"
+        "an externally approved package-approval.toml plus an actual signed universal package passing the repository verifier"
     ));
 }
 
@@ -231,7 +258,9 @@ fn plan_keeps_isolation_open_and_transport_fixture_explicit() {
     assert!(m4_09.contains("This does not prove adversarial content provenance"));
     assert!(m4_09.contains("is not signed, universal, or packaged-app evidence"));
     assert!(m4_09.contains("signed universal product package"));
-    assert!(m4_09.contains("crafted paired substitution"));
+    assert!(m4_09.contains("package-approval.toml"));
+    assert!(m4_09.contains("verification capability only"));
+    assert!(m4_09.contains("complete package hash remain unproved release evidence"));
     assert!(m4_09.contains("Darwin default-close spawn file actions"));
     assert!(m4_09.contains("real inherited-FD allowlist probe"));
     assert!(m4_09.contains("safe desktop crate retains forbid(unsafe_code)"));

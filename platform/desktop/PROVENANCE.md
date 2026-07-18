@@ -99,3 +99,23 @@ cross-process race is the non-atomic macOS socketpair-to-fcntl interval against
 a foreign concurrent fork; the packaged product Host must own process
 creation. This is FD hygiene only, not an operating-system sandbox. Deprecated
 sandbox tooling and private Seatbelt APIs are not product mechanisms.
+
+The package-verification capability is separate from both the unsigned build
+prerequisite and the product launch gate. `pdf-rs-quality
+verify-macos-package ROOT PDF.rs.app` accepts only the fixed four-file,
+four-directory bundle containing `Contents/MacOS/PDF.rs` and
+`Contents/Helpers/pdf-rs-desktop-worker`. It rejects links, special files,
+unknown executables, special permission bits, forbidden PDF-engine content,
+and any Worker or complete-tree SHA-256 that differs from the external
+`platform/desktop/macos/package-approval.toml` trust anchors.
+
+Verification uses only fixed absolute Apple system tools. It performs exactly
+18 bounded observations: all-architecture strict codesign verification, plus
+arm64 and x86_64 signing metadata, ordered authority chains, exact
+entitlements, exact dependency closure, and exact lipo architecture sets for
+both Host and helper. The package snapshot is collected again after those
+commands so an observed mutation fails closed. The approval record is
+deliberately absent from the repository: a release authority must approve a
+concrete signed package rather than letting the package approve itself.
+Consequently this is verification capability, not signed-package, content
+provenance, App Sandbox enforcement, notarization, or release evidence.

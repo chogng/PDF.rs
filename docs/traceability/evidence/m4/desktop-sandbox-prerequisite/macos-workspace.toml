@@ -64,11 +64,35 @@ universal_binary_proof = false
 signed_package_proof = false
 evidence_boundary = "The marker, Cargo filename association, and matching SHA-256 describe one ephemeral host-native release invocation. A crafted paired executable containing the product marker is not excluded without signed package provenance; this is neither an app/package hash nor codesign, entitlement, universal-slice, notarization, or App Sandbox evidence."
 
+[signed_universal_package_verifier]
+captured_at = 2026-07-18
+scope = "verification capability; not release evidence"
+cli = "pdf-rs-quality verify-macos-package ROOT PDF.rs.app"
+approval_record = "platform/desktop/macos/package-approval.toml"
+approval_record_present = false
+approval_scope = "external_release_trust_anchor"
+exact_bundle_layout = "PDF.rs.app with four directories, four regular files, and exactly two Mach-O executables"
+fixed_host = "Contents/MacOS/PDF.rs; identifier rs.pdf.desktop"
+fixed_worker = "Contents/Helpers/pdf-rs-desktop-worker; identifier rs.pdf.desktop.worker"
+fixed_architectures = ["arm64", "x86_64"]
+system_inspections = 18
+codesign_verification = "deep Host bundle plus direct Host/helper strict verification, all architectures"
+per_slice_observation = "Host/helper signing metadata, ordered nonempty authority chain, exact entitlements, and exact dynamic dependency closure for arm64 and x86_64"
+external_anchors = ["feature-free Worker SHA-256", "canonical complete package-tree SHA-256", "TeamIdentifier", "app and build versions"]
+topology_rejections = ["symlink", "hardlink", "special file", "unknown file", "unknown executable", "special permission bits", "surplus directory", "forbidden PDF engine content"]
+bounded_execution = "fixed absolute system tools, exactly 18 invocations, 15 seconds and 1 MiB per output stream per invocation"
+snapshot_recheck = true
+mutation_tests = ["missing approval", "paired Worker/package substitution against unchanged anchors", "missing feature-free marker", "fixture marker", "forbidden external PDF engine content", "package change during inspection", "authority order and slice drift", "entitlement widening", "architecture drift", "external dependency", "command failure", "timeout", "output overflow", "symlink", "hardlink", "unknown executable", "special mode", "global package entry overflow"]
+content_provenance_proved = false
+universal_binary_proof = false
+signed_package_proof = false
+app_sandbox_enforcement_proof = false
+evidence_boundary = "The repository can validate externally supplied release evidence but cannot manufacture its trust anchors. No approval record or signed package is checked in, so successful release verification has not occurred."
+
 [open_gates]
 items = [
   "signed parent app and embedded helper packaging",
-  "exact codesign and entitlement verification",
-  "signed universal helper content provenance, both architecture slices, and the package/CI artifact hash bound to the validated feature-free release worker SHA-256, including resistance to crafted paired substitution",
+  "external package approval record and an actual signed universal package passing exact codesign, entitlement, dependency, architecture, Worker-hash, and package-hash verification",
   "live child filesystem and network denial probes",
   "live inherited authenticated socket and read-only shared-memory success probes",
   "recorded sandbox Surface backend, inherited parent-app TMPDIR fallback, read-only reopen, unlink-before-SCM_RIGHTS, and zero residual objects without app-group widening",

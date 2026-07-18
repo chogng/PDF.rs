@@ -18,6 +18,7 @@ use std::process::ExitCode;
 use bundle::build_synthetic_failure_bundle;
 use maturity::validate_maturity_file;
 use pdf_rs_quality::case_contract::validate_case_file;
+use pdf_rs_quality::macos_package::verify_macos_package;
 use purity::{check_product_build_closure, check_product_manifests, prepare_product_build_proof};
 
 struct Selection {
@@ -222,6 +223,48 @@ fn main() -> ExitCode {
                 }
             }
         }
+        "verify-macos-package" => {
+            let Some(root) = arguments.next() else {
+                return usage();
+            };
+            let Some(app) = arguments.next() else {
+                return usage();
+            };
+            if arguments.next().is_some() {
+                return usage();
+            }
+            match verify_macos_package(Path::new(&root), Path::new(&app)) {
+                Ok(report) => {
+                    println!("package_files={}", report.package_files);
+                    println!("package_executables={}", report.package_executables);
+                    println!(
+                        "external_worker_trust_anchor_sha256={}",
+                        report.worker_external_trust_anchor_sha256
+                    );
+                    println!("observed_worker_sha256={}", report.observed_worker_sha256);
+                    println!(
+                        "external_package_trust_anchor_sha256={}",
+                        report.package_external_trust_anchor_sha256
+                    );
+                    println!("observed_package_sha256={}", report.observed_package_sha256);
+                    println!("signing_team_identifier={}", report.signing_team_identifier);
+                    println!("content_provenance_proved=false");
+                    println!("scope=verification-capability-not-release-evidence");
+                    ExitCode::SUCCESS
+                }
+                Err(violations) => {
+                    for violation in violations {
+                        eprintln!(
+                            "{} path={} token={}",
+                            violation.code,
+                            violation.path.display(),
+                            violation.token
+                        );
+                    }
+                    ExitCode::FAILURE
+                }
+            }
+        }
         "synthetic-bundle" => {
             let Some(manifest) = arguments.next() else {
                 return usage();
@@ -258,7 +301,7 @@ fn print_selection(selection: Selection) {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|synthetic-bundle CASE.toml OUTPUT_DIR>\nlocal/pr checks include the M3 raster-oracle, independent Reference oracle model, Content graphics, Reference geometry, Reference color, basic Image, basic Text, integrated Reference gate, and Reference trace contracts, plus M2 Scene profile replay and M2 exit closure"
+        "usage: pdf-rs-quality <local|pr|validate-case CASE.toml|validate-cases ROOT|validate-m1-maturity PROFILES.toml|check-product-purity [ROOT]|prepare-product-build-proof ROOT TARGET PROOF_ID|check-product-build-closure ROOT TARGET PROOF_ID|verify-macos-package ROOT PDF.rs.app|synthetic-bundle CASE.toml OUTPUT_DIR>\nlocal/pr checks include the M3 raster-oracle, independent Reference oracle model, Content graphics, Reference geometry, Reference color, basic Image, basic Text, integrated Reference gate, and Reference trace contracts, plus M2 Scene profile replay and M2 exit closure"
     );
     ExitCode::from(2)
 }
