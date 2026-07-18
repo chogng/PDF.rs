@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -111,3 +113,81 @@ test("Fast CPU CANARY rolls back to Reference without changing unsupported", asy
     await rolledBack.shutdown();
   }
 });
+
+test("bridge preserves open-time capability and resource categories", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pdf-rs-electron-open-errors-"));
+  const xrefStream = join(directory, "xref-stream.pdf");
+  const incremental = join(directory, "incremental.pdf");
+  const resourceLimited = join(directory, "resource-limit.pdf");
+  await writeFile(xrefStream, xrefStreamPdf());
+  await writeFile(incremental, traditionalPdf(0, 9));
+  await writeFile(resourceLimited, traditionalPdf(20_000));
+
+  const bridge = new PdfRsBridge();
+  try {
+    await assert.rejects(
+      bridge.open(xrefStream),
+      (error) => error?.code === "unsupported",
+    );
+    await assert.rejects(
+      bridge.open(incremental),
+      (error) => error?.code === "unsupported",
+    );
+    await assert.rejects(
+      bridge.open(resourceLimited),
+      (error) => error?.code === "resource-limit",
+    );
+  } finally {
+    await bridge.shutdown();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function traditionalPdf(boundaryPadding = 0, previous) {
+  const parts = [];
+  const offsets = [];
+  let length = 0;
+  const append = (value) => {
+    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "ascii");
+    parts.push(bytes);
+    length += bytes.byteLength;
+  };
+  const object = (number, body) => {
+    offsets.push(length);
+    append(`${number} 0 obj\n${body}\nendobj\n`);
+  };
+
+  append(Buffer.from("%PDF-1.7\n%\x80\x81\x82\x83\n", "latin1"));
+  object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  object(
+    3,
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /Contents 4 0 R >>",
+  );
+  offsets.push(length);
+  append("4 0 obj\n<< /Length 0 >>\nstream\n\nendstream\n");
+  append(Buffer.alloc(boundaryPadding, 0x20));
+  append("endobj\n");
+
+  const xrefOffset = length;
+  append("xref\n0 5\n0000000000 65535 f \n");
+  for (const offset of offsets) {
+    append(`${String(offset).padStart(10, "0")} 00000 n \n`);
+  }
+  append(`trailer\n<< /Size 5 /Root 1 0 R`);
+  if (previous !== undefined) {
+    append(` /Prev ${previous}`);
+  }
+  append(` >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
+function xrefStreamPdf() {
+  const header = Buffer.from("%PDF-1.7\n%\x80\x81\x82\x83\n", "latin1");
+  const body = Buffer.from(
+    `4 0 obj\n<< /Type /XRef /Size 5 /Root 1 0 R /W [1 2 1] /Length 0 >>\n`
+      + `stream\n\nendstream\nendobj\nstartxref\n${header.byteLength}\n%%EOF\n`,
+    "ascii",
+  );
+  return Buffer.concat([header, body]);
+}

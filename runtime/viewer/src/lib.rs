@@ -21,13 +21,14 @@ use pdf_rs_content::{
     ContentImageProfile, ContentLimits, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
-    FontResourceJobContext, FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits,
-    NeverCancelled, OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits,
-    PageContentPoll, PageFontLookupLimits, PageIndex, PageIndexBuildPoll, PageIndexLimits,
-    PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
-    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits,
-    PageXObjectLookupLimits, RevisionAttestationJobContext, RevisionAttestationLimits, RevisionId,
-    SharedAttestedRevisionIndex, StrictBaseOpenContext, StrictBaseOpenLimits, StrictBaseOpenPoll,
+    DocumentError, DocumentErrorCategory, FontResourceJobContext, FontResourceLimits,
+    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelled, OpenStrictBaseRevisionJob,
+    PageContentJobContext, PageContentLimits, PageContentPoll, PageFontLookupLimits, PageIndex,
+    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
+    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
+    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionId, SharedAttestedRevisionIndex, StrictBaseOpenContext,
+    StrictBaseOpenError, StrictBaseOpenLimits, StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
@@ -44,7 +45,7 @@ use pdf_rs_raster::reference::{
 };
 use pdf_rs_scene::{GraphicsSceneLimits, PageRotation, Scene, SceneRect, SceneScalar};
 use pdf_rs_syntax::SyntaxLimits;
-use pdf_rs_xref::{XrefJobContext, XrefLimits};
+use pdf_rs_xref::{XrefErrorCategory, XrefJobContext, XrefLimits};
 
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_OUTPUT_WIDTH: u32 = 4_096;
@@ -96,6 +97,39 @@ impl fmt::Display for NativeViewerError {
 }
 
 impl std::error::Error for NativeViewerError {}
+
+fn document_failure(error: DocumentError) -> NativeViewerError {
+    let code = match error.category() {
+        DocumentErrorCategory::Syntax | DocumentErrorCategory::Lookup => {
+            NativeViewerErrorCode::Document
+        }
+        DocumentErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+        DocumentErrorCategory::Source => NativeViewerErrorCode::Source,
+        DocumentErrorCategory::Unsupported => NativeViewerErrorCode::Unsupported,
+        DocumentErrorCategory::Configuration
+        | DocumentErrorCategory::Cancellation
+        | DocumentErrorCategory::Internal => NativeViewerErrorCode::Internal,
+    };
+    NativeViewerError::new(code)
+}
+
+fn strict_open_failure(error: StrictBaseOpenError) -> NativeViewerError {
+    match error {
+        StrictBaseOpenError::Document(error) => document_failure(error),
+        StrictBaseOpenError::Xref(error) => {
+            let code = match error.category() {
+                XrefErrorCategory::Syntax => NativeViewerErrorCode::Document,
+                XrefErrorCategory::Source => NativeViewerErrorCode::Source,
+                XrefErrorCategory::Unsupported => NativeViewerErrorCode::Unsupported,
+                XrefErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+                XrefErrorCategory::Configuration
+                | XrefErrorCategory::Cancellation
+                | XrefErrorCategory::Internal => NativeViewerErrorCode::Internal,
+            };
+            NativeViewerError::new(code)
+        }
+    }
+}
 
 /// Native raster implementation that produced a complete viewer surface.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,7 +243,7 @@ impl NativeDocument {
                 SyntaxLimits::default(),
             ),
         )
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?;
+        .map_err(strict_open_failure)?;
         let open_store = range_store(snapshot)?;
         let authority = loop {
             match open.poll(&open_store, &NeverCancelled) {
@@ -227,9 +261,7 @@ impl NativeDocument {
                     &missing,
                     checkpoint,
                 )?,
-                StrictBaseOpenPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
-                }
+                StrictBaseOpenPoll::Failed(error) => return Err(strict_open_failure(error)),
             }
         };
 
@@ -241,7 +273,7 @@ impl NativeDocument {
                 tree_limits,
                 PageIndexLimits::default(),
             )
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?;
+            .map_err(document_failure)?;
         let build_store = range_store(snapshot)?;
         let page_index = loop {
             match build.poll(&build_store, &NeverCancelled) {
@@ -259,9 +291,7 @@ impl NativeDocument {
                     &missing,
                     checkpoint,
                 )?,
-                PageIndexBuildPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
-                }
+                PageIndexBuildPoll::Failed(error) => return Err(document_failure(error)),
             }
         };
         if page_index.is_empty() {
@@ -315,7 +345,7 @@ impl NativeDocument {
                 page_tree_context(ids.lookup, ids.base + 100),
                 tree_limits,
             )
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?;
+            .map_err(document_failure)?;
         let lookup_store = range_store(self.snapshot)?;
         let lookup = loop {
             match lookup.poll(&lookup_store, &NeverCancelled) {
@@ -333,9 +363,7 @@ impl NativeDocument {
                     &missing,
                     checkpoint,
                 )?,
-                PageLookupPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
-                }
+                PageLookupPoll::Failed(error) => return Err(document_failure(error)),
             }
         };
         let (refined_index, handle) = lookup.into_parts();
@@ -354,7 +382,7 @@ impl NativeDocument {
                 ),
                 PageMaterializationLimits::default(),
             )
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?;
+            .map_err(document_failure)?;
         let materialize_store = range_store(self.snapshot)?;
         let page = loop {
             match materialize.poll(&materialize_store, &NeverCancelled) {
@@ -372,9 +400,7 @@ impl NativeDocument {
                     &missing,
                     checkpoint,
                 )?,
-                PageMaterializationPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
-                }
+                PageMaterializationPoll::Failed(error) => return Err(document_failure(error)),
             }
         };
 
@@ -392,7 +418,7 @@ impl NativeDocument {
                 ),
                 PageContentLimits::default(),
             )
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Document))?;
+            .map_err(document_failure)?;
         let content_store = range_store(self.snapshot)?;
         let acquired = loop {
             match content.poll(&content_store, &NeverCancelled) {
@@ -410,9 +436,7 @@ impl NativeDocument {
                     &missing,
                     checkpoint,
                 )?,
-                PageContentPoll::Failed(_) => {
-                    return Err(NativeViewerError::new(NativeViewerErrorCode::Document));
-                }
+                PageContentPoll::Failed(error) => return Err(document_failure(error)),
             }
         };
 
