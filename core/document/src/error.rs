@@ -427,6 +427,10 @@ pub enum DocumentErrorCode {
     InvalidFontResourceJobContext,
     /// A selected simple Font, descriptor, or embedded program has malformed metadata.
     InvalidFontResource,
+    /// Runtime identity or checkpoints for Form XObject acquisition are inconsistent.
+    InvalidFormXObjectJobContext,
+    /// A selected Form XObject has malformed required metadata or payload geometry.
+    InvalidFormXObject,
     /// A registered FontFile2 stream failed canonical planning or decoding.
     FontResourceDecodeFailure,
     /// A decoded embedded TrueType program is malformed under the registered profile.
@@ -877,6 +881,16 @@ impl DocumentError {
                 DocumentErrorCategory::Syntax,
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0086",
+            ),
+            DocumentErrorCode::InvalidFormXObjectJobContext => (
+                DocumentErrorCategory::Configuration,
+                DocumentRecoverability::CorrectConfiguration,
+                "RPE-DOCUMENT-0088",
+            ),
+            DocumentErrorCode::InvalidFormXObject => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0089",
             ),
             DocumentErrorCode::InvalidOutlineJobContext => (
                 DocumentErrorCategory::Configuration,

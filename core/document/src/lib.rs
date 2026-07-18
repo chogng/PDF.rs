@@ -70,6 +70,7 @@ mod dictionary;
 mod error;
 mod font_resource;
 mod font_resource_limits;
+mod form_xobject;
 mod image_xobject;
 mod image_xobject_limits;
 mod index;
@@ -132,6 +133,10 @@ pub use font_resource::{
     FontResourcePoll, FontResourceStats, FontResourceUnsupported, FontResourceUnsupportedKind,
 };
 pub use font_resource_limits::{FontResourceLimitConfig, FontResourceLimits};
+pub use form_xobject::{
+    AcquireFormXObjectJob, AcquiredFormXObject, FormXObjectJobContext, FormXObjectPhase,
+    FormXObjectPoll, FormXObjectStats, FormXObjectUnsupported, FormXObjectUnsupportedKind,
+};
 pub use image_xobject::{
     AcquireImageXObjectJob, AcquiredImageXObject, ImageXObjectColorSpace, ImageXObjectJobContext,
     ImageXObjectPhase, ImageXObjectPoll, ImageXObjectStats, ImageXObjectUnsupported,

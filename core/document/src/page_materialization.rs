@@ -1658,7 +1658,7 @@ fn parse_page_rotation(
     })
 }
 
-fn parse_page_real(real: &PdfReal) -> Option<i64> {
+pub(crate) fn parse_page_real(real: &PdfReal) -> Option<i64> {
     parse_page_real_bytes(real.raw())
 }
 

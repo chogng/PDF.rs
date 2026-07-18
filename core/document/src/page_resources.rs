@@ -23,6 +23,10 @@ enum PageResourceOwner {
         terminal_object: AttestedObject,
         alias_chain: Vec<ObjectRef>,
     },
+    Form {
+        object: AttestedObject,
+        resources_offset: u64,
+    },
 }
 
 /// Move-only inherited Resources scope with exact lookup and value provenance.
@@ -52,7 +56,7 @@ impl PageResourceScope {
     /// Returns the indirect object named by Resources, or `None` for a direct dictionary.
     pub fn resource_object(&self) -> Option<ObjectRef> {
         match &self.owner {
-            PageResourceOwner::Direct { .. } => None,
+            PageResourceOwner::Direct { .. } | PageResourceOwner::Form { .. } => None,
             PageResourceOwner::Indirect { alias_chain, .. } => alias_chain.first().copied(),
         }
     }
@@ -60,7 +64,7 @@ impl PageResourceScope {
     /// Returns the terminal non-reference resource object, or `None` for a direct dictionary.
     pub fn terminal_resource_object(&self) -> Option<ObjectRef> {
         match &self.owner {
-            PageResourceOwner::Direct { .. } => None,
+            PageResourceOwner::Direct { .. } | PageResourceOwner::Form { .. } => None,
             PageResourceOwner::Indirect { alias_chain, .. } => alias_chain.last().copied(),
         }
     }
@@ -73,7 +77,7 @@ impl PageResourceScope {
     /// Returns the complete Resources alias chain when the field was indirect.
     pub fn resource_alias_chain(&self) -> &[ObjectRef] {
         match &self.owner {
-            PageResourceOwner::Direct { .. } => &[],
+            PageResourceOwner::Direct { .. } | PageResourceOwner::Form { .. } => &[],
             PageResourceOwner::Indirect { alias_chain, .. } => alias_chain,
         }
     }
@@ -82,7 +86,7 @@ impl PageResourceScope {
     pub fn retained_lookup_chain_bytes(&self) -> Option<u64> {
         let ancestor = retained_reference_bytes(self.ancestor_lookup_chain.capacity())?;
         let alias = match &self.owner {
-            PageResourceOwner::Direct { .. } => 0,
+            PageResourceOwner::Direct { .. } | PageResourceOwner::Form { .. } => 0,
             PageResourceOwner::Indirect { alias_chain, .. } => {
                 retained_reference_bytes(alias_chain.capacity())?
             }
@@ -168,6 +172,7 @@ impl PageResourceScope {
             PageResourceOwner::Indirect {
                 terminal_object, ..
             } => terminal_object.syntax_heap_bytes(),
+            PageResourceOwner::Form { object, .. } => object.syntax_heap_bytes(),
         };
         chain_bytes
             .checked_add(syntax_heap_bytes)
@@ -222,6 +227,25 @@ impl PageResourceScope {
         })
     }
 
+    pub(crate) fn form(
+        object: AttestedObject,
+        resources_offset: u64,
+    ) -> Result<Self, DocumentError> {
+        let reference = object.reference();
+        if form_resource_dictionary(&object, resources_offset).is_none() {
+            return Err(internal_error(reference, Some(resources_offset)));
+        }
+        Ok(Self {
+            defining_object: reference,
+            defining_value_offset: resources_offset,
+            ancestor_lookup_chain: vec![reference],
+            owner: PageResourceOwner::Form {
+                object,
+                resources_offset,
+            },
+        })
+    }
+
     pub(crate) fn dictionary(&self) -> Result<&PdfDictionary, DocumentError> {
         match &self.owner {
             PageResourceOwner::Direct { object } => {
@@ -237,6 +261,11 @@ impl PageResourceScope {
                     Some(self.defining_value_offset),
                 )
             }),
+            PageResourceOwner::Form {
+                object,
+                resources_offset,
+            } => form_resource_dictionary(object, *resources_offset)
+                .ok_or_else(|| internal_error(object.reference(), Some(*resources_offset))),
         }
     }
 
@@ -246,6 +275,7 @@ impl PageResourceScope {
             PageResourceOwner::Indirect {
                 terminal_object, ..
             } => terminal_object,
+            PageResourceOwner::Form { object, .. } => object,
         }
     }
 }
@@ -1974,6 +2004,25 @@ fn terminal_resource_dictionary(object: &AttestedObject) -> Option<&PdfDictionar
         return None;
     };
     value.value().as_dictionary()
+}
+
+fn form_resource_dictionary(
+    object: &AttestedObject,
+    resources_offset: u64,
+) -> Option<&PdfDictionary> {
+    let IndirectObjectValue::Stream(stream) = object.value() else {
+        return None;
+    };
+    stream
+        .dictionary()
+        .value()
+        .entries()
+        .iter()
+        .find(|entry| {
+            entry.key().value().bytes() == b"Resources"
+                && entry.value().span().start() == resources_offset
+        })
+        .and_then(|entry| entry.value().value().as_dictionary())
 }
 
 fn retained_reference_bytes(capacity: usize) -> Option<u64> {
