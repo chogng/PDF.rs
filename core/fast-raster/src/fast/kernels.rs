@@ -76,6 +76,13 @@ pub(crate) struct Pixel {
 }
 
 impl Pixel {
+    pub(crate) const TRANSPARENT: Self = Self {
+        red: 0,
+        green: 0,
+        blue: 0,
+        alpha: 0,
+    };
+
     pub(crate) const WHITE: Self = Self {
         red: Q16_ONE,
         green: Q16_ONE,
@@ -107,6 +114,16 @@ impl Pixel {
             green: composite_channel(mode, self.green, self.alpha, backdrop.green, backdrop.alpha),
             blue: composite_channel(mode, self.blue, self.alpha, backdrop.blue, backdrop.alpha),
             alpha,
+        }
+    }
+
+    pub(crate) fn apply_constant_alpha(self, alpha: SceneUnit) -> Self {
+        let alpha = q16(alpha);
+        Self {
+            red: multiply(self.red, alpha),
+            green: multiply(self.green, alpha),
+            blue: multiply(self.blue, alpha),
+            alpha: multiply(self.alpha, alpha),
         }
     }
 

@@ -20,6 +20,8 @@ use crate::{
 const DECISION_SCHEMA_VERSION: u16 = 1;
 const M3_REFERENCE_PROFILE_VERSION: u32 = 1;
 const M3_REFERENCE_POLICY_VERSION: u32 = 1;
+const M4_FAST_PROFILE_VERSION: u32 = 2;
+const M4_FAST_POLICY_VERSION: u32 = 2;
 
 /// Cooperative cancellation observed by product capability evaluation and render planning.
 pub trait PolicyCancellation: Send + Sync {
@@ -53,6 +55,15 @@ impl CapabilityProfile {
             id: CapabilityProfileId::BaselineNative,
             profile_version: M3_REFERENCE_PROFILE_VERSION,
             policy_version: M3_REFERENCE_POLICY_VERSION,
+        }
+    }
+
+    /// Returns the first Fast CPU product profile with isolated-group compositing.
+    pub const fn m4_fast_v1() -> Self {
+        Self {
+            id: CapabilityProfileId::BaselineNative,
+            profile_version: M4_FAST_PROFILE_VERSION,
+            policy_version: M4_FAST_POLICY_VERSION,
         }
     }
 
@@ -92,7 +103,10 @@ impl CapabilityProfile {
                     && interpolate == 0
             }
             GraphicsCapability::Glyph => parameter != 0,
-            GraphicsCapability::SoftMask | GraphicsCapability::IsolatedGroup => false,
+            GraphicsCapability::IsolatedGroup => {
+                self.profile_version >= M4_FAST_PROFILE_VERSION && parameter == 0
+            }
+            GraphicsCapability::SoftMask => false,
         }
     }
 }

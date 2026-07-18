@@ -7,7 +7,7 @@ use pdf_rs_policy::{
     CapabilityEvaluationJob, CapabilityEvaluator, PolicyJobLimits, PolicyJobPoll,
     PolicyLimitConfig, PolicyLimits, PolicyPollBudget, RenderPlan,
 };
-use pdf_rs_scene::{GraphicsCommand, Scene};
+use pdf_rs_scene::Scene;
 
 use crate::fast::kernels::{PageMap, vector_bytes};
 use crate::fast::limits::checked_total;
@@ -388,22 +388,6 @@ impl FastRasterOwnedJob {
             self.pair_tile_cursor = 0;
             self.phase = Phase::AllocateBins;
             return Ok(false);
-        }
-        let invalid_group = {
-            let record = self
-                .graphics()?
-                .commands()
-                .get(self.command_cursor)
-                .ok_or_else(identity)?;
-            matches!(
-                record.command(),
-                GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup
-            )
-        };
-        if self.pair_tile_cursor == 0 && invalid_group {
-            return Err(FastRasterError::for_code(
-                FastRasterErrorCode::InvalidRenderConfig,
-            ));
         }
         let tile = self
             .plan

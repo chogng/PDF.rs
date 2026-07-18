@@ -1285,19 +1285,17 @@ fn render_fast_page(
     scene: &Scene,
     cancellation: &CancellationAdapter<'_>,
 ) -> Result<NativePageSurface, NativeViewerError> {
-    let decision = CapabilityEvaluator::new(
-        CapabilityProfile::m3_reference_v1(),
-        PolicyLimits::default(),
-    )
-    .evaluate(scene, 1, cancellation)
-    .map_err(|error| {
-        let code = match error.category() {
-            PolicyErrorCategory::Cancelled => NativeViewerErrorCode::Cancelled,
-            PolicyErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
-            _ => NativeViewerErrorCode::Render,
-        };
-        NativeViewerError::new(code)
-    })?;
+    let decision =
+        CapabilityEvaluator::new(CapabilityProfile::m4_fast_v1(), PolicyLimits::default())
+            .evaluate(scene, 1, cancellation)
+            .map_err(|error| {
+                let code = match error.category() {
+                    PolicyErrorCategory::Cancelled => NativeViewerErrorCode::Cancelled,
+                    PolicyErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+                    _ => NativeViewerErrorCode::Render,
+                };
+                NativeViewerError::new(code)
+            })?;
     let config = RenderConfig::validate(RenderConfigInput::fast_cpu_full())
         .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
     let request = RenderPlanRequest::new(

@@ -16,6 +16,10 @@ and the Rust bridge process. The context-isolated preload exposes only
 `openPdf`, `renderPage`, `closePdf`, and status helpers. The sandboxed renderer
 receives validated RGBA8 pixels and presents them with Canvas.
 
+The local scripts build and launch an optimized Rust bridge. Debug Rust builds
+remain available through normal Cargo commands, but are intentionally not used
+for interactive PDF preview because raster-heavy pages magnify debug overhead.
+
 Reference CPU remains the default renderer. The exact default-off M4 CANARY can
 be selected for a local run with:
 

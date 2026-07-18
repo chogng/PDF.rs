@@ -7,7 +7,9 @@ use pdf_rs_policy::{
     NativeBackend, OutputProfile, PixelFormat, PolicyCancellation, PolicyErrorCode,
     PolicyLimitConfig, PolicyLimits, RenderPlan,
 };
-use pdf_rs_scene::{FillRule, GraphicsCommand, GraphicsScene, Matrix, Paint, Scene};
+use pdf_rs_scene::{
+    BlendMode, FillRule, GraphicsCommand, GraphicsScene, Matrix, Paint, Scene, SceneUnit,
+};
 
 use crate::fast::kernels::{
     Coverage, FlatPath, KernelWork, PageMap, Pixel, WorkRect, composite_coverage, draw_image,
@@ -37,6 +39,14 @@ pub struct FastRasterJob<'a> {
     bin_fuel: u64,
     bin_cancellation_checks: u64,
     bin_peak_intermediate: u64,
+}
+
+enum GroupFrame {
+    Offscreen {
+        parent: Vec<Pixel>,
+        alpha: SceneUnit,
+        blend_mode: BlendMode,
+    },
 }
 
 impl<'a> FastRasterJob<'a> {
@@ -222,7 +232,7 @@ impl<'a> FastRasterJob<'a> {
         work.admit_intermediate(logical_surface_bytes)?;
         let mut surface = Vec::new();
         reserve(&mut surface, surface_len)?;
-        let surface_bytes = vector_bytes(&surface)?;
+        let mut surface_bytes = vector_bytes(&surface)?;
         work.admit_intermediate(surface_bytes)?;
         for _ in 0..surface_len {
             work.step()?;
@@ -234,6 +244,8 @@ impl<'a> FastRasterJob<'a> {
         let mut clip = Coverage::full(rect, surface_bytes, work)?;
         let mut stack = Vec::<Coverage>::new();
         let mut stack_payload_bytes = 0_u64;
+        let mut groups = Vec::<GroupFrame>::new();
+        let mut group_stack_bytes = 0_u64;
         let map = PageMap::new(self.scene, self.plan)?;
 
         for &command_index in command_bin {
@@ -248,8 +260,12 @@ impl<'a> FastRasterJob<'a> {
                     if stack.len() == stack.capacity() {
                         let next_len = stack.len().checked_add(1).ok_or_else(numeric)?;
                         let logical_stack_bytes = logical_vector_bytes::<Coverage>(next_len)?;
-                        let state_payload =
-                            state_payload_bytes(surface_bytes, &clip, stack_payload_bytes)?;
+                        let state_payload = state_payload_bytes(
+                            surface_bytes,
+                            &clip,
+                            stack_payload_bytes,
+                            group_stack_bytes,
+                        )?;
                         let old_stack_bytes = vector_bytes(&stack)?;
                         let allocation_peak = state_payload
                             .checked_add(old_stack_bytes)
@@ -269,9 +285,16 @@ impl<'a> FastRasterJob<'a> {
                             &clip,
                             &stack,
                             stack_payload_bytes,
+                            group_stack_bytes,
                         )?)?;
                     }
-                    let base = state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?;
+                    let base = state_bytes(
+                        surface_bytes,
+                        &clip,
+                        &stack,
+                        stack_payload_bytes,
+                        group_stack_bytes,
+                    )?;
                     work.admit_intermediate(base)?;
                     work.admit_intermediate(add(base, logical_clip_bytes)?)?;
                     let saved = Coverage::copy_from(&clip, base, work)?;
@@ -293,7 +316,13 @@ impl<'a> FastRasterJob<'a> {
                     rule,
                     transform,
                 } => {
-                    let base = state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?;
+                    let base = state_bytes(
+                        surface_bytes,
+                        &clip,
+                        &stack,
+                        stack_payload_bytes,
+                        group_stack_bytes,
+                    )?;
                     let flat = self.flatten(*path, *transform, 1, map, base, work)?;
                     let operation =
                         fill_coverage(&flat, rect, *rule, add(base, flat.retained_bytes())?, work)?;
@@ -307,7 +336,13 @@ impl<'a> FastRasterJob<'a> {
                 } => self.paint_fill(
                     &mut surface,
                     &clip,
-                    state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?,
+                    state_bytes(
+                        surface_bytes,
+                        &clip,
+                        &stack,
+                        stack_payload_bytes,
+                        group_stack_bytes,
+                    )?,
                     rect,
                     *path,
                     *transform,
@@ -325,7 +360,13 @@ impl<'a> FastRasterJob<'a> {
                 } => self.paint_stroke(
                     &mut surface,
                     &clip,
-                    state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?,
+                    state_bytes(
+                        surface_bytes,
+                        &clip,
+                        &stack,
+                        stack_payload_bytes,
+                        group_stack_bytes,
+                    )?,
                     rect,
                     *path,
                     *transform,
@@ -345,7 +386,13 @@ impl<'a> FastRasterJob<'a> {
                     self.paint_fill(
                         &mut surface,
                         &clip,
-                        state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?,
+                        state_bytes(
+                            surface_bytes,
+                            &clip,
+                            &stack,
+                            stack_payload_bytes,
+                            group_stack_bytes,
+                        )?,
                         rect,
                         *path,
                         *transform,
@@ -358,7 +405,13 @@ impl<'a> FastRasterJob<'a> {
                     self.paint_stroke(
                         &mut surface,
                         &clip,
-                        state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?,
+                        state_bytes(
+                            surface_bytes,
+                            &clip,
+                            &stack,
+                            stack_payload_bytes,
+                            group_stack_bytes,
+                        )?,
                         rect,
                         *path,
                         *transform,
@@ -388,7 +441,13 @@ impl<'a> FastRasterJob<'a> {
                     )?;
                 }
                 GraphicsCommand::DrawGlyphRun(run) => {
-                    let base = state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?;
+                    let base = state_bytes(
+                        surface_bytes,
+                        &clip,
+                        &stack,
+                        stack_payload_bytes,
+                        group_stack_bytes,
+                    )?;
                     let mut union = Coverage::empty(rect, base, work)?;
                     for glyph_use in run.glyphs() {
                         let glyph = lookup_glyph(self.graphics, glyph_use.outline())?;
@@ -415,12 +474,77 @@ impl<'a> FastRasterJob<'a> {
                     }
                     composite_coverage(&mut surface, &union, &clip, run.paint(), work)?;
                 }
-                GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup => {
-                    return Err(invalid_config());
+                GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
+                    if groups.len() == groups.capacity() {
+                        let next_len = groups.len().checked_add(1).ok_or_else(numeric)?;
+                        let logical_group_stack = logical_vector_bytes::<GroupFrame>(next_len)?;
+                        let base = state_bytes(
+                            surface_bytes,
+                            &clip,
+                            &stack,
+                            stack_payload_bytes,
+                            group_stack_bytes,
+                        )?;
+                        work.admit_intermediate(add(base, logical_group_stack)?)?;
+                        reserve(&mut groups, 1)?;
+                        group_stack_bytes = vector_bytes(&groups)?;
+                        work.admit_intermediate(state_bytes(
+                            surface_bytes,
+                            &clip,
+                            &stack,
+                            stack_payload_bytes,
+                            group_stack_bytes,
+                        )?)?;
+                    }
+
+                    let base = state_bytes(
+                        surface_bytes,
+                        &clip,
+                        &stack,
+                        stack_payload_bytes,
+                        group_stack_bytes,
+                    )?;
+                    work.admit_intermediate(add(base, logical_surface_bytes)?)?;
+                    let mut group = Vec::new();
+                    reserve(&mut group, surface_len)?;
+                    let group_bytes = vector_bytes(&group)?;
+                    work.admit_intermediate(add(base, group_bytes)?)?;
+                    for _ in 0..surface_len {
+                        work.step()?;
+                        group.push(Pixel::TRANSPARENT);
+                    }
+                    surface_bytes = surface_bytes.checked_add(group_bytes).ok_or_else(numeric)?;
+                    let parent = std::mem::replace(&mut surface, group);
+                    groups.push(GroupFrame::Offscreen {
+                        parent,
+                        alpha: *alpha,
+                        blend_mode: *blend_mode,
+                    });
+                }
+                GraphicsCommand::EndIsolatedGroup => {
+                    let frame = groups.pop().ok_or_else(command_sequence)?;
+                    let GroupFrame::Offscreen {
+                        parent,
+                        alpha,
+                        blend_mode,
+                    } = frame;
+                    let group = std::mem::replace(&mut surface, parent);
+                    if group.len() != surface.len() {
+                        return Err(command_sequence());
+                    }
+                    for (backdrop, source) in surface.iter_mut().zip(&group) {
+                        work.step()?;
+                        *backdrop = source
+                            .apply_constant_alpha(alpha)
+                            .source_over(*backdrop, blend_mode);
+                    }
+                    surface_bytes = surface_bytes
+                        .checked_sub(vector_bytes(&group)?)
+                        .ok_or_else(numeric)?;
                 }
             }
         }
-        if !stack.is_empty() {
+        if !stack.is_empty() || !groups.is_empty() {
             return Err(command_sequence());
         }
 
@@ -430,7 +554,13 @@ impl<'a> FastRasterJob<'a> {
             .ok_or_else(numeric)?;
         let output_len = usize::try_from(output_len).map_err(|_| numeric())?;
         let logical_output_bytes = logical_vector_bytes::<u8>(output_len)?;
-        let output_base = state_bytes(surface_bytes, &clip, &stack, stack_payload_bytes)?;
+        let output_base = state_bytes(
+            surface_bytes,
+            &clip,
+            &stack,
+            stack_payload_bytes,
+            group_stack_bytes,
+        )?;
         work.admit_intermediate(add(output_base, logical_output_bytes)?)?;
         let mut output = Vec::new();
         reserve(&mut output, output_len)?;
@@ -728,12 +858,6 @@ fn build_bins(
     }
     let mut entries = 0_u64;
     for record in graphics.commands() {
-        if matches!(
-            record.command(),
-            GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup
-        ) {
-            return Err(invalid_config());
-        }
         for (index, tile) in plan.tiles().iter().enumerate() {
             work.step()?;
             if command_belongs(
@@ -851,7 +975,11 @@ pub(super) fn command_belongs(
 ) -> Result<bool, FastRasterError> {
     if matches!(
         command,
-        GraphicsCommand::Save | GraphicsCommand::Restore | GraphicsCommand::Clip { .. }
+        GraphicsCommand::Save
+            | GraphicsCommand::Restore
+            | GraphicsCommand::Clip { .. }
+            | GraphicsCommand::BeginIsolatedGroup { .. }
+            | GraphicsCommand::EndIsolatedGroup
     ) {
         return Ok(true);
     }
@@ -1023,8 +1151,9 @@ fn state_bytes(
     clip: &Coverage,
     stack: &Vec<Coverage>,
     stack_payload_bytes: u64,
+    group_stack_bytes: u64,
 ) -> Result<u64, FastRasterError> {
-    state_payload_bytes(surface_bytes, clip, stack_payload_bytes)?
+    state_payload_bytes(surface_bytes, clip, stack_payload_bytes, group_stack_bytes)?
         .checked_add(vector_bytes(stack)?)
         .ok_or_else(numeric)
 }
@@ -1033,10 +1162,12 @@ fn state_payload_bytes(
     surface_bytes: u64,
     clip: &Coverage,
     stack_payload_bytes: u64,
+    group_stack_bytes: u64,
 ) -> Result<u64, FastRasterError> {
     surface_bytes
         .checked_add(clip.retained_bytes())
         .and_then(|value| value.checked_add(stack_payload_bytes))
+        .and_then(|value| value.checked_add(group_stack_bytes))
         .ok_or_else(numeric)
 }
 

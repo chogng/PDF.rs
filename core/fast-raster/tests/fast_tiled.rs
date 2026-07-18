@@ -76,6 +76,59 @@ fn owned_one_unit_polls_match_synchronous_pixels_and_identity() {
 }
 
 #[test]
+fn isolated_group_matches_reference_in_sync_and_owned_paths() {
+    let mut scene_builder = builder();
+    scene_builder
+        .begin_group(
+            SceneUnit::from_u16(32_768),
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    append_fill(&mut scene_builder, rectangle(0, 0, 16, 16), red(), 1);
+    scene_builder
+        .end_group(SceneBounds::Page, source(2))
+        .unwrap();
+    let scene = scene_builder.finish().unwrap();
+    let render_plan = plan_with_profile(
+        &scene,
+        config(8, 8, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+        CapabilityProfile::m4_fast_v1(),
+    );
+    let synchronous = FastRasterJob::new(
+        &scene,
+        &render_plan,
+        FastRasterLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap()
+    .render_all(&[0, 1, 2, 3], &NeverCancelled)
+    .unwrap();
+    let fast = compose(&synchronous);
+    let reference = reference_pixels(&scene);
+    assert!(
+        fast.iter()
+            .zip(&reference)
+            .all(|(fast, reference)| fast.abs_diff(*reference) <= 1)
+    );
+
+    let mut owned = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    let maximum = FastRasterPollBudget::new(NonZeroU32::new(4_096).unwrap()).unwrap();
+    while owned.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
+    assert_eq!(compose(&owned.take_result().unwrap().unwrap()), fast);
+}
+
+#[test]
 fn atomic_tile_fuel_is_distinct_and_terminal() {
     let scene = layered_scene();
     let render_plan = plan(
@@ -1291,12 +1344,25 @@ fn config(tile_width: u32, tile_height: u32, halo: u16) -> RenderConfig {
 }
 
 fn plan(scene: &Scene, config: RenderConfig, width: u32, height: u32) -> RenderPlan {
-    let decision = CapabilityEvaluator::new(
+    plan_with_profile(
+        scene,
+        config,
+        width,
+        height,
         CapabilityProfile::m3_reference_v1(),
-        PolicyLimits::default(),
     )
-    .evaluate(scene, 23, &PolicyNever)
-    .unwrap();
+}
+
+fn plan_with_profile(
+    scene: &Scene,
+    config: RenderConfig,
+    width: u32,
+    height: u32,
+    profile: CapabilityProfile,
+) -> RenderPlan {
+    let decision = CapabilityEvaluator::new(profile, PolicyLimits::default())
+        .evaluate(scene, 23, &PolicyNever)
+        .unwrap();
     let request = RenderPlanRequest::new(
         41,
         DeviceRect::new(0, 0, width, height).unwrap(),

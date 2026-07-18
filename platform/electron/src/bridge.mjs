@@ -26,7 +26,7 @@ export class PdfRsBridge {
     const moduleDirectory = dirname(fileURLToPath(import.meta.url));
     const program = options.program
       ?? process.env.PDF_RS_ELECTRON_BRIDGE
-      ?? resolve(moduleDirectory, "../../../target/debug/pdf-rs-electron-bridge");
+      ?? resolve(moduleDirectory, "../../../target/release/pdf-rs-electron-bridge");
     const rendererCohort = options.rendererCohort
       ?? process.env.PDF_RS_ELECTRON_RENDERER_COHORT;
     if (
