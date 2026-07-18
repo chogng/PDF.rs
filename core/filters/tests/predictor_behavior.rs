@@ -330,6 +330,27 @@ fn predictor_output_fuel_total_and_retained_capacity_limits_are_enforced() {
 }
 
 #[test]
+fn exact_total_output_limit_allows_large_predictor_buffer_growth() {
+    let row = vec![0x5a; 10_000];
+    let predictor_bytes = png_encode(std::slice::from_ref(&row), &[0], 1);
+    let parameters = parameters(10, 1, 8, 10_000);
+    let encoded = zlib_stored(&predictor_bytes);
+    let limits = configured(|config| {
+        config.max_layer_output_bytes = 10_001;
+        config.max_total_output_bytes = 20_001;
+        config.max_final_output_bytes = 10_000;
+    });
+    let decoded = decode_stream(
+        Fixture::new(&encoded).request(predictor_plan(parameters), limits),
+        &NeverCancelled,
+    )
+    .unwrap();
+
+    assert_eq!(decoded.bytes(), row);
+    assert_eq!(decoded.attestation().cumulative_output_bytes(), 20_001);
+}
+
+#[test]
 fn predictor_work_obeys_cooperative_cancellation() {
     let predictor_bytes = png_encode(&[vec![1, 2, 3, 4]], &[1], 1);
     let encoded = zlib_stored(&predictor_bytes);

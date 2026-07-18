@@ -604,7 +604,7 @@ impl DecodeBudget {
         Ok(())
     }
 
-    fn capacity_ceiling(&self, is_final: bool) -> u64 {
+    fn capacity_ceiling(&self, is_final: bool, current_layer_output_bytes: u64) -> u64 {
         let final_limit = if is_final {
             self.limits.max_final_output_bytes
         } else {
@@ -613,7 +613,8 @@ impl DecodeBudget {
         let total_remaining = self
             .limits
             .max_total_output_bytes
-            .saturating_sub(self.cumulative_output_bytes);
+            .saturating_sub(self.cumulative_output_bytes)
+            .saturating_add(current_layer_output_bytes);
         self.limits
             .max_layer_output_bytes
             .min(final_limit)
@@ -701,9 +702,12 @@ impl<'a> OutputBuffer<'a> {
         if required > available {
             return Err(self.retained_error(required));
         }
-        let logical_ceiling = usize::try_from(self.budget.capacity_ceiling(self.is_final))
-            .unwrap_or(usize::MAX)
-            .min(available);
+        let logical_ceiling = usize::try_from(
+            self.budget
+                .capacity_ceiling(self.is_final, self.layer_output_bytes),
+        )
+        .unwrap_or(usize::MAX)
+        .min(available);
         let hint = usize::try_from(self.expected_output)
             .unwrap_or(usize::MAX)
             .max(required)
