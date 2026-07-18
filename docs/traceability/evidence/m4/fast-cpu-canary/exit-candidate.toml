@@ -1,0 +1,76 @@
+schema = 1
+type = "milestone-exit-candidate"
+id = "evidence.m4.fast-cpu-canary.exit-candidate"
+milestone = "M4"
+state = "AUTOMATED_CLOSURE"
+created_at = 2026-07-18
+candidate_base_commit = "b41e7890a9906a4bd7644eba7a4016d3f4bfc76d"
+candidate_base_tree = "c88c82fdf66a35ed8a023a64d40381b160ed1be2"
+candidate_resolution = "git-tree-at-candidate-base-commit-not-working-tree"
+selected_target = "m4-electron-local-preview-v1"
+selected_target_status = "complete"
+profile = "m4.fast-cpu-r0-basic-page.v1"
+profile_state = "CANARY_CANDIDATE"
+default_renderer = "Reference CPU"
+canary_renderer = "Fast CPU"
+promotion_approved = false
+milestone_approved = false
+external_engine_fallback = false
+
+content_references = [
+  "docs/traceability/canary-profiles.toml#sha256:6abfb2fbb369f403763ea760631500d0b4a07c44e283797a88d06575fa67400b",
+  "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022",
+  "docs/traceability/evidence/m4/fast-cpu-canary/review-request.toml#sha256:1b395f995f27f47c3244a52d54f0cfb19ea687645b43b003a00c0a24ebb3f704",
+  "docs/traceability/evidence/m4/fast-cpu-canary/holdout.toml#sha256:f42bf556c9172d2601434665d265cbc2a082b59c1d3ca35026cf9225d09dd864",
+  "docs/traceability/evidence/m4/fast-cpu-canary/fuzz-replay.toml#sha256:8f8eb5ef89c331109a9323f653bdef702c1fd75bc5f4bd8ce47b483344279a38",
+  "docs/traceability/evidence/m4/fast-cpu-canary/performance.toml#sha256:6e851d27bc353af9b713772c6e63d061f7c59a0b7abd1ff0e3407552cce2068e",
+  "docs/traceability/evidence/m4/fast-cpu-canary/product-purity.toml#sha256:1155d79d12b94756e85320918cb268ee894b7e34a2dbedffdb9d73a5e4c061a4",
+  "tools/quality/tests/m4_fast_canary_gate.rs#sha256:050964581fa89576d5f75d770f7f4f642577130b2989535efa568218d983bdd1",
+  "tools/quality/tests/m4_review_request.rs#sha256:0674ef4eaada0d5ce327ee7f8bf5734aed2e1111895e82da88e3ad9e2d3bd602",
+  "tools/quality/tests/m4_fast_canary_holdout.rs#sha256:00a04a57ae4032be46e3b8f24d73928d911105fe668e482ffaac3710ebff58d9",
+  "tools/quality/tests/m4_fast_raster_fuzz.rs#sha256:c1ffbb640812f05b965ca1084ab4fc1bd52510e948d0c895cf529a0a3ad7aeae",
+  "tools/generate/src/readable_preview.rs#sha256:f1fbfd0c43ad6f7f52ed28678e72519b5f37f05df348212343db4498ab49e021",
+  "plan/m4.toml#sha256:a1b6ff3548b07a295ede86c769657847095df3d29f364406cb1a4f0d21fa2c7b",
+  "plan/r0.toml#sha256:f8a431a445728456b9c543f6e485de3616c4ad4b80561de181fec9c527459d1d",
+  "plan/m3.toml#sha256:70f5e847aa5f194a56e5a6b019ff729d234b5b48b928be1fed22742934c4e31f",
+  "plan/m2.toml#sha256:b0378ae2c3388626871863462362649ee291ee11142bee7686ec909f4cced55a",
+  "docs/traceability/capability-profiles.toml#sha256:474dbdb2019e8cd1afec3342755559e6f7be82cfdf2372f338bc13847cebdc88",
+  "docs/traceability/data-ledger.toml#sha256:dc87666e8fe998caafdb4a40afd99d498cbd4bc9fe6f22423799e9cba55e935c",
+  "platform/electron/electron-target.toml#sha256:0e53e397733590c4ea3c1dc09cd2877fde9b2a66b1e1b63531188dddb851b588",
+  "platform/electron/package.json#sha256:0194539debf89182631b931830c0eabcf54ccaf5d4a92f759b30bcfee7eddd29",
+  "platform/electron/package-lock.json#sha256:e32fd1cab6a832386ccb9c3da8b5c9cf3d5b173fef4df83380c2139eefa6a770",
+  "protocol/generated/schema-hash.txt#sha256:4ed385163d65906b3cb92c52af3f96e92633e5a72087fa4361a61d70b7773af8",
+  "tools/quality/tests/m3_exit.rs#sha256:a6ec8bb0576c9dffb900378f967c7eec45264a2d5350af6d7167aa8efcbeb01c",
+  "docs/traceability/evidence/m3/reference-raster-gate/independent-review.toml#sha256:90b1fee9e730dad977317f89ad9d107008ffcabff99578203c5a7487c8c0fcb4",
+]
+
+automated_gates = [
+  "cargo test --locked --package pdf-rs-quality --test m4_fast_canary_gate",
+  "cargo test --locked --package pdf-rs-quality --test m4_fast_canary_holdout",
+  "cargo test --locked --package pdf-rs-quality --test m4_fast_raster_fuzz -- --nocapture",
+  "cargo test --locked --package pdf-rs-fast-raster",
+  "cargo test --locked --package pdf-rs-viewer --all-targets",
+  "cargo test --locked --package pdf-rs-electron-bridge --all-targets",
+  "npm --prefix platform/electron test",
+  "cargo run --quiet --locked --package pdf-rs-quality -- check-product-purity .",
+  "cargo test --locked --package pdf-rs-quality --test m3_exit",
+  "cargo run --quiet --locked --package pdf-rs-protocol-codegen -- --check .",
+  "cargo fmt --all -- --check",
+  "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+]
+
+expected_pending_gaps = [
+  "independent-review-record-missing",
+  "promotion-review-incomplete",
+  "promotion-not-approved",
+  "registry-not-promoted-to-canary",
+  "m4-11-not-complete",
+  "m4-12-not-complete",
+  "m4-plan-not-complete",
+  "r0-m4-milestone-not-complete",
+]
+
+required_review_roles = ["runtime-platform", "graphics-color", "quality-corpus"]
+required_decision_record = "docs/traceability/evidence/m4/fast-cpu-canary/independent-review.toml"
+final_gate = "cargo test --locked --package pdf-rs-quality --test m4_exit"
+limitations = "This candidate proves the automated M4 closure inputs and the exact remaining gaps. It is not the final m4_exit verdict, does not approve promotion, does not enable Fast CPU by default, and does not authorize M5 work."
