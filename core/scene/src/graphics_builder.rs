@@ -2,11 +2,11 @@ use std::mem::size_of;
 
 use crate::{
     BlendMode, CapabilityContext, CapabilityRequirement, CapabilityRequirementId, CapabilityStatus,
-    CommandSource, FillRule, GlyphRun, GlyphUse, GraphicsCapability, GraphicsCommand,
-    GraphicsCommandRecord, GraphicsResource, GraphicsResourceEntry, GraphicsResourceId,
-    GraphicsScene, GraphicsSceneStats, ImageResource, LineStyle, Matrix, PageGeometry, Paint,
-    PathResource, PositionedGlyph, Scene, SceneBinding, SceneBounds, SceneError, SceneErrorCode,
-    SceneLimitKind, ScenePoint, SceneUnit,
+    CommandSource, FillRule, GlyphPainting, GlyphRun, GlyphUse, GraphicsCapability,
+    GraphicsCommand, GraphicsCommandRecord, GraphicsResource, GraphicsResourceEntry,
+    GraphicsResourceId, GraphicsScene, GraphicsSceneStats, ImageResource, LineStyle, Matrix,
+    PageGeometry, Paint, PathResource, PositionedGlyph, Scene, SceneBinding, SceneBounds,
+    SceneError, SceneErrorCode, SceneLimitKind, ScenePoint, SceneUnit,
 };
 
 const HARD_MAX_GRAPHICS_COMMANDS: u32 = 4_000_000;
@@ -446,6 +446,17 @@ impl GraphicsSceneBuilder {
         bounds: SceneBounds,
         source: CommandSource,
     ) -> Result<(), SceneError> {
+        self.draw_painted_glyph_run(glyphs, GlyphPainting::Fill(paint), bounds, source)
+    }
+
+    /// Appends one positioned embedded-glyph run with explicit fill/stroke semantics.
+    pub fn draw_painted_glyph_run(
+        &mut self,
+        glyphs: Vec<GlyphUse>,
+        painting: GlyphPainting,
+        bounds: SceneBounds,
+        source: CommandSource,
+    ) -> Result<(), SceneError> {
         if glyphs.is_empty() {
             return Err(SceneError::for_code(
                 SceneErrorCode::InvalidCommandSequence,
@@ -462,11 +473,15 @@ impl GraphicsSceneBuilder {
         )?;
         let persistent_retained = self.retained_bytes()?;
         let glyph_input_retained = capacity_bytes::<GlyphUse>(glyphs.capacity())?;
-        let glyph_input_nested = glyphs.iter().try_fold(0_u64, |retained, glyph| {
-            retained
-                .checked_add(glyph.outline().outline().retained_bytes()?)
-                .ok_or_else(internal)
-        })?;
+        let glyph_input_nested = glyphs
+            .iter()
+            .try_fold(0_u64, |retained, glyph| {
+                retained
+                    .checked_add(glyph.outline().outline().retained_bytes()?)
+                    .ok_or_else(internal)
+            })?
+            .checked_add(painting.retained_bytes()?)
+            .ok_or_else(internal)?;
         let positioned_retained = capacity_bytes::<PositionedGlyph>(glyphs.len())?;
         let resource_retained = capacity_bytes::<GraphicsResource>(glyphs.len())?;
         let id_retained = capacity_bytes::<GraphicsResourceId>(glyphs.len())?;
@@ -507,7 +522,7 @@ impl GraphicsSceneBuilder {
         for glyph in &glyphs {
             resources.push(GraphicsResource::GlyphOutline(glyph.outline().clone()));
         }
-        let capabilities = paint_capabilities(paint, GraphicsCapability::Glyph, glyph_count);
+        let capabilities = glyph_paint_capabilities(&painting, glyph_count);
         let allocation_limit = self.limits.max_retained_bytes();
         self.append_with_resources(
             resources,
@@ -540,9 +555,9 @@ impl GraphicsSceneBuilder {
                         glyph.character_code(),
                     ));
                 }
-                Ok(GraphicsCommand::DrawGlyphRun(GlyphRun::from_reserved(
-                    positioned, paint,
-                )?))
+                Ok(GraphicsCommand::DrawGlyphRun(
+                    GlyphRun::from_reserved_painted(positioned, painting)?,
+                ))
             },
             bounds,
             source,
@@ -716,7 +731,7 @@ impl GraphicsSceneBuilder {
                             glyph.character_code(),
                         ));
                     }
-                    self.draw_glyph_run(glyphs, run.paint(), bounds, source)?;
+                    self.draw_painted_glyph_run(glyphs, run.painting().clone(), bounds, source)?;
                 }
                 GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
                     self.begin_group(*alpha, *blend_mode, bounds, source)?;
@@ -1428,6 +1443,26 @@ fn paint_capabilities(
     ];
     append_alpha_blend_capabilities(&mut values, paint.alpha(), paint.blend_mode());
     values
+}
+
+fn glyph_paint_capabilities(
+    painting: &GlyphPainting,
+    glyph_count: u64,
+) -> Vec<(GraphicsCapability, u64)> {
+    match painting {
+        GlyphPainting::Fill(paint) | GlyphPainting::Stroke { paint, .. } => {
+            paint_capabilities(*paint, GraphicsCapability::Glyph, glyph_count)
+        }
+        GlyphPainting::FillStroke { fill, stroke, .. } => {
+            let mut values = paint_capabilities(*fill, GraphicsCapability::Glyph, glyph_count);
+            values.extend(paint_capabilities(
+                *stroke,
+                GraphicsCapability::Glyph,
+                glyph_count,
+            ));
+            values
+        }
+    }
 }
 
 fn append_alpha_blend_capabilities(

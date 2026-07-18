@@ -814,7 +814,23 @@ fn graphics_command_compare_work(
             .len()
             .max(actual.dash().array().len()),
         (GraphicsCommand::DrawGlyphRun(expected), GraphicsCommand::DrawGlyphRun(actual)) => {
-            expected.glyphs().len().max(actual.glyphs().len())
+            expected
+                .glyphs()
+                .len()
+                .max(actual.glyphs().len())
+                .checked_add(
+                    expected
+                        .painting()
+                        .stroke()
+                        .map_or(0, |(_, style)| style.dash().array().len())
+                        .max(
+                            actual
+                                .painting()
+                                .stroke()
+                                .map_or(0, |(_, style)| style.dash().array().len()),
+                        ),
+                )
+                .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?
         }
         _ => 0,
     };

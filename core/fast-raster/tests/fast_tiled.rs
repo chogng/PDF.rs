@@ -22,8 +22,8 @@ use pdf_rs_raster::reference::{
     ReferenceRenderPoll,
 };
 use pdf_rs_scene::{
-    BlendMode, CommandSource, DashPattern, DeviceColor, FillRule, GlyphOutline, GlyphUse,
-    GraphicsResourceSource, GraphicsSceneBuilder, GraphicsSceneLimits, ImageColorSpace,
+    BlendMode, CommandSource, DashPattern, DeviceColor, FillRule, GlyphOutline, GlyphPainting,
+    GlyphUse, GraphicsResourceSource, GraphicsSceneBuilder, GraphicsSceneLimits, ImageColorSpace,
     ImageResource, LineCap, LineJoin, LineStyle, Matrix, PageGeometry, PageRotation, Paint,
     PathResource, PathSegment, Scene, SceneBinding, SceneBounds, ScenePoint, SceneRect,
     SceneScalar, SceneUnit,
@@ -763,6 +763,64 @@ fn registered_stroke_semantics_match_reviewed_reference_pixels() {
         "registered dash, cap, join, miter, or nonuniform stroke-transform semantics diverged: \
          maximum 4x4-to-8x8 channel delta was {maximum_channel_delta}"
     );
+}
+
+#[test]
+fn glyph_fill_stroke_semantics_render_in_both_rust_rasterizers() {
+    let mut scene_builder = builder();
+    let outline = GlyphOutline::new(
+        GraphicsResourceSource::new(ObjectRef::new(62, 0).unwrap(), 19, 0),
+        2,
+        1_000,
+        rectangle(0, 0, 1_000, 1_000),
+    )
+    .unwrap();
+    let glyph_transform = Matrix::new([
+        scalar(8),
+        SceneScalar::ZERO,
+        SceneScalar::ZERO,
+        scalar(8),
+        scalar(4),
+        scalar(4),
+    ]);
+    let style = LineStyle::new(
+        scalar(2),
+        LineCap::Butt,
+        LineJoin::Miter,
+        scalar(10),
+        DashPattern::new(Vec::new(), SceneScalar::ZERO).unwrap(),
+        Matrix::IDENTITY,
+    )
+    .unwrap();
+    scene_builder
+        .draw_painted_glyph_run(
+            vec![GlyphUse::new(outline, glyph_transform, 65)],
+            GlyphPainting::FillStroke {
+                fill: blue(),
+                stroke: red(),
+                style,
+            },
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    let scene = scene_builder.finish().unwrap();
+    let plan = plan(&scene, config(8, 8, 1), PAGE_WIDTH, PAGE_HEIGHT);
+    let fast = compose(
+        &FastRasterJob::new(&scene, &plan, FastRasterLimits::default(), &NeverCancelled)
+            .unwrap()
+            .render_all(&[0, 1, 2, 3], &NeverCancelled)
+            .unwrap(),
+    );
+    assert!(
+        fast.chunks_exact(4).any(|pixel| pixel == [0, 0, 255, 255]),
+        "glyph interior must retain fill paint"
+    );
+    assert!(
+        fast.chunks_exact(4).any(|pixel| pixel == [255, 0, 0, 255]),
+        "glyph boundary must retain stroke paint"
+    );
+    assert_fast_matches_reference(&scene, 16, "glyph fill-stroke paint order");
 }
 
 #[test]

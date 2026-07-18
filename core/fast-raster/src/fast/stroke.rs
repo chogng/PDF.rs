@@ -163,6 +163,7 @@ impl StrokeOutline {
 pub(crate) fn stroke_coverage(
     path: &PathResource,
     path_transform: Matrix,
+    path_divisor: u16,
     style: &LineStyle,
     map: PageMap,
     rect: WorkRect,
@@ -171,9 +172,20 @@ pub(crate) fn stroke_coverage(
     base_intermediate: u64,
     work: &mut dyn KernelWork,
 ) -> Result<Coverage, FastRasterError> {
+    if path_divisor == 0 {
+        return Err(invalid_resource());
+    }
     let stroke_to_page = Affine::from_scene(style.stroke_transform())?;
     let page_to_stroke = stroke_to_page.inverse()?;
-    let path_to_page = Affine::from_scene(path_transform)?;
+    let unit_scale = round_to_i64(i128::from(FIXED_ONE), i128::from(path_divisor))?;
+    let path_to_page = Affine::from_scene(path_transform)?.concat(Affine {
+        a: unit_scale,
+        b: 0,
+        c: 0,
+        d: unit_scale,
+        e: 0,
+        f: 0,
+    })?;
     let page_to_device = Affine::from_page_map(map)?;
     let path_to_stroke = page_to_stroke.concat(path_to_page)?;
     let path_to_device = page_to_device.concat(path_to_page)?;

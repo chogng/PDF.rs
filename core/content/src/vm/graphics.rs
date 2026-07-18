@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pdf_rs_scene::{
-    BlendMode, DashPattern, DeviceColor, FillRule, LineCap, LineJoin, LineStyle, Matrix, Paint,
-    PathResource, PathResourceBuilder, PathSegment, SceneBounds, SceneError, ScenePoint,
-    SceneScalar, SceneUnit,
+    BlendMode, DashPattern, DeviceColor, FillRule, GlyphPainting, LineCap, LineJoin, LineStyle,
+    Matrix, Paint, PathResource, PathResourceBuilder, PathSegment, SceneBounds, SceneError,
+    ScenePoint, SceneScalar, SceneUnit,
 };
 
 use super::{
@@ -468,6 +468,40 @@ impl GraphicsVm {
 
     pub(super) const fn image_paint(&self) -> Paint {
         self.current.nonstroking
+    }
+
+    pub(super) fn text_painting(
+        &mut self,
+        render_mode: i64,
+        source: ContentOperatorSource,
+    ) -> Result<Option<GlyphPainting>, GraphicsExecutionError> {
+        let painting = match render_mode {
+            0 => Some(GlyphPainting::Fill(self.current.nonstroking)),
+            1 => Some(GlyphPainting::Stroke {
+                paint: self.current.stroking,
+                style: self.line_style()?,
+            }),
+            2 => Some(GlyphPainting::FillStroke {
+                fill: self.current.nonstroking,
+                stroke: self.current.stroking,
+                style: self.line_style()?,
+            }),
+            3 => None,
+            _ => {
+                return Err(
+                    ContentVmError::new(ContentVmErrorCode::InternalState, Some(source)).into(),
+                );
+            }
+        };
+        if matches!(render_mode, 1 | 2) && !self.current.dash_ownership.action_published() {
+            self.action_dash_retained_bytes = self
+                .action_dash_retained_bytes
+                .checked_add(self.current.dash_ownership.retained_bytes())
+                .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+            let newly_published = self.current.dash_ownership.publish_action();
+            debug_assert!(newly_published);
+        }
+        Ok(painting)
     }
 
     pub(super) fn set_ctm(&mut self, value: Matrix) {

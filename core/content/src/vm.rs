@@ -12,8 +12,8 @@ use pdf_rs_document::{
 };
 use pdf_rs_font::{GlyphId, OutlineSegment};
 use pdf_rs_scene::{
-    CommandSource, DashPattern, DashPatternBuilder, FillRule, GlyphOutline, GlyphUse,
-    GraphicsSceneBuilder, GraphicsSceneLimits, LineStyle, Matrix, PageGeometry,
+    CommandSource, DashPattern, DashPatternBuilder, FillRule, GlyphOutline, GlyphPainting,
+    GlyphUse, GraphicsSceneBuilder, GraphicsSceneLimits, LineStyle, Matrix, PageGeometry,
     PageRotation as ScenePageRotation, Paint, PathResource, PathResourceBuilder, PathSegment,
     Scene, SceneBinding, SceneBounds, SceneBuilder, SceneError, SceneLimits, ScenePoint, SceneRect,
     SceneScalar, SceneUnit,
@@ -1290,6 +1290,7 @@ struct PlannedImageInvocation {
 #[derive(Clone, Copy, Default)]
 struct TextPlanningState {
     font_selected: bool,
+    render_mode: i64,
 }
 
 enum TextShowItem {
@@ -1350,7 +1351,7 @@ enum TextAction {
         character_spacing: Option<ContentNumber>,
         word_spacing: Option<ContentNumber>,
         next_line: bool,
-        paint: Paint,
+        painting: Option<GlyphPainting>,
         ctm: Matrix,
         command_source: CommandSource,
         source: ContentOperatorSource,
@@ -2252,7 +2253,7 @@ fn plan_text_operator(
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
     font_runtime: Option<&mut FontRuntime>,
-    graphics: Option<&GraphicsVm>,
+    graphics: Option<&mut GraphicsVm>,
     text_active: &mut bool,
     text_state: &mut TextPlanningState,
     planned_font_uses: &mut u64,
@@ -2401,12 +2402,13 @@ fn plan_text_operator(
             if !(0..=7).contains(value) {
                 return Err(vm_error(ContentVmErrorCode::InvalidGraphicsParameter, source).into());
             }
-            if *value != 0 {
+            if *value >= 4 {
                 return Err(TextPlanningTerminal::Unsupported(ContentUnsupported::new(
                     ContentUnsupportedKind::TextRenderMode,
                     source,
                 )));
             }
+            text_state.render_mode = *value;
             TextAction::SetRenderMode {
                 value: *value,
                 source,
@@ -2488,12 +2490,17 @@ fn plan_text_operator(
             *planned_name_bytes = planned_name_bytes
                 .checked_add(retained)
                 .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, source))?;
+            let painting = match graphics.text_painting(text_state.render_mode, source) {
+                Ok(value) => value,
+                Err(GraphicsExecutionError::Vm(error)) => return Err(error.into()),
+                Err(GraphicsExecutionError::Scene(error)) => return Err(error.into()),
+            };
             TextAction::Show {
                 items,
                 character_spacing,
                 word_spacing,
                 next_line,
-                paint: graphics.image_paint(),
+                painting,
                 ctm: graphics.current_ctm(),
                 command_source: command_source(source)?,
                 source,
@@ -3396,7 +3403,7 @@ fn build_execution_plan(
                     byte_source,
                     cancellation,
                     font_runtime.as_deref_mut(),
-                    graphics_v2.as_ref(),
+                    graphics_v2.as_mut(),
                     &mut text_active,
                     &mut text_state,
                     &mut planned_font_uses,
@@ -5184,7 +5191,7 @@ impl TextExecutor {
                 self.parameters.font_size = SceneScalar::from_scaled(size.scaled());
             }
             TextAction::SetRenderMode { value, .. } => {
-                if value != 0 {
+                if !(0..=3).contains(&value) {
                     return Err(ContentVmFailure::Vm(vm_error(
                         ContentVmErrorCode::InternalState,
                         source,
@@ -5223,7 +5230,7 @@ impl TextExecutor {
                 character_spacing,
                 word_spacing,
                 next_line,
-                paint,
+                painting,
                 ctm,
                 command_source,
                 ..
@@ -5239,7 +5246,7 @@ impl TextExecutor {
                 }
                 self.show(
                     &items,
-                    paint,
+                    painting,
                     ctm,
                     command_source,
                     source,
@@ -5282,7 +5289,7 @@ impl TextExecutor {
     fn show(
         &mut self,
         items: &[TextShowItem],
-        paint: Paint,
+        painting: Option<GlyphPainting>,
         ctm: Matrix,
         command_source: CommandSource,
         source: ContentOperatorSource,
@@ -5514,9 +5521,11 @@ impl TextExecutor {
         self.peak_glyph_retained = self.peak_glyph_retained.max(candidate_retained);
         self.observe_glyph_retained(candidate_retained, materialization_peak);
         runtime.record_glyph_retained(candidate_retained);
-        if !glyphs.is_empty() {
+        if !glyphs.is_empty()
+            && let Some(painting) = painting
+        {
             scene
-                .draw_glyph_run(glyphs, paint, SceneBounds::Page, command_source)
+                .draw_painted_glyph_run(glyphs, painting, SceneBounds::Page, command_source)
                 .map_err(ContentVmFailure::Scene)?;
         }
         runtime

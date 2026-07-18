@@ -815,16 +815,71 @@ impl PositionedGlyph {
     }
 }
 
+/// Paint operation applied to one positioned glyph sequence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GlyphPainting {
+    /// Fill glyph outlines with the nonstroking paint.
+    Fill(Paint),
+    /// Stroke glyph outlines with the stroking paint and complete line state.
+    Stroke {
+        /// Stroke paint.
+        paint: Paint,
+        /// Complete line state.
+        style: LineStyle,
+    },
+    /// Fill and then stroke glyph outlines.
+    FillStroke {
+        /// Fill paint.
+        fill: Paint,
+        /// Stroke paint.
+        stroke: Paint,
+        /// Complete line state.
+        style: LineStyle,
+    },
+}
+
+impl GlyphPainting {
+    /// Returns the fill paint when this operation fills glyph outlines.
+    pub const fn fill(&self) -> Option<Paint> {
+        match self {
+            Self::Fill(paint) | Self::FillStroke { fill: paint, .. } => Some(*paint),
+            Self::Stroke { .. } => None,
+        }
+    }
+
+    /// Returns the stroke paint and line state when this operation strokes glyph outlines.
+    pub const fn stroke(&self) -> Option<(Paint, &LineStyle)> {
+        match self {
+            Self::Stroke { paint, style } => Some((*paint, style)),
+            Self::FillStroke { stroke, style, .. } => Some((*stroke, style)),
+            Self::Fill(_) => None,
+        }
+    }
+
+    pub(crate) fn retained_bytes(&self) -> Result<u64, SceneError> {
+        self.stroke()
+            .map_or(Ok(0), |(_, style)| style.dash().retained_bytes())
+    }
+}
+
 /// Immutable positioned glyph sequence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlyphRun {
     glyphs: Arc<Vec<PositionedGlyph>>,
-    paint: Paint,
+    painting: GlyphPainting,
 }
 
 impl GlyphRun {
-    /// Creates one nonempty glyph run.
+    /// Creates one nonempty filled glyph run.
     pub fn new(glyphs: Vec<PositionedGlyph>, paint: Paint) -> Result<Self, SceneError> {
+        Self::new_painted(glyphs, GlyphPainting::Fill(paint))
+    }
+
+    /// Creates one nonempty glyph run with an explicit paint operation.
+    pub fn new_painted(
+        glyphs: Vec<PositionedGlyph>,
+        painting: GlyphPainting,
+    ) -> Result<Self, SceneError> {
         if glyphs.is_empty() {
             return Err(SceneError::for_code(
                 SceneErrorCode::InvalidCommandSequence,
@@ -833,13 +888,13 @@ impl GlyphRun {
         }
         Ok(Self {
             glyphs: Arc::new(exact_vec(glyphs)?),
-            paint,
+            painting,
         })
     }
 
-    pub(crate) fn from_reserved(
+    pub(crate) fn from_reserved_painted(
         glyphs: Vec<PositionedGlyph>,
-        paint: Paint,
+        painting: GlyphPainting,
     ) -> Result<Self, SceneError> {
         if glyphs.is_empty() {
             return Err(SceneError::for_code(
@@ -849,7 +904,7 @@ impl GlyphRun {
         }
         Ok(Self {
             glyphs: Arc::new(glyphs),
-            paint,
+            painting,
         })
     }
 
@@ -858,13 +913,25 @@ impl GlyphRun {
         &self.glyphs
     }
 
-    /// Returns glyph fill paint.
+    /// Returns the primary paint, preserving the fill-only API for existing callers.
+    ///
+    /// Fill-stroke runs return their fill paint and stroke-only runs return their stroke paint.
     pub const fn paint(&self) -> Paint {
-        self.paint
+        match &self.painting {
+            GlyphPainting::Fill(paint) | GlyphPainting::FillStroke { fill: paint, .. } => *paint,
+            GlyphPainting::Stroke { paint, .. } => *paint,
+        }
+    }
+
+    /// Borrows the explicit glyph paint operation.
+    pub const fn painting(&self) -> &GlyphPainting {
+        &self.painting
     }
 
     pub(crate) fn retained_bytes(&self) -> Result<u64, SceneError> {
-        vec_capacity_bytes(&self.glyphs)
+        vec_capacity_bytes(&self.glyphs)?
+            .checked_add(self.painting.retained_bytes()?)
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))
     }
 }
 

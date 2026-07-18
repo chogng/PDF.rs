@@ -29,8 +29,8 @@ pub use error::{
 };
 pub use graphics::{
     BlendMode, CapabilityContext, CapabilityRequirement, CapabilityRequirementId, CapabilityStatus,
-    DashPattern, DashPatternBuilder, DeviceColor, FillRule, GlyphOutline, GlyphRun, GlyphUse,
-    GraphicsCapability, GraphicsCommand, GraphicsCommandRecord, GraphicsResource,
+    DashPattern, DashPatternBuilder, DeviceColor, FillRule, GlyphOutline, GlyphPainting, GlyphRun,
+    GlyphUse, GraphicsCapability, GraphicsCommand, GraphicsCommandRecord, GraphicsResource,
     GraphicsResourceEntry, GraphicsResourceId, GraphicsResourceSource, GraphicsScene,
     GraphicsSceneStats, ImageColorSpace, ImageResource, LineCap, LineJoin, LineStyle, Paint,
     PathResource, PathResourceBuilder, PathSegment, PositionedGlyph, SceneBounds, ScenePoint,

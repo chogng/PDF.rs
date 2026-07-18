@@ -2,11 +2,11 @@ use pdf_rs_syntax::ObjectRef;
 
 use crate::{
     BlendMode, CapabilityContext, CapabilityDecision, CapabilityStatus, CommandSource, DeviceColor,
-    FillRule, GraphicsCapability, GraphicsCommand, GraphicsCommandRecord, GraphicsResource,
-    GraphicsResourceSource, GraphicsScene, ImageColorSpace, LineCap, LineJoin, LineStyle, Matrix,
-    PageGeometry, PathResource, PathSegment, Scene, SceneBounds, SceneCanonicalObserver,
-    SceneCommand, SceneCommandKind, SceneError, SceneErrorCode, SceneFeature, SceneLimitKind,
-    ScenePoint, SceneRect, SceneResource, SceneResourceKind,
+    FillRule, GlyphPainting, GraphicsCapability, GraphicsCommand, GraphicsCommandRecord,
+    GraphicsResource, GraphicsResourceSource, GraphicsScene, ImageColorSpace, LineCap, LineJoin,
+    LineStyle, Matrix, PageGeometry, PathResource, PathSegment, Scene, SceneBounds,
+    SceneCanonicalObserver, SceneCommand, SceneCommandKind, SceneError, SceneErrorCode,
+    SceneFeature, SceneLimitKind, ScenePoint, SceneRect, SceneResource, SceneResourceKind,
 };
 
 impl Scene {
@@ -271,8 +271,30 @@ fn write_graphics_command(
                 write_matrix(writer, glyph.transform())?;
                 writer.push(b"}")?;
             }
-            writer.push(b"],\"paint\":")?;
-            write_paint(writer, run.paint())?;
+            match run.painting() {
+                GlyphPainting::Fill(paint) => {
+                    writer.push(b"],\"paint\":")?;
+                    write_paint(writer, *paint)?;
+                }
+                GlyphPainting::Stroke { paint, style } => {
+                    writer.push(b"],\"painting\":\"stroke\",\"paint\":")?;
+                    write_paint(writer, *paint)?;
+                    writer.push(b",\"style\":")?;
+                    write_line_style(writer, style)?;
+                }
+                GlyphPainting::FillStroke {
+                    fill,
+                    stroke,
+                    style,
+                } => {
+                    writer.push(b"],\"painting\":\"fill-stroke\",\"fill\":")?;
+                    write_paint(writer, *fill)?;
+                    writer.push(b",\"stroke\":")?;
+                    write_paint(writer, *stroke)?;
+                    writer.push(b",\"style\":")?;
+                    write_line_style(writer, style)?;
+                }
+            }
             writer.push(b"}")
         }
         GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {

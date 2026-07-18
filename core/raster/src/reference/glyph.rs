@@ -8,7 +8,8 @@
 use std::mem::size_of;
 
 use pdf_rs_scene::{
-    FillRule, GlyphOutline, GlyphRun, GraphicsResource, GraphicsResourceEntry, Matrix, PageGeometry,
+    FillRule, GlyphOutline, GlyphPainting, GlyphRun, GraphicsResource, GraphicsResourceEntry,
+    Matrix, PageGeometry, Paint,
 };
 
 use super::coverage::{ClipStack, CoverageMask, SAMPLES_PER_PIXEL, rasterize_fill_union};
@@ -16,6 +17,7 @@ use super::geometry::{
     Affine, Fixed, GeometryCancellation, GeometryFailure, GeometryLimitKind, GeometryLimits,
     GeometryWork, PageDeviceMap, flatten_path,
 };
+use super::stroke::rasterize_stroke;
 use super::{NormalizedQ16, PremultipliedRgbaQ16, ReferenceColorProfile};
 
 const FLATNESS_TOLERANCE_DENOMINATOR: i64 = 256;
@@ -795,6 +797,70 @@ pub(crate) fn paint_glyph_run(
             coverage_bytes: work.stats.coverage_bytes,
         });
 
+        if let GlyphPainting::Fill(fill) = run.painting() {
+            for glyph in run.glyphs() {
+                work.tighten_fuel_limit(
+                    aggregate_fuel_limit
+                        .checked_sub(geometry_work.fuel())
+                        .ok_or(GlyphFailure::NumericOverflow)?,
+                )?;
+                let outline = resolve_outline(resources, glyph.outline())?;
+                work.record_glyph_lookup()?;
+                let outline_segments = u64::try_from(outline.outline().segments().len())
+                    .map_err(|_| GlyphFailure::NumericOverflow)?;
+                work.charge_outline_segments(outline_segments)?;
+                work.charge_fuel(1)?;
+                geometry_work.tighten_fuel_limit(
+                    limits.max_geometry_fuel.min(
+                        aggregate_fuel_limit
+                            .checked_sub(work.stats.fuel)
+                            .ok_or(GlyphFailure::NumericOverflow)?,
+                    ),
+                )?;
+                let transform =
+                    glyph_device_transform(page_map, glyph.transform(), outline.units_per_em())?;
+                let path = flatten_path(
+                    outline.outline(),
+                    transform,
+                    transform,
+                    flatness,
+                    limits.max_curve_recursion,
+                    &mut geometry_work,
+                )
+                .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+                let edges = super::coverage::FillEdges::from_path(&path, &mut geometry_work)
+                    .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+                rasterize_fill_union(&edges, FillRule::Nonzero, &mut coverage, &mut geometry_work)
+                    .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+            }
+            work.tighten_fuel_limit(
+                aggregate_fuel_limit
+                    .checked_sub(geometry_work.fuel())
+                    .ok_or(GlyphFailure::NumericOverflow)?,
+            )?;
+            work.stats.retained_bytes = work.ensure(
+                GlyphLimitKind::RetainedBytes,
+                limits.max_retained_bytes,
+                0,
+                work.stats
+                    .coverage_bytes
+                    .checked_add(geometry_work.peak_geometry_bytes())
+                    .ok_or(GlyphFailure::NumericOverflow)?,
+            )?;
+            paint_glyph_coverage(
+                &coverage,
+                *fill,
+                output_width,
+                output_height,
+                pixels,
+                clip,
+                output_pixels,
+                &mut work,
+            )?;
+            work.check_cancellation()?;
+            return Ok(());
+        }
+
         for glyph in run.glyphs() {
             work.tighten_fuel_limit(
                 aggregate_fuel_limit
@@ -807,28 +873,95 @@ pub(crate) fn paint_glyph_run(
                 .map_err(|_| GlyphFailure::NumericOverflow)?;
             work.charge_outline_segments(outline_segments)?;
             work.charge_fuel(1)?;
-            geometry_work.tighten_fuel_limit(
-                limits.max_geometry_fuel.min(
+        }
+
+        let fill_paint = run.painting().fill();
+        if let Some(fill) = fill_paint {
+            for glyph in run.glyphs() {
+                work.tighten_fuel_limit(
                     aggregate_fuel_limit
-                        .checked_sub(work.stats.fuel)
+                        .checked_sub(geometry_work.fuel())
                         .ok_or(GlyphFailure::NumericOverflow)?,
-                ),
+                )?;
+                let outline = resolve_outline(resources, glyph.outline())?;
+                geometry_work.tighten_fuel_limit(
+                    limits.max_geometry_fuel.min(
+                        aggregate_fuel_limit
+                            .checked_sub(work.stats.fuel)
+                            .ok_or(GlyphFailure::NumericOverflow)?,
+                    ),
+                )?;
+                let transform =
+                    glyph_device_transform(page_map, glyph.transform(), outline.units_per_em())?;
+                let path = flatten_path(
+                    outline.outline(),
+                    transform,
+                    transform,
+                    flatness,
+                    limits.max_curve_recursion,
+                    &mut geometry_work,
+                )
+                .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+                let edges = super::coverage::FillEdges::from_path(&path, &mut geometry_work)
+                    .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+                rasterize_fill_union(&edges, FillRule::Nonzero, &mut coverage, &mut geometry_work)
+                    .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+            }
+            paint_glyph_coverage(
+                &coverage,
+                fill,
+                output_width,
+                output_height,
+                pixels,
+                clip,
+                output_pixels,
+                &mut work,
             )?;
-            let transform =
-                glyph_device_transform(page_map, glyph.transform(), outline.units_per_em())?;
-            let path = flatten_path(
-                outline.outline(),
-                transform,
-                transform,
-                flatness,
-                limits.max_curve_recursion,
-                &mut geometry_work,
-            )
-            .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
-            let edges = super::coverage::FillEdges::from_path(&path, &mut geometry_work)
+        }
+
+        if let Some((stroke, style)) = run.painting().stroke() {
+            if fill_paint.is_some() {
+                coverage = CoverageMask::empty(output_width, output_height, &mut geometry_work)?;
+            }
+            for glyph in run.glyphs() {
+                work.tighten_fuel_limit(
+                    aggregate_fuel_limit
+                        .checked_sub(geometry_work.fuel())
+                        .ok_or(GlyphFailure::NumericOverflow)?,
+                )?;
+                let outline = resolve_outline(resources, glyph.outline())?;
+                geometry_work.tighten_fuel_limit(
+                    limits.max_geometry_fuel.min(
+                        aggregate_fuel_limit
+                            .checked_sub(work.stats.fuel)
+                            .ok_or(GlyphFailure::NumericOverflow)?,
+                    ),
+                )?;
+                let path_to_page = glyph_page_transform(glyph.transform(), outline.units_per_em())?;
+                let glyph_coverage = rasterize_stroke(
+                    outline.outline(),
+                    path_to_page,
+                    page_map.affine(),
+                    style,
+                    output_width,
+                    output_height,
+                    &mut geometry_work,
+                )
                 .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
-            rasterize_fill_union(&edges, FillRule::Nonzero, &mut coverage, &mut geometry_work)
-                .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+                coverage
+                    .union_from(&glyph_coverage, &mut geometry_work)
+                    .map_err(|failure| GlyphFailure::from_geometry(failure, retained_geometry))?;
+            }
+            paint_glyph_coverage(
+                &coverage,
+                stroke,
+                output_width,
+                output_height,
+                pixels,
+                clip,
+                output_pixels,
+                &mut work,
+            )?;
         }
 
         work.tighten_fuel_limit(
@@ -845,37 +978,63 @@ pub(crate) fn paint_glyph_run(
                 .checked_add(geometry_work.peak_geometry_bytes())
                 .ok_or(GlyphFailure::NumericOverflow)?,
         )?;
-
-        // Preserve the staged kernel's deterministic surface-visit charge without copying pixels.
-        work.charge_fuel(output_pixels)?;
-        let (source, blend_mode) =
-            ReferenceColorProfile::ReferenceColorV1.prepare_paint(run.paint());
-        work.charge_fuel(1)?;
-        for y in 0..output_height {
-            for x in 0..output_width {
-                let index = pixel_index(output_width, output_height, x, y)
-                    .ok_or(GlyphFailure::InvalidGlyph)?;
-                let glyph_mask = coverage
-                    .sample_mask(x, y)
-                    .ok_or(GlyphFailure::InvalidGlyph)?;
-                let clip_mask = clip
-                    .and_then(|mask| mask.sample_mask(x, y))
-                    .unwrap_or(u64::MAX);
-                let covered = u64::from((glyph_mask & clip_mask).count_ones());
-                let completed_composites = work.guard_pixel(covered)?;
-                if covered != 0 {
-                    let backdrop = pixels[index];
-                    let painted = blend_mode.source_over(source, backdrop);
-                    pixels[index] = coverage_average(backdrop, painted, covered)?;
-                }
-                work.commit_composites(completed_composites);
-            }
-        }
         work.check_cancellation()?;
         Ok(())
     })();
     absorb_geometry_progress(&mut work, &geometry_work)?;
     result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_glyph_coverage(
+    coverage: &CoverageMask,
+    paint: Paint,
+    output_width: u32,
+    output_height: u32,
+    pixels: &mut [PremultipliedRgbaQ16],
+    clip: Option<&ClipStack>,
+    output_pixels: u64,
+    work: &mut GlyphWork<'_>,
+) -> Result<(), GlyphFailure> {
+    work.charge_fuel(output_pixels)?;
+    let (source, blend_mode) = ReferenceColorProfile::ReferenceColorV1.prepare_paint(paint);
+    work.charge_fuel(1)?;
+    for y in 0..output_height {
+        for x in 0..output_width {
+            let index =
+                pixel_index(output_width, output_height, x, y).ok_or(GlyphFailure::InvalidGlyph)?;
+            let glyph_mask = coverage
+                .sample_mask(x, y)
+                .ok_or(GlyphFailure::InvalidGlyph)?;
+            let clip_mask = clip
+                .and_then(|mask| mask.sample_mask(x, y))
+                .unwrap_or(u64::MAX);
+            let covered = u64::from((glyph_mask & clip_mask).count_ones());
+            let completed_composites = work.guard_pixel(covered)?;
+            if covered != 0 {
+                let backdrop = pixels[index];
+                let painted = blend_mode.source_over(source, backdrop);
+                pixels[index] = coverage_average(backdrop, painted, covered)?;
+            }
+            work.commit_composites(completed_composites);
+        }
+    }
+    Ok(())
+}
+
+fn glyph_page_transform(glyph_to_page: Matrix, units_per_em: u16) -> Result<Affine, GlyphFailure> {
+    let units_per_em = Fixed::from_i64(i64::from(units_per_em))?;
+    let scale = Fixed::ONE.checked_div(units_per_em)?;
+    Affine::from_scene(glyph_to_page)?
+        .checked_concat(Affine::new(
+            scale,
+            Fixed::ZERO,
+            Fixed::ZERO,
+            scale,
+            Fixed::ZERO,
+            Fixed::ZERO,
+        ))
+        .map_err(Into::into)
 }
 
 fn resolve_outline(

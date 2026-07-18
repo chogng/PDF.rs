@@ -34,10 +34,10 @@ use pdf_rs_document::{
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
-    BlendMode, DashPatternBuilder, DeviceColor, FillRule, GraphicsCommand, GraphicsResource,
-    GraphicsSceneLimitConfig, GraphicsSceneLimits, ImageColorSpace, LineCap, LineJoin, Matrix,
-    PageGeometry, PageRotation as ScenePageRotation, PathResourceBuilder, PathSegment,
-    SceneBinding, SceneRect, SceneScalar, SceneUnit, SceneVersion,
+    BlendMode, DashPatternBuilder, DeviceColor, FillRule, GlyphPainting, GraphicsCommand,
+    GraphicsResource, GraphicsSceneLimitConfig, GraphicsSceneLimits, ImageColorSpace, LineCap,
+    LineJoin, Matrix, PageGeometry, PageRotation as ScenePageRotation, PathResourceBuilder,
+    PathSegment, SceneBinding, SceneRect, SceneScalar, SceneUnit, SceneVersion,
 };
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{
@@ -3010,7 +3010,7 @@ fn bt_resets_only_text_matrices_and_quadratics_are_canonical_cubics() {
 }
 
 #[test]
-fn text_render_mode_distinguishes_malformed_values_from_valid_unsupported_modes() {
+fn text_render_mode_distinguishes_malformed_supported_and_clipping_modes() {
     for (value, expected) in [
         (-1, ContentVmErrorCode::InvalidGraphicsParameter),
         (8, ContentVmErrorCode::InvalidGraphicsParameter),
@@ -3026,17 +3026,84 @@ fn text_render_mode_distinguishes_malformed_values_from_valid_unsupported_modes(
         }
         assert_eq!(job.font_stats().lookups(), 0);
     }
-    for value in 1..=7 {
+    for value in 1..=3 {
+        let content = format!("BT {value} Tr ET");
+        let (mut job, store) = default_font_job(content.as_bytes(), 0x87 + value as u8);
+        match job.poll(&store, &DocumentNeverCancelled) {
+            ContentVmPoll::Ready(_) => {}
+            outcome => panic!("registered non-clipping Tr {value} must execute: {outcome:?}"),
+        }
+        assert_eq!(job.font_stats().lookups(), 0);
+    }
+    for value in 4..=7 {
         let content = format!("BT {value} Tr ET");
         let (mut job, store) = default_font_job(content.as_bytes(), 0x87 + value as u8);
         match job.poll(&store, &DocumentNeverCancelled) {
             ContentVmPoll::Unsupported(error) => {
                 assert_eq!(error.kind(), ContentUnsupportedKind::TextRenderMode);
             }
-            outcome => panic!("registered non-fill Tr {value} must be unsupported: {outcome:?}"),
+            outcome => panic!("text-clipping Tr {value} must be unsupported: {outcome:?}"),
         }
         assert_eq!(job.font_stats().lookups(), 0);
     }
+}
+
+#[test]
+fn text_fill_stroke_stroke_and_invisible_modes_publish_exact_glyph_painting() {
+    let page = font_ready(
+        b"2 w 1 0 0 RG 0 0 1 rg BT /F0 10 Tf 2 Tr (A) Tj 3 Tr (A) Tj 1 Tr (A) Tj ET",
+        0x8f,
+    );
+    let graphics = page.scene().graphics().expect("graphics-v2 page");
+    assert_eq!(
+        graphics.commands().len(),
+        2,
+        "invisible text advances without publishing a visible command"
+    );
+
+    let GraphicsCommand::DrawGlyphRun(fill_stroke) = graphics.commands()[0].command() else {
+        panic!("mode 2 must publish a glyph run");
+    };
+    let GlyphPainting::FillStroke {
+        fill,
+        stroke,
+        style,
+    } = fill_stroke.painting()
+    else {
+        panic!("mode 2 must retain fill-then-stroke semantics");
+    };
+    assert_eq!(
+        fill.color(),
+        DeviceColor::Rgb {
+            red: SceneUnit::ZERO,
+            green: SceneUnit::ZERO,
+            blue: SceneUnit::ONE,
+        }
+    );
+    assert_eq!(
+        stroke.color(),
+        DeviceColor::Rgb {
+            red: SceneUnit::ONE,
+            green: SceneUnit::ZERO,
+            blue: SceneUnit::ZERO,
+        }
+    );
+    assert_eq!(style.width(), SceneScalar::from_scaled(2_000_000_000));
+
+    let GraphicsCommand::DrawGlyphRun(stroke_only) = graphics.commands()[1].command() else {
+        panic!("mode 1 must publish a glyph run");
+    };
+    assert!(matches!(
+        stroke_only.painting(),
+        GlyphPainting::Stroke { paint, style }
+            if paint.color()
+                == DeviceColor::Rgb {
+                    red: SceneUnit::ONE,
+                    green: SceneUnit::ZERO,
+                    blue: SceneUnit::ZERO,
+                }
+                && style.width() == SceneScalar::from_scaled(2_000_000_000)
+    ));
 }
 
 #[test]

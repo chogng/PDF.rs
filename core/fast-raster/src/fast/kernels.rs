@@ -773,6 +773,23 @@ impl Coverage {
         }
         Ok(())
     }
+
+    pub(crate) fn union_all(
+        &mut self,
+        other: &Self,
+        work: &mut dyn KernelWork,
+    ) -> Result<(), FastRasterError> {
+        if self.masks.len() != other.masks.len() {
+            return Err(FastRasterError::for_code(
+                FastRasterErrorCode::IdentityMismatch,
+            ));
+        }
+        for (target, incoming) in self.masks.iter_mut().zip(&other.masks) {
+            *target |= *incoming;
+            work.step()?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn fill_coverage(

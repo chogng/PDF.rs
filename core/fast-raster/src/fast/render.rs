@@ -448,31 +448,31 @@ impl<'a> FastRasterJob<'a> {
                         stack_payload_bytes,
                         group_stack_bytes,
                     )?;
-                    let mut union = Coverage::empty(rect, base, work)?;
-                    for glyph_use in run.glyphs() {
-                        let glyph = lookup_glyph(self.graphics, glyph_use.outline())?;
-                        let flat = flatten_path(
-                            glyph.outline(),
-                            map,
-                            glyph_use.transform(),
-                            glyph.units_per_em(),
-                            config.curve_flatness_denominator,
-                            config.curve_recursion,
-                            add(base, union.retained_bytes())?,
-                            work,
-                        )?;
-                        let (coverage, window) = fill_coverage_bounded(
-                            &flat,
+                    if let Some(fill) = run.painting().fill() {
+                        self.paint_glyph_fill(
+                            &mut surface,
+                            &clip,
+                            base,
                             rect,
-                            FillRule::Nonzero,
-                            add(add(base, union.retained_bytes())?, flat.retained_bytes())?,
+                            run,
+                            fill,
+                            map,
                             work,
                         )?;
-                        if let Some(window) = window {
-                            union.union(&coverage, rect, window, work)?;
-                        }
                     }
-                    composite_coverage(&mut surface, &union, &clip, run.paint(), work)?;
+                    if let Some((stroke, style)) = run.painting().stroke() {
+                        self.paint_glyph_stroke(
+                            &mut surface,
+                            &clip,
+                            base,
+                            rect,
+                            run,
+                            stroke,
+                            style,
+                            map,
+                            work,
+                        )?;
+                    }
                 }
                 GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
                     if groups.len() == groups.capacity() {
@@ -638,6 +638,7 @@ impl<'a> FastRasterJob<'a> {
         let operation = stroke_coverage(
             lookup_path(self.graphics, path)?,
             transform,
+            1,
             style,
             map,
             rect,
@@ -647,6 +648,80 @@ impl<'a> FastRasterJob<'a> {
             work,
         )?;
         composite_coverage(surface, &operation, clip, paint, work)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_glyph_fill(
+        &self,
+        surface: &mut [Pixel],
+        clip: &Coverage,
+        base: u64,
+        rect: WorkRect,
+        run: &pdf_rs_scene::GlyphRun,
+        paint: Paint,
+        map: PageMap,
+        work: &mut Work<'_>,
+    ) -> Result<(), FastRasterError> {
+        let config = self.plan.config().input();
+        let mut union = Coverage::empty(rect, base, work)?;
+        for glyph_use in run.glyphs() {
+            let glyph = lookup_glyph(self.graphics, glyph_use.outline())?;
+            let flat = flatten_path(
+                glyph.outline(),
+                map,
+                glyph_use.transform(),
+                glyph.units_per_em(),
+                config.curve_flatness_denominator,
+                config.curve_recursion,
+                add(base, union.retained_bytes())?,
+                work,
+            )?;
+            let (coverage, window) = fill_coverage_bounded(
+                &flat,
+                rect,
+                FillRule::Nonzero,
+                add(add(base, union.retained_bytes())?, flat.retained_bytes())?,
+                work,
+            )?;
+            if let Some(window) = window {
+                union.union(&coverage, rect, window, work)?;
+            }
+        }
+        composite_coverage(surface, &union, clip, paint, work)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_glyph_stroke(
+        &self,
+        surface: &mut [Pixel],
+        clip: &Coverage,
+        base: u64,
+        rect: WorkRect,
+        run: &pdf_rs_scene::GlyphRun,
+        paint: Paint,
+        style: &pdf_rs_scene::LineStyle,
+        map: PageMap,
+        work: &mut Work<'_>,
+    ) -> Result<(), FastRasterError> {
+        let config = self.plan.config().input();
+        let mut union = Coverage::empty(rect, base, work)?;
+        for glyph_use in run.glyphs() {
+            let glyph = lookup_glyph(self.graphics, glyph_use.outline())?;
+            let coverage = stroke_coverage(
+                glyph.outline(),
+                glyph_use.transform(),
+                glyph.units_per_em(),
+                style,
+                map,
+                rect,
+                config.curve_flatness_denominator,
+                config.curve_recursion,
+                add(base, union.retained_bytes())?,
+                work,
+            )?;
+            union.union_all(&coverage, work)?;
+        }
+        composite_coverage(surface, &union, clip, paint, work)
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -326,6 +326,28 @@ impl CoverageMask {
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "the geometry-only harness compiles coverage without glyph-stroke integration"
+    )]
+    pub(crate) fn union_from(
+        &mut self,
+        other: &Self,
+        work: &mut GeometryWork<'_>,
+    ) -> Result<(), GeometryFailure> {
+        if self.width != other.width || self.height != other.height {
+            return Err(GeometryFailure::InvalidGeometry);
+        }
+        work.preflight_fuel(
+            u64::try_from(self.samples.len()).map_err(|_| GeometryFailure::NumericOverflow)?,
+        )?;
+        for (target, incoming) in self.samples.iter_mut().zip(&other.samples) {
+            work.charge_fuel(1)?;
+            *target |= *incoming;
+        }
+        Ok(())
+    }
+
     fn index(&self, x: u32, y: u32) -> Option<usize> {
         if x >= self.width || y >= self.height {
             return None;
