@@ -6,7 +6,8 @@ use std::sync::Arc;
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
 use pdf_rs_engine::{
     NativePolicyTask, NativeRasterTask, NativeTaskPoll, NativeWorkerConfig, NativeWorkerEvent,
-    NativeWorkerLimitConfig, NativeWorkerRegistry, OpenCompletion, Reentry,
+    NativeWorkerLimitConfig, NativeWorkerPhase as EngineWorkerPhase, NativeWorkerRegistry,
+    OpenCompletion, Reentry,
 };
 use pdf_rs_policy::{NeverCancelled as NeverCancelledPolicy, PolicyPollBudget};
 use pdf_rs_protocol::{
@@ -238,14 +239,40 @@ impl NativeBrowserWorker {
         })
     }
 
-    /// Creates the fixed production mailbox identity used by one Wasm instance.
-    pub fn production_default() -> Result<Self, NativeBrowserWorkerError> {
+    /// Creates the fixed identity used only by native mailbox unit tests.
+    #[cfg(test)]
+    pub(crate) fn test_default() -> Result<Self, NativeBrowserWorkerError> {
         Self::new(
             WorkerId::new(1),
             WorkerEpoch::new(1).ok_or(NativeBrowserWorkerError::Protocol)?,
             1,
             NativeWorkerLimitConfig::default(),
         )
+    }
+
+    pub(crate) fn has_pending_work(&self) -> bool {
+        if !self.queued.is_empty()
+            || !self.pending_parse.is_empty()
+            || self.active_parse.is_some()
+            || self.active_policy_task.is_some()
+            || self.active_raster_task.is_some()
+            || !self.pending_reentries.is_empty()
+        {
+            return true;
+        }
+        let Some(registry) = self.registry.as_ref() else {
+            return false;
+        };
+        let resources = registry.resources();
+        registry.phase() == EngineWorkerPhase::Draining
+            || resources.queued_reentries() != 0
+            || resources.queued_normal() != 0
+            || resources.queued_critical() != 0
+            || resources.in_flight() != 0
+            || resources.pending_policy_tasks() != 0
+            || resources.pending_rasters() != 0
+            || resources.queued_publications() != 0
+            || resources.queued_events() != 0
     }
 
     /// Returns the current adapter lifecycle.
@@ -567,13 +594,11 @@ impl NativeBrowserWorker {
                 if !transfers.is_empty() {
                     return Err(NativeBrowserWorkerError::Protocol);
                 }
+                self.validate_pending_parse_charge()?;
                 self.registry_mut()?
                     .shutdown(&correlation, &command)
                     .map_err(|_| NativeBrowserWorkerError::Engine)?;
-                self.pending_sources.clear();
-                self.pending_parse.clear();
-                self.pending_parse_bytes = 0;
-                self.pending_reentries.clear();
+                self.cancel_all_pending_opens();
                 Ok(())
             }
             Command::Hello(_) | Command::HelloAccept(_) => Err(NativeBrowserWorkerError::Protocol),
@@ -1049,6 +1074,36 @@ impl NativeBrowserWorker {
             .ok_or(NativeBrowserWorkerError::InvalidLifecycle)
     }
 
+    fn validate_pending_parse_charge(&self) -> Result<(), NativeBrowserWorkerError> {
+        let active = self
+            .active_parse
+            .as_ref()
+            .map(|active| active.pending.charged_bytes)
+            .unwrap_or(0);
+        let charged = self
+            .pending_parse
+            .iter()
+            .try_fold(active, |charged, pending| {
+                charged.checked_add(pending.charged_bytes)
+            })
+            .ok_or(NativeBrowserWorkerError::Engine)?;
+        if charged != self.pending_parse_bytes {
+            return Err(NativeBrowserWorkerError::Engine);
+        }
+        Ok(())
+    }
+
+    fn cancel_all_pending_opens(&mut self) {
+        // validate_pending_parse_charge ran immediately before the registry
+        // accepted shutdown. Dropping these owners therefore returns exactly
+        // every byte represented by pending_parse_bytes.
+        self.active_parse.take();
+        self.pending_parse.clear();
+        self.pending_parse_bytes = 0;
+        self.pending_sources.clear();
+        self.pending_reentries.clear();
+    }
+
     fn discard_pending_open(&mut self, session: SessionId) {
         self.pending_sources.remove(&session);
         if self
@@ -1188,8 +1243,24 @@ fn build_fixture_scene(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_fixture_scene, source_identity};
-    use pdf_rs_protocol::SourceIdentity as WireSourceIdentity;
+    use super::{
+        ActiveParse, NativeBrowserWorker, NativeBrowserWorkerError, PendingParse,
+        PendingParsePhase, PendingSource, build_fixture_scene, source_identity,
+    };
+    use pdf_rs_protocol::{
+        DataTicket, RequestId, SessionId, SourceDescriptor, SourceIdentity as WireSourceIdentity,
+    };
+
+    fn charged_parse(session: SessionId, length: usize) -> PendingParse {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).unwrap();
+        bytes.resize(length, 0);
+        PendingParse {
+            session,
+            charged_bytes: u64::try_from(bytes.capacity()).unwrap(),
+            bytes,
+        }
+    }
 
     #[test]
     fn fixture_scene_is_native_nonblank_graphics() {
@@ -1202,5 +1273,55 @@ mod tests {
         let graphics = scene.graphics().unwrap();
         assert_eq!(graphics.commands().len(), 1);
         assert!(graphics.is_supported());
+    }
+
+    #[test]
+    fn cancelling_all_pending_opens_returns_the_exact_parse_charge() {
+        let mut worker = NativeBrowserWorker::test_default().unwrap();
+        let active = charged_parse(SessionId::new(1), 17);
+        let queued = charged_parse(SessionId::new(2), 29);
+        worker.pending_parse_bytes = active
+            .charged_bytes
+            .checked_add(queued.charged_bytes)
+            .unwrap();
+        worker.active_parse = Some(ActiveParse {
+            pending: active,
+            phase: PendingParsePhase::ValidateHeader,
+        });
+        worker.pending_parse.push_back(queued);
+        let descriptor = SourceDescriptor {
+            identity: WireSourceIdentity {
+                stable_id: [7; 32],
+                revision: 1,
+            },
+            length: Some(64),
+            validator: [9; 32],
+        };
+        for session in [SessionId::new(1), SessionId::new(2)] {
+            worker.pending_sources.insert(
+                session,
+                PendingSource {
+                    descriptor: descriptor.clone(),
+                    session,
+                    request: RequestId::new(session.value()),
+                    ticket: DataTicket::new(session.value()),
+                },
+            );
+        }
+
+        assert_eq!(worker.validate_pending_parse_charge(), Ok(()));
+        worker.pending_parse_bytes = worker.pending_parse_bytes.checked_add(1).unwrap();
+        assert_eq!(
+            worker.validate_pending_parse_charge(),
+            Err(NativeBrowserWorkerError::Engine)
+        );
+        worker.pending_parse_bytes -= 1;
+
+        worker.cancel_all_pending_opens();
+        assert!(worker.active_parse.is_none());
+        assert!(worker.pending_parse.is_empty());
+        assert!(worker.pending_sources.is_empty());
+        assert_eq!(worker.pending_parse_bytes, 0);
+        assert!(worker.can_dispose());
     }
 }

@@ -18,6 +18,11 @@ import {
   NATIVE_WORKER_ABI_HASH_WORDS,
   NATIVE_WORKER_ABI_VERSION,
   NATIVE_WORKER_FUNCTION_SIGNATURES,
+  NATIVE_WORKER_POLL_MASK,
+  NATIVE_WORKER_POLL_OUTPUT,
+  NATIVE_WORKER_POLL_PENDING,
+  NATIVE_WORKER_STATUS_INTERNAL_UNWIND,
+  NATIVE_WORKER_STATUS_OK,
 } from "./native-worker-abi.generated.js";
 
 const SHA256_HEX_LENGTH = 64;
@@ -26,6 +31,7 @@ const WASM_PAGE_BYTES = 65_536;
 const MAX_WASM_PAGES = 1_024;
 const MAX_NATIVE_WORKER_ARTIFACT_BYTES = 64 * 1_024 * 1_024;
 const MAX_U32 = 0xffff_ffff;
+const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 
 const EXPECTED_NATIVE_WORKER_IMPORTS = Object.freeze(
   [] as readonly WebAssembly.ModuleImportDescriptor[],
@@ -33,6 +39,10 @@ const EXPECTED_NATIVE_WORKER_IMPORTS = Object.freeze(
 
 const EXPECTED_NATIVE_WORKER_EXPORTS = Object.freeze([
   Object.freeze({ name: "memory", kind: "memory" }),
+  Object.freeze({
+    name: "pdf_rs_worker_initialize",
+    kind: "function",
+  }),
   Object.freeze({
     name: "pdf_rs_worker_prepare_input",
     kind: "function",
@@ -92,6 +102,8 @@ const EXPECTED_NATIVE_WORKER_EXPORTS = Object.freeze([
 
 export type BrowserNativeWorkerErrorCode =
   | "InvalidConfiguration"
+  | "InvalidIdentity"
+  | "IdentityMismatch"
   | "NegotiationRequired"
   | "NegotiationMismatch"
   | "InvalidLifecycle"
@@ -153,8 +165,30 @@ export interface BrowserNativeWorkerDispatch {
   readonly transfers: readonly ArrayBuffer[];
 }
 
+/** Identity allocated by the owning Worker supervisor for one Wasm instance. */
+export interface BrowserNativeWorkerSupervisorIdentity {
+  readonly worker: bigint;
+  readonly workerEpoch: bigint;
+  readonly rendererEpoch: number;
+}
+
+/** One bounded Native actor turn and whether another turn is immediately runnable. */
+export interface BrowserNativeWorkerPoll {
+  readonly output: BrowserNativeWorkerDispatch | undefined;
+  readonly pending: boolean;
+}
+
+type NativeWorkerInitialize = (
+  workerLow: number,
+  workerHigh: number,
+  workerEpochLow: number,
+  workerEpochHigh: number,
+  rendererEpoch: number,
+) => number;
+
 interface NativeWorkerExports {
   readonly memory: WebAssembly.Memory;
+  readonly initialize: NativeWorkerInitialize;
   readonly prepareInput: (length: number) => number;
   readonly prepareTransfer: (
     index: number,
@@ -225,6 +259,88 @@ const isU32 = (value: unknown): value is number =>
   && Number.isSafeInteger(value)
   && value >= 0
   && value <= MAX_U32;
+
+const snapshotSupervisorIdentity = (
+  input: BrowserNativeWorkerSupervisorIdentity,
+): BrowserNativeWorkerSupervisorIdentity => {
+  try {
+    const names = typeof input === "object" && input !== null
+      ? Object.getOwnPropertyNames(input)
+      : [];
+    const symbols = typeof input === "object" && input !== null
+      ? Object.getOwnPropertySymbols(input)
+      : [];
+    const workerDescriptor = typeof input === "object" && input !== null
+      ? Object.getOwnPropertyDescriptor(input, "worker")
+      : undefined;
+    const workerEpochDescriptor =
+      typeof input === "object" && input !== null
+        ? Object.getOwnPropertyDescriptor(input, "workerEpoch")
+        : undefined;
+    const rendererEpochDescriptor =
+      typeof input === "object" && input !== null
+        ? Object.getOwnPropertyDescriptor(input, "rendererEpoch")
+        : undefined;
+    const worker = workerDescriptor !== undefined
+      && "value" in workerDescriptor
+      ? workerDescriptor.value
+      : undefined;
+    const workerEpoch = workerEpochDescriptor !== undefined
+      && "value" in workerEpochDescriptor
+      ? workerEpochDescriptor.value
+      : undefined;
+    const rendererEpoch = rendererEpochDescriptor !== undefined
+      && "value" in rendererEpochDescriptor
+      ? rendererEpochDescriptor.value
+      : undefined;
+    if (
+      typeof input !== "object"
+      || input === null
+      || Array.isArray(input)
+      || names.sort().join("\u0000")
+        !== ["rendererEpoch", "worker", "workerEpoch"]
+          .sort()
+          .join("\u0000")
+      || symbols.length !== 0
+      || typeof worker !== "bigint"
+      || worker <= 0n
+      || worker > MAX_U64
+      || typeof workerEpoch !== "bigint"
+      || workerEpoch <= 0n
+      || workerEpoch > MAX_U64
+      || !isU32(rendererEpoch)
+      || rendererEpoch === 0
+    ) {
+      throw new BrowserNativeWorkerError("InvalidIdentity");
+    }
+    return Object.freeze({
+      worker,
+      workerEpoch,
+      rendererEpoch,
+    });
+  } catch (error: unknown) {
+    if (error instanceof BrowserNativeWorkerError) {
+      throw error;
+    }
+    throw new BrowserNativeWorkerError("InvalidIdentity");
+  }
+};
+
+const sameSupervisorIdentity = (
+  left: BrowserNativeWorkerSupervisorIdentity,
+  right: BrowserNativeWorkerSupervisorIdentity,
+): boolean =>
+  left.worker === right.worker
+  && left.workerEpoch === right.workerEpoch
+  && left.rendererEpoch === right.rendererEpoch;
+
+const splitU64 = (
+  value: bigint,
+): Readonly<{ low: number; high: number }> =>
+  Object.freeze({
+    low: Number(value & 0xffff_ffffn),
+    high: Number(value >> 32n),
+  });
 
 const isFixedArrayBuffer = (
   value: unknown,
@@ -698,6 +814,10 @@ const nativeExports = (
   );
   const exports = {
     memory,
+    initialize: u32Export(
+      instance.exports,
+      "pdf_rs_worker_initialize",
+    ) as NativeWorkerInitialize,
     prepareInput: u32Export(
       instance.exports,
       "pdf_rs_worker_prepare_input",
@@ -808,11 +928,15 @@ const validateInputFrame = (
   frame: Uint8Array,
   transfers: readonly ArrayBuffer[],
   connection: CompatibleHandshake,
+  expectedWorker: bigint,
   sequence: EnvelopeSequenceTracker,
 ): PendingCommandEnvelope => {
   const parsed = parseFrame(frame);
   const decoded = decodeCommandPayload(parsed.header, parsed.payload);
   if (!decoded.ok) {
+    throw new BrowserNativeWorkerError("InvalidMessage");
+  }
+  if (decoded.value.correlation.worker !== expectedWorker) {
     throw new BrowserNativeWorkerError("InvalidMessage");
   }
   const pending = beginValidateCommandEnvelope(
@@ -841,11 +965,15 @@ const validateOutputFrame = (
   frame: Uint8Array<ArrayBuffer>,
   transfers: readonly ArrayBuffer[],
   connection: CompatibleHandshake,
+  expectedWorker: bigint,
   sequence: EnvelopeSequenceTracker,
 ): PendingEventEnvelope => {
   const parsed = parseFrame(frame);
   const decoded = decodeEventPayload(parsed.header, parsed.payload);
   if (!decoded.ok) {
+    throw new BrowserNativeWorkerError("InvalidMessage");
+  }
+  if (decoded.value.correlation.worker !== expectedWorker) {
     throw new BrowserNativeWorkerError("InvalidMessage");
   }
   const pending = beginValidateEventEnvelope(
@@ -1021,6 +1149,7 @@ const readBoundedArtifact = async (
 
 export class BrowserNativeWorkerInstance {
   readonly #connection: CompatibleHandshake;
+  readonly #supervisorIdentity: BrowserNativeWorkerSupervisorIdentity;
   readonly #exports: NativeWorkerExports;
   readonly #minimumMemoryBytes: number;
   readonly #maximumMemoryBytes: number;
@@ -1033,6 +1162,7 @@ export class BrowserNativeWorkerInstance {
 
   constructor(
     connection: CompatibleHandshake,
+    supervisorIdentity: BrowserNativeWorkerSupervisorIdentity,
     instance: WebAssembly.Instance,
     minimumMemoryPages: number,
     maximumMemoryPages: number,
@@ -1040,6 +1170,7 @@ export class BrowserNativeWorkerInstance {
     if (!isCompatibleHandshake(connection)) {
       throw new BrowserNativeWorkerError("NegotiationRequired");
     }
+    const identity = snapshotSupervisorIdentity(supervisorIdentity);
     if (
       !isSafePositive(minimumMemoryPages, MAX_WASM_PAGES)
       || maximumMemoryPages !== MAX_WASM_PAGES
@@ -1048,17 +1179,55 @@ export class BrowserNativeWorkerInstance {
       throw new BrowserNativeWorkerError("InvalidConfiguration");
     }
     this.#connection = connection;
+    this.#supervisorIdentity = identity;
     this.#minimumMemoryBytes = minimumMemoryPages * WASM_PAGE_BYTES;
     this.#maximumMemoryBytes = maximumMemoryPages * WASM_PAGE_BYTES;
     this.#exports = nativeExports(instance);
+    const initialBuffer = this.#exports.memory.buffer;
+    if (
+      !isFixedArrayBuffer(initialBuffer)
+      || initialBuffer.byteLength < this.#minimumMemoryBytes
+      || initialBuffer.byteLength > this.#maximumMemoryBytes
+      || initialBuffer.byteLength % WASM_PAGE_BYTES !== 0
+    ) {
+      throw new BrowserNativeWorkerError("InvalidWasmMemory");
+    }
+    const workerParts = splitU64(identity.worker);
+    const workerEpochParts = splitU64(
+      identity.workerEpoch,
+    );
+    let initializeStatus: number;
+    try {
+      initializeStatus = this.#exports.initialize(
+        workerParts.low,
+        workerParts.high,
+        workerEpochParts.low,
+        workerEpochParts.high,
+        identity.rendererEpoch,
+      );
+    } catch {
+      throw new BrowserNativeWorkerError("EngineTrap");
+    }
+    if (initializeStatus !== NATIVE_WORKER_STATUS_OK) {
+      throw new BrowserNativeWorkerError(
+        initializeStatus === NATIVE_WORKER_STATUS_INTERNAL_UNWIND
+          ? "EngineTrap"
+          : "EngineRejected",
+      );
+    }
+    let epoch: number;
+    try {
+      epoch = this.#exports.memoryEpoch();
+    } catch {
+      throw new BrowserNativeWorkerError("EngineTrap");
+    }
     const buffer = this.#exports.memory.buffer;
-    const epoch = this.#exports.memoryEpoch();
     if (
       !isFixedArrayBuffer(buffer)
-      || epoch === 0
       || buffer.byteLength < this.#minimumMemoryBytes
       || buffer.byteLength > this.#maximumMemoryBytes
       || buffer.byteLength % WASM_PAGE_BYTES !== 0
+      || epoch === 0
     ) {
       throw new BrowserNativeWorkerError("InvalidWasmMemory");
     }
@@ -1069,6 +1238,10 @@ export class BrowserNativeWorkerInstance {
 
   get closed(): boolean {
     return this.#closed;
+  }
+
+  get supervisorIdentity(): BrowserNativeWorkerSupervisorIdentity {
+    return this.#supervisorIdentity;
   }
 
   dispatch(
@@ -1089,6 +1262,7 @@ export class BrowserNativeWorkerInstance {
       frame,
       transferBytes,
       this.#connection,
+      this.#supervisorIdentity.worker,
       this.#inputSequence,
     );
     try {
@@ -1131,7 +1305,14 @@ export class BrowserNativeWorkerInstance {
         transferBytes.length,
       );
       this.#observeMemory();
-      if (status !== 0 || !pending.commitSequence()) {
+      if (status !== NATIVE_WORKER_STATUS_OK) {
+        this.#poison(
+          status === NATIVE_WORKER_STATUS_INTERNAL_UNWIND
+            ? "EngineTrap"
+            : "EngineRejected",
+        );
+      }
+      if (!pending.commitSequence()) {
         this.#poison("EngineRejected");
       }
       return this.#readOutput();
@@ -1140,17 +1321,31 @@ export class BrowserNativeWorkerInstance {
     }
   }
 
-  poll(): BrowserNativeWorkerDispatch | undefined {
+  poll(): BrowserNativeWorkerPoll {
     if (this.#closed) {
       throw new BrowserNativeWorkerError("InvalidLifecycle");
     }
     try {
       const status = this.#exports.poll();
       this.#observeMemory();
-      if (status !== 0) {
+      if ((status & ~NATIVE_WORKER_POLL_MASK) !== 0) {
+        this.#poison(
+          status === NATIVE_WORKER_STATUS_INTERNAL_UNWIND
+            ? "EngineTrap"
+            : "EngineRejected",
+        );
+      }
+      const output = this.#readOutput();
+      if (
+        (output !== undefined)
+        !== ((status & NATIVE_WORKER_POLL_OUTPUT) !== 0)
+      ) {
         this.#poison("EngineRejected");
       }
-      return this.#readOutput();
+      return Object.freeze({
+        output,
+        pending: (status & NATIVE_WORKER_POLL_PENDING) !== 0,
+      });
     } catch (error: unknown) {
       this.#rethrowPoisoned(error);
     }
@@ -1162,8 +1357,13 @@ export class BrowserNativeWorkerInstance {
     }
     this.#closed = true;
     try {
-      if (this.#exports.shutdown() !== 0) {
-        throw new BrowserNativeWorkerError("EngineRejected");
+      const status = this.#exports.shutdown();
+      if (status !== NATIVE_WORKER_STATUS_OK) {
+        throw new BrowserNativeWorkerError(
+          status === NATIVE_WORKER_STATUS_INTERNAL_UNWIND
+            ? "EngineTrap"
+            : "EngineRejected",
+        );
       }
     } catch (error: unknown) {
       if (error instanceof BrowserNativeWorkerError) {
@@ -1283,6 +1483,7 @@ export class BrowserNativeWorkerInstance {
       frame,
       frozenTransfers,
       this.#connection,
+      this.#supervisorIdentity.worker,
       this.#outputSequence,
     );
     if (!pending.commitSequence()) {
@@ -1315,6 +1516,7 @@ export class BrowserNativeWorkerInstance {
         || error.code === "InvalidMessage"
         || error.code === "InvalidWasmMemory"
         || error.code === "InvalidWasmExports"
+        || error.code === "EngineTrap"
       ) {
         this.#poison(error.code);
       }
@@ -1328,6 +1530,8 @@ export class BrowserNativeWorkerLoader {
   readonly #artifact: BrowserNativeWorkerArtifact;
   readonly #runtime: BrowserNativeWorkerLoaderRuntime;
   #connection: CompatibleHandshake | undefined;
+  #supervisorIdentity:
+    BrowserNativeWorkerSupervisorIdentity | undefined;
   #load: Promise<BrowserNativeWorkerInstance> | undefined;
   readonly #abort = new AbortController();
   #closed = false;
@@ -1357,6 +1561,7 @@ export class BrowserNativeWorkerLoader {
 
   load(
     connection: CompatibleHandshake,
+    supervisorIdentity: BrowserNativeWorkerSupervisorIdentity,
   ): Promise<BrowserNativeWorkerInstance> {
     if (this.#closed) {
       return Promise.reject(
@@ -1368,6 +1573,12 @@ export class BrowserNativeWorkerLoader {
         new BrowserNativeWorkerError("NegotiationRequired"),
       );
     }
+    let identity: BrowserNativeWorkerSupervisorIdentity;
+    try {
+      identity = snapshotSupervisorIdentity(supervisorIdentity);
+    } catch (error: unknown) {
+      return Promise.reject(error);
+    }
     if (
       this.#connection !== undefined
       && connection !== this.#connection
@@ -1376,8 +1587,20 @@ export class BrowserNativeWorkerLoader {
         new BrowserNativeWorkerError("NegotiationMismatch"),
       );
     }
+    if (
+      this.#supervisorIdentity !== undefined
+      && !sameSupervisorIdentity(
+        identity,
+        this.#supervisorIdentity,
+      )
+    ) {
+      return Promise.reject(
+        new BrowserNativeWorkerError("IdentityMismatch"),
+      );
+    }
     this.#connection ??= connection;
-    this.#load ??= this.#loadOnce(connection);
+    this.#supervisorIdentity ??= identity;
+    this.#load ??= this.#loadOnce(connection, identity);
     return this.#load;
   }
 
@@ -1407,6 +1630,7 @@ export class BrowserNativeWorkerLoader {
 
   async #loadOnce(
     connection: CompatibleHandshake,
+    supervisorIdentity: BrowserNativeWorkerSupervisorIdentity,
   ): Promise<BrowserNativeWorkerInstance> {
     const signal = this.#abort.signal;
     let response: Pick<Response, "ok" | "headers" | "body">;
@@ -1555,6 +1779,7 @@ export class BrowserNativeWorkerLoader {
     try {
       const worker = new BrowserNativeWorkerInstance(
         connection,
+        supervisorIdentity,
         instance,
         this.#artifact.minimumMemoryPages,
         this.#artifact.maximumMemoryPages,

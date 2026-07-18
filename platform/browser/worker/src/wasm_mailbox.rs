@@ -33,9 +33,13 @@ use crate::{NativeBrowserWorker, NativeBrowserWorkerError, NativeBrowserWorkerPh
 #[cfg(any(target_arch = "wasm32", test))]
 const ABI_STATUS_OK: u32 = 0;
 #[cfg(any(target_arch = "wasm32", test))]
-const ABI_STATUS_REJECTED: u32 = 1;
+const ABI_STATUS_REJECTED: u32 = 0xfffe;
+// Reserved for internal unwinds in unwind-capable embeddings. The production
+// Wasm build aborts on panic, so a panic traps instead of returning this value.
 #[cfg(any(target_arch = "wasm32", test))]
-const ABI_STATUS_PANIC: u32 = 2;
+const ABI_STATUS_INTERNAL_UNWIND: u32 = 0xffff;
+const ABI_POLL_OUTPUT: u32 = 1;
+const ABI_POLL_PENDING: u32 = 2;
 #[cfg(target_arch = "wasm32")]
 const INVALID_POINTER: u32 = u32::MAX;
 const MAX_MAILBOX_INPUT_RETAINED_BYTES: u64 = 64 * 1024 * 1024;
@@ -98,9 +102,25 @@ impl NativeWorkerMailbox {
         }
     }
 
-    /// Creates the fixed production mailbox identity for one Wasm instance.
-    pub fn production_default() -> Result<Self, NativeWorkerMailboxError> {
-        NativeBrowserWorker::production_default()
+    /// Creates one mailbox for an explicitly supplied Worker identity and epochs.
+    pub fn for_identity(
+        worker: pdf_rs_protocol::WorkerId,
+        worker_epoch: pdf_rs_surface::WorkerEpoch,
+        renderer_epoch: u32,
+    ) -> Result<Self, NativeWorkerMailboxError> {
+        NativeBrowserWorker::new(
+            worker,
+            worker_epoch,
+            renderer_epoch,
+            pdf_rs_engine::NativeWorkerLimitConfig::default(),
+        )
+        .map(Self::new)
+        .map_err(NativeWorkerMailboxError::Native)
+    }
+
+    #[cfg(test)]
+    fn test_default() -> Result<Self, NativeWorkerMailboxError> {
+        NativeBrowserWorker::test_default()
             .map(Self::new)
             .map_err(NativeWorkerMailboxError::Native)
     }
@@ -272,10 +292,20 @@ impl NativeWorkerMailbox {
         self.refresh_output(false)
     }
 
-    /// Pumps at most one additional generated event from the Native actor.
-    pub fn poll(&mut self) -> Result<(), NativeWorkerMailboxError> {
+    /// Pumps at most one bounded Native actor turn and returns its ABI readiness bitmask.
+    ///
+    /// Bit zero reports a staged output frame. Bit one reports additional
+    /// immediately runnable Native work. Zero means the Worker is idle and
+    /// should not be polled again until the Host dispatches another command.
+    pub fn poll(&mut self) -> Result<u32, NativeWorkerMailboxError> {
         self.ensure_open()?;
-        self.refresh_output(true)
+        self.refresh_output(true)?;
+        Ok(poll_state(
+            !self.output.is_empty(),
+            self.worker
+                .as_ref()
+                .is_some_and(NativeBrowserWorker::has_pending_work),
+        ))
     }
 
     /// Returns the current canonical output frame, or an empty slice when idle.
@@ -503,6 +533,15 @@ fn resize_bounded(bytes: &mut Vec<u8>, length: usize) -> Result<(), NativeWorker
     Ok(())
 }
 
+const fn poll_state(has_output: bool, has_pending_work: bool) -> u32 {
+    (if has_output { ABI_POLL_OUTPUT } else { 0 })
+        | (if has_pending_work {
+            ABI_POLL_PENDING
+        } else {
+            0
+        })
+}
+
 fn event_message_id(event: &Event) -> u16 {
     match event {
         Event::Ready(_) => MESSAGE_ID_READY,
@@ -611,7 +650,7 @@ fn pointer_of(bytes: &mut [u8]) -> u32 {
 #[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
     static WASM_MAILBOX: RefCell<Option<NativeWorkerMailbox>> =
-        RefCell::new(NativeWorkerMailbox::production_default().ok());
+        const { RefCell::new(None) };
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -630,8 +669,87 @@ fn abi_status(
     match catch_unwind(AssertUnwindSafe(|| with_mailbox_mut(operation))) {
         Ok(Some(Ok(()))) => ABI_STATUS_OK,
         Ok(Some(Err(_))) | Ok(None) => ABI_STATUS_REJECTED,
-        Err(_) => ABI_STATUS_PANIC,
+        Err(_) => ABI_STATUS_INTERNAL_UNWIND,
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn abi_initialize(
+    worker_low: u32,
+    worker_high: u32,
+    worker_epoch_low: u32,
+    worker_epoch_high: u32,
+    renderer_epoch: u32,
+) -> u32 {
+    match catch_unwind(AssertUnwindSafe(|| {
+        WASM_MAILBOX.with(|mailbox| {
+            let mut mailbox = mailbox
+                .try_borrow_mut()
+                .map_err(|_| NativeWorkerMailboxError::Closed)?;
+            if mailbox.is_some() {
+                return Err(NativeWorkerMailboxError::Closed);
+            }
+            let worker = join_u64(worker_low, worker_high);
+            let worker_epoch = join_u64(worker_epoch_low, worker_epoch_high);
+            if worker == 0 || renderer_epoch == 0 {
+                return Err(NativeWorkerMailboxError::Native(
+                    NativeBrowserWorkerError::Protocol,
+                ));
+            }
+            let worker_epoch = pdf_rs_surface::WorkerEpoch::new(worker_epoch).ok_or(
+                NativeWorkerMailboxError::Native(NativeBrowserWorkerError::Protocol),
+            )?;
+            let initialized = NativeWorkerMailbox::for_identity(
+                pdf_rs_protocol::WorkerId::new(worker),
+                worker_epoch,
+                renderer_epoch,
+            )?;
+            *mailbox = Some(initialized);
+            Ok(())
+        })
+    })) {
+        Ok(Ok(())) => ABI_STATUS_OK,
+        Ok(Err(_)) => ABI_STATUS_REJECTED,
+        Err(_) => ABI_STATUS_INTERNAL_UNWIND,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn join_u64(low: u32, high: u32) -> u64 {
+    u64::from(low) | (u64::from(high) << 32)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn abi_poll() -> u32 {
+    match catch_unwind(AssertUnwindSafe(|| {
+        with_mailbox_mut(NativeWorkerMailbox::poll)
+    })) {
+        Ok(Some(Ok(state))) => state,
+        Ok(Some(Err(_))) | Ok(None) => ABI_STATUS_REJECTED,
+        Err(_) => ABI_STATUS_INTERNAL_UNWIND,
+    }
+}
+
+/// Initializes the same-instance mailbox exactly once with its supervisor identity.
+///
+/// `0` and `0xfffe` mean success and rejection. `0xffff` is reserved for an
+/// internal unwind in unwind-capable embeddings. A production Wasm panic traps
+/// and therefore does not return an ABI status.
+#[cfg(target_arch = "wasm32")]
+pub fn wasm_initialize(
+    worker_low: u32,
+    worker_high: u32,
+    worker_epoch_low: u32,
+    worker_epoch_high: u32,
+    renderer_epoch: u32,
+) -> u32 {
+    abi_initialize(
+        worker_low,
+        worker_high,
+        worker_epoch_low,
+        worker_epoch_high,
+        renderer_epoch,
+    )
 }
 
 /// Resizes the same-Wasm-memory command input and returns its local address.
@@ -666,16 +784,24 @@ pub fn wasm_prepare_transfer(index: u32, length: u32) -> u32 {
     }
 }
 
-/// Dispatches one prepared command; `0`, `1`, and `2` mean success, rejection, and panic.
+/// Dispatches one prepared command.
+///
+/// `0` and `0xfffe` mean success and rejection. `0xffff` is reserved for an
+/// internal unwind in unwind-capable embeddings. A production Wasm panic traps
+/// and therefore does not return an ABI status.
 #[cfg(target_arch = "wasm32")]
 pub fn wasm_dispatch(length: u32, transfer_count: u32) -> u32 {
     abi_status(|mailbox| mailbox.dispatch(length as usize, transfer_count as usize))
 }
 
-/// Pumps one additional event; `0`, `1`, and `2` mean success, rejection, and panic.
+/// Pumps one bounded turn and returns idle/output/pending/both as `0`, `1`, `2`, or `3`.
+///
+/// `0xfffe` means rejection. `0xffff` is reserved for an internal unwind in
+/// unwind-capable embeddings. A production Wasm panic traps and therefore does
+/// not return an ABI status.
 #[cfg(target_arch = "wasm32")]
 pub fn wasm_poll() -> u32 {
-    abi_status(NativeWorkerMailbox::poll)
+    abi_poll()
 }
 
 /// Returns the same-instance local address of the current output frame.
@@ -739,7 +865,9 @@ pub fn wasm_shutdown() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ABI_STATUS_PANIC, NativeWorkerMailbox, NativeWorkerMailboxError, abi_status, resize_bounded,
+        ABI_POLL_OUTPUT, ABI_POLL_PENDING, ABI_STATUS_INTERNAL_UNWIND, ABI_STATUS_OK,
+        ABI_STATUS_REJECTED, NativeWorkerMailbox, NativeWorkerMailboxError, abi_initialize,
+        abi_poll, abi_status, join_u64, poll_state, resize_bounded,
     };
     use crate::{BrowserNativeWorkerEvent, NativeBrowserWorker};
     use pdf_rs_protocol::{
@@ -756,6 +884,7 @@ mod tests {
     };
 
     const SOURCE_BYTES: &[u8] = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+    const MAX_TEST_POLL_TURNS: usize = 4_096;
 
     fn correlation(
         session: Option<pdf_rs_protocol::SessionId>,
@@ -789,18 +918,22 @@ mod tests {
         worker: &mut NativeBrowserWorker,
         predicate: impl Fn(&Event) -> bool,
     ) -> BrowserNativeWorkerEvent {
-        for _ in 0..256 {
+        for _ in 0..MAX_TEST_POLL_TURNS {
             if let Some(event) = worker.next_event().unwrap()
                 && predicate(event.event())
             {
                 return event;
             }
+            assert!(
+                worker.has_pending_work(),
+                "Native actor became idle before producing the expected event"
+            );
         }
-        panic!("expected Native event was not produced");
+        panic!("Native actor exceeded the bounded test poll budget");
     }
 
-    fn worker_with_pending_surface() -> (NativeBrowserWorker, pdf_rs_protocol::SessionId) {
-        let mut worker = NativeBrowserWorker::production_default().unwrap();
+    fn negotiated_worker() -> NativeBrowserWorker {
+        let mut worker = NativeBrowserWorker::test_default().unwrap();
         worker
             .handle_command(
                 command(
@@ -847,7 +980,11 @@ mod tests {
                 if event.capability_profiles == vec![CapabilityProfileId::BaselineNative]
                     && event.output_profiles == vec![OutputProfile::Srgb]
         ));
+        worker
+    }
 
+    fn worker_with_pending_surface() -> (NativeBrowserWorker, pdf_rs_protocol::SessionId) {
+        let mut worker = negotiated_worker();
         worker
             .handle_command(
                 command(
@@ -975,7 +1112,7 @@ mod tests {
 
     #[test]
     fn shutdown_is_irreversible_and_idempotent() {
-        let mut mailbox = NativeWorkerMailbox::production_default().unwrap();
+        let mut mailbox = NativeWorkerMailbox::test_default().unwrap();
         mailbox.shutdown().unwrap();
         mailbox.shutdown().unwrap();
         assert!(mailbox.poll().is_err());
@@ -983,7 +1120,7 @@ mod tests {
 
     #[test]
     fn shutdown_rejects_a_live_native_registry() {
-        let mut mailbox = NativeWorkerMailbox::production_default().unwrap();
+        let mut mailbox = NativeWorkerMailbox::test_default().unwrap();
         let input = mailbox.prepare_input(20).unwrap();
         input[12] = 1;
         assert!(mailbox.dispatch(20, 0).is_err());
@@ -991,11 +1128,40 @@ mod tests {
     }
 
     #[test]
-    fn panics_map_to_stable_abi_status() {
-        let status = abi_status(|_| -> Result<(), super::NativeWorkerMailboxError> {
-            panic!("injected mailbox panic")
-        });
-        assert_eq!(status, ABI_STATUS_PANIC);
+    fn abi_status_values_and_poll_bits_are_stable() {
+        assert_eq!(ABI_STATUS_OK, 0);
+        assert_eq!(ABI_STATUS_REJECTED, 0xfffe);
+        assert_eq!(ABI_STATUS_INTERNAL_UNWIND, 0xffff);
+        assert_eq!(join_u64(0x89ab_cdef, 0x0123_4567), 0x0123_4567_89ab_cdef);
+        assert_eq!(poll_state(false, false), 0);
+        assert_eq!(poll_state(true, false), ABI_POLL_OUTPUT);
+        assert_eq!(poll_state(false, true), ABI_POLL_PENDING);
+        assert_eq!(poll_state(true, true), ABI_POLL_OUTPUT | ABI_POLL_PENDING);
+    }
+
+    #[test]
+    fn wasm_mailbox_requires_one_nonzero_explicit_initialization() {
+        std::thread::spawn(|| {
+            assert_eq!(abi_poll(), ABI_STATUS_REJECTED);
+            assert_eq!(abi_status(|_| Ok(())), ABI_STATUS_REJECTED);
+            assert_eq!(abi_initialize(0, 0, 1, 0, 1), ABI_STATUS_REJECTED);
+            assert_eq!(abi_initialize(1, 0, 0, 0, 1), ABI_STATUS_REJECTED);
+            assert_eq!(abi_initialize(1, 0, 1, 0, 0), ABI_STATUS_REJECTED);
+
+            assert_eq!(abi_initialize(0, 7, 0, 9, 11), ABI_STATUS_OK);
+            assert_eq!(abi_status(|_| Ok(())), ABI_STATUS_OK);
+            assert_eq!(abi_initialize(1, 0, 1, 0, 1), ABI_STATUS_REJECTED);
+            assert_eq!(abi_status(NativeWorkerMailbox::shutdown), ABI_STATUS_OK);
+            assert_eq!(abi_initialize(1, 0, 1, 0, 1), ABI_STATUS_REJECTED);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn mailbox_poll_reports_idle_without_requiring_a_host_spin_limit() {
+        let mut mailbox = NativeWorkerMailbox::new(negotiated_worker());
+        assert_eq!(mailbox.poll(), Ok(0));
     }
 
     #[test]
@@ -1012,7 +1178,7 @@ mod tests {
         let mut second_table_probe = Vec::<Vec<u8>>::new();
         second_table_probe.try_reserve_exact(2).unwrap();
 
-        let mut exact = NativeWorkerMailbox::production_default().unwrap();
+        let mut exact = NativeWorkerMailbox::test_default().unwrap();
         exact.prepare_input(input_length).unwrap();
         let exact_capacity = u64::try_from(exact.input.capacity()).unwrap()
             + u64::try_from(first_probe.capacity()).unwrap()
@@ -1025,7 +1191,7 @@ mod tests {
         exact.prepare_transfer(1, second_length).unwrap();
         assert!(exact.input_retained_capacity().unwrap() <= exact_capacity);
 
-        let mut one_less = NativeWorkerMailbox::production_default().unwrap();
+        let mut one_less = NativeWorkerMailbox::test_default().unwrap();
         one_less.prepare_input(input_length).unwrap();
         one_less.input_retained_byte_capacity = exact_capacity - 1;
         one_less.prepare_transfer(0, first_length).unwrap();
@@ -1041,7 +1207,7 @@ mod tests {
 
     #[test]
     fn input_transfer_slot_limit_is_exact() {
-        let mut mailbox = NativeWorkerMailbox::production_default().unwrap();
+        let mut mailbox = NativeWorkerMailbox::test_default().unwrap();
         mailbox.prepare_input(super::ENVELOPE_HEADER_BYTES).unwrap();
         for index in 0..usize::from(MAX_TRANSFER_SLOTS) {
             mailbox.prepare_transfer(index, 0).unwrap();
@@ -1054,7 +1220,7 @@ mod tests {
 
     #[test]
     fn aggregate_preflight_rejects_without_slot_or_epoch_mutation() {
-        let mut mailbox = NativeWorkerMailbox::production_default().unwrap();
+        let mut mailbox = NativeWorkerMailbox::test_default().unwrap();
         mailbox.prepare_input(super::ENVELOPE_HEADER_BYTES).unwrap();
         mailbox.input_retained_byte_capacity = mailbox.input_retained_capacity().unwrap() + 32;
         let epoch = mailbox.memory_epoch();
@@ -1068,7 +1234,7 @@ mod tests {
 
     #[test]
     fn exhausted_memory_epoch_never_mutates_prepared_input_or_transfers() {
-        let mut input = NativeWorkerMailbox::production_default().unwrap();
+        let mut input = NativeWorkerMailbox::test_default().unwrap();
         input.prepare_input(super::ENVELOPE_HEADER_BYTES).unwrap();
         let original = input.input.clone();
         input.memory_epoch = u32::MAX;
@@ -1079,7 +1245,7 @@ mod tests {
         assert_eq!(input.input, original);
         assert_eq!(input.memory_epoch(), u32::MAX);
 
-        let mut transfers = NativeWorkerMailbox::production_default().unwrap();
+        let mut transfers = NativeWorkerMailbox::test_default().unwrap();
         transfers
             .prepare_input(super::ENVELOPE_HEADER_BYTES)
             .unwrap();
@@ -1105,19 +1271,25 @@ mod tests {
         mailbox.fail_next_surface_output_after_dequeue = true;
 
         let mut rejected_sequence = None;
-        for _ in 0..256 {
+        for _ in 0..MAX_TEST_POLL_TURNS {
             let sequence = mailbox.next_output_sequence;
             match mailbox.poll() {
-                Ok(()) => {}
+                Ok(state) => assert_ne!(
+                    state & ABI_POLL_PENDING,
+                    0,
+                    "Native actor became idle before the pending Surface output"
+                ),
                 Err(NativeWorkerMailboxError::Output) => {
-                    rejected_sequence = Some(sequence);
                     assert_eq!(mailbox.next_output_sequence, sequence);
+                    rejected_sequence = Some(sequence);
                     break;
                 }
                 Err(error) => panic!("unexpected mailbox failure: {error:?}"),
             }
         }
-        assert!(rejected_sequence.is_some());
+        let rejected_sequence =
+            rejected_sequence.expect("Surface output exceeded the bounded test poll budget");
+        assert_ne!(rejected_sequence, 0);
         assert!(mailbox.output().is_empty());
         assert!(mailbox.output_transfers().is_empty());
 
@@ -1157,12 +1329,24 @@ mod tests {
     fn rejected_dispatch_and_native_poll_preserve_staged_surface_output() {
         let (worker, session) = worker_with_pending_surface();
         let mut mailbox = NativeWorkerMailbox::new(worker);
-        for _ in 0..256 {
-            mailbox.poll().unwrap();
+        let mut staged_surface = false;
+        for _ in 0..MAX_TEST_POLL_TURNS {
+            let state = mailbox.poll().unwrap();
+            assert_eq!(state & ABI_POLL_OUTPUT != 0, !mailbox.output().is_empty());
             if !mailbox.output_transfers().is_empty() {
+                staged_surface = true;
                 break;
             }
+            assert_ne!(
+                state & ABI_POLL_PENDING,
+                0,
+                "Native actor became idle before the pending Surface output"
+            );
         }
+        assert!(
+            staged_surface,
+            "Surface output exceeded the bounded test poll budget"
+        );
         assert_eq!(mailbox.output_transfers().len(), 1);
         let output = mailbox.output().to_vec();
         let transfers = mailbox.output_transfers().to_vec();

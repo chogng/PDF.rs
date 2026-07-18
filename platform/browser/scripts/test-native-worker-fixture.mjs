@@ -16,6 +16,8 @@ const protocol = await import(
 const engine = new Uint8Array(await readFile(
   new URL("../dist/native/engine.wasm", import.meta.url),
 ));
+// The production build uses panic=abort: Rust panic is a WebAssembly trap.
+// Status 0xffff is reserved for unwind-capable/internal ABI probes only.
 const runtime = {
   fetch: async () => ({
     ok: true,
@@ -51,6 +53,12 @@ const connection = protocol.negotiateHandshake(
   hello(protocol.EndpointRole.Engine),
 );
 assert.notEqual(connection, undefined, "fixture handshake must negotiate");
+const supervisorIdentity = Object.freeze({
+  worker: 1n,
+  workerEpoch: 1n,
+  rendererEpoch: 1,
+});
+const MAX_FIXTURE_NATIVE_TURNS = 4_096;
 
 const unwrap = (result) => {
   if (!result.ok) {
@@ -159,7 +167,7 @@ const loader = glue.createNativeWorkerEngineLoader(
   BrowserNativeWorkerLoader,
   runtime,
 );
-const worker = await loader.load(connection);
+const worker = await loader.load(connection, supervisorIdentity);
 const seen = [];
 const dispatch = (command, correlation, transfers = []) => {
   const event = decodeDispatch(
@@ -175,21 +183,29 @@ const pollUntil = (predicate, label) => {
   if (existing !== undefined && predicate(existing, seen)) {
     return existing;
   }
-  for (let turn = 0; turn < 100_000; turn += 1) {
-    const event = decodeDispatch(worker.poll());
+  for (let turn = 0; turn < MAX_FIXTURE_NATIVE_TURNS; turn += 1) {
+    const polled = worker.poll();
+    const event = decodeDispatch(polled.output);
     if (event !== undefined) {
       seen.push(event);
       if (predicate(event, seen)) {
         return event;
       }
     }
+    if (!polled.pending) {
+      throw new Error(
+        `Native Worker became idle while waiting for ${label}`,
+      );
+    }
   }
-  throw new Error(`Native Worker fixture timed out waiting for ${label}`);
+  throw new Error(
+    `Native Worker exceeded ${MAX_FIXTURE_NATIVE_TURNS} turns waiting for ${label}`,
+  );
 };
 
 const engineHello = dispatch(
   { type: "Hello", payload: { hello: hostHello } },
-  { worker: 1n },
+  { worker: supervisorIdentity.worker },
 );
 assert.equal(engineHello?.event.type, "EngineHello");
 assert.equal(
@@ -205,7 +221,7 @@ const ready = dispatch(
       schema_hash: protocol.SCHEMA_HASH.slice(),
     },
   },
-  { worker: 1n },
+  { worker: supervisorIdentity.worker },
 );
 assert.equal(ready?.event.type, "Ready");
 
@@ -225,7 +241,7 @@ dispatch(
       },
     },
   },
-  { worker: 1n, request: 1n },
+  { worker: supervisorIdentity.worker, request: 1n },
 );
 const needData = pollUntil(
   (event) => event.event.type === "NeedData",
@@ -253,7 +269,7 @@ dispatch(
       })),
     },
   },
-  { worker: 1n, session },
+  { worker: supervisorIdentity.worker, session },
   dataTransfers,
 );
 const documentReady = pollUntil(
@@ -271,7 +287,7 @@ dispatch(
       max_count: 1,
     },
   },
-  { worker: 1n, session, request: 2n },
+  { worker: supervisorIdentity.worker, session, request: 2n },
 );
 const pageMetrics = pollUntil(
   (event) => event.event.type === "PageMetrics",
@@ -313,7 +329,7 @@ dispatch(
       },
     },
   },
-  { worker: 1n, session, generation: 1n },
+  { worker: supervisorIdentity.worker, session, generation: 1n },
 );
 pollUntil(
   (_event, events) =>
@@ -339,7 +355,7 @@ dispatch(
       lease_token: surface.event.payload.metadata.lease_token,
     },
   },
-  { worker: 1n, session },
+  { worker: supervisorIdentity.worker, session },
 );
 pollUntil(
   (_event, events) =>
@@ -349,7 +365,7 @@ pollUntil(
 
 dispatch(
   { type: "CloseSession", payload: {} },
-  { worker: 1n, session },
+  { worker: supervisorIdentity.worker, session },
 );
 pollUntil(
   (_event, events) =>
@@ -360,7 +376,7 @@ pollUntil(
 
 dispatch(
   { type: "Shutdown", payload: { deadline_ms: 1_000 } },
-  { worker: 1n },
+  { worker: supervisorIdentity.worker },
 );
 pollUntil(
   (_event, events) =>

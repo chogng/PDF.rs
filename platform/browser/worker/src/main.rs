@@ -6,10 +6,28 @@
 
 #[cfg(target_arch = "wasm32")]
 use pdf_rs_browser_worker::{
-    wasm_dispatch, wasm_memory_epoch, wasm_output_length, wasm_output_pointer, wasm_poll,
-    wasm_prepare_input, wasm_prepare_transfer, wasm_shutdown, wasm_transfer_count,
+    wasm_dispatch, wasm_initialize, wasm_memory_epoch, wasm_output_length, wasm_output_pointer,
+    wasm_poll, wasm_prepare_input, wasm_prepare_transfer, wasm_shutdown, wasm_transfer_count,
     wasm_transfer_length, wasm_transfer_pointer,
 };
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn pdf_rs_worker_initialize(
+    worker_low: u32,
+    worker_high: u32,
+    worker_epoch_low: u32,
+    worker_epoch_high: u32,
+    renderer_epoch: u32,
+) -> u32 {
+    wasm_initialize(
+        worker_low,
+        worker_high,
+        worker_epoch_low,
+        worker_epoch_high,
+        renderer_epoch,
+    )
+}
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
@@ -80,55 +98,55 @@ pub extern "C" fn pdf_rs_worker_shutdown() -> u32 {
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_version() -> u32 {
-    1
+    2
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_0() -> u32 {
-    0x585f_6908
+    0x8e09_b597
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_1() -> u32 {
-    0x4c71_6d91
+    0x9c9c_d6ae
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_2() -> u32 {
-    0xa852_d981
+    0x13c3_75a3
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_3() -> u32 {
-    0x921a_edbd
+    0x1316_9125
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_4() -> u32 {
-    0x9553_5e6c
+    0x4cae_2a95
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_5() -> u32 {
-    0xbd1f_d501
+    0xe611_9354
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_6() -> u32 {
-    0x941e_0b6a
+    0x56ed_5d3d
 }
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pdf_rs_worker_abi_hash_7() -> u32 {
-    0xd621_61c9
+    0xae4b_37f6
 }
 
 fn main() {}

@@ -641,6 +641,48 @@ fn complete_source_bytes_precharge_the_adapter_parse_budget() {
 }
 
 #[test]
+fn shutdown_cancels_an_active_parse_and_drains_to_worker_stopped() {
+    let bytes = b"%PDF-1.7\nshutdown during active parse\n";
+    let mut worker = worker();
+    negotiate(&mut worker);
+    let (session, need) = open_to_need_data(&mut worker, bytes, 10);
+    provide_data(&mut worker, bytes, session, &need);
+
+    // One bounded turn moves the charged parse from the queue into
+    // active_parse without completing header validation.
+    assert!(worker.next_event().unwrap().is_none());
+
+    worker
+        .handle_command(
+            command(
+                MESSAGE_ID_SHUTDOWN,
+                correlation(None, None, None),
+                Command::Shutdown(ShutdownCommand { deadline_ms: 1_000 }),
+            ),
+            &[],
+        )
+        .unwrap();
+
+    let mut stopped = false;
+    for _ in 0..64 {
+        let Some(event) = worker.next_event().unwrap() else {
+            continue;
+        };
+        assert!(!matches!(
+            event.event(),
+            Event::DocumentReady(_) | Event::SurfaceReady(_)
+        ));
+        if matches!(event.event(), Event::WorkerStopped(_)) {
+            stopped = true;
+            break;
+        }
+    }
+    assert!(stopped);
+    assert_eq!(worker.phase(), NativeBrowserWorkerPhase::Stopped);
+    assert!(worker.can_dispose());
+}
+
+#[test]
 fn browser_surface_copy_budget_is_exact_and_one_less_reclaims_every_resource() {
     let bytes = b"%PDF-1.7\nsurface budget fixture\n";
     let pixel_length = 16_usize * 16 * 4;

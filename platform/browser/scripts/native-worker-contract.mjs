@@ -3,8 +3,18 @@ import { createHash } from "node:crypto";
 export const WASM_PAGE_BYTES = 65_536;
 export const MAX_WASM_PAGES = 1_024;
 export const MAX_NATIVE_WORKER_ARTIFACT_BYTES = 64 * 1_024 * 1_024;
-export const NATIVE_WORKER_ABI_VERSION = 1;
+export const NATIVE_WORKER_ABI_VERSION = 2;
+export const NATIVE_WORKER_STATUS_OK = 0;
+export const NATIVE_WORKER_STATUS_REJECTED = 0xfffe;
+// Reserved for unwind-capable/internal builds. Production is linked with
+// panic=abort, so a Rust panic crosses this boundary as a WebAssembly trap.
+export const NATIVE_WORKER_STATUS_INTERNAL_UNWIND = 0xffff;
+export const NATIVE_WORKER_POLL_OUTPUT = 1;
+export const NATIVE_WORKER_POLL_PENDING = 2;
+export const NATIVE_WORKER_POLL_MASK =
+  NATIVE_WORKER_POLL_OUTPUT | NATIVE_WORKER_POLL_PENDING;
 export const NATIVE_WORKER_FUNCTION_SIGNATURES = Object.freeze({
+  pdf_rs_worker_initialize: "(i32,i32,i32,i32,i32)->i32",
   pdf_rs_worker_prepare_input: "(i32)->i32",
   pdf_rs_worker_prepare_transfer: "(i32,i32)->i32",
   pdf_rs_worker_dispatch: "(i32,i32)->i32",
@@ -49,6 +59,7 @@ export const NATIVE_WORKER_ABI_WORDS = Object.freeze(
 );
 export const NATIVE_WORKER_EXPORTS = Object.freeze([
   "memory",
+  "pdf_rs_worker_initialize",
   "pdf_rs_worker_prepare_input",
   "pdf_rs_worker_prepare_transfer",
   "pdf_rs_worker_dispatch",
@@ -358,14 +369,22 @@ export const validateNativeWorkerModule = async (bytes) => {
   ) {
     throw new Error("Native Worker instantiated an invalid memory backing");
   }
+  const initialize = instance.exports.pdf_rs_worker_initialize;
+  const dispatch = instance.exports.pdf_rs_worker_dispatch;
+  const poll = instance.exports.pdf_rs_worker_poll;
   const epoch = instance.exports.pdf_rs_worker_memory_epoch;
   const shutdown = instance.exports.pdf_rs_worker_shutdown;
   const abiVersion = instance.exports.pdf_rs_worker_abi_version;
   const abiWords = NATIVE_WORKER_ABI_WORDS.map((_, index) =>
     instance.exports[`pdf_rs_worker_abi_hash_${index}`]);
   if (
-    typeof epoch !== "function"
-    || epoch() !== 1
+    typeof initialize !== "function"
+    || typeof dispatch !== "function"
+    || dispatch(0, 0) !== NATIVE_WORKER_STATUS_REJECTED
+    || typeof poll !== "function"
+    || poll() !== NATIVE_WORKER_STATUS_REJECTED
+    || typeof epoch !== "function"
+    || epoch() !== 0
     || typeof abiVersion !== "function"
     || abiVersion() !== NATIVE_WORKER_ABI_VERSION
     || abiWords.some(
@@ -374,9 +393,9 @@ export const validateNativeWorkerModule = async (bytes) => {
         || (word() >>> 0) !== NATIVE_WORKER_ABI_WORDS[index],
     )
     || typeof shutdown !== "function"
-    || shutdown() !== 0
+    || shutdown() !== NATIVE_WORKER_STATUS_REJECTED
   ) {
-    throw new Error("Native Worker ABI startup/shutdown proof failed");
+    throw new Error("Native Worker ABI pre-initialization proof failed");
   }
   return Object.freeze({ module, memory });
 };

@@ -20,8 +20,8 @@ pub use native_adapter::{
 pub use wasm_mailbox::{NativeWorkerMailbox, NativeWorkerMailboxError};
 #[cfg(target_arch = "wasm32")]
 pub use wasm_mailbox::{
-    wasm_dispatch, wasm_memory_epoch, wasm_output_length, wasm_output_pointer, wasm_poll,
-    wasm_prepare_input, wasm_prepare_transfer, wasm_shutdown, wasm_transfer_count,
+    wasm_dispatch, wasm_initialize, wasm_memory_epoch, wasm_output_length, wasm_output_pointer,
+    wasm_poll, wasm_prepare_input, wasm_prepare_transfer, wasm_shutdown, wasm_transfer_count,
     wasm_transfer_length, wasm_transfer_pointer,
 };
 

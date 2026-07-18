@@ -121,14 +121,14 @@
       "src/browser-worker-supervisor.ts",
       "src/native-worker-abi.generated.ts"
     ],
-    "sha256": "c0971356675eba1f18fe68a48f73490095c0553ab72357ca2ec56d387fef5353"
+    "sha256": "a76766433be9da5de3b9155dde9284119ef66438d586aebbc427ce4f320f6ae1"
   },
   "network_manifest": [
     {
       "id": "native-wasm",
       "kind": "integrity-bound-product-resource",
       "location": "./native/engine.wasm",
-      "max_bytes": 16521161,
+      "max_bytes": 16633786,
       "max_requests_per_open": 17,
       "ownership": "PDF.rs Native engine"
     },
@@ -160,14 +160,14 @@
   "product": "PDF.rs Native Browser",
   "resources": [
     {
-      "byte_length": 1495,
+      "byte_length": 1529,
       "executable": false,
       "hash_binding": "canonical-sha256",
       "kind": "native-artifact-manifest",
       "max_bytes": 16384,
       "ownership": "PDF.rs browser release",
       "path": "dist/native/engine-manifest.json",
-      "sha256": "ea031780667a960ebe0c9b320619ba08d57d8e5d17d5367c8e403ed7895f8c9e"
+      "sha256": "57682c53006a7ec446487409ef46bd7415a1e0df9c9d3c343f0d69d089a0259a"
     },
     {
       "byte_length": 640,
@@ -177,17 +177,17 @@
       "max_bytes": 65536,
       "ownership": "PDF.rs browser host",
       "path": "dist/native/engine-worker.generated.js",
-      "sha256": "77555454437453e2aa8fb7fb3791c4a4f7ed85df217f91168b674e8b1810d5ae"
+      "sha256": "c36b38dcb8ee6deedcce19e7e9247476774e4146caf9d0371abc3685e95311c2"
     },
     {
-      "byte_length": 971833,
+      "byte_length": 978458,
       "executable": true,
       "hash_binding": "engine-manifest.json#/engine/sha256",
       "kind": "native-wasm-engine",
       "max_bytes": 67108864,
       "ownership": "PDF.rs Native engine",
       "path": "dist/native/engine.wasm",
-      "sha256": "ac506c7ba8e88fb54a98d1bcf4bc25714182511f9e433724006f8bc0d0fc43c6"
+      "sha256": "ca9d34157f725736200e77fa626729e347b408d051c0bbc2943380ed27f5b386"
     }
   ],
   "schema": 1,

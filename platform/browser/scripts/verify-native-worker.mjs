@@ -184,7 +184,11 @@ const loader = glueModule.createNativeWorkerEngineLoader(
   loaderModule.BrowserNativeWorkerLoader,
   runtime,
 );
-const worker = await loader.load(connection);
+const worker = await loader.load(connection, Object.freeze({
+  worker: 1n,
+  workerEpoch: 1n,
+  rendererEpoch: 1,
+}));
 loader.close();
 await Promise.resolve();
 if (!worker.closed) {

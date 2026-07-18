@@ -17,7 +17,13 @@ import {
   type PayloadCodecResult,
   type ProtocolHello,
 } from "../generated/engine-protocol.js";
-import { NATIVE_WORKER_ABI_HASH_WORDS } from "../src/native-worker-abi.generated.js";
+import {
+  NATIVE_WORKER_ABI_HASH_WORDS,
+  NATIVE_WORKER_ABI_VERSION,
+  NATIVE_WORKER_POLL_PENDING,
+  NATIVE_WORKER_STATUS_INTERNAL_UNWIND,
+  NATIVE_WORKER_STATUS_REJECTED,
+} from "../src/native-worker-abi.generated.js";
 import {
   BrowserNativeWorkerError,
   BrowserNativeWorkerInstance,
@@ -25,6 +31,7 @@ import {
   inspectNativeWorkerMemory,
   nativeWorkerMaximumArtifactBytes,
   nativeWorkerSha256,
+  type BrowserNativeWorkerSupervisorIdentity,
 } from "../src/browser-native-worker-loader.js";
 import { negotiateBrowserHello } from "../src/browser-handshake.js";
 
@@ -74,7 +81,12 @@ const section = (id: number, bytes: readonly number[]): number[] => [
 
 interface TestModuleOptions {
   readonly maximumPages?: number;
+  readonly initializeStatus?: number;
+  readonly initializeTraps?: boolean;
   readonly dispatchStatus?: number;
+  readonly dispatchTraps?: boolean;
+  readonly pollStatus?: number;
+  readonly pollTraps?: boolean;
   readonly dispatchGrowsMemory?: boolean;
   readonly outputLength?: number;
   readonly transferCount?: number;
@@ -92,6 +104,11 @@ const nativeTestModule = (
   }
   const specs = [
     {
+      name: "pdf_rs_worker_initialize",
+      type: 4,
+      value: options.initializeStatus ?? 0,
+    },
+    {
       name: "pdf_rs_worker_prepare_input",
       type: options.wrongPrepareInputSignature === true ? 2 : 0,
       value: 1_024,
@@ -106,7 +123,11 @@ const nativeTestModule = (
       type: 1,
       value: options.dispatchStatus ?? 0,
     },
-    { name: "pdf_rs_worker_poll", type: 2, value: 0 },
+    {
+      name: "pdf_rs_worker_poll",
+      type: 2,
+      value: options.pollStatus ?? 0,
+    },
     {
       name: "pdf_rs_worker_output_pointer",
       type: 2,
@@ -145,7 +166,7 @@ const nativeTestModule = (
     {
       name: "pdf_rs_worker_abi_version",
       type: 2,
-      value: 1,
+      value: NATIVE_WORKER_ABI_VERSION,
     },
     ...hashWords.map((value, index) => ({
       name: `pdf_rs_worker_abi_hash_${index}`,
@@ -155,7 +176,7 @@ const nativeTestModule = (
     { name: "main", type: 1, value: 0 },
   ] as const;
   const type = section(1, [
-    4,
+    5,
     0x60,
     1,
     0x7f,
@@ -174,6 +195,15 @@ const nativeTestModule = (
     0x60,
     0,
     0,
+    0x60,
+    5,
+    0x7f,
+    0x7f,
+    0x7f,
+    0x7f,
+    0x7f,
+    1,
+    0x7f,
   ]);
   const functions = section(3, [
     ...uleb(specs.length),
@@ -224,10 +254,19 @@ const nativeTestModule = (
     ),
     ...exportRecords,
   ]);
-  const bodies = specs.map((spec, index) => {
+  const bodies = specs.map((spec) => {
     const instructions = spec.value === undefined
       ? []
-      : index === 2
+      : spec.name === "pdf_rs_worker_initialize"
+      && options.initializeTraps === true
+      ? [0x00]
+      : spec.name === "pdf_rs_worker_dispatch"
+      && options.dispatchTraps === true
+      ? [0x00]
+      : spec.name === "pdf_rs_worker_poll"
+      && options.pollTraps === true
+      ? [0x00]
+      : spec.name === "pdf_rs_worker_dispatch"
       && options.dispatchGrowsMemory === true
       ? [0x41, 1, 0x40, 0, 0x1a, 0x41, 0]
       : [0x41, ...sleb32(spec.value)];
@@ -281,6 +320,15 @@ const connection = (): CompatibleHandshake =>
     hello(EndpointRole.Host),
     hello(EndpointRole.Engine),
   );
+
+const supervisorIdentity = (
+  overrides: Partial<BrowserNativeWorkerSupervisorIdentity> = {},
+): BrowserNativeWorkerSupervisorIdentity => Object.freeze({
+  worker: 1n,
+  workerEpoch: 1n,
+  rendererEpoch: 1,
+  ...overrides,
+});
 
 const unwrap = <T>(result: PayloadCodecResult<T>): T => {
   if (result.ok) {
@@ -356,12 +404,14 @@ const deferred = <T>(): Readonly<{
 
 const instance = async (
   options: TestModuleOptions = {},
+  identity: BrowserNativeWorkerSupervisorIdentity = supervisorIdentity(),
 ): Promise<BrowserNativeWorkerInstance> => {
   const bytes = nativeTestModule(options);
   const module = await WebAssembly.compile(bytes);
   const wasm = await WebAssembly.instantiate(module, {});
   return new BrowserNativeWorkerInstance(
     connection(),
+    identity,
     wasm,
     1,
     1_024,
@@ -437,8 +487,9 @@ test("loader admits one exact hash-bound import-free bounded module", async () =
     },
   );
   const negotiated = connection();
-  const first = await loader.load(negotiated);
-  const second = await loader.load(negotiated);
+  const identity = supervisorIdentity();
+  const first = await loader.load(negotiated, identity);
+  const second = await loader.load(negotiated, identity);
   assert.equal(first, second);
   assert.equal(fetches, 1);
   assert.equal(first.dispatch(helloFrame(1n)), undefined);
@@ -448,7 +499,106 @@ test("loader admits one exact hash-bound import-free bounded module", async () =
   );
 });
 
-test("loader requires negotiation and one exact connection identity", async () => {
+test("instance initializes once with the exact supervisor u64 words before mailbox access", async () => {
+  const module = await WebAssembly.compile(nativeTestModule());
+  const wasm = await WebAssembly.instantiate(module, {});
+  const calls: number[][] = [];
+  const order: string[] = [];
+  let initialized = false;
+  const wrapped = {
+    exports: {
+      ...wasm.exports,
+      pdf_rs_worker_initialize: (...values: number[]): number => {
+        order.push("initialize");
+        calls.push(values);
+        initialized = true;
+        return 0;
+      },
+      pdf_rs_worker_memory_epoch: (): number => {
+        order.push("memoryEpoch");
+        assert.equal(initialized, true);
+        return 1;
+      },
+    },
+  } as unknown as WebAssembly.Instance;
+  const identity = supervisorIdentity({
+    worker: 0x0123_4567_89ab_cdefn,
+    workerEpoch: 0xfedc_ba98_7654_3210n,
+    rendererEpoch: 0x7654_3210,
+  });
+  const worker = new BrowserNativeWorkerInstance(
+    connection(),
+    identity,
+    wrapped,
+    1,
+    1_024,
+  );
+  assert.deepEqual(calls, [[
+    0x89ab_cdef,
+    0x0123_4567,
+    0x7654_3210,
+    0xfedc_ba98,
+    0x7654_3210,
+  ]]);
+  assert.deepEqual(order, ["initialize", "memoryEpoch"]);
+  assert.deepEqual(worker.supervisorIdentity, identity);
+  worker.shutdown();
+});
+
+test("memory growth during initialize establishes the post-initialize backing", async () => {
+  const module = await WebAssembly.compile(nativeTestModule());
+  const wasm = await WebAssembly.instantiate(module, {});
+  const memory = wasm.exports.memory;
+  assert.ok(memory instanceof WebAssembly.Memory);
+  const initialBuffer = memory.buffer;
+  const wrapped = {
+    exports: {
+      ...wasm.exports,
+      pdf_rs_worker_initialize: (): number => {
+        assert.equal(memory.grow(1), 1);
+        return 0;
+      },
+      pdf_rs_worker_memory_epoch: (): number => 1,
+    },
+  } as unknown as WebAssembly.Instance;
+  const worker = new BrowserNativeWorkerInstance(
+    connection(),
+    supervisorIdentity(),
+    wrapped,
+    1,
+    1_024,
+  );
+  assert.notEqual(memory.buffer, initialBuffer);
+  assert.equal(memory.buffer.byteLength, 2 * 65_536);
+  assert.equal(worker.dispatch(helloFrame(1n)), undefined);
+  worker.shutdown();
+});
+
+test("initialization rejection, reserved internal unwind, and Wasm trap are fail closed", async () => {
+  for (const [options, code] of [
+    [
+      { initializeStatus: NATIVE_WORKER_STATUS_REJECTED },
+      "EngineRejected",
+    ],
+    [
+      { initializeStatus: NATIVE_WORKER_STATUS_INTERNAL_UNWIND },
+      "EngineTrap",
+    ],
+    [
+      { initializeTraps: true },
+      "EngineTrap",
+    ],
+  ] as const) {
+    await assert.rejects(
+      instance(options),
+      (error: unknown) =>
+        error instanceof BrowserNativeWorkerError
+        && error.code === code,
+    );
+  }
+});
+
+test("loader requires negotiation and one exact supervisor identity", async () => {
   const bytes = nativeTestModule();
   const loader = new BrowserNativeWorkerLoader({
     url: "engine.wasm",
@@ -469,17 +619,71 @@ test("loader requires negotiation and one exact connection identity", async () =
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    loader.load({} as CompatibleHandshake),
+    loader.load(
+      {} as CompatibleHandshake,
+      supervisorIdentity(),
+    ),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "NegotiationRequired",
   );
-  await loader.load(connection());
   await assert.rejects(
-    loader.load(connection()),
+    loader.load(connection(), {} as BrowserNativeWorkerSupervisorIdentity),
+    (error: unknown) =>
+      error instanceof BrowserNativeWorkerError
+      && error.code === "InvalidIdentity",
+  );
+  let identityReads = 0;
+  const accessorIdentity = {};
+  Object.defineProperties(accessorIdentity, {
+    worker: {
+      enumerable: true,
+      get: () => {
+        identityReads += 1;
+        return 1n;
+      },
+    },
+    workerEpoch: {
+      enumerable: true,
+      get: () => {
+        identityReads += 1;
+        return 1n;
+      },
+    },
+    rendererEpoch: {
+      enumerable: true,
+      get: () => {
+        identityReads += 1;
+        return 1;
+      },
+    },
+  });
+  await assert.rejects(
+    loader.load(
+      connection(),
+      accessorIdentity as BrowserNativeWorkerSupervisorIdentity,
+    ),
+    (error: unknown) =>
+      error instanceof BrowserNativeWorkerError
+      && error.code === "InvalidIdentity",
+  );
+  assert.equal(identityReads, 0);
+  const negotiated = connection();
+  await loader.load(negotiated, supervisorIdentity());
+  await assert.rejects(
+    loader.load(connection(), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "NegotiationMismatch",
+  );
+  await assert.rejects(
+    loader.load(
+      negotiated,
+      supervisorIdentity({ workerEpoch: 2n }),
+    ),
+    (error: unknown) =>
+      error instanceof BrowserNativeWorkerError
+      && error.code === "IdentityMismatch",
   );
 });
 
@@ -507,7 +711,10 @@ test("close aborts fetch and body waits and rejects the load immediately", async
     instantiate: async (module, imports) =>
       WebAssembly.instantiate(module, imports),
   });
-  const fetchLoad = fetching.load(connection());
+  const fetchLoad = fetching.load(
+    connection(),
+    supervisorIdentity(),
+  );
   await Promise.resolve();
   fetching.close();
   assert.equal(fetchSignal?.aborted, true);
@@ -559,7 +766,10 @@ test("close aborts fetch and body waits and rejects the load immediately", async
     instantiate: async (module, imports) =>
       WebAssembly.instantiate(module, imports),
   });
-  const bodyLoad = reading.load(connection());
+  const bodyLoad = reading.load(
+    connection(),
+    supervisorIdentity(),
+  );
   await bodyEntered.promise;
   reading.close();
   await assert.rejects(
@@ -622,7 +832,10 @@ test("close covers digest, compile, and instantiate waits and reclaims a late in
         return WebAssembly.instantiate(module, {});
       },
     });
-    const load = loader.load(connection());
+    const load = loader.load(
+      connection(),
+      supervisorIdentity(),
+    );
     await entered.promise;
     loader.close();
     await assert.rejects(
@@ -689,7 +902,7 @@ test("artifact and digest inputs are fixed, exact, hash-bound, and capped", asyn
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    loader.load(connection()),
+    loader.load(connection(), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "ArtifactLengthMismatch",
@@ -714,7 +927,7 @@ test("artifact and digest inputs are fixed, exact, hash-bound, and capped", asyn
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    mismatched.load(connection()),
+    mismatched.load(connection(), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "ArtifactLengthMismatch",
@@ -754,7 +967,7 @@ test("module memory and export surface are exact", async () => {
       WebAssembly.instantiate(module, imports),
   });
   await assert.rejects(
-    loader.load(connection()),
+    loader.load(connection(), supervisorIdentity()),
     (error: unknown) =>
       error instanceof BrowserNativeWorkerError
       && error.code === "InvalidWasmExports",
@@ -765,11 +978,43 @@ test("module memory and export surface are exact", async () => {
     nativeTestModule({ wrongAbiHash: true }),
   ]) {
     await assert.rejects(
-      (await loaderFor(invalid)).load(connection()),
+      (await loaderFor(invalid)).load(
+        connection(),
+        supervisorIdentity(),
+      ),
       (error: unknown) =>
         error instanceof BrowserNativeWorkerError
         && error.code === "InvalidWasmExports",
     );
+  }
+});
+
+test("poll exposes bounded pending work and maps rejection or traps", async () => {
+  const pending = await instance({
+    pollStatus: NATIVE_WORKER_POLL_PENDING,
+  });
+  assert.deepEqual(pending.poll(), {
+    output: undefined,
+    pending: true,
+  });
+
+  for (const [options, code] of [
+    [
+      { pollStatus: NATIVE_WORKER_STATUS_REJECTED },
+      "EngineRejected",
+    ],
+    [
+      { pollStatus: NATIVE_WORKER_STATUS_INTERNAL_UNWIND },
+      "EngineTrap",
+    ],
+    [
+      { pollTraps: true },
+      "EngineTrap",
+    ],
+  ] as const) {
+    const worker = await instance(options);
+    assertCode(() => worker.poll(), code);
+    assert.equal(worker.closed, true);
   }
 });
 
@@ -780,13 +1025,35 @@ test("dispatch rejects resizable transfers, engine rejection, traps, and untrack
     () => fixed.dispatch(helloFrame(1n), [resizable]),
     "TransferLimit",
   );
+  const staleIdentity = await instance(
+    {},
+    supervisorIdentity({ worker: 2n }),
+  );
+  assertCode(
+    () => staleIdentity.dispatch(helloFrame(1n)),
+    "InvalidMessage",
+  );
 
-  const rejected = await instance({ dispatchStatus: 1 });
+  const rejected = await instance({
+    dispatchStatus: NATIVE_WORKER_STATUS_REJECTED,
+  });
   assertCode(
     () => rejected.dispatch(helloFrame(1n)),
     "EngineRejected",
   );
   assert.equal(rejected.closed, true);
+
+  for (const options of [
+    { dispatchStatus: NATIVE_WORKER_STATUS_INTERNAL_UNWIND },
+    { dispatchTraps: true },
+  ] as const) {
+    const trapped = await instance(options);
+    assertCode(
+      () => trapped.dispatch(helloFrame(1n)),
+      "EngineTrap",
+    );
+    assert.equal(trapped.closed, true);
+  }
 
   const grown = await instance({ dispatchGrowsMemory: true });
   assertCode(
