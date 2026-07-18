@@ -15,7 +15,7 @@ pub enum ContentExtGStateErrorKind {
     DuplicateEntry,
     /// `/Type`, `/CA`, `/ca`, or `/BM` has a malformed value.
     InvalidValue,
-    /// The dictionary selects an ExtGState entry outside the registered alpha/blend subset.
+    /// The dictionary selects an ExtGState entry outside the registered screen-raster subset.
     UnsupportedEntry,
 }
 
@@ -65,8 +65,10 @@ impl ContentExtGStateResource {
     /// Parses one reopened proof-bound ExtGState dictionary and retains its resource name.
     ///
     /// The registered subset accepts optional `/Type /ExtGState`, direct numeric `/CA` and `/ca`
-    /// in the closed unit interval, and `/BM` names `Normal`, `Multiply`, or `Screen`. Any other
-    /// dictionary entry remains an explicit unsupported capability.
+    /// in the closed unit interval, and `/BM` names `Normal`, `Multiply`, or `Screen`. Standard
+    /// screen-compatibility controls `/AIS`, `/OP`, `/op`, `/OPM`, and `/SA` are shape-validated
+    /// while `/SMask` is accepted only when it explicitly selects `/None`. Other entries remain
+    /// an explicit unsupported capability instead of being silently discarded.
     pub fn new(name: Vec<u8>, object: AttestedObject) -> Result<Self, ContentExtGStateError> {
         let reference = object.reference();
         let object_offset = object.object_span().start();
@@ -96,6 +98,12 @@ impl ContentExtGStateResource {
         let mut stroking_alpha = None;
         let mut nonstroking_alpha = None;
         let mut blend_mode = None;
+        let mut alpha_is_shape = None;
+        let mut stroking_overprint = None;
+        let mut nonstroking_overprint = None;
+        let mut overprint_mode = None;
+        let mut stroke_adjustment = None;
+        let mut soft_mask_none = false;
         for entry in dictionary.entries() {
             let key = entry.key().value().bytes();
             let offset = entry.value().span().start();
@@ -147,6 +155,64 @@ impl ContentExtGStateResource {
                             ));
                         }
                     });
+                }
+                b"AIS" => {
+                    parse_boolean_entry(
+                        &mut alpha_is_shape,
+                        entry.value().value(),
+                        reference,
+                        offset,
+                    )?;
+                }
+                b"OP" => {
+                    parse_boolean_entry(
+                        &mut stroking_overprint,
+                        entry.value().value(),
+                        reference,
+                        offset,
+                    )?;
+                }
+                b"op" => {
+                    parse_boolean_entry(
+                        &mut nonstroking_overprint,
+                        entry.value().value(),
+                        reference,
+                        offset,
+                    )?;
+                }
+                b"OPM" => {
+                    if overprint_mode.is_some() {
+                        return Err(duplicate(reference, offset));
+                    }
+                    overprint_mode = Some(match entry.value().value() {
+                        SyntaxObject::Integer(value @ (0 | 1)) => *value,
+                        _ => return Err(invalid_value(reference, offset)),
+                    });
+                }
+                b"SA" => {
+                    parse_boolean_entry(
+                        &mut stroke_adjustment,
+                        entry.value().value(),
+                        reference,
+                        offset,
+                    )?;
+                }
+                b"SMask" => {
+                    if soft_mask_none {
+                        return Err(duplicate(reference, offset));
+                    }
+                    match entry.value().value() {
+                        SyntaxObject::Name(name) if name.bytes() == b"None" => {
+                            soft_mask_none = true;
+                        }
+                        _ => {
+                            return Err(ContentExtGStateError::new(
+                                ContentExtGStateErrorKind::UnsupportedEntry,
+                                reference,
+                                offset,
+                            ));
+                        }
+                    }
                 }
                 _ => {
                     return Err(ContentExtGStateError::new(
@@ -261,6 +327,22 @@ fn duplicate(reference: ObjectRef, offset: u64) -> ContentExtGStateError {
 
 fn invalid_value(reference: ObjectRef, offset: u64) -> ContentExtGStateError {
     ContentExtGStateError::new(ContentExtGStateErrorKind::InvalidValue, reference, offset)
+}
+
+fn parse_boolean_entry(
+    slot: &mut Option<bool>,
+    value: &SyntaxObject,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), ContentExtGStateError> {
+    if slot.is_some() {
+        return Err(duplicate(reference, offset));
+    }
+    let SyntaxObject::Boolean(value) = value else {
+        return Err(invalid_value(reference, offset));
+    };
+    *slot = Some(*value);
+    Ok(())
 }
 
 fn parse_unit(value: &SyntaxObject) -> Option<SceneUnit> {

@@ -84,7 +84,13 @@ fn ext_gstate_pdf() -> Vec<u8> {
         4,
         b"<< /Length 34 >>\nstream\n/Fade gs 1 0 0 rg 0 0 100 100 re f\nendstream",
     );
-    append_object(&mut pdf, &mut offsets, 5, b"<< /ca 0.5 /CA 1 >>");
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        5,
+        b"<< /AIS false /BM /Normal /CA 1 /OP true /OPM 1 /SA true \
+          /SMask /None /ca 0.5 /op true >>",
+    );
 
     let xref_offset = pdf.len();
     pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
