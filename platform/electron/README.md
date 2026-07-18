@@ -23,15 +23,18 @@ npm test
 npm run smoke
 ```
 
-`npm test` exercises the persistent bridge against the registered mixed PDF.
-`npm run smoke` starts Electron with that PDF, waits for a real Canvas
-presentation, captures `target/electron-preview-smoke.png`, and exits.
+`npm test` exercises both pages of the deterministic readable PDF through the
+persistent bridge. `npm run smoke` starts Electron with that PDF, waits for a
+real Canvas presentation, captures `target/electron-preview-smoke.png`, and
+exits.
 
 ## Current compatibility
 
 The first development slice uses the PDF.rs strict traditional-xref opener,
-the registered graphics-v2 content profile, and the PDF.rs Reference raster
-backend. PDFs outside that bounded R0 subset return a structured unsupported
+the registered graphics-v2 content profile, embedded simple TrueType text, and
+the PDF.rs Reference raster backend. Its acceptance fixture is a readable,
+two-page Letter document generated from project-authored paths and font
+outlines. PDFs outside that bounded R0 subset return a structured unsupported
 or document failure; Electron never falls back to Chromium's PDF viewer or an
 external PDF engine.
 

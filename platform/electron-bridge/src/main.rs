@@ -118,8 +118,9 @@ fn run_stdio() -> io::Result<()> {
                 };
                 writeln!(
                     output,
-                    "SURFACE {request} {document_id} {} {} {} {} {}",
+                    "SURFACE {request} {document_id} {} {} {} {} {} {}",
                     surface.page_index(),
+                    surface.renderer().identifier(),
                     surface.width(),
                     surface.height(),
                     surface.stride(),

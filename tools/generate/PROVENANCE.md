@@ -1,8 +1,10 @@
 # Scope
 
-`tools/generate` compiles deterministic, self-authored PDF fixture DSL sources for the PDF.rs test
-system. The `m0.one-page-table.v1` profile emits PDF 1.7 with one page, a direct content-stream
-length, a traditional cross-reference table, a trailer, and `startxref`.
+`tools/generate` compiles deterministic, self-authored PDF fixtures for the PDF.rs test system. The
+`m0.one-page-table.v1` profile emits PDF 1.7 with one page, a direct content-stream length, a
+traditional cross-reference table, a trailer, and `startxref`. The separate
+`m4.readable-preview.v1` profile emits a two-page Letter-sized visual acceptance fixture with an
+analytic project-authored block TrueType font.
 
 # Semantic owner
 
@@ -64,13 +66,15 @@ after implementation and was not treated as specification truth or a source for 
 
 - The crate uses the Rust standard library plus the local development-only `pdf-rs-digest` crate;
   it introduces no third-party dependency.
-- All templates and source code are project-authored; no third-party data is embedded. Because the
-  repository does not yet carry an approved project/test-data license, generated PDF bytes remain
-  locally generated, non-redistributable, and ignored until the project owner records that approval.
+- All templates, glyph outlines, and source code are project-authored; no third-party data is
+  embedded. The M4 readable preview is committed as `tests/desktop/readable-preview.pdf` under
+  `LicenseRef-PDF.rs-SelfAuthored-Test` so Electron, Rust, and independent visual checks consume the
+  exact same bytes. Other generated PDF bytes remain local unless separately registered.
 - Generated PDFs contain `generated_by`, `input_hashes`, `generator_revision`, and `schema` PDF
   comments. `input_hashes` contains the exact DSL source SHA-256 for replay verification.
-- The generator writes no generated fixture into the repository by default. The CLI requires an
-  explicit DSL source and output path and reads the source through the same fixed input ceiling.
+- The generator writes no generated fixture into the repository by default. The CLI accepts either
+  an explicit DSL source and output path or `--readable-preview <output.pdf>`; both destinations are
+  trusted developer or CI paths.
 
 # Tests and fuzz targets
 
@@ -92,9 +96,11 @@ timeout, and structure-aware minimizer.
 
 # Known deviations and unsupported cases
 
-- This is a deliberately narrow executable profile beneath the full DSL required by RPE-ARCH-001
-  section 12.6. It emits only PDF 1.7, one fixed four-object page topology, generation-zero objects,
-  direct stream length, an empty Resources dictionary, and a traditional xref table.
+- These are deliberately narrow executable profiles beneath the full DSL required by RPE-ARCH-001
+  section 12.6. They emit fixed generation-zero object graphs, direct stream lengths, and a
+  traditional xref table. The M4 profile adds only two Pages, direct Font resources, and one
+  embedded simple TrueType program whose 5-by-7 block glyphs are generated from project-authored
+  bit patterns.
 - Xref streams, hybrid references, indirect lengths, filters, object streams, incremental revisions,
   encryption, deliberate corruption, additional objects/resources, and object-graph variants are
   not implemented.
@@ -109,3 +115,5 @@ timeout, and structure-aware minimizer.
   tests.
 - 2026-07-13: Added bounded `m0.one-page-table.v1` DSL compilation, source-bound metadata, stable
   diagnostics, and repository fixture replay.
+- 2026-07-18: Added the deterministic two-page `m4.readable-preview.v1` fixture and analytic
+  readable block font for desktop visual acceptance.

@@ -124,6 +124,7 @@ export class PdfRsBridge {
           this.#resolve(surface.request, "SURFACE", {
             documentId: surface.documentId,
             page: surface.page,
+            renderer: surface.renderer,
             width: surface.width,
             height: surface.height,
             stride: surface.stride,
@@ -175,18 +176,23 @@ export class PdfRsBridge {
       this.#resolve(request, type, undefined);
       return;
     }
-    if (type === "SURFACE" && fields.length === 8) {
-      const length = parsedInteger(fields[7]);
+    if (type === "SURFACE" && fields.length === 9) {
+      const length = parsedInteger(fields[8]);
       if (!length || length > MAX_SURFACE_BYTES) {
         throw new PdfRsBridgeError("invalid-surface-length");
+      }
+      const renderer = fields[4];
+      if (renderer !== "reference-cpu-v1" && renderer !== "fast-cpu-v1") {
+        throw new PdfRsBridgeError("invalid-renderer");
       }
       this.#surface = {
         request,
         documentId: parsedInteger(fields[2]),
         page: parsedInteger(fields[3], true),
-        width: parsedInteger(fields[4]),
-        height: parsedInteger(fields[5]),
-        stride: parsedInteger(fields[6]),
+        renderer,
+        width: parsedInteger(fields[5]),
+        height: parsedInteger(fields[6]),
+        stride: parsedInteger(fields[7]),
         length,
       };
       if (

@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use pdf_rs_generate::{GenerateLimits, ONE_PAGE_DSL, compile_dsl, generate_one_page_pdf};
+use pdf_rs_generate::{
+    GenerateLimits, ONE_PAGE_DSL, compile_dsl, generate_one_page_pdf, generate_readable_preview_pdf,
+};
 
 #[test]
 fn repository_source_replays_the_canonical_fixture() {
@@ -14,4 +16,13 @@ fn repository_source_replays_the_canonical_fixture() {
     let replayed = compile_dsl(&source, GenerateLimits::default()).unwrap();
     let canonical = generate_one_page_pdf().unwrap();
     assert_eq!(replayed.bytes(), canonical);
+}
+
+#[test]
+fn repository_readable_preview_replays_the_generator() {
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = fs::read(repository.join("tests/desktop/readable-preview.pdf"))
+        .expect("repository readable preview");
+    let replayed = generate_readable_preview_pdf().expect("readable preview generation");
+    assert_eq!(fixture, replayed);
 }

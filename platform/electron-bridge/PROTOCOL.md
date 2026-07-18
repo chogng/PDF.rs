@@ -13,11 +13,12 @@ Requests are ASCII lines:
 Responses are ASCII lines except for a `SURFACE` payload:
 
 - `OPENED <request-id> <document-id> <page-count>`
-- `SURFACE <request-id> <document-id> <page> <width> <height> <stride> <length>\n<RGBA bytes>\n`
+- `SURFACE <request-id> <document-id> <page> <renderer> <width> <height> <stride> <length>\n<RGBA bytes>\n`
 - `CLOSED <request-id> <document-id>`
 - `BYE <request-id>`
 - `ERROR <request-id> <stable-code>`
 
 Paths, source bytes, page indices, output dimensions, line lengths, and Surface
 lengths are bounded before allocation or access. The raw Surface is top-down
-straight-alpha sRGB RGBA8.
+straight-alpha sRGB RGBA8. `renderer` is a stable PDF.rs Native renderer
+identifier such as `reference-cpu-v1`.

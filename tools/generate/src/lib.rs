@@ -9,6 +9,7 @@
 //! variation modes remain explicit unsupported results.
 
 mod dsl;
+mod readable_preview;
 
 use std::error::Error;
 use std::fmt;
@@ -16,6 +17,7 @@ use std::fmt;
 use pdf_rs_digest::{hex_digest, sha256};
 
 use dsl::OnePageSpec;
+pub use readable_preview::generate_readable_preview_pdf;
 
 /// Schema of the accepted one-page fixture DSL.
 pub const DSL_SCHEMA: u32 = 1;

@@ -34,7 +34,7 @@ use pdf_rs_raster::reference::{
     ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
     ReferenceRenderPoll,
 };
-use pdf_rs_scene::{GraphicsSceneLimits, PageRotation};
+use pdf_rs_scene::{GraphicsSceneLimits, PageRotation, SceneRect};
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{XrefJobContext, XrefLimits};
 
@@ -89,10 +89,27 @@ impl fmt::Display for NativeViewerError {
 
 impl std::error::Error for NativeViewerError {}
 
+/// Native raster implementation that produced a complete viewer surface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeRendererKind {
+    /// Independently reviewed PDF.rs Reference CPU rasterizer.
+    ReferenceCpu,
+}
+
+impl NativeRendererKind {
+    /// Returns the stable renderer identifier exposed across UI adapters.
+    pub const fn identifier(self) -> &'static str {
+        match self {
+            Self::ReferenceCpu => "reference-cpu-v1",
+        }
+    }
+}
+
 /// Complete immutable top-down straight-alpha sRGB RGBA8 page result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativePageSurface {
     page_index: u32,
+    renderer: NativeRendererKind,
     width: u32,
     height: u32,
     stride: u32,
@@ -103,6 +120,11 @@ impl NativePageSurface {
     /// Returns the zero-based rendered page index.
     pub const fn page_index(&self) -> u32 {
         self.page_index
+    }
+
+    /// Returns the Native raster implementation that produced the pixels.
+    pub const fn renderer(&self) -> NativeRendererKind {
+        self.renderer
     }
 
     /// Returns the output width in device pixels.
@@ -461,6 +483,7 @@ impl NativeDocument {
             .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
         Ok(NativePageSurface {
             page_index,
+            renderer: NativeRendererKind::ReferenceCpu,
             width: pixels.width(),
             height: pixels.height(),
             stride,
@@ -598,7 +621,7 @@ fn vm_pending_job(checkpoint: ResumeCheckpoint, jobs: RenderJobs) -> JobId {
 }
 
 fn output_height(
-    crop: pdf_rs_scene::SceneRect,
+    crop: SceneRect,
     rotation: PageRotation,
     width: u32,
 ) -> Result<u32, NativeViewerError> {

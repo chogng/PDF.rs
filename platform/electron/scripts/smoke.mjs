@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import electron from "electron";
 
 const root = resolve(import.meta.dirname, "../../..");
-const fixture = resolve(root, "tests/cases/raster/m3-reference/valid-mixed/input.pdf");
+const fixture = resolve(root, "tests/desktop/readable-preview.pdf");
 const screenshot = resolve(root, "target/electron-preview-smoke.png");
 await rm(screenshot, { force: true });
 const child = spawn(electron, ["."], {

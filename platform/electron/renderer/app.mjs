@@ -65,8 +65,12 @@ const render = async () => {
   context.putImageData(new ImageData(pixels, result.width, result.height), 0, 0);
   pageShell.hidden = false;
   empty.hidden = true;
-  setStatus(`${result.width} × ${result.height} · RGBA8`);
-  requestAnimationFrame(() => window.pdfRs.notifyPreviewReady());
+  setStatus(
+    `${result.width} × ${result.height} · RGBA8 · ${rendererLabel(result.renderer)}`,
+  );
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => window.pdfRs.notifyPreviewReady());
+  });
 };
 
 const adoptDocument = async (result) => {
@@ -138,6 +142,14 @@ const failureLabel = (code) => {
     "bridge-closed": "The Rust rendering process stopped.",
   };
   return labels[code] ?? `Viewer error: ${code}`;
+};
+
+const rendererLabel = (renderer) => {
+  const labels = {
+    "reference-cpu-v1": "Reference CPU",
+    "fast-cpu-v1": "Fast CPU",
+  };
+  return labels[renderer] ?? renderer;
 };
 
 openButton.addEventListener("click", open);

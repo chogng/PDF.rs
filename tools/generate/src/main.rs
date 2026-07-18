@@ -6,7 +6,7 @@ use std::io::{Read, Take};
 use std::path::Path;
 use std::process::ExitCode;
 
-use pdf_rs_generate::{GenerateLimits, compile_dsl};
+use pdf_rs_generate::{GenerateLimits, compile_dsl, generate_readable_preview_pdf};
 
 fn main() -> ExitCode {
     let mut arguments = env::args_os().skip(1);
@@ -14,6 +14,28 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::from(2);
     };
+    if source_path == "--readable-preview" {
+        let Some(output_path) = arguments.next() else {
+            usage();
+            return ExitCode::from(2);
+        };
+        if arguments.next().is_some() {
+            usage();
+            return ExitCode::from(2);
+        }
+        let generated = match generate_readable_preview_pdf() {
+            Ok(generated) => generated,
+            Err(error) => {
+                eprintln!("failed to generate readable preview PDF: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if fs::write(output_path, generated).is_err() {
+            eprintln!("failed to write generated PDF");
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
     let Some(output_path) = arguments.next() else {
         usage();
         return ExitCode::from(2);
@@ -64,5 +86,8 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, ()> {
 }
 
 fn usage() {
-    eprintln!("usage: pdf-rs-generate <source.dsl> <output.pdf>");
+    eprintln!(
+        "usage: pdf-rs-generate <source.dsl> <output.pdf>\n       \
+         pdf-rs-generate --readable-preview <output.pdf>"
+    );
 }

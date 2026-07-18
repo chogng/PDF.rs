@@ -64,6 +64,11 @@ const createWindow = async () => {
     mainWindow.webContents.on("render-process-gone", (_event, details) => {
       console.error(`PDF_RS_ELECTRON_RENDERER_GONE ${details.reason}`);
     });
+    mainWindow.webContents.on("console-message", (_event, details) => {
+      console.error(
+        `PDF_RS_ELECTRON_CONSOLE ${details.level ?? "unknown"} ${details.message ?? "unknown"}`,
+      );
+    });
   }
   mainWindow.removeMenu();
   if (smokeScreenshot) {
@@ -99,7 +104,11 @@ ipcMain.handle("pdf-rs:open-startup", async (event) => {
     return { ok: false, code: "absent" };
   }
   try {
-    return await openPath(path);
+    const opened = await openPath(path);
+    if (smokeScreenshot) {
+      console.log(`PDF_RS_ELECTRON_OPENED ${opened.pageCount}`);
+    }
+    return opened;
   } catch (error) {
     return safeFailure(error);
   }
@@ -118,6 +127,11 @@ ipcMain.handle("pdf-rs:render", async (event, request) => {
   }
   try {
     const surface = await bridge.render(request.documentId, request.page, request.width);
+    if (smokeScreenshot) {
+      console.log(
+        `PDF_RS_ELECTRON_RENDERED ${surface.page} ${surface.width} ${surface.height}`,
+      );
+    }
     return { ok: true, ...surface };
   } catch (error) {
     return safeFailure(error);
@@ -141,6 +155,9 @@ ipcMain.handle("pdf-rs:close", async (event) => {
 
 ipcMain.on("pdf-rs:preview-ready", async (event) => {
   assertMainFrame(event);
+  if (smokeScreenshot) {
+    console.log("PDF_RS_ELECTRON_PREVIEW_READY");
+  }
   if (!smokeScreenshot || smokeCaptured || !mainWindow) {
     return;
   }
