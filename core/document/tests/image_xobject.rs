@@ -609,6 +609,75 @@ fn one_level_indirect_device_color_space_is_proof_bound_and_decoded() {
 }
 
 #[test]
+fn indexed_icc_alternate_and_flate_lookup_publish_bounded_palette_evidence() {
+    let palette = [255, 0, 0, 0, 255, 0];
+    let encoded_palette = zlib_stored(&palette);
+    let fixture = resource_fixture(
+        b"<< /XObject << /Im0 4 0 R >> >>",
+        vec![
+            (
+                4,
+                stream_body(
+                    4,
+                    b"/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace 5 0 R /BitsPerComponent 8 /Decode [0 255]",
+                    &[0, 1],
+                ),
+            ),
+            (5, b"5 0 obj\n[/Indexed 6 0 R 1 7 0 R]\nendobj\n".to_vec()),
+            (6, b"6 0 obj\n[/ICCBased 8 0 R]\nendobj\n".to_vec()),
+            (
+                7,
+                stream_body(7, b"/Filter /FlateDecode", &encoded_palette),
+            ),
+            (8, stream_body(8, b"/N 3", b"ignored-profile-payload")),
+        ],
+        9,
+        0xd3,
+    );
+    let prepared = prepare(&fixture, 12_421);
+    let image = acquire_ready(&prepared, ImageXObjectLimits::default(), 12_431);
+
+    assert_eq!(image.color_space(), ImageXObjectColorSpace::IndexedRgb);
+    assert_eq!(image.components(), 3);
+    assert_eq!(image.source_components(), 1);
+    assert_eq!(image.indexed_high_value(), Some(1));
+    assert_eq!(image.indexed_lookup_bytes(), Some(palette.as_slice()));
+    assert_eq!(image.decoded_bytes(), &[0, 1]);
+    assert_eq!(
+        image
+            .color_space_object()
+            .expect("Indexed definition proof")
+            .reference(),
+        object_ref(5)
+    );
+    assert_eq!(
+        image
+            .color_space_base_object()
+            .expect("Indexed base proof")
+            .reference(),
+        object_ref(6)
+    );
+    assert_eq!(
+        image
+            .icc_profile_object()
+            .expect("ICC alternate proof")
+            .reference(),
+        object_ref(8)
+    );
+    assert_eq!(
+        image
+            .indexed_lookup_object()
+            .expect("lookup stream proof")
+            .reference(),
+        object_ref(7)
+    );
+    assert_eq!(
+        image.stats().encoded_bytes(),
+        u64::try_from(encoded_palette.len() + 2).unwrap()
+    );
+}
+
+#[test]
 fn flate_default_decode_and_all_direct_device_color_spaces_are_registered() {
     let flate = image_fixture(
         b"/Type /XObject /Subtype /Image /Width 2 /Height 3 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Decode [0.0 1.0 0 1 0e2 0.1e1] /Filter /FlateDecode /DecodeParms << /Predictor 1 /Colors 3 /BitsPerComponent 8 /Columns 2 >>",

@@ -971,9 +971,44 @@ fn normalize_image_samples(
     if packed.len() != expected_packed {
         return Err(vm_failure(source));
     }
+    if let (Some(high_value), Some(lookup)) = (
+        acquired.indexed_high_value(),
+        acquired.indexed_lookup_bytes(),
+    ) {
+        let components = usize::from(acquired.components());
+        let expected_lookup = usize::from(high_value)
+            .checked_add(1)
+            .and_then(|entries| entries.checked_mul(components))
+            .ok_or_else(|| vm_failure(source))?;
+        if lookup.len() != expected_lookup || acquired.source_components() != 1 {
+            return Err(vm_failure(source));
+        }
+        let width = usize::try_from(acquired.width()).map_err(|_| vm_failure(source))?;
+        let bits = acquired.bits_per_component();
+        if !matches!(bits, 1 | 2 | 4 | 8) {
+            return Err(vm_failure(source));
+        }
+        for row in packed.chunks_exact(stride) {
+            for sample_index in 0..width {
+                let sample = packed_sample(row, sample_index, bits, source)?;
+                let palette_index = usize::from(sample.min(u16::from(high_value)));
+                let start = palette_index
+                    .checked_mul(components)
+                    .ok_or_else(|| vm_failure(source))?;
+                let end = start
+                    .checked_add(components)
+                    .ok_or_else(|| vm_failure(source))?;
+                output.extend_from_slice(lookup.get(start..end).ok_or_else(|| vm_failure(source))?);
+            }
+        }
+        return Ok(());
+    }
+    if acquired.indexed_high_value().is_some() || acquired.indexed_lookup_bytes().is_some() {
+        return Err(vm_failure(source));
+    }
     let samples_per_row = usize::try_from(acquired.width())
         .ok()
-        .and_then(|width| width.checked_mul(usize::from(acquired.components())))
+        .and_then(|width| width.checked_mul(usize::from(acquired.source_components())))
         .ok_or_else(|| vm_failure(source))?;
     let bits = acquired.bits_per_component();
     match bits {
@@ -1021,6 +1056,37 @@ fn normalize_image_samples(
 
 #[allow(
     clippy::result_large_err,
+    reason = "packed sample extraction preserves the caller's complete VM failure contract"
+)]
+fn packed_sample(
+    row: &[u8],
+    sample_index: usize,
+    bits: u8,
+    source: ContentOperatorSource,
+) -> Result<u16, ContentVmFailure> {
+    match bits {
+        8 => row
+            .get(sample_index)
+            .copied()
+            .map(u16::from)
+            .ok_or_else(|| vm_failure(source)),
+        1 | 2 | 4 => {
+            let bit_offset = sample_index
+                .checked_mul(usize::from(bits))
+                .ok_or_else(|| vm_failure(source))?;
+            let byte = *row.get(bit_offset / 8).ok_or_else(|| vm_failure(source))?;
+            let shift = 8_usize
+                .checked_sub(usize::from(bits))
+                .and_then(|value| value.checked_sub(bit_offset % 8))
+                .ok_or_else(|| vm_failure(source))?;
+            Ok(u16::from((byte >> shift) & ((1_u8 << bits) - 1)))
+        }
+        _ => Err(vm_failure(source)),
+    }
+}
+
+#[allow(
+    clippy::result_large_err,
     reason = "the image runtime preserves complete copyable VM failures at guard boundaries"
 )]
 fn runtime_guard(
@@ -1053,9 +1119,15 @@ fn runtime_guard(
 
 fn scene_color_space(value: ImageXObjectColorSpace) -> ImageColorSpace {
     match value {
-        ImageXObjectColorSpace::DeviceGray => ImageColorSpace::DeviceGray,
-        ImageXObjectColorSpace::DeviceRgb => ImageColorSpace::DeviceRgb,
-        ImageXObjectColorSpace::DeviceCmyk => ImageColorSpace::DeviceCmyk,
+        ImageXObjectColorSpace::DeviceGray | ImageXObjectColorSpace::IndexedGray => {
+            ImageColorSpace::DeviceGray
+        }
+        ImageXObjectColorSpace::DeviceRgb | ImageXObjectColorSpace::IndexedRgb => {
+            ImageColorSpace::DeviceRgb
+        }
+        ImageXObjectColorSpace::DeviceCmyk | ImageXObjectColorSpace::IndexedCmyk => {
+            ImageColorSpace::DeviceCmyk
+        }
     }
 }
 

@@ -1171,6 +1171,38 @@ fn packed_image_samples_normalize_to_eight_bit_scene_resources() {
     );
     assert_eq!(page.image_stats().encoded_bytes(), 2);
     assert_eq!(page.image_stats().decoded_bytes(), 16);
+
+    let indexed_image = b"5 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 1 \
+        /ColorSpace 6 0 R /BitsPerComponent 8 /Decode [0 255] /Length 2 >>\nstream\n\
+        \x00\x01\nendstream\nendobj\n"
+        .to_vec();
+    let icc_profile = b"9 0 obj\n<< /N 3 /Length 1 >>\nstream\nx\nendstream\nendobj\n".to_vec();
+    let indexed_objects = [
+        (5, indexed_image),
+        (6, indirect_object(6, b"[/Indexed 7 0 R 1 8 0 R]")),
+        (7, indirect_object(7, b"[/ICCBased 9 0 R]")),
+        (8, indirect_object(8, b"<ff000000ff00>")),
+        (9, icc_profile),
+    ];
+    let (mut indexed, store) = image_job(
+        b"/Im0 Do",
+        b"<< /XObject << /Im0 5 0 R >> >>",
+        &indexed_objects,
+        0x5f,
+        ContentImageLimits::default(),
+    );
+    let page = match indexed.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("Indexed ICC image must expand into the Scene: {outcome:?}"),
+    };
+    let graphics = page.scene().graphics().unwrap();
+    let GraphicsResource::Image(image) = graphics.resources()[0].resource() else {
+        panic!("Indexed image publishes one Scene image")
+    };
+    assert_eq!(image.color_space(), ImageColorSpace::DeviceRgb);
+    assert_eq!(image.decoded(), [255, 0, 0, 0, 255, 0]);
+    assert_eq!(page.image_stats().encoded_bytes(), 2);
+    assert_eq!(page.image_stats().decoded_bytes(), 6);
 }
 
 #[test]

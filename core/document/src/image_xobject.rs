@@ -40,7 +40,7 @@ pub enum ImageXObjectUnsupportedKind {
     ExplicitMask,
     /// The image declares a soft mask.
     SoftMask,
-    /// The image color space is outside direct or one-level indirect device color spaces.
+    /// The image color space is outside device, ICCBased alternate, and bounded Indexed profiles.
     UnsupportedColorSpace,
     /// The image component width is outside the registered 1-, 2-, 4-, 8-, and 16-bit profile.
     UnsupportedBitsPerComponent,
@@ -52,7 +52,7 @@ pub enum ImageXObjectUnsupportedKind {
     UnsupportedFilter,
     /// The image filter parameters are recognized but outside the registered default profile.
     UnsupportedDecodeParameters,
-    /// Required image metadata other than one registered device ColorSpace is indirect.
+    /// Required image metadata outside the registered bounded ColorSpace chain is indirect.
     IndirectMetadata,
 }
 
@@ -113,7 +113,7 @@ impl ImageXObjectUnsupported {
     }
 }
 
-/// Direct device color spaces registered for basic Image XObjects.
+/// Canonical device output models registered for basic and Indexed Image XObjects.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ImageXObjectColorSpace {
     /// One gray component per pixel.
@@ -122,16 +122,36 @@ pub enum ImageXObjectColorSpace {
     DeviceRgb,
     /// Four cyan, magenta, yellow, and black components per pixel.
     DeviceCmyk,
+    /// One palette index expanded through an additive gray lookup table.
+    IndexedGray,
+    /// One palette index expanded through an additive RGB lookup table.
+    IndexedRgb,
+    /// One palette index expanded through a subtractive CMYK lookup table.
+    IndexedCmyk,
 }
 
 impl ImageXObjectColorSpace {
-    /// Returns tightly interleaved components per pixel.
+    /// Returns tightly interleaved output color components per pixel.
     pub const fn components(self) -> u8 {
         match self {
-            Self::DeviceGray => 1,
-            Self::DeviceRgb => 3,
-            Self::DeviceCmyk => 4,
+            Self::DeviceGray | Self::IndexedGray => 1,
+            Self::DeviceRgb | Self::IndexedRgb => 3,
+            Self::DeviceCmyk | Self::IndexedCmyk => 4,
         }
+    }
+
+    const fn source_components(self) -> u8 {
+        match self {
+            Self::DeviceGray | Self::DeviceRgb | Self::DeviceCmyk => self.components(),
+            Self::IndexedGray | Self::IndexedRgb | Self::IndexedCmyk => 1,
+        }
+    }
+
+    const fn is_indexed(self) -> bool {
+        matches!(
+            self,
+            Self::IndexedGray | Self::IndexedRgb | Self::IndexedCmyk
+        )
     }
 
     const fn context_code(self) -> u64 {
@@ -139,11 +159,15 @@ impl ImageXObjectColorSpace {
             Self::DeviceGray => 1,
             Self::DeviceRgb => 2,
             Self::DeviceCmyk => 3,
+            Self::IndexedGray => 4,
+            Self::IndexedRgb => 5,
+            Self::IndexedCmyk => 6,
         }
     }
 }
 
-/// Runtime identity and checkpoints for one Image XObject object and payload acquisition.
+/// Runtime identity and reusable sequential checkpoints for one Image XObject, its bounded
+/// ColorSpace evidence chain, and exact stream payloads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageXObjectJobContext {
     job: JobId,
@@ -243,7 +267,7 @@ impl ImageXObjectStats {
         self.metadata_entries
     }
 
-    /// Returns exact encoded stream-payload bytes acquired.
+    /// Returns exact encoded image and Indexed lookup stream-payload bytes acquired.
     pub const fn encoded_bytes(self) -> u64 {
         self.encoded_bytes
     }
@@ -253,7 +277,7 @@ impl ImageXObjectStats {
         self.decoded_bytes
     }
 
-    /// Returns deterministic foundational decode fuel consumed.
+    /// Returns deterministic foundational image and Indexed lookup decode fuel consumed.
     pub const fn decode_fuel(self) -> u64 {
         self.decode_fuel
     }
@@ -269,11 +293,44 @@ impl ImageXObjectStats {
     }
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the move-only decode proof remains inline so palette publication adds no unbudgeted box allocation"
+)]
+enum IndexedLookup {
+    Direct(Box<[u8]>),
+    Stream(DecodedStream),
+}
+
+impl IndexedLookup {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Direct(bytes) => bytes,
+            Self::Stream(decoded) => decoded.bytes(),
+        }
+    }
+
+    fn retained_heap_bytes(&self) -> Option<u64> {
+        match self {
+            Self::Direct(bytes) => u64::try_from(bytes.len()).ok(),
+            Self::Stream(decoded) => decoded
+                .attestation()
+                .plan_retained_heap_bytes()
+                .checked_add(decoded.attestation().peak_retained_capacity_bytes()),
+        }
+    }
+}
+
 /// Published proof-bearing decoded bytes and canonical metadata for one basic Image XObject.
 pub struct AcquiredImageXObject {
     proof: PageXObjectReference,
     object: AttestedObject,
     color_space_object: Option<AttestedObject>,
+    color_space_base_object: Option<AttestedObject>,
+    icc_profile_object: Option<AttestedObject>,
+    indexed_lookup_object: Option<AttestedObject>,
+    indexed_lookup: Option<IndexedLookup>,
+    indexed_high_value: Option<u8>,
     width: u32,
     height: u32,
     color_space: ImageXObjectColorSpace,
@@ -306,6 +363,21 @@ impl AcquiredImageXObject {
         self.color_space_object.as_ref()
     }
 
+    /// Borrows the retained indirect Indexed base color-space definition, when present.
+    pub const fn color_space_base_object(&self) -> Option<&AttestedObject> {
+        self.color_space_base_object.as_ref()
+    }
+
+    /// Borrows the retained ICC profile stream used to select a device alternate.
+    pub const fn icc_profile_object(&self) -> Option<&AttestedObject> {
+        self.icc_profile_object.as_ref()
+    }
+
+    /// Borrows the retained indirect Indexed lookup stream object, when present.
+    pub const fn indexed_lookup_object(&self) -> Option<&AttestedObject> {
+        self.indexed_lookup_object.as_ref()
+    }
+
     /// Returns positive pixel columns.
     pub const fn width(&self) -> u32 {
         self.width
@@ -321,9 +393,24 @@ impl AcquiredImageXObject {
         self.color_space
     }
 
-    /// Returns tightly interleaved components per pixel.
+    /// Returns tightly interleaved output components per pixel after Indexed expansion.
     pub const fn components(&self) -> u8 {
         self.color_space.components()
+    }
+
+    /// Returns packed source samples per pixel before Indexed lookup expansion.
+    pub const fn source_components(&self) -> u8 {
+        self.color_space.source_components()
+    }
+
+    /// Returns the maximum palette index, when this is an Indexed image.
+    pub const fn indexed_high_value(&self) -> Option<u8> {
+        self.indexed_high_value
+    }
+
+    /// Borrows the exact Indexed lookup table, when present.
+    pub fn indexed_lookup_bytes(&self) -> Option<&[u8]> {
+        self.indexed_lookup.as_ref().map(IndexedLookup::bytes)
     }
 
     /// Returns the registered packed component width.
@@ -336,7 +423,7 @@ impl AcquiredImageXObject {
         false
     }
 
-    /// Returns tightly packed decoded bytes per row.
+    /// Returns tightly packed source sample bytes per row before Indexed expansion.
     pub const fn stride_bytes(&self) -> u64 {
         self.stride_bytes
     }
@@ -346,7 +433,7 @@ impl AcquiredImageXObject {
         &self.decoded
     }
 
-    /// Borrows tightly packed source-order component bytes.
+    /// Borrows tightly packed source-order device components or Indexed sample values.
     pub fn decoded_bytes(&self) -> &[u8] {
         self.decoded.bytes()
     }
@@ -384,6 +471,28 @@ impl fmt::Debug for AcquiredImageXObject {
                     .as_ref()
                     .map(AttestedObject::reference),
             )
+            .field(
+                "color_space_base_reference",
+                &self
+                    .color_space_base_object
+                    .as_ref()
+                    .map(AttestedObject::reference),
+            )
+            .field(
+                "icc_profile_reference",
+                &self
+                    .icc_profile_object
+                    .as_ref()
+                    .map(AttestedObject::reference),
+            )
+            .field(
+                "indexed_lookup_reference",
+                &self
+                    .indexed_lookup_object
+                    .as_ref()
+                    .map(AttestedObject::reference),
+            )
+            .field("indexed_high_value", &self.indexed_high_value)
             .field("width", &self.width)
             .field("height", &self.height)
             .field("color_space", &self.color_space)
@@ -477,13 +586,43 @@ struct ImageDecodeAdmission {
 struct ActiveImage {
     object: AttestedObject,
     color_space_object: Option<AttestedObject>,
+    color_space_base_object: Option<AttestedObject>,
+    icc_profile_object: Option<AttestedObject>,
+    indexed_lookup_object: Option<AttestedObject>,
+    indexed_lookup: Option<IndexedLookup>,
+    indexed_high_value: Option<u8>,
     metadata: ImageMetadata,
+}
+
+impl ActiveImage {
+    fn retained_prefix_bytes(&self) -> Option<u64> {
+        let mut retained = 0_u64;
+        for object in [
+            Some(&self.object),
+            self.color_space_object.as_ref(),
+            self.color_space_base_object.as_ref(),
+            self.icc_profile_object.as_ref(),
+            self.indexed_lookup_object.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            retained = retained.checked_add(object.syntax_heap_bytes())?;
+        }
+        if let Some(lookup) = &self.indexed_lookup {
+            retained = retained.checked_add(lookup.retained_heap_bytes()?)?;
+        }
+        Some(retained)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChildKind {
     Image,
     ColorSpace,
+    IndexedBase,
+    IccProfile,
+    IndexedLookup,
 }
 
 struct ChildState {
@@ -507,6 +646,37 @@ enum MetadataOutcome {
     Unsupported(ImageXObjectUnsupported),
 }
 
+enum ColorSpaceDefinition {
+    Device(ImageXObjectColorSpace),
+    IccBased(ObjectRef),
+    Indexed(PendingIndexed),
+}
+
+enum IndexedLookupPlan {
+    Direct(Box<[u8]>),
+    Indirect(ObjectRef),
+}
+
+struct PendingIndexed {
+    high_value: u8,
+    base: Option<ImageXObjectColorSpace>,
+    base_reference: Option<ObjectRef>,
+    lookup: Option<IndexedLookupPlan>,
+}
+
+#[derive(Clone, Copy)]
+struct ResolvedImageColorSpace {
+    reference: ObjectRef,
+    kind: ImageXObjectColorSpace,
+    indexed_high_value: Option<u8>,
+}
+
+struct ActiveIndexedLookup {
+    object: AttestedObject,
+    filter: RegisteredFilter,
+    expected_bytes: u64,
+}
+
 enum DecodeParametersOutcome {
     Ready(PredictorParameters),
     Unsupported(ImageXObjectUnsupported),
@@ -520,6 +690,25 @@ enum PayloadOutcome {
     },
     Unsupported(ImageXObjectUnsupported),
     Failed(DocumentError),
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the move-only decode proof remains inline across one synchronous payload transition"
+)]
+enum IndexedLookupPayloadOutcome {
+    Ready(DecodedStream),
+    Pending {
+        ticket: DataTicket,
+        missing: SmallRanges,
+    },
+    Unsupported(ImageXObjectUnsupported),
+    Failed(DocumentError),
+}
+
+enum IndexedLookupObjectOutcome {
+    Direct(Box<[u8]>),
+    Stream,
 }
 
 struct DecodeCancellationAdapter<'a>(&'a dyn DocumentCancellation);
@@ -539,6 +728,13 @@ pub struct AcquireImageXObjectJob {
     limits: ImageXObjectLimits,
     child: Option<ChildState>,
     image_object: Option<AttestedObject>,
+    color_space_object: Option<AttestedObject>,
+    color_space_base_object: Option<AttestedObject>,
+    icc_profile_object: Option<AttestedObject>,
+    indexed_lookup_object: Option<AttestedObject>,
+    pending_indexed: Option<PendingIndexed>,
+    indexed_lookup: Option<IndexedLookup>,
+    active_indexed_lookup: Option<ActiveIndexedLookup>,
     active: Option<ActiveImage>,
     stats: ImageXObjectStats,
     state: ImageJobState,
@@ -577,8 +773,11 @@ impl AcquireImageXObjectJob {
             ImageJobState::Unsupported(_) => ImageXObjectPhase::Unsupported,
             ImageJobState::Failed(_) => ImageXObjectPhase::Failed,
             ImageJobState::Active if self.active.is_some() => ImageXObjectPhase::Payload,
+            ImageJobState::Active if self.active_indexed_lookup.is_some() => {
+                ImageXObjectPhase::ColorSpace
+            }
             ImageJobState::Active => match &self.child {
-                Some(child) if matches!(child.kind, ChildKind::ColorSpace) => {
+                Some(child) if !matches!(child.kind, ChildKind::Image) => {
                     ImageXObjectPhase::ColorSpace
                 }
                 Some(_) | None => ImageXObjectPhase::Object,
@@ -605,6 +804,37 @@ impl AcquireImageXObjectJob {
         }
 
         loop {
+            if self.active_indexed_lookup.is_some() {
+                match self.poll_indexed_lookup_payload(source, cancellation) {
+                    IndexedLookupPayloadOutcome::Ready(decoded) => {
+                        self.indexed_lookup = Some(IndexedLookup::Stream(decoded));
+                        match self.finish_indexed_color_space(source, cancellation) {
+                            Ok(Ok(())) => {}
+                            Ok(Err(unsupported)) => return self.unsupported(unsupported),
+                            Err(error) => {
+                                let error =
+                                    self.prioritize_runtime_error(source, cancellation, error);
+                                return self.fail(error);
+                            }
+                        }
+                        continue;
+                    }
+                    IndexedLookupPayloadOutcome::Pending { ticket, missing } => {
+                        return ImageXObjectPoll::Pending {
+                            ticket,
+                            missing,
+                            checkpoint: self.context.payload_checkpoint(),
+                        };
+                    }
+                    IndexedLookupPayloadOutcome::Unsupported(unsupported) => {
+                        return self.unsupported(unsupported);
+                    }
+                    IndexedLookupPayloadOutcome::Failed(error) => {
+                        let error = self.prioritize_runtime_error(source, cancellation, error);
+                        return self.fail(error);
+                    }
+                }
+            }
             if self.active.is_some() {
                 return match self.poll_payload(source, cancellation) {
                     PayloadOutcome::Ready(image) => self.ready(image),
@@ -621,7 +851,10 @@ impl AcquireImageXObjectJob {
                 };
             }
 
-            let retained_objects = self.retained_object_bytes();
+            let retained_objects = match self.retained_object_bytes() {
+                Ok(value) => value,
+                Err(error) => return self.fail(error),
+            };
             let Some(child) = self.child.as_mut() else {
                 return self.fail(self.internal_error(None));
             };
@@ -697,6 +930,11 @@ impl AcquireImageXObjectJob {
                     self.active = Some(ActiveImage {
                         object,
                         color_space_object: None,
+                        color_space_base_object: None,
+                        icc_profile_object: None,
+                        indexed_lookup_object: None,
+                        indexed_lookup: None,
+                        indexed_high_value: None,
                         metadata,
                     });
                     Ok(Ok(()))
@@ -712,33 +950,113 @@ impl AcquireImageXObjectJob {
                 MetadataOutcome::Unsupported(unsupported) => Ok(Err(unsupported)),
             },
             ChildKind::ColorSpace => {
-                let color_space =
+                let definition =
                     match self.inspect_color_space_object(&object, source, cancellation)? {
-                        Ok(color_space) => color_space,
+                        Ok(definition) => definition,
                         Err(unsupported) => return Ok(Err(unsupported)),
                     };
-                let Some(image_object) = self.image_object.take() else {
-                    return Err(self.internal_error(Some(object.object_span().start())));
-                };
-                match self.inspect_object(
-                    &image_object,
-                    Some((object.reference(), color_space)),
-                    source,
-                    cancellation,
-                )? {
-                    MetadataOutcome::Ready(metadata) => {
-                        self.active = Some(ActiveImage {
-                            object: image_object,
-                            color_space_object: Some(object),
-                            metadata,
-                        });
-                        Ok(Ok(()))
+                self.color_space_object = Some(object);
+                match definition {
+                    ColorSpaceDefinition::Device(kind) => {
+                        return self.finish_resolved_color_space(
+                            ResolvedImageColorSpace {
+                                reference: self
+                                    .color_space_object
+                                    .as_ref()
+                                    .expect("stored ColorSpace object")
+                                    .reference(),
+                                kind,
+                                indexed_high_value: None,
+                            },
+                            source,
+                            cancellation,
+                        );
                     }
-                    MetadataOutcome::IndirectColorSpace(_) => {
-                        Err(self.internal_error(Some(image_object.object_span().start())))
+                    ColorSpaceDefinition::IccBased(reference) => {
+                        self.start_child(reference, ChildKind::IccProfile)?;
                     }
-                    MetadataOutcome::Unsupported(unsupported) => Ok(Err(unsupported)),
+                    ColorSpaceDefinition::Indexed(pending) => {
+                        self.pending_indexed = Some(pending);
+                        return self.advance_indexed_color_space(source, cancellation);
+                    }
                 }
+                Ok(Ok(()))
+            }
+            ChildKind::IndexedBase => {
+                let definition =
+                    match self.inspect_color_space_object(&object, source, cancellation)? {
+                        Ok(definition) => definition,
+                        Err(unsupported) => return Ok(Err(unsupported)),
+                    };
+                self.color_space_base_object = Some(object);
+                match definition {
+                    ColorSpaceDefinition::Device(kind) => {
+                        let Some(pending) = self.pending_indexed.as_mut() else {
+                            return Err(self.internal_error(None));
+                        };
+                        pending.base = Some(kind);
+                        return self.advance_indexed_color_space(source, cancellation);
+                    }
+                    ColorSpaceDefinition::IccBased(reference) => {
+                        self.start_child(reference, ChildKind::IccProfile)?;
+                    }
+                    ColorSpaceDefinition::Indexed(_) => {
+                        let object = self
+                            .color_space_base_object
+                            .as_ref()
+                            .expect("stored Indexed base object");
+                        return Ok(Err(unsupported_color_space(
+                            object.reference(),
+                            object.object_span().start(),
+                        )));
+                    }
+                }
+                Ok(Ok(()))
+            }
+            ChildKind::IccProfile => {
+                let kind = match self.inspect_icc_profile(&object, source, cancellation)? {
+                    Ok(kind) => kind,
+                    Err(unsupported) => return Ok(Err(unsupported)),
+                };
+                self.icc_profile_object = Some(object);
+                if let Some(pending) = self.pending_indexed.as_mut() {
+                    pending.base = Some(kind);
+                    self.advance_indexed_color_space(source, cancellation)
+                } else {
+                    let reference = self
+                        .color_space_object
+                        .as_ref()
+                        .ok_or_else(|| self.internal_error(None))?
+                        .reference();
+                    self.finish_resolved_color_space(
+                        ResolvedImageColorSpace {
+                            reference,
+                            kind,
+                            indexed_high_value: None,
+                        },
+                        source,
+                        cancellation,
+                    )
+                }
+            }
+            ChildKind::IndexedLookup => {
+                match self.inspect_indexed_lookup_object(&object, source, cancellation)? {
+                    IndexedLookupObjectOutcome::Direct(lookup) => {
+                        self.indexed_lookup_object = Some(object);
+                        self.indexed_lookup = Some(IndexedLookup::Direct(lookup));
+                        return self.finish_indexed_color_space(source, cancellation);
+                    }
+                    IndexedLookupObjectOutcome::Stream => {
+                        let expected_bytes = self.indexed_expected_lookup_bytes()?;
+                        let filter = self.indexed_lookup_filter(&object)?;
+                        self.active_indexed_lookup = Some(ActiveIndexedLookup {
+                            object,
+                            filter,
+                            expected_bytes,
+                        });
+                    }
+                }
+                Ok(Ok(()))
             }
         }
     }
@@ -748,7 +1066,7 @@ impl AcquireImageXObjectJob {
         object: &AttestedObject,
         source: &dyn ByteSource,
         cancellation: &dyn DocumentCancellation,
-    ) -> Result<Result<ImageXObjectColorSpace, ImageXObjectUnsupported>, DocumentError> {
+    ) -> Result<Result<ColorSpaceDefinition, ImageXObjectUnsupported>, DocumentError> {
         let reference = object.reference();
         let value = match object.value() {
             IndirectObjectValue::Direct(value) => value,
@@ -759,28 +1077,714 @@ impl AcquireImageXObjectJob {
         self.charge_metadata(reference, value.span().start())?;
         self.runtime_guard(source, cancellation, Some(value.span().start()))?;
         match value.value() {
-            SyntaxObject::Name(name) => match name.bytes() {
-                b"DeviceGray" => Ok(Ok(ImageXObjectColorSpace::DeviceGray)),
-                b"DeviceRGB" => Ok(Ok(ImageXObjectColorSpace::DeviceRgb)),
-                b"DeviceCMYK" => Ok(Ok(ImageXObjectColorSpace::DeviceCmyk)),
-                _ => Ok(Err(ImageXObjectUnsupported::new(
-                    ImageXObjectUnsupportedKind::UnsupportedColorSpace,
-                    reference,
-                    value.span().start(),
-                ))),
-            },
+            SyntaxObject::Name(name) => Ok(device_color_space(name.bytes())
+                .map(ColorSpaceDefinition::Device)
+                .ok_or_else(|| unsupported_color_space(reference, value.span().start()))),
             SyntaxObject::Reference(_) => Ok(Err(ImageXObjectUnsupported::new(
                 ImageXObjectUnsupportedKind::IndirectMetadata,
                 reference,
                 value.span().start(),
             ))),
-            SyntaxObject::Array(_) => Ok(Err(ImageXObjectUnsupported::new(
-                ImageXObjectUnsupportedKind::UnsupportedColorSpace,
-                reference,
-                value.span().start(),
-            ))),
+            SyntaxObject::Array(array) => {
+                for entry in array.values() {
+                    self.charge_metadata(reference, entry.span().start())?;
+                }
+                let values = array.values();
+                if values.len() == 2
+                    && matches!(
+                        values[0].value(),
+                        SyntaxObject::Name(name) if name.bytes() == b"ICCBased"
+                    )
+                    && let SyntaxObject::Reference(profile) = values[1].value()
+                {
+                    return Ok(Ok(ColorSpaceDefinition::IccBased(*profile)));
+                }
+                if values.len() == 4
+                    && matches!(
+                        values[0].value(),
+                        SyntaxObject::Name(name)
+                            if matches!(name.bytes(), b"Indexed" | b"I")
+                    )
+                {
+                    let base = match values[1].value() {
+                        SyntaxObject::Name(name) => match device_color_space(name.bytes()) {
+                            Some(kind) => Some(kind),
+                            None => {
+                                return Ok(Err(unsupported_color_space(
+                                    reference,
+                                    values[1].span().start(),
+                                )));
+                            }
+                        },
+                        SyntaxObject::Reference(base) => {
+                            return Ok(Ok(ColorSpaceDefinition::Indexed(PendingIndexed {
+                                high_value: indexed_high_value(&values[2], reference)?,
+                                base: None,
+                                base_reference: Some(*base),
+                                lookup: Some(self.indexed_lookup_plan(&values[3], reference)?),
+                            })));
+                        }
+                        _ => {
+                            return Err(invalid_image(reference, values[1].span().start()));
+                        }
+                    };
+                    let high_value = match values[2].value() {
+                        SyntaxObject::Integer(value) => u8::try_from(*value)
+                            .map_err(|_| invalid_image(reference, values[2].span().start()))?,
+                        _ => return Err(invalid_image(reference, values[2].span().start())),
+                    };
+                    let lookup = self.indexed_lookup_plan(&values[3], reference)?;
+                    return Ok(Ok(ColorSpaceDefinition::Indexed(PendingIndexed {
+                        high_value,
+                        base,
+                        base_reference: None,
+                        lookup: Some(lookup),
+                    })));
+                }
+                Ok(Err(unsupported_color_space(
+                    reference,
+                    value.span().start(),
+                )))
+            }
             _ => Err(invalid_image(reference, value.span().start())),
         }
+    }
+
+    fn indexed_lookup_plan(
+        &self,
+        value: &Located<SyntaxObject>,
+        reference: ObjectRef,
+    ) -> Result<IndexedLookupPlan, DocumentError> {
+        let offset = value.span().start();
+        match value.value() {
+            SyntaxObject::Reference(reference) => Ok(IndexedLookupPlan::Indirect(*reference)),
+            SyntaxObject::String(string) => {
+                let retained = u64::try_from(string.bytes().len())
+                    .map_err(|_| self.internal_error(Some(offset)))?;
+                let existing = self.retained_object_bytes()?;
+                let total = existing
+                    .checked_add(retained)
+                    .ok_or_else(|| self.internal_error(Some(offset)))?;
+                if total > self.limits.max_retained_bytes() {
+                    return Err(DocumentError::image_xobject_resource(
+                        DocumentLimitKind::ImageXObjectRetainedBytes,
+                        self.limits.max_retained_bytes(),
+                        existing,
+                        retained,
+                        reference,
+                        Some(offset),
+                    ));
+                }
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(string.bytes().len()).map_err(|_| {
+                    DocumentError::image_xobject_resource(
+                        DocumentLimitKind::ImageXObjectRetainedBytes,
+                        self.limits.max_retained_bytes(),
+                        existing,
+                        retained,
+                        reference,
+                        Some(offset),
+                    )
+                })?;
+                bytes.extend_from_slice(string.bytes());
+                Ok(IndexedLookupPlan::Direct(bytes.into_boxed_slice()))
+            }
+            _ => Err(invalid_image(reference, value.span().start())),
+        }
+    }
+
+    fn advance_indexed_color_space(
+        &mut self,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<(), ImageXObjectUnsupported>, DocumentError> {
+        let Some(pending) = self.pending_indexed.as_mut() else {
+            return Err(self.internal_error(None));
+        };
+        if pending.base.is_none() {
+            let reference = pending
+                .base_reference
+                .take()
+                .ok_or_else(|| self.internal_error(None))?;
+            self.start_child(reference, ChildKind::IndexedBase)?;
+            return Ok(Ok(()));
+        }
+        let lookup = match pending.lookup.take() {
+            Some(lookup) => lookup,
+            None if self.child.is_some() || self.active_indexed_lookup.is_some() => {
+                return Ok(Ok(()));
+            }
+            None => return Err(self.internal_error(None)),
+        };
+        match lookup {
+            IndexedLookupPlan::Direct(bytes) => {
+                let expected = usize::try_from(self.indexed_expected_lookup_bytes()?)
+                    .map_err(|_| self.internal_error(None))?;
+                if bytes.len() != expected {
+                    let reference = self
+                        .color_space_object
+                        .as_ref()
+                        .ok_or_else(|| self.internal_error(None))?
+                        .reference();
+                    return Err(invalid_image(reference, self.current_offset().unwrap_or(0)));
+                }
+                self.indexed_lookup = Some(IndexedLookup::Direct(bytes));
+                self.finish_indexed_color_space(source, cancellation)
+            }
+            IndexedLookupPlan::Indirect(reference) => {
+                self.start_child(reference, ChildKind::IndexedLookup)?;
+                Ok(Ok(()))
+            }
+        }
+    }
+
+    fn finish_indexed_color_space(
+        &mut self,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<(), ImageXObjectUnsupported>, DocumentError> {
+        let pending = self
+            .pending_indexed
+            .take()
+            .ok_or_else(|| self.internal_error(None))?;
+        let base = pending.base.ok_or_else(|| self.internal_error(None))?;
+        let kind = indexed_color_space(base).ok_or_else(|| self.internal_error(None))?;
+        let lookup = self
+            .indexed_lookup
+            .as_ref()
+            .ok_or_else(|| self.internal_error(None))?;
+        let expected = usize::try_from(
+            indexed_lookup_bytes(pending.high_value, base.components())
+                .map_err(|_| self.internal_error(None))?,
+        )
+        .map_err(|_| self.internal_error(None))?;
+        if lookup.bytes().len() != expected {
+            let reference = self
+                .color_space_object
+                .as_ref()
+                .ok_or_else(|| self.internal_error(None))?
+                .reference();
+            return Err(invalid_image(reference, self.current_offset().unwrap_or(0)));
+        }
+        let reference = self
+            .color_space_object
+            .as_ref()
+            .ok_or_else(|| self.internal_error(None))?
+            .reference();
+        self.finish_resolved_color_space(
+            ResolvedImageColorSpace {
+                reference,
+                kind,
+                indexed_high_value: Some(pending.high_value),
+            },
+            source,
+            cancellation,
+        )
+    }
+
+    fn finish_resolved_color_space(
+        &mut self,
+        resolved: ResolvedImageColorSpace,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<(), ImageXObjectUnsupported>, DocumentError> {
+        let image_object = self
+            .image_object
+            .take()
+            .ok_or_else(|| self.internal_error(None))?;
+        match self.inspect_object(&image_object, Some(resolved), source, cancellation)? {
+            MetadataOutcome::Ready(metadata) => {
+                self.active = Some(ActiveImage {
+                    object: image_object,
+                    color_space_object: self.color_space_object.take(),
+                    color_space_base_object: self.color_space_base_object.take(),
+                    icc_profile_object: self.icc_profile_object.take(),
+                    indexed_lookup_object: self.indexed_lookup_object.take(),
+                    indexed_lookup: self.indexed_lookup.take(),
+                    indexed_high_value: resolved.indexed_high_value,
+                    metadata,
+                });
+                Ok(Ok(()))
+            }
+            MetadataOutcome::IndirectColorSpace(_) => {
+                Err(self.internal_error(Some(image_object.object_span().start())))
+            }
+            MetadataOutcome::Unsupported(unsupported) => Ok(Err(unsupported)),
+        }
+    }
+
+    fn indexed_expected_lookup_bytes(&self) -> Result<u64, DocumentError> {
+        let pending = self
+            .pending_indexed
+            .as_ref()
+            .ok_or_else(|| self.internal_error(None))?;
+        let base = pending.base.ok_or_else(|| self.internal_error(None))?;
+        indexed_lookup_bytes(pending.high_value, base.components())
+            .map_err(|_| self.internal_error(None))
+    }
+
+    fn inspect_icc_profile(
+        &mut self,
+        object: &AttestedObject,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<Result<ImageXObjectColorSpace, ImageXObjectUnsupported>, DocumentError> {
+        let reference = object.reference();
+        let Some(dictionary) = object.stream_dictionary() else {
+            return Err(invalid_image(reference, object.object_span().start()));
+        };
+        let mut components = None;
+        let mut alternate = None;
+        for entry in dictionary.value().entries() {
+            self.charge_metadata(reference, entry.key().span().start())?;
+            match entry.key().value().bytes() {
+                b"N" => {
+                    if components.is_some() {
+                        return Err(DocumentError::for_code(
+                            DocumentErrorCode::DuplicateStructuralKey,
+                            Some(reference),
+                            Some(entry.key().span().start()),
+                        ));
+                    }
+                    let SyntaxObject::Integer(value @ (1 | 3 | 4)) = entry.value().value() else {
+                        return Ok(Err(unsupported_color_space(
+                            reference,
+                            entry.value().span().start(),
+                        )));
+                    };
+                    components = u8::try_from(*value).ok();
+                }
+                b"Alternate" => {
+                    if alternate.is_some() {
+                        return Err(DocumentError::for_code(
+                            DocumentErrorCode::DuplicateStructuralKey,
+                            Some(reference),
+                            Some(entry.key().span().start()),
+                        ));
+                    }
+                    let SyntaxObject::Name(name) = entry.value().value() else {
+                        return Ok(Err(unsupported_color_space(
+                            reference,
+                            entry.value().span().start(),
+                        )));
+                    };
+                    alternate = device_color_space(name.bytes());
+                    if alternate.is_none() {
+                        return Ok(Err(unsupported_color_space(
+                            reference,
+                            entry.value().span().start(),
+                        )));
+                    }
+                }
+                b"Range" => {
+                    return Ok(Err(unsupported_color_space(
+                        reference,
+                        entry.value().span().start(),
+                    )));
+                }
+                _ => {}
+            }
+        }
+        self.runtime_guard(source, cancellation, Some(dictionary.span().start()))?;
+        let Some(components) = components else {
+            return Err(invalid_image(reference, dictionary.span().start()));
+        };
+        let default = match components {
+            1 => ImageXObjectColorSpace::DeviceGray,
+            3 => ImageXObjectColorSpace::DeviceRgb,
+            4 => ImageXObjectColorSpace::DeviceCmyk,
+            _ => return Err(self.internal_error(Some(dictionary.span().start()))),
+        };
+        let kind = alternate.unwrap_or(default);
+        if kind.components() != components {
+            return Ok(Err(unsupported_color_space(
+                reference,
+                dictionary.span().start(),
+            )));
+        }
+        Ok(Ok(kind))
+    }
+
+    fn inspect_indexed_lookup_object(
+        &mut self,
+        object: &AttestedObject,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Result<IndexedLookupObjectOutcome, DocumentError> {
+        let reference = object.reference();
+        match object.value() {
+            IndirectObjectValue::Direct(value) => {
+                let offset = value.span().start();
+                self.charge_metadata(reference, offset)?;
+                self.runtime_guard(source, cancellation, Some(offset))?;
+                let SyntaxObject::String(string) = value.value() else {
+                    return Err(invalid_image(reference, offset));
+                };
+                let expected = usize::try_from(self.indexed_expected_lookup_bytes()?)
+                    .map_err(|_| self.internal_error(Some(offset)))?;
+                if string.bytes().len() != expected {
+                    return Err(invalid_image(reference, offset));
+                }
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(expected).map_err(|_| {
+                    DocumentError::image_xobject_resource(
+                        DocumentLimitKind::ImageXObjectRetainedBytes,
+                        self.limits.max_retained_bytes(),
+                        self.retained_object_bytes().unwrap_or(u64::MAX),
+                        u64::try_from(expected).unwrap_or(u64::MAX),
+                        reference,
+                        Some(offset),
+                    )
+                })?;
+                bytes.extend_from_slice(string.bytes());
+                Ok(IndexedLookupObjectOutcome::Direct(bytes.into_boxed_slice()))
+            }
+            IndirectObjectValue::Stream(stream) => {
+                self.runtime_guard(
+                    source,
+                    cancellation,
+                    Some(stream.dictionary().span().start()),
+                )?;
+                Ok(IndexedLookupObjectOutcome::Stream)
+            }
+        }
+    }
+
+    fn indexed_lookup_filter(
+        &mut self,
+        object: &AttestedObject,
+    ) -> Result<RegisteredFilter, DocumentError> {
+        let reference = object.reference();
+        let Some(dictionary) = object.stream_dictionary() else {
+            return Err(invalid_image(reference, object.object_span().start()));
+        };
+        let mut filter = None;
+        let mut parameters = None;
+        for entry in dictionary.value().entries() {
+            self.charge_metadata(reference, entry.key().span().start())?;
+            match entry.key().value().bytes() {
+                b"Filter" => {
+                    if filter.is_some() {
+                        return Err(DocumentError::for_code(
+                            DocumentErrorCode::DuplicateStructuralKey,
+                            Some(reference),
+                            Some(entry.key().span().start()),
+                        ));
+                    }
+                    filter = Some(entry.value());
+                }
+                b"DecodeParms" => {
+                    if parameters.is_some() {
+                        return Err(DocumentError::for_code(
+                            DocumentErrorCode::DuplicateStructuralKey,
+                            Some(reference),
+                            Some(entry.key().span().start()),
+                        ));
+                    }
+                    parameters = Some(entry.value());
+                }
+                _ => {}
+            }
+        }
+        if parameters.is_some_and(|value| !matches!(value.value(), SyntaxObject::Null)) {
+            return Err(invalid_image(
+                reference,
+                parameters.expect("checked").span().start(),
+            ));
+        }
+        match filter {
+            None => Ok(RegisteredFilter::Identity),
+            Some(value) => match value.value() {
+                SyntaxObject::Name(name) if name.bytes() == b"FlateDecode" => {
+                    Ok(RegisteredFilter::Flate { parameters: None })
+                }
+                _ => Err(invalid_image(reference, value.span().start())),
+            },
+        }
+    }
+
+    fn poll_indexed_lookup_payload(
+        &mut self,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> IndexedLookupPayloadOutcome {
+        let Some(active) = self.active_indexed_lookup.take() else {
+            return IndexedLookupPayloadOutcome::Failed(self.internal_error(None));
+        };
+        let reference = active.object.reference();
+        let stream = match active.object.value() {
+            IndirectObjectValue::Stream(stream) => stream,
+            IndirectObjectValue::Direct(_) => {
+                return IndexedLookupPayloadOutcome::Failed(self.internal_error(None));
+            }
+        };
+        let data_span = stream.data_span();
+        if data_span.is_empty() {
+            return IndexedLookupPayloadOutcome::Failed(invalid_image(
+                reference,
+                data_span.start(),
+            ));
+        }
+        if self
+            .stats
+            .encoded_bytes
+            .checked_add(data_span.len())
+            .is_none_or(|value| value > self.limits.max_encoded_bytes())
+        {
+            return IndexedLookupPayloadOutcome::Failed(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectEncodedBytes,
+                self.limits.max_encoded_bytes(),
+                self.stats.encoded_bytes,
+                data_span.len(),
+                reference,
+                Some(data_span.start()),
+            ));
+        }
+        let range = match ByteRange::new(data_span.start(), data_span.len()) {
+            Ok(range) => range,
+            Err(_) => {
+                return IndexedLookupPayloadOutcome::Failed(
+                    self.internal_error(Some(data_span.start())),
+                );
+            }
+        };
+        let request = ReadRequest::new(
+            range,
+            self.context.priority(),
+            self.context.job(),
+            self.context.payload_checkpoint(),
+        );
+        let read = source.poll(request);
+        if let ReadPoll::Ready(bytes) = &read
+            && bytes.identity() != self.snapshot.identity()
+        {
+            return IndexedLookupPayloadOutcome::Failed(DocumentError::for_code(
+                DocumentErrorCode::SourceSnapshotMismatch,
+                Some(reference),
+                Some(data_span.start()),
+            ));
+        }
+        if let Err(error) = self.runtime_guard(source, cancellation, Some(data_span.start())) {
+            return IndexedLookupPayloadOutcome::Failed(error);
+        }
+        let encoded = match read {
+            ReadPoll::Ready(bytes) => bytes,
+            ReadPoll::Pending { ticket, missing } => {
+                self.active_indexed_lookup = Some(active);
+                return IndexedLookupPayloadOutcome::Pending { ticket, missing };
+            }
+            ReadPoll::EndOfFile => {
+                return IndexedLookupPayloadOutcome::Failed(DocumentError::for_code(
+                    DocumentErrorCode::UnexpectedEndOfSource,
+                    Some(reference),
+                    Some(data_span.start()),
+                ));
+            }
+            ReadPoll::Failed(error) => {
+                return IndexedLookupPayloadOutcome::Failed(DocumentError::from_source(
+                    error,
+                    data_span.start(),
+                ));
+            }
+        };
+        if encoded.range().start() != data_span.start() || encoded.range().len() != data_span.len()
+        {
+            return IndexedLookupPayloadOutcome::Failed(
+                self.internal_error(Some(data_span.start())),
+            );
+        }
+        let plan = match canonical_filter_plan(active.filter) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return IndexedLookupPayloadOutcome::Failed(self.map_decode_error(
+                    error,
+                    reference,
+                    data_span.start(),
+                    ImageMetadata {
+                        width: 1,
+                        height: 1,
+                        color_space: ImageXObjectColorSpace::DeviceGray,
+                        bits_per_component: 8,
+                        stride_bytes: active.expected_bytes,
+                        decoded_bytes: active.expected_bytes,
+                        layer_output_bytes: active.expected_bytes,
+                        total_output_bytes: active.expected_bytes,
+                        filter: active.filter,
+                    },
+                    None,
+                ));
+            }
+        };
+        let base = self.limits.decode_limits();
+        let fuel = self
+            .limits
+            .max_decode_fuel()
+            .min(base.max_fuel())
+            .saturating_sub(self.stats.decode_fuel);
+        if fuel == 0 {
+            return IndexedLookupPayloadOutcome::Failed(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectDecodeFuel,
+                self.limits.max_decode_fuel().min(base.max_fuel()),
+                self.stats.decode_fuel,
+                1,
+                reference,
+                Some(data_span.start()),
+            ));
+        }
+        let retained_prefix = match self.retained_object_bytes().and_then(|value| {
+            value
+                .checked_add(active.object.syntax_heap_bytes())
+                .ok_or_else(|| self.internal_error(Some(data_span.start())))
+        }) {
+            Ok(value) => value,
+            Err(error) => return IndexedLookupPayloadOutcome::Failed(error),
+        };
+        let retained_remaining = match self
+            .limits
+            .max_retained_bytes()
+            .checked_sub(retained_prefix)
+        {
+            Some(value) if value != 0 => value.min(base.max_retained_capacity_bytes()),
+            _ => {
+                return IndexedLookupPayloadOutcome::Failed(DocumentError::image_xobject_resource(
+                    DocumentLimitKind::ImageXObjectRetainedBytes,
+                    self.limits.max_retained_bytes(),
+                    retained_prefix,
+                    1,
+                    reference,
+                    Some(data_span.start()),
+                ));
+            }
+        };
+        let limits = match DecodeLimits::validate(DecodeLimitConfig {
+            max_input_bytes: data_span.len(),
+            max_filters: 1,
+            max_layer_output_bytes: active.expected_bytes,
+            max_total_output_bytes: active.expected_bytes,
+            max_final_output_bytes: active.expected_bytes,
+            max_retained_capacity_bytes: retained_remaining,
+            max_fuel: fuel,
+            cancellation_check_interval_fuel: base.cancellation_check_interval_fuel().min(fuel),
+        }) {
+            Ok(limits) => limits,
+            Err(_) => {
+                return IndexedLookupPayloadOutcome::Failed(
+                    self.internal_error(Some(data_span.start())),
+                );
+            }
+        };
+        let request = match DecodeRequest::new(
+            self.snapshot,
+            reference,
+            stream.dictionary().span(),
+            data_span,
+            encoded,
+            plan,
+            DecodeProfile::M1StrictV1,
+            limits,
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                return IndexedLookupPayloadOutcome::Failed(self.map_decode_error(
+                    error,
+                    reference,
+                    data_span.start(),
+                    ImageMetadata {
+                        width: 1,
+                        height: 1,
+                        color_space: ImageXObjectColorSpace::DeviceGray,
+                        bits_per_component: 8,
+                        stride_bytes: active.expected_bytes,
+                        decoded_bytes: active.expected_bytes,
+                        layer_output_bytes: active.expected_bytes,
+                        total_output_bytes: active.expected_bytes,
+                        filter: active.filter,
+                    },
+                    None,
+                ));
+            }
+        };
+        let decoded = match decode_stream(request, &DecodeCancellationAdapter(cancellation)) {
+            Ok(decoded) => decoded,
+            Err(error) if error.category() == DecodeErrorCategory::Unsupported => {
+                return IndexedLookupPayloadOutcome::Unsupported(ImageXObjectUnsupported::new(
+                    ImageXObjectUnsupportedKind::UnsupportedFilter,
+                    reference,
+                    data_span.start(),
+                ));
+            }
+            Err(error) => {
+                return IndexedLookupPayloadOutcome::Failed(self.map_decode_error(
+                    error,
+                    reference,
+                    data_span.start(),
+                    ImageMetadata {
+                        width: 1,
+                        height: 1,
+                        color_space: ImageXObjectColorSpace::DeviceGray,
+                        bits_per_component: 8,
+                        stride_bytes: active.expected_bytes,
+                        decoded_bytes: active.expected_bytes,
+                        layer_output_bytes: active.expected_bytes,
+                        total_output_bytes: active.expected_bytes,
+                        filter: active.filter,
+                    },
+                    None,
+                ));
+            }
+        };
+        if decoded.len() != active.expected_bytes {
+            return IndexedLookupPayloadOutcome::Failed(invalid_image(
+                reference,
+                data_span.start(),
+            ));
+        }
+        self.stats.encoded_bytes = match self.stats.encoded_bytes.checked_add(data_span.len()) {
+            Some(value) => value,
+            None => {
+                return IndexedLookupPayloadOutcome::Failed(
+                    self.internal_error(Some(data_span.start())),
+                );
+            }
+        };
+        self.stats.decode_fuel = match self
+            .stats
+            .decode_fuel
+            .checked_add(decoded.attestation().fuel_consumed())
+        {
+            Some(value) => value,
+            None => {
+                return IndexedLookupPayloadOutcome::Failed(
+                    self.internal_error(Some(data_span.start())),
+                );
+            }
+        };
+        let retained = match decoded
+            .attestation()
+            .plan_retained_heap_bytes()
+            .checked_add(decoded.attestation().peak_retained_capacity_bytes())
+            .and_then(|value| retained_prefix.checked_add(value))
+        {
+            Some(value) => value,
+            None => {
+                return IndexedLookupPayloadOutcome::Failed(
+                    self.internal_error(Some(data_span.start())),
+                );
+            }
+        };
+        if retained > self.limits.max_retained_bytes() {
+            return IndexedLookupPayloadOutcome::Failed(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectRetainedBytes,
+                self.limits.max_retained_bytes(),
+                retained_prefix,
+                retained.saturating_sub(retained_prefix),
+                reference,
+                Some(data_span.start()),
+            ));
+        }
+        self.stats.peak_retained_bytes = self.stats.peak_retained_bytes.max(retained);
+        self.indexed_lookup_object = Some(active.object);
+        IndexedLookupPayloadOutcome::Ready(decoded)
     }
 
     fn poll_payload(
@@ -864,7 +1868,10 @@ impl AcquireImageXObjectJob {
         {
             return PayloadOutcome::Failed(self.internal_error(Some(data_span.start())));
         }
-        self.stats.encoded_bytes = data_span.len();
+        self.stats.encoded_bytes = match self.stats.encoded_bytes.checked_add(data_span.len()) {
+            Some(value) => value,
+            None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
+        };
 
         let plan_upper = match FilterPlan::retained_heap_upper_bound(1) {
             Ok(value) => value,
@@ -878,15 +1885,7 @@ impl AcquireImageXObjectJob {
                 ));
             }
         };
-        let object_heap = match active.color_space_object.as_ref().map_or(
-            Some(active.object.syntax_heap_bytes()),
-            |object| {
-                active
-                    .object
-                    .syntax_heap_bytes()
-                    .checked_add(object.syntax_heap_bytes())
-            },
-        ) {
+        let object_heap = match active.retained_prefix_bytes() {
             Some(value) => value,
             None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
         };
@@ -1016,13 +2015,21 @@ impl AcquireImageXObjectJob {
             ));
         }
         self.stats.decoded_bytes = active.metadata.decoded_bytes;
-        self.stats.decode_fuel = decode_fuel;
+        self.stats.decode_fuel = match self.stats.decode_fuel.checked_add(decode_fuel) {
+            Some(value) => value,
+            None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
+        };
         self.stats.retained_bytes = retained;
         self.stats.peak_retained_bytes = self.stats.peak_retained_bytes.max(retained);
         let image = AcquiredImageXObject {
             proof: self.proof,
             object: active.object,
             color_space_object: active.color_space_object,
+            color_space_base_object: active.color_space_base_object,
+            icc_profile_object: active.icc_profile_object,
+            indexed_lookup_object: active.indexed_lookup_object,
+            indexed_lookup: active.indexed_lookup,
+            indexed_high_value: active.indexed_high_value,
             width: active.metadata.width,
             height: active.metadata.height,
             color_space: active.metadata.color_space,
@@ -1039,7 +2046,7 @@ impl AcquireImageXObjectJob {
     fn inspect_object(
         &mut self,
         object: &AttestedObject,
-        resolved_color_space: Option<(ObjectRef, ImageXObjectColorSpace)>,
+        resolved_color_space: Option<ResolvedImageColorSpace>,
         source: &(dyn ByteSource + '_),
         cancellation: &(dyn DocumentCancellation + '_),
     ) -> Result<MetadataOutcome, DocumentError> {
@@ -1180,7 +2187,7 @@ impl AcquireImageXObjectJob {
                 }
             },
             SyntaxObject::Reference(target) => match resolved_color_space {
-                Some((resolved, color_space)) if resolved == *target => color_space,
+                Some(resolved) if resolved.reference == *target => resolved.kind,
                 Some(_) => return Err(self.internal_error(Some(color_value.span().start()))),
                 None => return Ok(MetadataOutcome::IndirectColorSpace(*target)),
             },
@@ -1211,6 +2218,21 @@ impl AcquireImageXObjectJob {
             }
             _ => return Err(invalid_image(reference, bits_value.span().start())),
         };
+        if color_space.is_indexed() && bits_per_component == 16 {
+            return Ok(unsupported(
+                ImageXObjectUnsupportedKind::UnsupportedBitsPerComponent,
+                reference,
+                bits_value.span().start(),
+            ));
+        }
+        let indexed_high_value =
+            resolved_color_space.and_then(|resolved| resolved.indexed_high_value);
+        if let Some(high_value) = indexed_high_value {
+            let maximum_sample = (1_u16 << bits_per_component) - 1;
+            if u16::from(high_value) > maximum_sample {
+                return Err(invalid_image(reference, bits_value.span().start()));
+            }
+        }
 
         if let Some(decode) = slots.decode {
             let SyntaxObject::Array(values) = decode.value() else {
@@ -1219,7 +2241,11 @@ impl AcquireImageXObjectJob {
                 }
                 return Err(invalid_image(reference, decode.span().start()));
             };
-            let expected = usize::from(color_space.components()) * 2;
+            let expected = if color_space.is_indexed() {
+                2
+            } else {
+                usize::from(color_space.components()) * 2
+            };
             if values.values().len() != expected {
                 return Ok(unsupported(
                     ImageXObjectUnsupportedKind::UnsupportedDecodeArray,
@@ -1229,8 +2255,16 @@ impl AcquireImageXObjectJob {
             }
             for (index, value) in values.values().iter().enumerate() {
                 self.charge_metadata(reference, value.span().start())?;
-                let expected_one = index % 2 == 1;
-                if !numeric_is_exact(value.value(), expected_one) {
+                let valid = if color_space.is_indexed() {
+                    let maximum_sample = (1_i64 << bits_per_component) - 1;
+                    numeric_is_exact_integer(
+                        value.value(),
+                        if index == 0 { 0 } else { maximum_sample },
+                    )
+                } else {
+                    numeric_is_exact(value.value(), index % 2 == 1)
+                };
+                if !valid {
                     return Ok(unsupported(
                         ImageXObjectUnsupportedKind::UnsupportedDecodeArray,
                         reference,
@@ -1328,7 +2362,7 @@ impl AcquireImageXObjectJob {
             width_value.span().start(),
         )?;
         let row_bits = u64::from(width)
-            .checked_mul(u64::from(color_space.components()))
+            .checked_mul(u64::from(color_space.source_components()))
             .and_then(|samples| samples.checked_mul(u64::from(bits_per_component)))
             .ok_or_else(|| self.internal_error(Some(width_value.span().start())))?;
         let stride_bytes = row_bits
@@ -1425,12 +2459,12 @@ impl AcquireImageXObjectJob {
             };
             *slot = Some((*value, entry.value().span().start()));
         }
-        if colors.is_some_and(|(value, _)| value != i64::from(color_space.components()))
+        if colors.is_some_and(|(value, _)| value != i64::from(color_space.source_components()))
             || bits.is_some_and(|(value, _)| value != i64::from(bits_per_component))
             || columns.is_some_and(|(value, _)| value != i64::from(width))
         {
             let mismatch_offset = colors
-                .filter(|(value, _)| *value != i64::from(color_space.components()))
+                .filter(|(value, _)| *value != i64::from(color_space.source_components()))
                 .or_else(|| bits.filter(|(value, _)| *value != i64::from(bits_per_component)))
                 .or_else(|| columns.filter(|(value, _)| *value != i64::from(width)))
                 .map_or(offset, |(_, offset)| offset);
@@ -1444,7 +2478,7 @@ impl AcquireImageXObjectJob {
         }
         match PredictorParameters::new(
             predictor.map_or(1, |(value, _)| value),
-            i64::from(color_space.components()),
+            i64::from(color_space.source_components()),
             i64::from(bits_per_component),
             i64::from(width),
         ) {
@@ -1539,20 +2573,63 @@ impl AcquireImageXObjectJob {
         Ok(())
     }
 
-    fn retained_object_bytes(&self) -> u64 {
-        self.image_object
-            .as_ref()
-            .map_or(0, AttestedObject::syntax_heap_bytes)
+    fn retained_object_bytes(&self) -> Result<u64, DocumentError> {
+        let mut retained = 0_u64;
+        for object in [
+            self.image_object.as_ref(),
+            self.color_space_object.as_ref(),
+            self.color_space_base_object.as_ref(),
+            self.icc_profile_object.as_ref(),
+            self.indexed_lookup_object.as_ref(),
+            self.active_indexed_lookup
+                .as_ref()
+                .map(|active| &active.object),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            retained = retained
+                .checked_add(object.syntax_heap_bytes())
+                .ok_or_else(|| self.internal_error(None))?;
+        }
+        if let Some(PendingIndexed {
+            lookup: Some(IndexedLookupPlan::Direct(bytes)),
+            ..
+        }) = &self.pending_indexed
+        {
+            retained = retained
+                .checked_add(u64::try_from(bytes.len()).map_err(|_| self.internal_error(None))?)
+                .ok_or_else(|| self.internal_error(None))?;
+        }
+        if let Some(lookup) = &self.indexed_lookup {
+            retained = retained
+                .checked_add(
+                    lookup
+                        .retained_heap_bytes()
+                        .ok_or_else(|| self.internal_error(None))?,
+                )
+                .ok_or_else(|| self.internal_error(None))?;
+        }
+        Ok(retained)
     }
 
     fn start_child(&mut self, reference: ObjectRef, kind: ChildKind) -> Result<(), DocumentError> {
         let authority = self.authority.as_attested();
         let offset = authority.attestation(reference)?.xref_offset();
         if reference == self.proof.target()
-            || self
-                .image_object
-                .as_ref()
-                .is_some_and(|object| object.reference() == reference)
+            || [
+                self.image_object.as_ref(),
+                self.color_space_object.as_ref(),
+                self.color_space_base_object.as_ref(),
+                self.icc_profile_object.as_ref(),
+                self.indexed_lookup_object.as_ref(),
+                self.active_indexed_lookup
+                    .as_ref()
+                    .map(|active| &active.object),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|object| object.reference() == reference)
         {
             return Err(invalid_image(reference, offset));
         }
@@ -1586,7 +2663,7 @@ impl AcquireImageXObjectJob {
                 Some(offset),
             ));
         }
-        let retained_objects = self.retained_object_bytes();
+        let retained_objects = self.retained_object_bytes()?;
         let retained_remaining = self
             .limits
             .max_retained_bytes()
@@ -1645,13 +2722,21 @@ impl AcquireImageXObjectJob {
         encoded_bytes: u64,
         offset: u64,
     ) -> Result<(), DocumentError> {
-        check_scalar_limit(
-            encoded_bytes,
-            self.limits.max_encoded_bytes(),
-            DocumentLimitKind::ImageXObjectEncodedBytes,
-            self.proof.target(),
-            offset,
-        )?;
+        let aggregate_encoded = self
+            .stats
+            .encoded_bytes
+            .checked_add(encoded_bytes)
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        if aggregate_encoded > self.limits.max_encoded_bytes() {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectEncodedBytes,
+                self.limits.max_encoded_bytes(),
+                self.stats.encoded_bytes,
+                encoded_bytes,
+                self.proof.target(),
+                Some(offset),
+            ));
+        }
         let base = self.limits.decode_limits();
         if encoded_bytes > base.max_input_bytes() {
             return Err(DocumentError::image_xobject_resource(
@@ -1732,7 +2817,29 @@ impl AcquireImageXObjectJob {
                 Some(offset),
             ));
         }
-        let fuel = self.limits.max_decode_fuel().min(base.max_fuel());
+        let fuel_limit = self.limits.max_decode_fuel().min(base.max_fuel());
+        let fuel = fuel_limit
+            .checked_sub(self.stats.decode_fuel)
+            .ok_or_else(|| {
+                DocumentError::image_xobject_resource(
+                    DocumentLimitKind::ImageXObjectDecodeFuel,
+                    fuel_limit,
+                    self.stats.decode_fuel,
+                    1,
+                    self.proof.target(),
+                    Some(offset),
+                )
+            })?;
+        if fuel == 0 {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectDecodeFuel,
+                fuel_limit,
+                self.stats.decode_fuel,
+                1,
+                self.proof.target(),
+                Some(offset),
+            ));
+        }
         let limits = DecodeLimits::validate(DecodeLimitConfig {
             max_input_bytes: encoded_bytes,
             max_filters: 1,
@@ -1755,7 +2862,7 @@ impl AcquireImageXObjectJob {
             .child
             .as_ref()
             .map_or(self.proof.target(), |child| child.job.reference());
-        let retained_prefix = self.retained_object_bytes();
+        let retained_prefix = self.retained_object_bytes().unwrap_or(u64::MAX);
         let Some(lower) = error.object_error() else {
             return error;
         };
@@ -2111,6 +3218,13 @@ impl SharedAttestedRevisionIndex {
                 base_parse_bytes: 0,
             }),
             image_object: None,
+            color_space_object: None,
+            color_space_base_object: None,
+            icc_profile_object: None,
+            indexed_lookup_object: None,
+            pending_indexed: None,
+            indexed_lookup: None,
+            active_indexed_lookup: None,
             active: None,
             stats: ImageXObjectStats::default(),
             state: ImageJobState::Active,
@@ -2187,6 +3301,54 @@ fn check_scalar_limit(
     Ok(())
 }
 
+fn device_color_space(name: &[u8]) -> Option<ImageXObjectColorSpace> {
+    match name {
+        b"DeviceGray" | b"G" => Some(ImageXObjectColorSpace::DeviceGray),
+        b"DeviceRGB" | b"RGB" => Some(ImageXObjectColorSpace::DeviceRgb),
+        b"DeviceCMYK" | b"CMYK" => Some(ImageXObjectColorSpace::DeviceCmyk),
+        _ => None,
+    }
+}
+
+fn indexed_color_space(base: ImageXObjectColorSpace) -> Option<ImageXObjectColorSpace> {
+    match base {
+        ImageXObjectColorSpace::DeviceGray => Some(ImageXObjectColorSpace::IndexedGray),
+        ImageXObjectColorSpace::DeviceRgb => Some(ImageXObjectColorSpace::IndexedRgb),
+        ImageXObjectColorSpace::DeviceCmyk => Some(ImageXObjectColorSpace::IndexedCmyk),
+        ImageXObjectColorSpace::IndexedGray
+        | ImageXObjectColorSpace::IndexedRgb
+        | ImageXObjectColorSpace::IndexedCmyk => None,
+    }
+}
+
+fn indexed_lookup_bytes(high_value: u8, components: u8) -> Result<u64, ()> {
+    u64::from(high_value)
+        .checked_add(1)
+        .and_then(|entries| entries.checked_mul(u64::from(components)))
+        .ok_or(())
+}
+
+fn indexed_high_value(
+    value: &Located<SyntaxObject>,
+    reference: ObjectRef,
+) -> Result<u8, DocumentError> {
+    let offset = value.span().start();
+    match value.value() {
+        SyntaxObject::Integer(value) => {
+            u8::try_from(*value).map_err(|_| invalid_image(reference, offset))
+        }
+        _ => Err(invalid_image(reference, offset)),
+    }
+}
+
+fn unsupported_color_space(reference: ObjectRef, offset: u64) -> ImageXObjectUnsupported {
+    ImageXObjectUnsupported::new(
+        ImageXObjectUnsupportedKind::UnsupportedColorSpace,
+        reference,
+        offset,
+    )
+}
+
 fn canonical_filter_plan(filter: RegisteredFilter) -> Result<FilterPlan, DecodeError> {
     match filter {
         RegisteredFilter::Identity => FilterPlan::new(&[]),
@@ -2214,6 +3376,15 @@ fn numeric_is_exact(value: &SyntaxObject, expected_one: bool) -> bool {
     match value {
         SyntaxObject::Integer(value) => *value == i64::from(expected_one),
         SyntaxObject::Real(value) => real_is_exact(value, expected_one),
+        _ => false,
+    }
+}
+
+fn numeric_is_exact_integer(value: &SyntaxObject, expected: i64) -> bool {
+    match value {
+        SyntaxObject::Integer(value) => *value == expected,
+        SyntaxObject::Real(value) if expected == 0 => real_is_exact(value, false),
+        SyntaxObject::Real(value) if expected == 1 => real_is_exact(value, true),
         _ => false,
     }
 }
