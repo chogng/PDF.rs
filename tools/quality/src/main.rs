@@ -184,6 +184,11 @@ fn main() -> ExitCode {
                 Ok(report) => {
                     println!("proof_id={proof_id}");
                     println!("release_product_packages={}", report.product_packages);
+                    println!("release_product_binaries={}", report.product_binaries);
+                    println!(
+                        "release_registered_third_party_packages={}",
+                        report.registered_third_party_packages
+                    );
                     println!("release_depfiles={}", report.depfiles);
                     println!("release_artifact_files={}", report.artifact_files);
                     println!(

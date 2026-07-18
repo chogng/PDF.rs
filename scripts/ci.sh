@@ -150,10 +150,17 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-scene \
     --package pdf-rs-browser-worker \
     --package pdf-rs-cache \
+    --package pdf-rs-engine \
     --package pdf-rs-policy \
     --package pdf-rs-protocol \
     --package pdf-rs-scheduler \
-    --package pdf-rs-session
+    --package pdf-rs-session \
+    --package pdf-rs-surface
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
+    --locked \
+    --release \
+    --package pdf-rs-desktop \
+    --bin pdf-rs-desktop-worker
 cargo run --quiet --package pdf-rs-quality -- \
     check-product-build-closure . "$product_target" "$product_proof_id"
 

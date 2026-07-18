@@ -11,6 +11,11 @@ const PROOF_MARKER: &str = ".pdf-rs-product-build-proof";
 const PROOF_SCHEMA: &str = "1";
 const MAX_PROOF_AGE: Duration = Duration::from_secs(60 * 60);
 const CARGO_HASH_LENGTH: usize = 16;
+const DESKTOP_WORKER_BINARY: &str = "pdf-rs-desktop-worker";
+const DESKTOP_WORKER_CRATE: &str = "pdf_rs_desktop_worker";
+const THIRD_PARTY_REGISTRY_PATH: &str = "platform/desktop/product-dependency-registry.toml";
+const THIRD_PARTY_REGISTRY_CONTENT: &str =
+    include_str!("../../../platform/desktop/product-dependency-registry.toml");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProductPackage {
@@ -19,7 +24,76 @@ struct ProductPackage {
     crate_name: &'static str,
 }
 
-const PRODUCT_PACKAGE_COUNT: usize = 16;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ThirdPartyProductPackage {
+    package_name: &'static str,
+    crate_name: &'static str,
+    version: &'static str,
+    checksum: &'static str,
+    allows_build_script: bool,
+    max_release_artifact_bytes: u64,
+}
+
+const THIRD_PARTY_PRODUCT_PACKAGES: &[ThirdPartyProductPackage; 7] = &[
+    ThirdPartyProductPackage {
+        package_name: "bitflags",
+        crate_name: "bitflags",
+        version: "2.13.1",
+        checksum: "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da",
+        allows_build_script: false,
+        max_release_artifact_bytes: 4 * 1024 * 1024,
+    },
+    ThirdPartyProductPackage {
+        package_name: "errno",
+        crate_name: "errno",
+        version: "0.3.14",
+        checksum: "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb",
+        allows_build_script: false,
+        max_release_artifact_bytes: 4 * 1024 * 1024,
+    },
+    ThirdPartyProductPackage {
+        package_name: "libc",
+        crate_name: "libc",
+        version: "0.2.186",
+        checksum: "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66",
+        allows_build_script: true,
+        max_release_artifact_bytes: 16 * 1024 * 1024,
+    },
+    ThirdPartyProductPackage {
+        package_name: "linux-raw-sys",
+        crate_name: "linux_raw_sys",
+        version: "0.12.1",
+        checksum: "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53",
+        allows_build_script: false,
+        max_release_artifact_bytes: 16 * 1024 * 1024,
+    },
+    ThirdPartyProductPackage {
+        package_name: "rustix",
+        crate_name: "rustix",
+        version: "1.1.4",
+        checksum: "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190",
+        allows_build_script: true,
+        max_release_artifact_bytes: 32 * 1024 * 1024,
+    },
+    ThirdPartyProductPackage {
+        package_name: "windows-link",
+        crate_name: "windows_link",
+        version: "0.2.1",
+        checksum: "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5",
+        allows_build_script: false,
+        max_release_artifact_bytes: 4 * 1024 * 1024,
+    },
+    ThirdPartyProductPackage {
+        package_name: "windows-sys",
+        crate_name: "windows_sys",
+        version: "0.61.2",
+        checksum: "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc",
+        allows_build_script: false,
+        max_release_artifact_bytes: 16 * 1024 * 1024,
+    },
+];
+
+const PRODUCT_PACKAGE_COUNT: usize = 19;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -77,9 +151,19 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         crate_name: "pdf_rs_browser_worker",
     },
     ProductPackage {
+        manifest: "platform/desktop/Cargo.toml",
+        package_name: "pdf-rs-desktop",
+        crate_name: "pdf_rs_desktop",
+    },
+    ProductPackage {
         manifest: "runtime/cache/Cargo.toml",
         package_name: "pdf-rs-cache",
         crate_name: "pdf_rs_cache",
+    },
+    ProductPackage {
+        manifest: "runtime/engine/Cargo.toml",
+        package_name: "pdf-rs-engine",
+        crate_name: "pdf_rs_engine",
     },
     ProductPackage {
         manifest: "runtime/policy/Cargo.toml",
@@ -100,6 +184,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "runtime/session/Cargo.toml",
         package_name: "pdf-rs-session",
         crate_name: "pdf_rs_session",
+    },
+    ProductPackage {
+        manifest: "runtime/surface/Cargo.toml",
+        package_name: "pdf-rs-surface",
+        crate_name: "pdf_rs_surface",
     },
 ];
 
@@ -132,6 +221,8 @@ pub struct ProductBuildPreparation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductBuildClosureReport {
     pub product_packages: usize,
+    pub product_binaries: usize,
+    pub registered_third_party_packages: usize,
     pub depfiles: usize,
     pub artifact_files: usize,
     pub fingerprint_directories: usize,
@@ -208,6 +299,7 @@ pub fn check_product_manifests(
             }
         }
     }
+    violations.extend(validate_third_party_product_registry(repository));
 
     if violations.is_empty() {
         Ok(ProductManifestReport {
@@ -496,6 +588,81 @@ fn validate_product_package_policy(
     violations
 }
 
+fn validate_third_party_product_registry(repository: &Path) -> Vec<PurityViolation> {
+    let registry_path = repository.join(THIRD_PARTY_REGISTRY_PATH);
+    let mut violations = Vec::new();
+    match fs::read_to_string(&registry_path) {
+        Ok(input) if input == THIRD_PARTY_REGISTRY_CONTENT => {}
+        Ok(_) => violations.push(PurityViolation {
+            code: "RPE-PURITY-0005",
+            manifest: registry_path,
+            token: "third-party-registry-drift".into(),
+        }),
+        Err(_) => violations.push(PurityViolation {
+            code: "RPE-PURITY-0005",
+            manifest: registry_path,
+            token: "missing-third-party-registry".into(),
+        }),
+    }
+
+    let lock_path = repository.join("Cargo.lock");
+    let lock = match fs::read_to_string(&lock_path) {
+        Ok(input) => input,
+        Err(_) => {
+            violations.push(PurityViolation {
+                code: "RPE-PURITY-0005",
+                manifest: lock_path,
+                token: "missing-cargo-lock".into(),
+            });
+            return violations;
+        }
+    };
+    for package in THIRD_PARTY_PRODUCT_PACKAGES {
+        let Some(fields) = cargo_lock_package_fields(&lock, package.package_name) else {
+            violations.push(PurityViolation {
+                code: "RPE-PURITY-0005",
+                manifest: lock_path.clone(),
+                token: format!("missing-third-party-lock={}", package.package_name),
+            });
+            continue;
+        };
+        let expected_source = "registry+https://github.com/rust-lang/crates.io-index";
+        if fields.get("version").map(String::as_str) != Some(package.version)
+            || fields.get("source").map(String::as_str) != Some(expected_source)
+            || fields.get("checksum").map(String::as_str) != Some(package.checksum)
+        {
+            violations.push(PurityViolation {
+                code: "RPE-PURITY-0005",
+                manifest: lock_path.clone(),
+                token: format!("third-party-lock-drift={}", package.package_name),
+            });
+        }
+    }
+    violations
+}
+
+fn cargo_lock_package_fields(input: &str, package_name: &str) -> Option<BTreeMap<String, String>> {
+    input
+        .split("[[package]]")
+        .skip(1)
+        .filter_map(|block| {
+            let fields: BTreeMap<String, String> = block
+                .lines()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once('=')?;
+                    let value = value
+                        .trim()
+                        .strip_prefix('"')?
+                        .strip_suffix('"')?
+                        .to_owned();
+                    Some((key.trim().to_owned(), value))
+                })
+                .collect();
+            (fields.get("name").map(String::as_str) == Some(package_name)).then_some(fields)
+        })
+        .next()
+}
+
 fn package_name(input: &str) -> Option<String> {
     let mut in_package = false;
     for line in input.lines() {
@@ -542,6 +709,12 @@ fn scan_build_inventory(
     let mut depfile_crates = BTreeSet::new();
     let mut artifact_crates = BTreeSet::new();
     let mut fingerprint_packages = BTreeSet::new();
+    let mut third_party_depfile_crates = BTreeSet::new();
+    let mut third_party_artifact_crates = BTreeSet::new();
+    let mut third_party_fingerprint_packages = BTreeSet::new();
+    let mut third_party_build_packages = BTreeSet::new();
+    let mut observed_third_party_packages = BTreeSet::new();
+    let mut product_binary_artifacts = BTreeSet::new();
     let mut artifact_files = 0;
     let mut build_script_artifacts = 0;
     let mut native_artifacts = 0;
@@ -559,6 +732,9 @@ fn scan_build_inventory(
                 ));
             } else if let Some(package) = package_from_fingerprint(fingerprint) {
                 fingerprint_packages.insert(package.package_name);
+            } else if let Some(package) = third_party_package_from_fingerprint(fingerprint) {
+                third_party_fingerprint_packages.insert(package.package_name);
+                observed_third_party_packages.insert(package.package_name);
             } else {
                 violations.push(build_violation(
                     "RPE-PURITY-0105",
@@ -567,12 +743,21 @@ fn scan_build_inventory(
                 ));
             }
         } else if relative.starts_with("release/build/") {
-            build_script_artifacts += 1;
-            violations.push(build_violation(
-                "RPE-PURITY-0106",
-                &target.join(directory),
-                "build-script-directory",
-            ));
+            match registered_build_directory(&relative) {
+                Some(package) => {
+                    build_script_artifacts += 1;
+                    third_party_build_packages.insert(package.package_name);
+                    observed_third_party_packages.insert(package.package_name);
+                }
+                None => {
+                    build_script_artifacts += 1;
+                    violations.push(build_violation(
+                        "RPE-PURITY-0106",
+                        &target.join(directory),
+                        "unregistered-build-script-directory",
+                    ));
+                }
+            }
         } else if !matches!(
             relative.as_str(),
             "release"
@@ -622,12 +807,6 @@ fn scan_build_inventory(
                 "product-closure-to-tools",
             ));
         }
-        if is_native_artifact(&path) {
-            native_artifacts += 1;
-            violations.push(build_violation("RPE-PURITY-0107", &path, "native-artifact"));
-            continue;
-        }
-
         if matches!(
             relative_text.as_str(),
             PROOF_MARKER | "CACHEDIR.TAG" | ".rustc_info.json" | "release/.cargo-lock"
@@ -636,11 +815,38 @@ fn scan_build_inventory(
         }
         if relative_text.starts_with("release/build/") {
             build_script_artifacts += 1;
-            violations.push(build_violation(
-                "RPE-PURITY-0106",
-                &path,
-                "build-script-artifact",
-            ));
+            if let Some(package) = registered_build_artifact(&relative_text) {
+                third_party_build_packages.insert(package.package_name);
+                observed_third_party_packages.insert(package.package_name);
+                validate_third_party_artifact_size(&path, package, &mut violations);
+                validate_registered_build_artifact_contents(&path, &mut violations);
+            } else {
+                violations.push(build_violation(
+                    "RPE-PURITY-0106",
+                    &path,
+                    "unregistered-build-script-artifact",
+                ));
+            }
+            continue;
+        }
+        if let Some(binary_artifact) = classify_product_binary_artifact(&relative_text) {
+            artifact_files += 1;
+            if binary_artifact.is_depfile() {
+                validate_depfile(
+                    repository,
+                    &path,
+                    product_package_by_name("pdf-rs-desktop"),
+                    &mut violations,
+                );
+            } else {
+                validate_product_binary_executable(&path, &mut violations);
+            }
+            product_binary_artifacts.insert(binary_artifact);
+            continue;
+        }
+        if is_native_artifact(&path) {
+            native_artifacts += 1;
+            violations.push(build_violation("RPE-PURITY-0107", &path, "native-artifact"));
             continue;
         }
         if let Some(name) = relative_text.strip_prefix("release/deps/") {
@@ -648,10 +854,16 @@ fn scan_build_inventory(
             match classify_dep_artifact(name) {
                 Some((crate_name, DepArtifactKind::Depfile)) => {
                     let package = package_by_crate(crate_name);
-                    validate_depfile(repository, &path, package, &mut violations);
                     if let Some(package) = package {
+                        validate_depfile(repository, &path, Some(package), &mut violations);
                         depfile_crates.insert(package.crate_name);
+                    } else if let Some(package) = third_party_package_by_crate(crate_name) {
+                        validate_third_party_depfile(&path, package, &mut violations);
+                        validate_third_party_artifact_size(&path, package, &mut violations);
+                        third_party_depfile_crates.insert(package.crate_name);
+                        observed_third_party_packages.insert(package.package_name);
                     } else {
+                        validate_depfile(repository, &path, None, &mut violations);
                         violations.push(build_violation(
                             "RPE-PURITY-0105",
                             &path,
@@ -662,6 +874,10 @@ fn scan_build_inventory(
                 Some((crate_name, DepArtifactKind::RustArtifact)) => {
                     if let Some(package) = package_by_crate(crate_name) {
                         artifact_crates.insert(package.crate_name);
+                    } else if let Some(package) = third_party_package_by_crate(crate_name) {
+                        validate_third_party_artifact_size(&path, package, &mut violations);
+                        third_party_artifact_crates.insert(package.crate_name);
+                        observed_third_party_packages.insert(package.package_name);
                     } else {
                         violations.push(build_violation(
                             "RPE-PURITY-0105",
@@ -693,7 +909,13 @@ fn scan_build_inventory(
                 continue;
             };
             match package_from_fingerprint(fingerprint) {
-                Some(package) if allowed_fingerprint_file(file_name, package.crate_name) => {}
+                Some(package) if allowed_product_fingerprint_file(file_name, package) => {
+                    if let Some(binary_artifact) =
+                        classify_product_binary_fingerprint(file_name, package)
+                    {
+                        product_binary_artifacts.insert(binary_artifact);
+                    }
+                }
                 Some(_) => {
                     unknown_artifacts += 1;
                     violations.push(build_violation(
@@ -702,11 +924,27 @@ fn scan_build_inventory(
                         "unexpected-fingerprint-artifact",
                     ));
                 }
-                None => violations.push(build_violation(
-                    "RPE-PURITY-0105",
-                    &path,
-                    "unknown-fingerprint-package",
-                )),
+                None => match third_party_package_from_fingerprint(fingerprint) {
+                    Some(package)
+                        if allowed_third_party_fingerprint_file(file_name, package.crate_name) =>
+                    {
+                        validate_third_party_artifact_size(&path, package, &mut violations);
+                        observed_third_party_packages.insert(package.package_name);
+                    }
+                    Some(_) => {
+                        unknown_artifacts += 1;
+                        violations.push(build_violation(
+                            "RPE-PURITY-0108",
+                            &path,
+                            "unexpected-third-party-fingerprint-artifact",
+                        ));
+                    }
+                    None => violations.push(build_violation(
+                        "RPE-PURITY-0105",
+                        &path,
+                        "unknown-fingerprint-package",
+                    )),
+                },
             }
             continue;
         }
@@ -755,10 +993,66 @@ fn scan_build_inventory(
             ));
         }
     }
+    for required in ProductBinaryArtifact::ALL {
+        if !product_binary_artifacts.contains(&required) {
+            violations.push(build_violation(
+                "RPE-PURITY-0109",
+                &target.join("release"),
+                &format!("missing-product-binary-artifact={}", required.label()),
+            ));
+        }
+    }
+    let expected_third_party: Vec<_> = expected_third_party_packages().collect();
+    let expected_third_party_names: BTreeSet<_> = expected_third_party
+        .iter()
+        .map(|package| package.package_name)
+        .collect();
+    for observed in &observed_third_party_packages {
+        if !expected_third_party_names.contains(observed) {
+            violations.push(build_violation(
+                "RPE-PURITY-0110",
+                &target.join("release"),
+                &format!("unexpected-target-third-party={observed}"),
+            ));
+        }
+    }
+    for package in expected_third_party {
+        if !third_party_depfile_crates.contains(package.crate_name) {
+            violations.push(build_violation(
+                "RPE-PURITY-0110",
+                &target.join("release/deps"),
+                &format!("missing-third-party-depfile={}", package.crate_name),
+            ));
+        }
+        if !third_party_artifact_crates.contains(package.crate_name) {
+            violations.push(build_violation(
+                "RPE-PURITY-0110",
+                &target.join("release/deps"),
+                &format!("missing-third-party-artifact={}", package.crate_name),
+            ));
+        }
+        if !third_party_fingerprint_packages.contains(package.package_name) {
+            violations.push(build_violation(
+                "RPE-PURITY-0110",
+                &target.join("release/.fingerprint"),
+                &format!("missing-third-party-fingerprint={}", package.package_name),
+            ));
+        }
+        if package.allows_build_script && !third_party_build_packages.contains(package.package_name)
+        {
+            violations.push(build_violation(
+                "RPE-PURITY-0110",
+                &target.join("release/build"),
+                &format!("missing-third-party-build-script={}", package.package_name),
+            ));
+        }
+    }
 
     if violations.is_empty() {
         Ok(ProductBuildClosureReport {
             product_packages: PRODUCT_PACKAGES.len(),
+            product_binaries: 1,
+            registered_third_party_packages: observed_third_party_packages.len(),
             depfiles: depfile_crates.len(),
             artifact_files,
             fingerprint_directories: fingerprint_packages.len(),
@@ -845,6 +1139,69 @@ fn validate_depfile(
             "RPE-PURITY-0109",
             path,
             "depfile-missing-own-source",
+        ));
+    }
+}
+
+fn validate_third_party_depfile(
+    path: &Path,
+    package: &ThirdPartyProductPackage,
+    violations: &mut Vec<BuildClosureViolation>,
+) {
+    let input = match fs::read_to_string(path) {
+        Ok(input) if input.len() <= 16 * 1024 * 1024 => input,
+        Ok(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0111",
+                path,
+                "third-party-depfile-hard-byte-cap",
+            ));
+            return;
+        }
+        Err(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0101",
+                path,
+                "unreadable-third-party-depfile",
+            ));
+            return;
+        }
+    };
+    let normalized = input.to_ascii_lowercase().replace('\\', "/");
+    for engine in FORBIDDEN_ENGINES {
+        if normalized.contains(engine) {
+            violations.push(build_violation("RPE-PURITY-0104", path, engine));
+        }
+    }
+    if normalized.contains("tools/") {
+        violations.push(build_violation(
+            "RPE-PURITY-0104",
+            path,
+            "third-party-depfile-to-tools",
+        ));
+    }
+    let source_marker = format!("/{0}-{1}/", package.package_name, package.version);
+    let mut saw_own_source = false;
+    for token in input.split_whitespace() {
+        let token = token.trim_end_matches(['\\', ':']).replace('\\', "/");
+        if !token.ends_with(".rs") {
+            continue;
+        }
+        if !token.contains("/registry/src/") || !token.contains(&source_marker) {
+            violations.push(build_violation(
+                "RPE-PURITY-0105",
+                path,
+                "third-party-source-outside-registered-crate",
+            ));
+        } else {
+            saw_own_source = true;
+        }
+    }
+    if !saw_own_source {
+        violations.push(build_violation(
+            "RPE-PURITY-0110",
+            path,
+            "third-party-depfile-missing-own-source",
         ));
     }
 }
@@ -938,6 +1295,83 @@ enum DepArtifactKind {
     RustArtifact,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ProductBinaryArtifact {
+    TopLevelExecutable,
+    TopLevelDepfile,
+    HashedExecutable,
+    HashedDepfile,
+    FingerprintExecutable,
+    FingerprintJson,
+    FingerprintDependency,
+}
+
+impl ProductBinaryArtifact {
+    const ALL: [Self; 7] = [
+        Self::TopLevelExecutable,
+        Self::TopLevelDepfile,
+        Self::HashedExecutable,
+        Self::HashedDepfile,
+        Self::FingerprintExecutable,
+        Self::FingerprintJson,
+        Self::FingerprintDependency,
+    ];
+
+    const fn is_depfile(self) -> bool {
+        matches!(self, Self::TopLevelDepfile | Self::HashedDepfile)
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::TopLevelExecutable => "desktop-worker",
+            Self::TopLevelDepfile => "desktop-worker-depfile",
+            Self::HashedExecutable => "desktop-worker-hashed",
+            Self::HashedDepfile => "desktop-worker-hashed-depfile",
+            Self::FingerprintExecutable => "desktop-worker-fingerprint",
+            Self::FingerprintJson => "desktop-worker-fingerprint-json",
+            Self::FingerprintDependency => "desktop-worker-fingerprint-dependency",
+        }
+    }
+}
+
+fn classify_product_binary_artifact(relative: &str) -> Option<ProductBinaryArtifact> {
+    let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+    if relative == format!("release/{DESKTOP_WORKER_BINARY}{executable_suffix}") {
+        return Some(ProductBinaryArtifact::TopLevelExecutable);
+    }
+    if relative == format!("release/{DESKTOP_WORKER_BINARY}.d") {
+        return Some(ProductBinaryArtifact::TopLevelDepfile);
+    }
+
+    let file = relative.strip_prefix("release/deps/")?;
+    if let Some(stem) = file.strip_suffix(".d") {
+        return (strip_cargo_hash(stem) == Some(DESKTOP_WORKER_CRATE))
+            .then_some(ProductBinaryArtifact::HashedDepfile);
+    }
+    let stem = if cfg!(windows) {
+        file.strip_suffix(".exe")?
+    } else {
+        file
+    };
+    (strip_cargo_hash(stem) == Some(DESKTOP_WORKER_CRATE))
+        .then_some(ProductBinaryArtifact::HashedExecutable)
+}
+
+fn classify_product_binary_fingerprint(
+    file: &str,
+    package: &ProductPackage,
+) -> Option<ProductBinaryArtifact> {
+    if package.package_name != "pdf-rs-desktop" {
+        return None;
+    }
+    match file {
+        "bin-pdf-rs-desktop-worker" => Some(ProductBinaryArtifact::FingerprintExecutable),
+        "bin-pdf-rs-desktop-worker.json" => Some(ProductBinaryArtifact::FingerprintJson),
+        "dep-bin-pdf-rs-desktop-worker" => Some(ProductBinaryArtifact::FingerprintDependency),
+        _ => None,
+    }
+}
+
 fn classify_top_level_rust_artifact(relative: &str) -> Option<&str> {
     let file = relative.strip_prefix("release/lib")?;
     file.strip_suffix(".rlib")
@@ -966,6 +1400,40 @@ fn package_by_crate(crate_name: &str) -> Option<&'static ProductPackage> {
         .find(|candidate| candidate.crate_name == crate_name)
 }
 
+fn product_package_by_name(package_name: &str) -> Option<&'static ProductPackage> {
+    PRODUCT_PACKAGES
+        .iter()
+        .find(|candidate| candidate.package_name == package_name)
+}
+
+fn third_party_package_from_fingerprint(value: &str) -> Option<&'static ThirdPartyProductPackage> {
+    let (package, hash) = value.rsplit_once('-')?;
+    if hash.len() != CARGO_HASH_LENGTH || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    THIRD_PARTY_PRODUCT_PACKAGES
+        .iter()
+        .find(|candidate| candidate.package_name == package)
+}
+
+fn third_party_package_by_crate(crate_name: &str) -> Option<&'static ThirdPartyProductPackage> {
+    THIRD_PARTY_PRODUCT_PACKAGES
+        .iter()
+        .find(|candidate| candidate.crate_name == crate_name)
+}
+
+fn expected_third_party_packages() -> impl Iterator<Item = &'static ThirdPartyProductPackage> {
+    THIRD_PARTY_PRODUCT_PACKAGES
+        .iter()
+        .filter(|package| match package.package_name {
+            "bitflags" | "errno" | "rustix" => true,
+            "libc" => cfg!(unix),
+            "linux-raw-sys" => cfg!(any(target_os = "linux", target_os = "android")),
+            "windows-link" | "windows-sys" => cfg!(windows),
+            _ => false,
+        })
+}
+
 fn allowed_fingerprint_file(file: &str, crate_name: &str) -> bool {
     file == "invoked.timestamp"
         || file == format!("lib-{crate_name}")
@@ -974,13 +1442,159 @@ fn allowed_fingerprint_file(file: &str, crate_name: &str) -> bool {
         || file == format!("output-lib-{crate_name}")
 }
 
+fn allowed_product_fingerprint_file(file: &str, package: &ProductPackage) -> bool {
+    allowed_fingerprint_file(file, package.crate_name)
+        || (package.package_name == "pdf-rs-desktop"
+            && matches!(
+                file,
+                "bin-pdf-rs-desktop-worker"
+                    | "bin-pdf-rs-desktop-worker.json"
+                    | "dep-bin-pdf-rs-desktop-worker"
+                    | "output-bin-pdf-rs-desktop-worker"
+            ))
+}
+
+fn allowed_third_party_fingerprint_file(file: &str, crate_name: &str) -> bool {
+    allowed_fingerprint_file(file, crate_name)
+        || matches!(
+            file,
+            "build-script-build-script-build"
+                | "build-script-build-script-build.json"
+                | "dep-build-script-build-script-build"
+                | "run-build-script-build-script-build"
+                | "run-build-script-build-script-build.json"
+        )
+}
+
+fn registered_build_directory(relative: &str) -> Option<&'static ThirdPartyProductPackage> {
+    let rest = relative.strip_prefix("release/build/")?;
+    let (fingerprint, child) = rest
+        .split_once('/')
+        .map_or((rest, None), |(fingerprint, child)| {
+            (fingerprint, Some(child))
+        });
+    let package = third_party_package_from_fingerprint(fingerprint)?;
+    if !package.allows_build_script || !matches!(child, None | Some("out")) {
+        return None;
+    }
+    Some(package)
+}
+
+fn registered_build_artifact(relative: &str) -> Option<&'static ThirdPartyProductPackage> {
+    let rest = relative.strip_prefix("release/build/")?;
+    let (fingerprint, file) = rest.split_once('/')?;
+    let package = third_party_package_from_fingerprint(fingerprint)?;
+    if !package.allows_build_script {
+        return None;
+    }
+    let executable_stem = file
+        .strip_prefix("build_script_build-")
+        .and_then(|value| value.strip_suffix(".exe").or(Some(value)))
+        .and_then(|value| value.strip_suffix(".d").or(Some(value)));
+    let executable_is_bounded_hash = executable_stem.is_some_and(|hash| {
+        hash.len() == CARGO_HASH_LENGTH && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    let allowed = matches!(
+        file,
+        "build-script-build" | "invoked.timestamp" | "output" | "root-output" | "stderr"
+    ) || executable_is_bounded_hash
+        || (package.package_name == "rustix" && file == "out/rustix_test_can_compile");
+    allowed.then_some(package)
+}
+
+fn validate_third_party_artifact_size(
+    path: &Path,
+    package: &ThirdPartyProductPackage,
+    violations: &mut Vec<BuildClosureViolation>,
+) {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.len() <= package.max_release_artifact_bytes => {}
+        Ok(_) => violations.push(build_violation(
+            "RPE-PURITY-0111",
+            path,
+            &format!("third-party-artifact-budget={}", package.package_name),
+        )),
+        Err(_) => violations.push(build_violation(
+            "RPE-PURITY-0101",
+            path,
+            "unreadable-third-party-artifact",
+        )),
+    }
+}
+
+fn validate_product_binary_executable(path: &Path, violations: &mut Vec<BuildClosureViolation>) {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0101",
+                path,
+                "unreadable-product-binary",
+            ));
+            return;
+        }
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if metadata.permissions().mode() & 0o111 == 0 {
+            violations.push(build_violation(
+                "RPE-PURITY-0109",
+                path,
+                "product-binary-is-not-executable",
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = metadata;
+}
+
+fn validate_registered_build_artifact_contents(
+    path: &Path,
+    violations: &mut Vec<BuildClosureViolation>,
+) {
+    let input = match fs::read(path) {
+        Ok(input) if input.len() <= 32 * 1024 * 1024 => input,
+        Ok(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0111",
+                path,
+                "registered-build-artifact-hard-byte-cap",
+            ));
+            return;
+        }
+        Err(_) => {
+            violations.push(build_violation(
+                "RPE-PURITY-0101",
+                path,
+                "unreadable-registered-build-artifact",
+            ));
+            return;
+        }
+    };
+    let normalized = String::from_utf8_lossy(&input).to_ascii_lowercase();
+    for engine in FORBIDDEN_ENGINES {
+        if normalized.contains(engine) {
+            violations.push(build_violation("RPE-PURITY-0104", path, engine));
+        }
+    }
+    if normalized.contains("tools/") {
+        violations.push(build_violation(
+            "RPE-PURITY-0104",
+            path,
+            "registered-build-artifact-to-tools",
+        ));
+    }
+}
+
 fn is_native_artifact(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("a" | "so" | "dylib" | "dll" | "lib" | "o" | "obj" | "wasm")
+        Some("a" | "so" | "dylib" | "dll" | "exe" | "lib" | "o" | "obj" | "wasm")
     )
 }
 
@@ -1106,6 +1720,16 @@ mod tests {
             crate_name: "pdf_rs_browser_worker",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "platform/desktop/Cargo.toml",
+            package_name: "pdf-rs-desktop",
+            crate_name: "pdf_rs_desktop",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "runtime/engine/Cargo.toml",
+            package_name: "pdf-rs-engine",
+            crate_name: "pdf_rs_engine",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "runtime/policy/Cargo.toml",
             package_name: "pdf-rs-policy",
             crate_name: "pdf_rs_policy",
@@ -1119,6 +1743,11 @@ mod tests {
             manifest: "runtime/scheduler/Cargo.toml",
             package_name: "pdf-rs-scheduler",
             crate_name: "pdf_rs_scheduler",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "runtime/surface/Cargo.toml",
+            package_name: "pdf-rs-surface",
+            crate_name: "pdf_rs_surface",
         }));
         let root = temp_dir("isolated");
         write_product_manifests(&root);
@@ -1169,6 +1798,42 @@ mod tests {
         let violations = check_product_manifests(&root).unwrap_err();
         assert!(violations.iter().any(|value| {
             value.code == "RPE-PURITY-0002" && value.manifest == root.join("Cargo.toml")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_third_party_registry_and_lock_drift() {
+        let root = temp_dir("third-party-registry-drift");
+        write_product_manifests(&root);
+        fs::write(
+            root.join(THIRD_PARTY_REGISTRY_PATH),
+            format!("{THIRD_PARTY_REGISTRY_CONTENT}\n# unreviewed"),
+        )
+        .unwrap();
+        let violations = check_product_manifests(&root).unwrap_err();
+        assert!(violations.iter().any(|value| {
+            value.code == "RPE-PURITY-0005" && value.token == "third-party-registry-drift"
+        }));
+
+        write_manifest(
+            &root.join(THIRD_PARTY_REGISTRY_PATH),
+            THIRD_PARTY_REGISTRY_CONTENT,
+        );
+        let lock_path = root.join("Cargo.lock");
+        let lock = fs::read_to_string(&lock_path).unwrap().replace(
+            THIRD_PARTY_PRODUCT_PACKAGES[0].checksum,
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        );
+        fs::write(&lock_path, lock).unwrap();
+        let violations = check_product_manifests(&root).unwrap_err();
+        assert!(violations.iter().any(|value| {
+            value.code == "RPE-PURITY-0005"
+                && value.token
+                    == format!(
+                        "third-party-lock-drift={}",
+                        THIRD_PARTY_PRODUCT_PACKAGES[0].package_name
+                    )
         }));
         fs::remove_dir_all(root).unwrap();
     }
@@ -1228,9 +1893,20 @@ mod tests {
 
         let report = check_product_build_closure(&root, &target, "proof-2").unwrap();
         assert_eq!(report.product_packages, PRODUCT_PACKAGES.len());
+        assert_eq!(report.product_binaries, 1);
+        assert_eq!(
+            report.registered_third_party_packages,
+            expected_third_party_packages().count()
+        );
         assert_eq!(report.depfiles, PRODUCT_PACKAGES.len());
         assert_eq!(report.fingerprint_directories, PRODUCT_PACKAGES.len());
-        assert_eq!(report.build_script_artifacts, 0);
+        assert_eq!(
+            report.build_script_artifacts,
+            expected_third_party_packages()
+                .filter(|package| package.allows_build_script)
+                .count()
+                * 2
+        );
         assert_eq!(report.native_artifacts, 0);
         assert_eq!(report.unknown_artifacts, 0);
 
@@ -1276,6 +1952,113 @@ mod tests {
             value.code == "RPE-PURITY-0108" && value.token == "unexpected-deps-artifact"
         }));
 
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_desktop_worker_binary() {
+        let root = temp_dir("missing-desktop-worker-repository");
+        let proof_root = temp_dir("missing-desktop-worker-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-missing-desktop-worker").unwrap();
+        write_valid_build_inventory(&target);
+        let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+        fs::remove_file(target.join(format!(
+            "release/{DESKTOP_WORKER_BINARY}{executable_suffix}"
+        )))
+        .unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-missing-desktop-worker")
+                .unwrap_err();
+        assert!(violations.iter().any(|value| {
+            value.code == "RPE-PURITY-0109"
+                && value.token == "missing-product-binary-artifact=desktop-worker"
+        }));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_product_executable() {
+        let root = temp_dir("unknown-product-executable-repository");
+        let proof_root = temp_dir("unknown-product-executable-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-unknown-product-executable").unwrap();
+        write_valid_build_inventory(&target);
+        let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+        let unknown = target.join(format!("release/unregistered-worker{executable_suffix}"));
+        fs::write(&unknown, b"unregistered executable").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&unknown, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-unknown-product-executable")
+                .unwrap_err();
+        assert!(violations.iter().any(|value| {
+            if cfg!(windows) {
+                value.code == "RPE-PURITY-0107" && value.token == "native-artifact"
+            } else {
+                value.code == "RPE-PURITY-0108" && value.token == "unexpected-build-artifact"
+            }
+        }));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(proof_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_registered_leaf_artifacts_for_the_wrong_build_target() {
+        let root = temp_dir("wrong-target-leaf-repository");
+        let proof_root = temp_dir("wrong-target-leaf-proof-root");
+        let target = proof_root.join("target");
+        write_product_manifests(&root);
+        prepare_product_build_proof(&root, &target, "proof-wrong-target").unwrap();
+        write_valid_build_inventory(&target);
+        let expected: BTreeSet<_> = expected_third_party_packages()
+            .map(|package| package.package_name)
+            .collect();
+        let foreign = THIRD_PARTY_PRODUCT_PACKAGES
+            .iter()
+            .find(|package| !expected.contains(package.package_name))
+            .expect("registry includes at least one target-conditional foreign leaf");
+        let registry_source = format!(
+            "/synthetic/.cargo/registry/src/index/{0}-{1}/src/lib.rs",
+            foreign.package_name, foreign.version
+        );
+        fs::write(
+            target.join(format!("release/deps/{}-{HASH}.d", foreign.crate_name)),
+            format!("target: {registry_source}\n"),
+        )
+        .unwrap();
+        fs::write(
+            target.join(format!(
+                "release/deps/lib{}-{HASH}.rlib",
+                foreign.crate_name
+            )),
+            b"rlib",
+        )
+        .unwrap();
+        fs::write(
+            target.join(format!(
+                "release/deps/lib{}-{HASH}.rmeta",
+                foreign.crate_name
+            )),
+            b"rmeta",
+        )
+        .unwrap();
+
+        let violations =
+            check_product_build_closure(&root, &target, "proof-wrong-target").unwrap_err();
+        assert!(violations.iter().any(|value| {
+            value.code == "RPE-PURITY-0110"
+                && value.token == format!("unexpected-target-third-party={}", foreign.package_name)
+        }));
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(proof_root).unwrap();
     }
@@ -1374,6 +2157,18 @@ mod tests {
                 &format!("[package]\nname = \"{}\"\n", package.package_name),
             );
         }
+        write_manifest(
+            &root.join(THIRD_PARTY_REGISTRY_PATH),
+            THIRD_PARTY_REGISTRY_CONTENT,
+        );
+        let mut lock = String::from("# synthetic Cargo lock for purity tests\nversion = 4\n");
+        for package in THIRD_PARTY_PRODUCT_PACKAGES {
+            lock.push_str(&format!(
+                "\n[[package]]\nname = \"{}\"\nversion = \"{}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n",
+                package.package_name, package.version, package.checksum
+            ));
+        }
+        write_manifest(&root.join("Cargo.lock"), &lock);
     }
 
     fn write_valid_build_inventory(target: &Path) {
@@ -1389,6 +2184,33 @@ mod tests {
         fs::write(target.join("CACHEDIR.TAG"), b"cargo cache").unwrap();
         fs::write(target.join(".rustc_info.json"), b"{}").unwrap();
         fs::write(target.join("release/.cargo-lock"), b"").unwrap();
+        let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+        let desktop_worker = target.join(format!(
+            "release/{DESKTOP_WORKER_BINARY}{executable_suffix}"
+        ));
+        fs::write(&desktop_worker, b"desktop worker").unwrap();
+        fs::write(
+            target.join(format!("release/{DESKTOP_WORKER_BINARY}.d")),
+            "target: platform/desktop/src/main.rs\n",
+        )
+        .unwrap();
+        let hashed_desktop_worker = target.join(format!(
+            "release/deps/{DESKTOP_WORKER_CRATE}-{HASH}{executable_suffix}"
+        ));
+        fs::write(&hashed_desktop_worker, b"hashed desktop worker").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            for executable in [&desktop_worker, &hashed_desktop_worker] {
+                fs::set_permissions(executable, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        fs::write(
+            target.join(format!("release/deps/{DESKTOP_WORKER_CRATE}-{HASH}.d")),
+            "target: platform/desktop/src/main.rs\n",
+        )
+        .unwrap();
         for package in PRODUCT_PACKAGES {
             let source_root = Path::new(package.manifest).parent().unwrap();
             let source = source_root.join("src/lib.rs");
@@ -1426,6 +2248,63 @@ mod tests {
                 b"{}",
             )
             .unwrap();
+            if package.package_name == "pdf-rs-desktop" {
+                for file in [
+                    "bin-pdf-rs-desktop-worker",
+                    "bin-pdf-rs-desktop-worker.json",
+                    "dep-bin-pdf-rs-desktop-worker",
+                ] {
+                    fs::write(fingerprint.join(file), b"fingerprint").unwrap();
+                }
+            }
+        }
+        for package in expected_third_party_packages() {
+            let registry_source = format!(
+                "/synthetic/.cargo/registry/src/index/{0}-{1}/src/lib.rs",
+                package.package_name, package.version
+            );
+            fs::write(
+                target.join(format!("release/deps/{}-{HASH}.d", package.crate_name)),
+                format!("target: {registry_source}\n"),
+            )
+            .unwrap();
+            fs::write(
+                target.join(format!(
+                    "release/deps/lib{}-{HASH}.rlib",
+                    package.crate_name
+                )),
+                b"rlib",
+            )
+            .unwrap();
+            fs::write(
+                target.join(format!(
+                    "release/deps/lib{}-{HASH}.rmeta",
+                    package.crate_name
+                )),
+                b"rmeta",
+            )
+            .unwrap();
+            let fingerprint = target.join(format!(
+                "release/.fingerprint/{}-{HASH}",
+                package.package_name
+            ));
+            fs::create_dir_all(&fingerprint).unwrap();
+            fs::write(fingerprint.join("invoked.timestamp"), b"fresh").unwrap();
+            fs::write(
+                fingerprint.join(format!("lib-{}", package.crate_name)),
+                b"fingerprint",
+            )
+            .unwrap();
+            fs::write(
+                fingerprint.join(format!("lib-{}.json", package.crate_name)),
+                b"{}",
+            )
+            .unwrap();
+            if package.allows_build_script {
+                let build = target.join(format!("release/build/{}-{HASH}", package.package_name));
+                fs::create_dir_all(&build).unwrap();
+                fs::write(build.join("invoked.timestamp"), b"fresh").unwrap();
+            }
         }
     }
 

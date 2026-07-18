@@ -463,6 +463,18 @@ duration evidence, a nightly campaign, or CANARY-scale corpus evidence.
   closures, binaries, Wasm imports, dynamic libraries, packages, and network
   manifests remain separate release-blocking scans; this command does not claim
   that broader proof.
+- The separate fresh-release closure now admits exactly nineteen repository-owned
+  product crates. Desktop builds may additionally contain only the seven
+  checksum-, source-, license-, ownership-, budget-, and replacement-bound leaves
+  in `platform/desktop/product-dependency-registry.toml`; the expected subset is
+  selected by the build target, so macOS, Linux, and Windows closures cannot
+  silently substitute one another. Registry-source depfiles, fingerprints, Rust
+  artifacts, and the bounded `libc`/`rustix` build-script inventory must all be
+  complete. The same fresh target must contain the exact platform form of the
+  `pdf-rs-desktop-worker` executable, its hashed Cargo artifact, both depfiles,
+  and its reviewed binary fingerprint; missing or additional executables, native
+  payloads, unknown packages, tool paths, and external PDF engines remain
+  rejected.
 - Passing the fixed mutation smoke proves only that the enumerated project-authored
   cases produced repeatable bounded results in the ordinary test process. It is
   not coverage evidence and has no per-case wall-clock watchdog.

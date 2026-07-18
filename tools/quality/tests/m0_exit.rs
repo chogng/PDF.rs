@@ -116,24 +116,30 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
     let manifest_scan = position(CI, "check-product-purity .");
     let proof_prepare = position(CI, "prepare-product-build-proof");
     let product_build = position(CI, "CARGO_TARGET_DIR=\"$product_target\" cargo build");
+    let desktop_worker_build = position(CI, "--bin pdf-rs-desktop-worker");
     let proof_check = position(CI, "check-product-build-closure");
     let bundle = position(CI, "synthetic-bundle");
     assert!(manifest_scan < proof_prepare);
     assert!(proof_prepare < product_build);
-    assert!(product_build < proof_check);
+    assert!(product_build < desktop_worker_build);
+    assert!(desktop_worker_build < proof_check);
     assert!(proof_check < bundle);
     for required in [
         "mktemp -d",
         "--locked",
         "--release",
         "--lib",
+        "--bin pdf-rs-desktop-worker",
         "--package pdf-rs-bytes",
         "--package pdf-rs-browser-worker",
         "--package pdf-rs-content",
+        "--package pdf-rs-desktop",
+        "--package pdf-rs-engine",
         "--package pdf-rs-policy",
         "--package pdf-rs-protocol",
         "--package pdf-rs-scheduler",
         "--package pdf-rs-session",
+        "--package pdf-rs-surface",
         "target/ci-artifacts/m0-failure-bundles",
     ] {
         assert!(CI.contains(required));
