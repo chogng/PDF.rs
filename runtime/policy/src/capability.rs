@@ -1,3 +1,8 @@
+use std::fmt;
+use std::mem::size_of;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+
 use pdf_rs_bytes::SourceIdentity;
 pub use pdf_rs_protocol::CapabilityProfileId;
 use pdf_rs_scene::{
@@ -7,7 +12,10 @@ use pdf_rs_scene::{
 };
 
 use crate::canonical_hash::CanonicalHasher;
-use crate::{CapabilityDecisionHash, PolicyError, PolicyLimitKind, PolicyLimits, SceneHash};
+use crate::{
+    CapabilityDecisionHash, PolicyError, PolicyJobLimits, PolicyJobPoll, PolicyJobStats,
+    PolicyLimitKind, PolicyLimits, PolicyPollBudget, SceneHash,
+};
 
 const DECISION_SCHEMA_VERSION: u16 = 1;
 const M3_REFERENCE_PROFILE_VERSION: u32 = 1;
@@ -323,6 +331,26 @@ pub struct CapabilitySubject {
 }
 
 impl CapabilitySubject {
+    pub(crate) fn from_scene_hash(
+        scene: &Scene,
+        document_revision: u64,
+        scene_hash: SceneHash,
+    ) -> Self {
+        let binding = scene.binding();
+        let page_object = binding.page_object();
+        Self {
+            source: binding.source(),
+            document_revision,
+            revision_startxref: binding.revision_startxref(),
+            page_index: binding.page_index(),
+            page_object_number: page_object.number(),
+            page_object_generation: page_object.generation(),
+            scene_schema_major: scene.version().major(),
+            scene_schema_minor: scene.version().minor(),
+            scene_hash,
+        }
+    }
+
     /// Returns the immutable source identity.
     pub const fn source(self) -> SourceIdentity {
         self.source
@@ -537,9 +565,44 @@ impl CapabilityEvaluator {
         document_revision: u64,
         cancellation: &dyn PolicyCancellation,
     ) -> Result<CapabilityDecision, PolicyError> {
-        self.evaluate_inner(scene, document_revision, cancellation, None)
+        let scene = Arc::new(scene.clone());
+        let job_limits = PolicyJobLimits::synchronous_compatibility(
+            canonical_scene_upper_bound(&scene),
+            u64::MAX,
+        );
+        let mut job =
+            CapabilityEvaluationJob::new_compatibility(self, scene, document_revision, job_limits);
+        let budget = PolicyPollBudget::new(
+            NonZeroU32::new(4_096).expect("fixed synchronous poll budget is nonzero"),
+        )?;
+        loop {
+            match job.poll(budget, cancellation) {
+                PolicyJobPoll::Pending => {}
+                PolicyJobPoll::Ready => {
+                    return job
+                        .take_result()
+                        .ok_or_else(PolicyError::identity_mismatch)?;
+                }
+            }
+        }
     }
 
+    /// Creates an owned, bounded, resumable capability-evaluation job.
+    ///
+    /// A checked conservative bound derived from the Scene's published retained capacity must fit
+    /// [`PolicyJobLimits::max_atomic_canonical_bytes`]. This makes the one Scene API operation
+    /// that cannot expose a writer cursor an explicitly small and rejectable atomic phase. The
+    /// observer independently enforces the same limit against actual bytes before each allocation.
+    pub fn start_job(
+        self,
+        scene: Arc<Scene>,
+        document_revision: u64,
+        job_limits: PolicyJobLimits,
+    ) -> Result<CapabilityEvaluationJob, PolicyError> {
+        CapabilityEvaluationJob::new(self, scene, document_revision, job_limits)
+    }
+
+    #[cfg(test)]
     fn evaluate_inner(
         self,
         scene: &Scene,
@@ -756,6 +819,31 @@ impl CapabilityEvaluator {
         )
     }
 
+    #[cfg(test)]
+    fn evaluate_with_resource_override(
+        self,
+        scene: &Scene,
+        document_revision: u64,
+        resource_index: usize,
+        resource_id: u32,
+    ) -> Result<CapabilityDecision, PolicyError> {
+        let scene = Arc::new(scene.clone());
+        let mut job = CapabilityEvaluationJob::new_compatibility(
+            self,
+            Arc::clone(&scene),
+            document_revision,
+            PolicyJobLimits::synchronous_compatibility(
+                canonical_scene_upper_bound(&scene),
+                u64::MAX,
+            ),
+        );
+        job.resource_id_override = Some((resource_index, resource_id));
+        let budget = PolicyPollBudget::new(NonZeroU32::new(4_096).unwrap())?;
+        while job.poll(budget, &NeverCancelled) == PolicyJobPoll::Pending {}
+        job.take_result()
+            .ok_or_else(PolicyError::identity_mismatch)?
+    }
+
     /// Returns the selected profile.
     pub const fn profile(self) -> CapabilityProfile {
         self.profile
@@ -770,6 +858,936 @@ impl CapabilityEvaluator {
 impl Default for CapabilityEvaluator {
     fn default() -> Self {
         Self::new(CapabilityProfile::default(), PolicyLimits::default())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapabilityJobPhase {
+    Preflight,
+    Canonicalize,
+    HashCanonical,
+    AuditResources,
+    AuditCommands,
+    AllocateClosure,
+    EvaluateRequirements,
+    CountMissing,
+    AllocateDecision,
+    BuildMissing,
+    Seal,
+}
+
+struct PendingMissing {
+    requirement_index: usize,
+    dependency_index: usize,
+    dependencies: Vec<u32>,
+    contributor_ids: Vec<u32>,
+    scope: CapabilityScope,
+    location: Option<CapabilityLocation>,
+}
+
+/// Owned capability evaluation with explicit cursors and terminal replay.
+///
+/// Each [`Self::poll`] advances at most the supplied nonzero work budget. Job-owned working
+/// allocations are admitted before publication and accounted by [`Self::stats`]. Dropping a
+/// pending or terminal job releases the owned Scene reference and every unpublished buffer.
+pub struct CapabilityEvaluationJob {
+    evaluator: CapabilityEvaluator,
+    scene: Arc<Scene>,
+    document_revision: u64,
+    job_limits: PolicyJobLimits,
+    stats: PolicyJobStats,
+    phase: CapabilityJobPhase,
+    terminal: Option<Result<CapabilityDecision, PolicyError>>,
+    result_taken: bool,
+    preflight_index: usize,
+    cardinalities: Option<GraphCardinalities>,
+    canonical: Option<Vec<u8>>,
+    canonical_offset: usize,
+    canonical_hasher: Option<CanonicalHasher>,
+    subject: Option<CapabilitySubject>,
+    resource_index: usize,
+    #[cfg(test)]
+    resource_id_override: Option<(usize, u32)>,
+    #[cfg(test)]
+    requirement_id_override: Option<(usize, u32)>,
+    command_index: usize,
+    effective: Vec<bool>,
+    causes: Vec<MissingCause>,
+    requirement_index: usize,
+    dependency_index: usize,
+    previous_dependency: Option<u32>,
+    first_missing_dependency: Option<u32>,
+    missing_count_index: usize,
+    missing_total: u32,
+    missing: Vec<MissingCapabilityRequirement>,
+    contributors: Vec<CapabilityContributor>,
+    missing_index: usize,
+    missing_ordinal: u32,
+    first_scope: Option<CapabilityScope>,
+    first_location: Option<CapabilityLocation>,
+    pending_missing: Option<PendingMissing>,
+    pending_decision: Option<CapabilityDecision>,
+}
+
+impl CapabilityEvaluationJob {
+    fn new(
+        evaluator: CapabilityEvaluator,
+        scene: Arc<Scene>,
+        document_revision: u64,
+        job_limits: PolicyJobLimits,
+    ) -> Result<Self, PolicyError> {
+        let declared = canonical_scene_upper_bound(&scene);
+        if declared > job_limits.max_atomic_canonical_bytes() {
+            return Err(PolicyError::resource(
+                PolicyLimitKind::AtomicCanonicalBytes,
+                job_limits.max_atomic_canonical_bytes(),
+                0,
+                declared,
+            ));
+        }
+        if declared > job_limits.max_retained_bytes() {
+            return Err(PolicyError::resource(
+                PolicyLimitKind::JobRetainedBytes,
+                job_limits.max_retained_bytes(),
+                0,
+                declared,
+            ));
+        }
+        Ok(Self::new_compatibility(
+            evaluator,
+            scene,
+            document_revision,
+            job_limits,
+        ))
+    }
+
+    fn new_compatibility(
+        evaluator: CapabilityEvaluator,
+        scene: Arc<Scene>,
+        document_revision: u64,
+        job_limits: PolicyJobLimits,
+    ) -> Self {
+        Self {
+            evaluator,
+            scene,
+            document_revision,
+            job_limits,
+            stats: PolicyJobStats::default(),
+            phase: CapabilityJobPhase::Preflight,
+            terminal: None,
+            result_taken: false,
+            preflight_index: 0,
+            cardinalities: None,
+            canonical: None,
+            canonical_offset: 0,
+            canonical_hasher: None,
+            subject: None,
+            resource_index: 0,
+            #[cfg(test)]
+            resource_id_override: None,
+            #[cfg(test)]
+            requirement_id_override: None,
+            command_index: 0,
+            effective: Vec::new(),
+            causes: Vec::new(),
+            requirement_index: 0,
+            dependency_index: 0,
+            previous_dependency: None,
+            first_missing_dependency: None,
+            missing_count_index: 0,
+            missing_total: 0,
+            missing: Vec::new(),
+            contributors: Vec::new(),
+            missing_index: 0,
+            missing_ordinal: 0,
+            first_scope: None,
+            first_location: None,
+            pending_missing: None,
+            pending_decision: None,
+        }
+    }
+
+    /// Returns deterministic work and owned-capacity accounting through the latest poll.
+    pub const fn stats(&self) -> PolicyJobStats {
+        self.stats
+    }
+
+    /// Returns the current replayable terminal result, when ready.
+    pub fn result(&self) -> Option<Result<&CapabilityDecision, PolicyError>> {
+        self.terminal
+            .as_ref()
+            .map(|result| result.as_ref().map_err(|error| *error))
+    }
+
+    /// Moves the terminal result out of this job without cloning retained decision vectors.
+    pub fn take_result(&mut self) -> Option<Result<CapabilityDecision, PolicyError>> {
+        let result = self.terminal.take();
+        if result.is_some() {
+            self.stats.clear_retained();
+            self.result_taken = true;
+        }
+        result
+    }
+
+    /// Advances at most `budget` explicit work units or reaches one terminal result.
+    pub fn poll(
+        &mut self,
+        budget: PolicyPollBudget,
+        cancellation: &dyn PolicyCancellation,
+    ) -> PolicyJobPoll {
+        if self.terminal.is_some() || self.result_taken {
+            return PolicyJobPoll::Ready;
+        }
+        if self.phase == CapabilityJobPhase::Preflight
+            && self.preflight_index == 0
+            && self.document_revision == 0
+        {
+            self.fail(PolicyError::invalid_document_revision());
+            return PolicyJobPoll::Ready;
+        }
+        for _ in 0..budget.work_units().get() {
+            if cancellation.is_cancelled() {
+                self.fail(PolicyError::cancelled());
+                return PolicyJobPoll::Ready;
+            }
+            if let Err(error) = self.stats.charge_work() {
+                self.fail(error);
+                return PolicyJobPoll::Ready;
+            }
+            match self.step(cancellation) {
+                Ok(true) => return PolicyJobPoll::Ready,
+                Ok(false) => {}
+                Err(error) => {
+                    self.fail(error);
+                    return PolicyJobPoll::Ready;
+                }
+            }
+        }
+        PolicyJobPoll::Pending
+    }
+
+    fn step(&mut self, cancellation: &dyn PolicyCancellation) -> Result<bool, PolicyError> {
+        match self.phase {
+            CapabilityJobPhase::Preflight => self.step_preflight(),
+            CapabilityJobPhase::Canonicalize => self.step_canonicalize(cancellation),
+            CapabilityJobPhase::HashCanonical => self.step_hash_canonical(),
+            CapabilityJobPhase::AuditResources => self.step_audit_resources(),
+            CapabilityJobPhase::AuditCommands => self.step_audit_commands(),
+            CapabilityJobPhase::AllocateClosure => self.step_allocate_closure(),
+            CapabilityJobPhase::EvaluateRequirements => self.step_evaluate_requirements(),
+            CapabilityJobPhase::CountMissing => self.step_count_missing(),
+            CapabilityJobPhase::AllocateDecision => self.step_allocate_decision(),
+            CapabilityJobPhase::BuildMissing => self.step_build_missing(),
+            CapabilityJobPhase::Seal => self.step_seal(cancellation),
+        }
+    }
+
+    fn step_preflight(&mut self) -> Result<bool, PolicyError> {
+        if self.document_revision == 0 {
+            return Err(PolicyError::invalid_document_revision());
+        }
+        let Some(graphics) = self.scene.graphics() else {
+            self.cardinalities = Some(GraphCardinalities {
+                requirements: 0,
+                dependencies: 0,
+                parameters: 0,
+                commands: u32::try_from(self.scene.commands().len())
+                    .map_err(|_| PolicyError::numeric_overflow())?,
+                resources: u32::try_from(self.scene.resources().len())
+                    .map_err(|_| PolicyError::numeric_overflow())?,
+            });
+            self.phase = CapabilityJobPhase::Canonicalize;
+            return Ok(false);
+        };
+        if self.cardinalities.is_none() {
+            let requirements = u32::try_from(graphics.requirements().len())
+                .map_err(|_| PolicyError::numeric_overflow())?;
+            ensure_limit(
+                PolicyLimitKind::Requirements,
+                self.evaluator.limits.max_requirements(),
+                requirements,
+            )?;
+            ensure_limit(
+                PolicyLimitKind::Parameters,
+                self.evaluator.limits.max_parameters(),
+                requirements,
+            )?;
+            self.cardinalities = Some(GraphCardinalities {
+                requirements,
+                dependencies: 0,
+                parameters: requirements,
+                commands: u32::try_from(graphics.commands().len())
+                    .map_err(|_| PolicyError::numeric_overflow())?,
+                resources: u32::try_from(graphics.resources().len())
+                    .map_err(|_| PolicyError::numeric_overflow())?,
+            });
+        }
+        if let Some(requirement) = graphics.requirements().get(self.preflight_index) {
+            let additional = u32::try_from(requirement.dependencies().len())
+                .map_err(|_| PolicyError::numeric_overflow())?;
+            let cardinalities = self
+                .cardinalities
+                .as_mut()
+                .ok_or_else(PolicyError::identity_mismatch)?;
+            cardinalities.dependencies = cardinalities
+                .dependencies
+                .checked_add(additional)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            self.preflight_index = self
+                .preflight_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        ensure_limit(
+            PolicyLimitKind::Dependencies,
+            self.evaluator.limits.max_dependencies(),
+            self.cardinalities
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .dependencies,
+        )?;
+        self.phase = CapabilityJobPhase::Canonicalize;
+        Ok(false)
+    }
+
+    fn step_canonicalize(
+        &mut self,
+        cancellation: &dyn PolicyCancellation,
+    ) -> Result<bool, PolicyError> {
+        struct Observer<'a> {
+            cancellation: &'a dyn PolicyCancellation,
+            limit: u64,
+            observed: u64,
+            error: Option<PolicyError>,
+        }
+
+        impl SceneCanonicalObserver for Observer<'_> {
+            fn observe(&mut self, next_fragment: &[u8]) -> bool {
+                if self.cancellation.is_cancelled() {
+                    self.error = Some(PolicyError::cancelled());
+                    return false;
+                }
+                let Ok(additional) = u64::try_from(next_fragment.len()) else {
+                    self.error = Some(PolicyError::numeric_overflow());
+                    return false;
+                };
+                let Some(attempted) = self.observed.checked_add(additional) else {
+                    self.error = Some(PolicyError::numeric_overflow());
+                    return false;
+                };
+                if attempted > self.limit {
+                    self.error = Some(PolicyError::resource(
+                        PolicyLimitKind::AtomicCanonicalBytes,
+                        self.limit,
+                        self.observed,
+                        additional,
+                    ));
+                    return false;
+                }
+                self.observed = attempted;
+                true
+            }
+        }
+
+        let mut observer = Observer {
+            cancellation,
+            limit: self.job_limits.max_atomic_canonical_bytes(),
+            observed: 0,
+            error: None,
+        };
+        let canonical = match self.scene.canonical_json_bytes_observed(&mut observer) {
+            Ok(value) => value,
+            Err(error) if error.code() == SceneErrorCode::CanonicalizationInterrupted => {
+                return Err(observer
+                    .error
+                    .unwrap_or_else(PolicyError::scene_canonicalization));
+            }
+            Err(_) => return Err(PolicyError::scene_canonicalization()),
+        };
+        let retained = vec_capacity_bytes(&canonical)?;
+        self.stats.charge_allocation(retained, self.job_limits)?;
+        self.stats.set_atomic_canonical_bytes(
+            u64::try_from(canonical.len()).map_err(|_| PolicyError::numeric_overflow())?,
+        );
+        let mut hasher = CanonicalHasher::new(b"scene/canonical-json/v1");
+        hasher.u64(u64::try_from(canonical.len()).map_err(|_| PolicyError::numeric_overflow())?);
+        self.canonical = Some(canonical);
+        self.canonical_hasher = Some(hasher);
+        self.phase = CapabilityJobPhase::HashCanonical;
+        Ok(false)
+    }
+
+    fn step_hash_canonical(&mut self) -> Result<bool, PolicyError> {
+        let canonical = self
+            .canonical
+            .as_ref()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        if let Some(chunk) = canonical
+            .get(self.canonical_offset..)
+            .and_then(|remaining| remaining.chunks(4 * 1024).next())
+        {
+            self.canonical_hasher
+                .as_mut()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .bytes(chunk);
+            self.canonical_offset = self
+                .canonical_offset
+                .checked_add(chunk.len())
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        let scene_hash = SceneHash::new(
+            self.canonical_hasher
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .finish()?,
+        );
+        self.subject = Some(CapabilitySubject::from_scene_hash(
+            &self.scene,
+            self.document_revision,
+            scene_hash,
+        ));
+        let released = vec_capacity_bytes(
+            self.canonical
+                .as_ref()
+                .ok_or_else(PolicyError::identity_mismatch)?,
+        )?;
+        self.canonical = None;
+        self.stats.release(released)?;
+        if self.scene.version() != SceneVersion::V2_0 || self.scene.graphics().is_none() {
+            let cardinalities = self
+                .cardinalities
+                .ok_or_else(PolicyError::identity_mismatch)?;
+            let subject = self.subject.ok_or_else(PolicyError::identity_mismatch)?;
+            let page_scope = CapabilityScope::Page {
+                page: subject.page_index(),
+            };
+            self.pending_decision = Some(rejected(
+                self.evaluator.profile,
+                subject,
+                CapabilityRejectionCode::UnsupportedSceneSchema,
+                page_scope,
+                retained_location(
+                    0,
+                    self.evaluator.limits,
+                    CapabilityLocation::page(&self.scene),
+                ),
+                cardinalities.requirements,
+                cardinalities.dependencies,
+                cardinalities.parameters,
+                cardinalities.commands,
+                cardinalities.resources,
+                self.evaluator.limits,
+            )?);
+            self.phase = CapabilityJobPhase::Seal;
+        } else {
+            self.phase = CapabilityJobPhase::AuditResources;
+        }
+        Ok(false)
+    }
+
+    fn step_audit_resources(&mut self) -> Result<bool, PolicyError> {
+        let graphics = self
+            .scene
+            .graphics()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        if let Some(entry) = graphics.resources().get(self.resource_index) {
+            let resource_id = self.audited_resource_id(entry.id().value());
+            if resource_id
+                != u32::try_from(self.resource_index)
+                    .map_err(|_| PolicyError::numeric_overflow())?
+            {
+                self.reject(CapabilityRejectionCode::NonCanonicalResourceId)?;
+                return Ok(false);
+            }
+            self.resource_index = self
+                .resource_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        self.phase = CapabilityJobPhase::AuditCommands;
+        Ok(false)
+    }
+
+    fn step_audit_commands(&mut self) -> Result<bool, PolicyError> {
+        let command_len = self
+            .scene
+            .graphics()
+            .ok_or_else(PolicyError::identity_mismatch)?
+            .commands()
+            .len();
+        if self.command_index < command_len {
+            self.command_index = self
+                .command_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        self.phase = CapabilityJobPhase::AllocateClosure;
+        Ok(false)
+    }
+
+    fn step_allocate_closure(&mut self) -> Result<bool, PolicyError> {
+        let capacity = usize::try_from(
+            self.cardinalities
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .requirements,
+        )
+        .map_err(|_| PolicyError::numeric_overflow())?;
+        reserve_job_vec(
+            &mut self.effective,
+            capacity,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        reserve_job_vec(&mut self.causes, capacity, self.job_limits, &mut self.stats)?;
+        self.phase = CapabilityJobPhase::EvaluateRequirements;
+        Ok(false)
+    }
+
+    fn step_evaluate_requirements(&mut self) -> Result<bool, PolicyError> {
+        let graphics = self
+            .scene
+            .graphics()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let Some(requirement) = graphics.requirements().get(self.requirement_index) else {
+            self.phase = CapabilityJobPhase::CountMissing;
+            return Ok(false);
+        };
+        let canonical_id =
+            u32::try_from(self.requirement_index).map_err(|_| PolicyError::numeric_overflow())?;
+        let page_scope = CapabilityScope::Page {
+            page: self.scene.binding().page_index(),
+        };
+        let Some((scope, _location)) = context_for(&self.scene, graphics, requirement.context())
+        else {
+            self.reject_at(
+                CapabilityRejectionCode::InvalidContext,
+                page_scope,
+                CapabilityLocation::page(&self.scene),
+            )?;
+            return Ok(false);
+        };
+        if self.audited_requirement_id(requirement.id().value()) != canonical_id {
+            self.reject_at(
+                CapabilityRejectionCode::NonCanonicalRequirementId,
+                page_scope,
+                CapabilityLocation::page(&self.scene),
+            )?;
+            return Ok(false);
+        }
+        if u32::try_from(requirement.dependencies().len())
+            .map_err(|_| PolicyError::numeric_overflow())?
+            > self.evaluator.limits.max_dependencies_per_requirement()
+        {
+            let location = context_for(&self.scene, graphics, requirement.context())
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .1;
+            self.reject_at(
+                CapabilityRejectionCode::DependencyFanoutProhibited,
+                scope,
+                location,
+            )?;
+            return Ok(false);
+        }
+        if let Some(dependency) = requirement.dependencies().get(self.dependency_index) {
+            let value = dependency.value();
+            if value >= canonical_id
+                || self
+                    .previous_dependency
+                    .is_some_and(|previous| previous >= value)
+            {
+                let location = context_for(&self.scene, graphics, requirement.context())
+                    .ok_or_else(PolicyError::identity_mismatch)?
+                    .1;
+                self.reject_at(
+                    CapabilityRejectionCode::InvalidDependencyGraph,
+                    scope,
+                    location,
+                )?;
+                return Ok(false);
+            }
+            let offset = usize::try_from(value).map_err(|_| PolicyError::numeric_overflow())?;
+            if !*self
+                .effective
+                .get(offset)
+                .ok_or_else(PolicyError::identity_mismatch)?
+                && self.first_missing_dependency.is_none()
+            {
+                self.first_missing_dependency = Some(value);
+            }
+            self.previous_dependency = Some(value);
+            self.dependency_index = self
+                .dependency_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        let direct = self.evaluator.profile.directly_supports(requirement);
+        let supported = direct && self.first_missing_dependency.is_none();
+        self.effective.push(supported);
+        self.causes.push(if supported {
+            MissingCause::Supported
+        } else if direct {
+            MissingCause::Dependency(
+                self.first_missing_dependency
+                    .ok_or_else(PolicyError::identity_mismatch)?,
+            )
+        } else {
+            MissingCause::Direct(capability_code(requirement.capability()))
+        });
+        self.requirement_index = self
+            .requirement_index
+            .checked_add(1)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        self.dependency_index = 0;
+        self.previous_dependency = None;
+        self.first_missing_dependency = None;
+        Ok(false)
+    }
+
+    fn step_count_missing(&mut self) -> Result<bool, PolicyError> {
+        if let Some(supported) = self.effective.get(self.missing_count_index) {
+            if !supported {
+                self.missing_total = self
+                    .missing_total
+                    .checked_add(1)
+                    .ok_or_else(PolicyError::numeric_overflow)?;
+            }
+            self.missing_count_index = self
+                .missing_count_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        self.phase = CapabilityJobPhase::AllocateDecision;
+        Ok(false)
+    }
+
+    fn step_allocate_decision(&mut self) -> Result<bool, PolicyError> {
+        let retained_missing = self
+            .missing_total
+            .min(self.evaluator.limits.max_missing_retained());
+        let retained_contributors = self
+            .missing_total
+            .min(self.evaluator.limits.max_contributors_retained());
+        reserve_job_vec(
+            &mut self.missing,
+            usize::try_from(retained_missing).map_err(|_| PolicyError::numeric_overflow())?,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        reserve_job_vec(
+            &mut self.contributors,
+            usize::try_from(retained_contributors).map_err(|_| PolicyError::numeric_overflow())?,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        self.phase = CapabilityJobPhase::BuildMissing;
+        Ok(false)
+    }
+
+    fn step_build_missing(&mut self) -> Result<bool, PolicyError> {
+        if let Some(pending) = self.pending_missing.as_mut() {
+            let graphics = self
+                .scene
+                .graphics()
+                .ok_or_else(PolicyError::identity_mismatch)?;
+            let requirement = graphics
+                .requirements()
+                .get(pending.requirement_index)
+                .ok_or_else(PolicyError::identity_mismatch)?;
+            if let Some(dependency) = requirement.dependencies().get(pending.dependency_index) {
+                pending.dependencies.push(dependency.value());
+                pending.dependency_index = pending
+                    .dependency_index
+                    .checked_add(1)
+                    .ok_or_else(PolicyError::numeric_overflow)?;
+                return Ok(false);
+            }
+            let pending = self
+                .pending_missing
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?;
+            self.missing.push(MissingCapabilityRequirement {
+                id: requirement.id().value(),
+                capability: requirement.capability(),
+                parameter: requirement.parameter(),
+                dependencies: pending.dependencies,
+                scope: pending.scope,
+                contributor_ids: pending.contributor_ids,
+                location: pending.location,
+            });
+            self.finish_missing_requirement()?;
+            return Ok(false);
+        }
+
+        let graphics = self
+            .scene
+            .graphics()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let Some(requirement) = graphics.requirements().get(self.missing_index) else {
+            if self.missing_ordinal != self.missing_total {
+                return Err(PolicyError::identity_mismatch());
+            }
+            self.build_decision()?;
+            self.phase = CapabilityJobPhase::Seal;
+            return Ok(false);
+        };
+        if *self
+            .effective
+            .get(self.missing_index)
+            .ok_or_else(PolicyError::identity_mismatch)?
+        {
+            self.missing_index = self
+                .missing_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        let (scope, available_location) = context_for(&self.scene, graphics, requirement.context())
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let location = (self.missing_ordinal < self.evaluator.limits.max_locations_retained())
+            .then_some(available_location);
+        if self.missing_ordinal == 0 {
+            self.first_scope = Some(scope);
+            self.first_location = location;
+        }
+        let cause = *self
+            .causes
+            .get(self.missing_index)
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let (kind, code) = match cause {
+            MissingCause::Direct(code) => (CapabilityContributorKind::SceneRequirement, code),
+            MissingCause::Dependency(id) => {
+                (CapabilityContributorKind::PolicyDependencyClosure, id)
+            }
+            MissingCause::Supported => return Err(PolicyError::identity_mismatch()),
+        };
+        if self.missing_ordinal < self.evaluator.limits.max_contributors_retained() {
+            self.contributors.push(CapabilityContributor {
+                id: self.missing_ordinal,
+                kind,
+                code,
+                location,
+            });
+        }
+        if self.missing_ordinal < self.evaluator.limits.max_missing_retained() {
+            let mut dependencies = Vec::new();
+            reserve_job_vec(
+                &mut dependencies,
+                requirement.dependencies().len(),
+                self.job_limits,
+                &mut self.stats,
+            )?;
+            let mut contributor_ids = Vec::new();
+            if self.missing_ordinal < self.evaluator.limits.max_contributors_retained() {
+                reserve_job_vec(&mut contributor_ids, 1, self.job_limits, &mut self.stats)?;
+                contributor_ids.push(self.missing_ordinal);
+            }
+            self.pending_missing = Some(PendingMissing {
+                requirement_index: self.missing_index,
+                dependency_index: 0,
+                dependencies,
+                contributor_ids,
+                scope,
+                location,
+            });
+        } else {
+            self.finish_missing_requirement()?;
+        }
+        Ok(false)
+    }
+
+    fn finish_missing_requirement(&mut self) -> Result<(), PolicyError> {
+        self.missing_ordinal = self
+            .missing_ordinal
+            .checked_add(1)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        self.missing_index = self
+            .missing_index
+            .checked_add(1)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        Ok(())
+    }
+
+    fn build_decision(&mut self) -> Result<(), PolicyError> {
+        let subject = self.subject.ok_or_else(PolicyError::identity_mismatch)?;
+        let cardinalities = self
+            .cardinalities
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let page_scope = CapabilityScope::Page {
+            page: subject.page_index(),
+        };
+        let status = if self.missing_total == 0 {
+            CapabilityStatus::Supported
+        } else {
+            CapabilityStatus::Unsupported
+        };
+        let missing = std::mem::take(&mut self.missing);
+        let contributors = std::mem::take(&mut self.contributors);
+        self.pending_decision = Some(CapabilityDecision {
+            schema_version: DECISION_SCHEMA_VERSION,
+            status,
+            profile: self.evaluator.profile,
+            subject,
+            missing,
+            missing_total: self.missing_total,
+            missing_completeness: completeness(
+                self.missing_total
+                    .min(self.evaluator.limits.max_missing_retained()),
+                self.missing_total,
+            ),
+            contributors,
+            contributors_total: self.missing_total,
+            contributors_completeness: completeness(
+                self.missing_total
+                    .min(self.evaluator.limits.max_contributors_retained()),
+                self.missing_total,
+            ),
+            locations_total: self.missing_total,
+            locations_completeness: completeness(
+                u32::from(self.first_location.is_some()),
+                self.missing_total,
+            ),
+            evaluated_requirements: cardinalities.requirements,
+            evaluated_dependencies: cardinalities.dependencies,
+            evaluated_parameters: cardinalities.parameters,
+            evaluated_commands: cardinalities.commands,
+            evaluated_resources: cardinalities.resources,
+            scope: if status == CapabilityStatus::Supported {
+                page_scope
+            } else {
+                self.first_scope
+                    .ok_or_else(PolicyError::identity_mismatch)?
+            },
+            location: if status == CapabilityStatus::Supported {
+                None
+            } else {
+                self.first_location
+            },
+            rejection_code: None,
+            hash: CapabilityDecisionHash::new([0; 32]),
+        });
+        let effective = vec_capacity_bytes(&self.effective)?;
+        let causes = vec_capacity_bytes(&self.causes)?;
+        self.effective = Vec::new();
+        self.causes = Vec::new();
+        self.stats.release(
+            effective
+                .checked_add(causes)
+                .ok_or_else(PolicyError::numeric_overflow)?,
+        )?;
+        Ok(())
+    }
+
+    fn step_seal(&mut self, cancellation: &dyn PolicyCancellation) -> Result<bool, PolicyError> {
+        let mut work =
+            CancellationWork::new(cancellation, self.evaluator.limits.cancellation_interval())?;
+        let decision = self
+            .pending_decision
+            .take()
+            .ok_or_else(PolicyError::identity_mismatch)?
+            .seal(&mut work)?;
+        self.terminal = Some(Ok(decision));
+        Ok(true)
+    }
+
+    fn reject(&mut self, code: CapabilityRejectionCode) -> Result<(), PolicyError> {
+        self.reject_at(
+            code,
+            CapabilityScope::Page {
+                page: self.scene.binding().page_index(),
+            },
+            CapabilityLocation::page(&self.scene),
+        )
+    }
+
+    fn reject_at(
+        &mut self,
+        code: CapabilityRejectionCode,
+        scope: CapabilityScope,
+        location: CapabilityLocation,
+    ) -> Result<(), PolicyError> {
+        let cardinalities = self
+            .cardinalities
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        self.pending_decision = Some(rejected(
+            self.evaluator.profile,
+            self.subject.ok_or_else(PolicyError::identity_mismatch)?,
+            code,
+            scope,
+            retained_location(0, self.evaluator.limits, location),
+            cardinalities.requirements,
+            cardinalities.dependencies,
+            cardinalities.parameters,
+            cardinalities.commands,
+            cardinalities.resources,
+            self.evaluator.limits,
+        )?);
+        let effective = vec_capacity_bytes(&self.effective)?;
+        let causes = vec_capacity_bytes(&self.causes)?;
+        self.effective = Vec::new();
+        self.causes = Vec::new();
+        self.stats.release(
+            effective
+                .checked_add(causes)
+                .ok_or_else(PolicyError::numeric_overflow)?,
+        )?;
+        self.phase = CapabilityJobPhase::Seal;
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    const fn audited_resource_id(&self, resource_id: u32) -> u32 {
+        resource_id
+    }
+
+    #[cfg(test)]
+    fn audited_resource_id(&self, resource_id: u32) -> u32 {
+        self.resource_id_override
+            .filter(|(index, _)| *index == self.resource_index)
+            .map_or(resource_id, |(_, value)| value)
+    }
+
+    #[cfg(not(test))]
+    const fn audited_requirement_id(&self, requirement_id: u32) -> u32 {
+        requirement_id
+    }
+
+    #[cfg(test)]
+    fn audited_requirement_id(&self, requirement_id: u32) -> u32 {
+        self.requirement_id_override
+            .filter(|(index, _)| *index == self.requirement_index)
+            .map_or(requirement_id, |(_, value)| value)
+    }
+
+    fn fail(&mut self, error: PolicyError) {
+        self.canonical = None;
+        self.effective = Vec::new();
+        self.causes = Vec::new();
+        self.missing = Vec::new();
+        self.contributors = Vec::new();
+        self.pending_missing = None;
+        self.pending_decision = None;
+        self.stats.clear_retained();
+        self.terminal = Some(Err(error));
+    }
+}
+
+impl fmt::Debug for CapabilityEvaluationJob {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CapabilityEvaluationJob")
+            .field("document_revision", &self.document_revision)
+            .field("job_limits", &self.job_limits)
+            .field("stats", &self.stats)
+            .field("phase", &self.phase)
+            .field("terminal", &self.terminal.as_ref().map(Result::is_ok))
+            .field("scene", &"[REDACTED]")
+            .field("working_bytes", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -789,18 +1807,21 @@ struct GraphCardinalities {
     resources: u32,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct DependencyOverride<'a> {
     requirement_index: usize,
     dependencies: &'a [u32],
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum DependencyValues<'a> {
     Scene(&'a [pdf_rs_scene::CapabilityRequirementId]),
     Override(&'a [u32]),
 }
 
+#[cfg(test)]
 impl DependencyValues<'_> {
     fn len(self) -> usize {
         match self {
@@ -817,6 +1838,7 @@ impl DependencyValues<'_> {
     }
 }
 
+#[cfg(test)]
 fn dependency_values<'a>(
     requirement_index: usize,
     requirement: &'a SceneRequirement,
@@ -830,6 +1852,7 @@ fn dependency_values<'a>(
         )
 }
 
+#[cfg(test)]
 fn preflight_cardinalities(
     scene: &Scene,
     limits: PolicyLimits,
@@ -894,6 +1917,7 @@ fn preflight_cardinalities(
     clippy::too_many_arguments,
     reason = "decision construction receives independently audited cardinalities and identities"
 )]
+#[cfg(test)]
 fn build_evaluated_decision(
     profile: CapabilityProfile,
     limits: PolicyLimits,
@@ -1186,6 +2210,7 @@ fn context_for(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn subject_for_scene(
     scene: &Scene,
     document_revision: u64,
@@ -1220,6 +2245,7 @@ pub(crate) fn subject_for_scene(
     })
 }
 
+#[allow(dead_code)]
 fn canonical_scene_bytes(
     scene: &Scene,
     work: &mut CancellationWork<'_>,
@@ -1260,6 +2286,7 @@ fn hash_decision(
     crate::canonical_hash::hash_preimage_observed(&preimage, || work.step())
 }
 
+#[cfg(test)]
 fn dependencies_are_canonical(
     requirement_id: u32,
     dependencies: impl IntoIterator<Item = u32>,
@@ -1299,6 +2326,96 @@ fn ensure_limit(kind: PolicyLimitKind, maximum: u32, actual: u32) -> Result<(), 
         ));
     }
     Ok(())
+}
+
+/// Returns a checked conservative upper bound for this Scene's canonical JSON bytes.
+///
+/// Published Scene retained-byte accounting includes every variable-length name, image, path,
+/// glyph, command, resource, requirement, and dependency allocation. Canonical encoding expands
+/// arbitrary bytes to at most two hexadecimal digits and signed integers to at most 20 decimal
+/// bytes. The 64x retained-capacity factor dominates those representations, 1 KiB per top-level
+/// semantic record dominates fixed field labels and inline scalars, and 64 KiB dominates the
+/// document envelope. The serializer's declared maximum remains an independent upper bound.
+/// Checked arithmetic overflow conservatively returns that declared maximum.
+pub(crate) fn canonical_scene_upper_bound(scene: &Scene) -> u64 {
+    const FIXED_CANONICAL_OVERHEAD: u64 = 64 * 1024;
+    const BINARY_TO_JSON_EXPANSION: u64 = 64;
+    const TOP_LEVEL_ITEM_OVERHEAD: u64 = 1024;
+    let (declared, retained, items) = scene.graphics().map_or_else(
+        || {
+            (
+                scene.limits().max_canonical_bytes(),
+                scene.stats().retained_bytes(),
+                Some(u64::from(scene.stats().commands()) + u64::from(scene.stats().resources())),
+            )
+        },
+        |graphics| {
+            (
+                graphics.limits().max_canonical_bytes(),
+                graphics.stats().retained_bytes(),
+                u64::try_from(graphics.commands().len())
+                    .ok()
+                    .and_then(|count| {
+                        count.checked_add(u64::try_from(graphics.resources().len()).ok()?)
+                    })
+                    .and_then(|count| {
+                        count.checked_add(u64::try_from(graphics.requirements().len()).ok()?)
+                    }),
+            )
+        },
+    );
+    let estimate = retained
+        .checked_mul(BINARY_TO_JSON_EXPANSION)
+        .and_then(|bytes| {
+            items?
+                .checked_mul(TOP_LEVEL_ITEM_OVERHEAD)
+                .and_then(|overhead| bytes.checked_add(overhead))
+        })
+        .and_then(|bytes| bytes.checked_add(FIXED_CANONICAL_OVERHEAD));
+    estimate.map_or(declared, |value| value.min(declared))
+}
+
+fn vec_capacity_bytes<T>(values: &Vec<T>) -> Result<u64, PolicyError> {
+    u64::try_from(values.capacity())
+        .ok()
+        .and_then(|count| {
+            u64::try_from(size_of::<T>())
+                .ok()
+                .and_then(|width| count.checked_mul(width))
+        })
+        .ok_or_else(PolicyError::numeric_overflow)
+}
+
+fn reserve_job_vec<T>(
+    values: &mut Vec<T>,
+    capacity: usize,
+    limits: PolicyJobLimits,
+    stats: &mut PolicyJobStats,
+) -> Result<(), PolicyError> {
+    if capacity == 0 {
+        return Ok(());
+    }
+    let maximum = limits.max_retained_bytes();
+    let requested = u64::try_from(capacity)
+        .ok()
+        .and_then(|count| {
+            u64::try_from(size_of::<T>())
+                .ok()
+                .and_then(|width| count.checked_mul(width))
+        })
+        .ok_or_else(PolicyError::numeric_overflow)?;
+    if requested > maximum.saturating_sub(stats.retained_bytes()) {
+        return Err(PolicyError::resource(
+            PolicyLimitKind::JobRetainedBytes,
+            maximum,
+            stats.retained_bytes(),
+            requested,
+        ));
+    }
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| PolicyError::allocation())?;
+    stats.charge_allocation(vec_capacity_bytes(values)?, limits)
 }
 
 pub(crate) struct CancellationWork<'a> {
@@ -1344,17 +2461,98 @@ impl<'a> CancellationWork<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+
     use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
     use pdf_rs_scene::{
-        CapabilityContext, CapabilityStatus as SceneCapabilityStatus, GraphicsCapability,
-        GraphicsSceneBuilder, GraphicsSceneLimits, PageGeometry, PageRotation, SceneBinding,
-        SceneRect, SceneScalar,
+        BlendMode, CapabilityContext, CapabilityStatus as SceneCapabilityStatus, CommandSource,
+        DeviceColor, FillRule, GlyphOutline, GlyphUse, GraphicsCapability, GraphicsResourceSource,
+        GraphicsSceneBuilder, GraphicsSceneLimits, ImageColorSpace, ImageResource, Matrix,
+        PageGeometry, PageRotation, Paint, PathResource, PathSegment, SceneBinding, SceneBounds,
+        SceneBuilder, SceneLimits, ScenePoint, SceneRect, SceneScalar, SceneUnit,
     };
     use pdf_rs_syntax::ObjectRef;
 
     use super::{
-        CapabilityEvaluator, CapabilityRejectionCode, CapabilityStatus, dependencies_are_canonical,
+        CapabilityEvaluationJob, CapabilityEvaluator, CapabilityRejectionCode, CapabilityStatus,
+        NeverCancelled, PolicyJobLimits, PolicyJobPoll, PolicyPollBudget,
+        canonical_scene_upper_bound, dependencies_are_canonical,
     };
+
+    fn scalar(value: &str) -> SceneScalar {
+        SceneScalar::from_decimal(value).unwrap()
+    }
+
+    fn point(x: &str, y: &str) -> ScenePoint {
+        ScenePoint::new(scalar(x), scalar(y))
+    }
+
+    fn test_binding(salt: u8) -> SceneBinding {
+        SceneBinding::new(
+            SourceIdentity::new(
+                SourceStableId::new([salt; 32]),
+                SourceRevision::new(u64::MAX),
+            ),
+            u64::MAX,
+            u32::MAX,
+            ObjectRef::new(u32::MAX, u16::MAX).unwrap(),
+        )
+    }
+
+    fn test_geometry() -> PageGeometry {
+        let page = SceneRect::new([
+            SceneScalar::from_scaled(-4_000_000_000_000_000_000),
+            SceneScalar::from_scaled(-4_000_000_000_000_000_000),
+            SceneScalar::from_scaled(4_000_000_000_000_000_000),
+            SceneScalar::from_scaled(4_000_000_000_000_000_000),
+        ])
+        .unwrap();
+        PageGeometry::new(page, page, PageRotation::Degrees270)
+    }
+
+    fn test_source(index: u32) -> CommandSource {
+        CommandSource::new(
+            ObjectRef::new(u32::MAX - 1, u16::MAX).unwrap(),
+            u32::MAX,
+            u64::MAX - 16 - u64::from(index),
+            8,
+            index,
+        )
+        .unwrap()
+    }
+
+    fn test_path() -> PathResource {
+        PathResource::new(vec![
+            PathSegment::MoveTo(point("-1", "-2")),
+            PathSegment::LineTo(point("5", "2")),
+            PathSegment::CubicTo {
+                control_1: point("7", "8"),
+                control_2: point("9", "10"),
+                end: point("11", "12"),
+            },
+            PathSegment::ClosePath,
+        ])
+        .unwrap()
+    }
+
+    fn alternate_path() -> PathResource {
+        PathResource::new(vec![
+            PathSegment::MoveTo(point("2", "3")),
+            PathSegment::LineTo(point("6", "3")),
+            PathSegment::LineTo(point("6", "8")),
+            PathSegment::ClosePath,
+        ])
+        .unwrap()
+    }
+
+    fn black() -> Paint {
+        Paint::new(
+            DeviceColor::Gray(SceneUnit::ZERO),
+            SceneUnit::ONE,
+            BlendMode::Normal,
+        )
+    }
 
     #[test]
     fn malformed_dependency_shapes_are_rejected_without_graph_traversal() {
@@ -1436,5 +2634,197 @@ mod tests {
             assert_eq!(first.hash(), replay.hash());
             assert!(first.protocol_projection().unwrap().wire_invariants_valid());
         }
+    }
+
+    #[test]
+    fn canonical_upper_bound_covers_decimal_names_and_every_variable_graphics_family() {
+        let mut legacy =
+            SceneBuilder::new(test_binding(1), test_geometry(), SceneLimits::default());
+        let long_name = vec![0xff; 32 * 1024];
+        legacy
+            .begin_marked_content(&long_name, None, test_source(0))
+            .unwrap();
+        legacy.end_marked_content(test_source(1)).unwrap();
+        let legacy = legacy.finish().unwrap();
+        assert!(
+            u64::try_from(legacy.canonical_json_bytes().unwrap().len()).unwrap()
+                <= canonical_scene_upper_bound(&legacy)
+        );
+
+        let mut graphics = GraphicsSceneBuilder::new_v2(
+            test_binding(2),
+            test_geometry(),
+            GraphicsSceneLimits::default(),
+        );
+        graphics
+            .append_fill(
+                test_path(),
+                FillRule::EvenOdd,
+                black(),
+                Matrix::IDENTITY,
+                SceneBounds::Page,
+                test_source(0),
+            )
+            .unwrap();
+        let resource_source = GraphicsResourceSource::new(
+            ObjectRef::new(u32::MAX - 2, u16::MAX).unwrap(),
+            u64::MAX,
+            u64::MAX,
+        );
+        graphics
+            .draw_image(
+                ImageResource::new(
+                    resource_source,
+                    64,
+                    64,
+                    ImageColorSpace::DeviceRgb,
+                    8,
+                    false,
+                    vec![0xab; 64 * 64 * 3],
+                )
+                .unwrap(),
+                Matrix::IDENTITY,
+                SceneUnit::ONE,
+                BlendMode::Normal,
+                SceneBounds::Page,
+                test_source(1),
+            )
+            .unwrap();
+        let outline = GlyphOutline::new(resource_source, u32::MAX, u16::MAX, test_path()).unwrap();
+        graphics
+            .draw_glyph_run(
+                vec![
+                    GlyphUse::new(outline.clone(), Matrix::IDENTITY, u32::MAX),
+                    GlyphUse::new(outline, Matrix::IDENTITY, u32::MAX - 1),
+                ],
+                black(),
+                SceneBounds::Page,
+                test_source(2),
+            )
+            .unwrap();
+        let first = graphics
+            .add_requirement(
+                GraphicsCapability::SoftMask,
+                u64::MAX,
+                CapabilityContext::Scene,
+                Vec::new(),
+                SceneCapabilityStatus::Unsupported,
+            )
+            .unwrap();
+        graphics
+            .add_requirement(
+                GraphicsCapability::IsolatedGroup,
+                u64::MAX,
+                CapabilityContext::Scene,
+                vec![first],
+                SceneCapabilityStatus::Unsupported,
+            )
+            .unwrap();
+        let graphics = graphics.finish().unwrap();
+        assert!(
+            u64::try_from(graphics.canonical_json_bytes().unwrap().len()).unwrap()
+                <= canonical_scene_upper_bound(&graphics)
+        );
+    }
+
+    #[test]
+    fn second_resource_id_is_audited_by_sync_and_one_unit_jobs() {
+        let mut builder = GraphicsSceneBuilder::new_v2(
+            test_binding(3),
+            test_geometry(),
+            GraphicsSceneLimits::default(),
+        );
+        for (index, path) in [test_path(), alternate_path()].into_iter().enumerate() {
+            builder
+                .append_fill(
+                    path,
+                    FillRule::Nonzero,
+                    black(),
+                    Matrix::IDENTITY,
+                    SceneBounds::Page,
+                    test_source(u32::try_from(index).unwrap()),
+                )
+                .unwrap();
+        }
+        let scene = builder.finish().unwrap();
+        assert_eq!(scene.graphics().unwrap().resources().len(), 2);
+
+        let sync = CapabilityEvaluator::default()
+            .evaluate_with_resource_override(&scene, 23, 1, 7)
+            .unwrap();
+        assert_eq!(sync.status(), CapabilityStatus::Rejected);
+        assert_eq!(
+            sync.rejection_code(),
+            Some(CapabilityRejectionCode::NonCanonicalResourceId)
+        );
+
+        let scene = Arc::new(scene);
+        let mut incremental = CapabilityEvaluationJob::new_compatibility(
+            CapabilityEvaluator::default(),
+            Arc::clone(&scene),
+            23,
+            PolicyJobLimits::synchronous_compatibility(
+                canonical_scene_upper_bound(&scene),
+                u64::MAX,
+            ),
+        );
+        incremental.resource_id_override = Some((1, 7));
+        let one = PolicyPollBudget::new(NonZeroU32::new(1).unwrap()).unwrap();
+        let mut pending = 0;
+        while incremental.poll(one, &NeverCancelled) == PolicyJobPoll::Pending {
+            pending += 1;
+        }
+        assert!(pending > 1);
+        let incremental = incremental.take_result().unwrap().unwrap();
+        assert_eq!(incremental, sync);
+    }
+
+    #[test]
+    fn later_requirement_rejection_releases_closure_buffers_and_stays_terminal_after_take() {
+        let mut builder = GraphicsSceneBuilder::new_v2(
+            test_binding(4),
+            test_geometry(),
+            GraphicsSceneLimits::default(),
+        );
+        builder
+            .add_requirement(
+                GraphicsCapability::PathFill,
+                0,
+                CapabilityContext::Scene,
+                Vec::new(),
+                SceneCapabilityStatus::Supported,
+            )
+            .unwrap();
+        builder
+            .add_requirement(
+                GraphicsCapability::PathStroke,
+                0,
+                CapabilityContext::Scene,
+                Vec::new(),
+                SceneCapabilityStatus::Supported,
+            )
+            .unwrap();
+        let scene = Arc::new(builder.finish().unwrap());
+        let mut job = CapabilityEvaluationJob::new_compatibility(
+            CapabilityEvaluator::default(),
+            Arc::clone(&scene),
+            23,
+            PolicyJobLimits::synchronous_compatibility(
+                canonical_scene_upper_bound(&scene),
+                u64::MAX,
+            ),
+        );
+        job.requirement_id_override = Some((1, 9));
+        let one = PolicyPollBudget::new(NonZeroU32::new(1).unwrap()).unwrap();
+        while job.poll(one, &NeverCancelled) == PolicyJobPoll::Pending {}
+        assert_eq!(job.stats().retained_bytes(), 0);
+        let decision = job.take_result().unwrap().unwrap();
+        assert_eq!(
+            decision.rejection_code(),
+            Some(CapabilityRejectionCode::NonCanonicalRequirementId)
+        );
+        assert_eq!(job.stats().retained_bytes(), 0);
+        assert_eq!(job.poll(one, &NeverCancelled), PolicyJobPoll::Ready);
+        assert!(job.result().is_none());
     }
 }

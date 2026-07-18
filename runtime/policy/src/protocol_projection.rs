@@ -147,6 +147,7 @@ pub(crate) fn capability_decision_hash_preimage(
     observer.finish(result)
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_plan_manifest(
     decision: &CapabilityDecision,
     viewport: ViewportIdentity,
@@ -308,6 +309,7 @@ fn protocol_id(zero_based: u32) -> Result<u32, PolicyError> {
         .ok_or_else(PolicyError::numeric_overflow)
 }
 
+#[allow(dead_code)]
 const fn page_rotation(rotation: PageRotation) -> wire::PageRotation {
     match rotation {
         PageRotation::Degrees0 => wire::PageRotation::Degrees0,

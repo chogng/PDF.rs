@@ -92,6 +92,12 @@ pub enum PolicyLimitKind {
     OutputDimension,
     /// Output pixel count.
     OutputPixels,
+    /// Resumable work units admitted by one policy-job poll.
+    PollWorkUnits,
+    /// Bytes retained by one owned pollable policy job.
+    JobRetainedBytes,
+    /// Bytes admitted to the explicitly atomic Scene canonicalization phase.
+    AtomicCanonicalBytes,
 }
 
 /// Exact checked resource-limit evidence.

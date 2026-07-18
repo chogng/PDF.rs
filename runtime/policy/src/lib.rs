@@ -13,16 +13,17 @@ mod canonical_hash;
 mod capability;
 mod error;
 mod identity;
+mod job;
 mod limits;
 mod protocol_projection;
 mod render_config;
 mod render_plan;
 
 pub use capability::{
-    CapabilityContributor, CapabilityContributorKind, CapabilityDecision, CapabilityEvaluator,
-    CapabilityLocation, CapabilityProfile, CapabilityProfileId, CapabilityRejectionCode,
-    CapabilityScope, CapabilityStatus, CapabilitySubject, CollectionCompleteness,
-    MissingCapabilityRequirement, NeverCancelled, PolicyCancellation,
+    CapabilityContributor, CapabilityContributorKind, CapabilityDecision, CapabilityEvaluationJob,
+    CapabilityEvaluator, CapabilityLocation, CapabilityProfile, CapabilityProfileId,
+    CapabilityRejectionCode, CapabilityScope, CapabilityStatus, CapabilitySubject,
+    CollectionCompleteness, MissingCapabilityRequirement, NeverCancelled, PolicyCancellation,
 };
 pub use error::{
     PolicyError, PolicyErrorCategory, PolicyErrorCode, PolicyLimit, PolicyLimitKind,
@@ -32,13 +33,16 @@ pub use identity::{
     CapabilityDecisionHash, GeometryHash, OptionalContentIdentity, PlannedTileHash,
     RenderConfigHash, RenderPlanHash, RendererEpoch, SceneHash, TileContentHash,
 };
+pub use job::{
+    PolicyJobLimitConfig, PolicyJobLimits, PolicyJobPoll, PolicyJobStats, PolicyPollBudget,
+};
 pub use limits::{PolicyLimitConfig, PolicyLimits};
 pub use render_config::{
     AlphaMode, AntialiasMode, ColorProfile, CompositingMode, GlyphSampling, ImageSampling,
     NativeBackend, OutputProfile, PixelFormat, QualityPolicy, RenderConfig, RenderConfigInput,
 };
 pub use render_plan::{
-    DeviceRect, PlannedTileIdentity, RenderPlan, RenderPlanId, RenderPlanOutcome,
+    DeviceRect, PlannedTileIdentity, RenderPlan, RenderPlanId, RenderPlanJob, RenderPlanOutcome,
     RenderPlanRequest, TileContentKey, ViewportIdentity, ZoomRatio, create_render_plan,
     page_geometry_identity,
 };

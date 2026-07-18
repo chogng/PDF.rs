@@ -100,6 +100,26 @@ pub(crate) fn hash_preimage_observed(
     sha.finalize().map_err(|()| PolicyError::numeric_overflow())
 }
 
+pub(crate) struct PreimageHasher(Sha256);
+
+impl PreimageHasher {
+    pub(crate) const fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    pub(crate) fn update(&mut self, bytes: &[u8]) -> Result<(), PolicyError> {
+        self.0
+            .update(bytes)
+            .map_err(|()| PolicyError::numeric_overflow())
+    }
+
+    pub(crate) fn finish(self) -> Result<[u8; 32], PolicyError> {
+        self.0
+            .finalize()
+            .map_err(|()| PolicyError::numeric_overflow())
+    }
+}
+
 struct Sha256 {
     state: [u32; 8],
     buffer: [u8; BLOCK_BYTES],

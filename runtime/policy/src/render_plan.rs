@@ -1,14 +1,20 @@
+use std::fmt;
+use std::mem::size_of;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+
 use pdf_rs_bytes::SourceIdentity;
 pub use pdf_rs_protocol::RenderPlanId;
-use pdf_rs_scene::{PageGeometry, PageRotation, Scene};
+use pdf_rs_scene::{PageGeometry, PageRotation, Scene, SceneCanonicalObserver, SceneErrorCode};
 
-use crate::canonical_hash::CanonicalHasher;
-use crate::capability::{CancellationWork, subject_for_scene};
+use crate::canonical_hash::{CanonicalHasher, PreimageHasher};
+use crate::capability::{CancellationWork, canonical_scene_upper_bound};
 use crate::{
-    CapabilityDecision, CapabilityDecisionHash, CapabilityStatus, GeometryHash, NativeBackend,
-    OptionalContentIdentity, OutputProfile, PlannedTileHash, PolicyCancellation, PolicyError,
-    PolicyLimitKind, PolicyLimits, QualityPolicy, RenderConfig, RenderConfigHash, RenderPlanHash,
-    RendererEpoch, SceneHash, TileContentHash,
+    CapabilityDecision, CapabilityDecisionHash, CapabilityStatus, CapabilitySubject, GeometryHash,
+    NativeBackend, OptionalContentIdentity, OutputProfile, PlannedTileHash, PolicyCancellation,
+    PolicyError, PolicyJobLimits, PolicyJobPoll, PolicyJobStats, PolicyLimitKind, PolicyLimits,
+    PolicyPollBudget, QualityPolicy, RenderConfig, RenderConfigHash, RenderPlanHash, RendererEpoch,
+    SceneHash, TileContentHash,
 };
 
 pub(crate) const RENDER_PLAN_SCHEMA_VERSION: u16 = 1;
@@ -525,6 +531,748 @@ pub enum RenderPlanOutcome {
     NotPublishable(CapabilityDecision),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenderPlanJobPhase {
+    Validate,
+    Canonicalize,
+    HashCanonical,
+    Initialize,
+    AllocateContent,
+    BuildContent,
+    AllocateManifest,
+    BuildManifest,
+    EncodeManifest,
+    HashManifest,
+    AllocateTiles,
+    BuildTiles,
+    Publish,
+}
+
+/// Owned render planning job with explicit tile and hash cursors.
+pub struct RenderPlanJob {
+    scene: Arc<Scene>,
+    decision: Option<CapabilityDecision>,
+    config: RenderConfig,
+    request: RenderPlanRequest,
+    renderer_epoch: RendererEpoch,
+    limits: PolicyLimits,
+    job_limits: PolicyJobLimits,
+    stats: PolicyJobStats,
+    phase: RenderPlanJobPhase,
+    terminal: Option<Result<RenderPlanOutcome, PolicyError>>,
+    result_taken: bool,
+    canonical: Option<Vec<u8>>,
+    canonical_offset: usize,
+    canonical_hasher: Option<CanonicalHasher>,
+    actual_subject: Option<CapabilitySubject>,
+    viewport: Option<ViewportIdentity>,
+    columns: u32,
+    rows: u32,
+    tile_count: u32,
+    tile_index: u32,
+    content_keys: Vec<TileContentKey>,
+    manifest_regions: Vec<pdf_rs_protocol::SurfaceRegion>,
+    manifest_hashes: Vec<pdf_rs_protocol::TileContentHash>,
+    manifest_index: usize,
+    manifest: Option<pdf_rs_protocol::RenderPlanManifest>,
+    manifest_preimage: Option<Vec<u8>>,
+    manifest_preimage_offset: usize,
+    manifest_hasher: Option<PreimageHasher>,
+    plan_hash: Option<RenderPlanHash>,
+    tiles: Vec<PlannedTileIdentity>,
+    planned_tile_index: usize,
+}
+
+impl RenderPlanJob {
+    /// Creates one owned resumable planning job after admitting a conservative bound derived from
+    /// the Scene's published retained capacity. The serializer observer also enforces the same
+    /// limit against actual output before allocation.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the owned job binds every immutable planning identity and independent limit"
+    )]
+    pub fn new(
+        scene: Arc<Scene>,
+        decision: CapabilityDecision,
+        config: RenderConfig,
+        request: RenderPlanRequest,
+        renderer_epoch: RendererEpoch,
+        limits: PolicyLimits,
+        job_limits: PolicyJobLimits,
+    ) -> Result<Self, PolicyError> {
+        let declared = canonical_scene_upper_bound(&scene);
+        if decision.status() == CapabilityStatus::Supported
+            && declared > job_limits.max_atomic_canonical_bytes()
+        {
+            return Err(PolicyError::resource(
+                PolicyLimitKind::AtomicCanonicalBytes,
+                job_limits.max_atomic_canonical_bytes(),
+                0,
+                declared,
+            ));
+        }
+        if decision.status() == CapabilityStatus::Supported
+            && declared > job_limits.max_retained_bytes()
+        {
+            return Err(PolicyError::resource(
+                PolicyLimitKind::JobRetainedBytes,
+                job_limits.max_retained_bytes(),
+                0,
+                declared,
+            ));
+        }
+        Ok(Self::new_compatibility(
+            scene,
+            decision,
+            config,
+            request,
+            renderer_epoch,
+            limits,
+            job_limits,
+        ))
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the synchronous compatibility path binds the same complete planning identity"
+    )]
+    fn new_compatibility(
+        scene: Arc<Scene>,
+        decision: CapabilityDecision,
+        config: RenderConfig,
+        request: RenderPlanRequest,
+        renderer_epoch: RendererEpoch,
+        limits: PolicyLimits,
+        job_limits: PolicyJobLimits,
+    ) -> Self {
+        Self {
+            scene,
+            decision: Some(decision),
+            config,
+            request,
+            renderer_epoch,
+            limits,
+            job_limits,
+            stats: PolicyJobStats::default(),
+            phase: RenderPlanJobPhase::Validate,
+            terminal: None,
+            result_taken: false,
+            canonical: None,
+            canonical_offset: 0,
+            canonical_hasher: None,
+            actual_subject: None,
+            viewport: None,
+            columns: 0,
+            rows: 0,
+            tile_count: 0,
+            tile_index: 0,
+            content_keys: Vec::new(),
+            manifest_regions: Vec::new(),
+            manifest_hashes: Vec::new(),
+            manifest_index: 0,
+            manifest: None,
+            manifest_preimage: None,
+            manifest_preimage_offset: 0,
+            manifest_hasher: None,
+            plan_hash: None,
+            tiles: Vec::new(),
+            planned_tile_index: 0,
+        }
+    }
+
+    /// Returns deterministic work and job-owned capacity accounting.
+    pub const fn stats(&self) -> PolicyJobStats {
+        self.stats
+    }
+
+    /// Borrows the replayable terminal result.
+    pub fn result(&self) -> Option<Result<&RenderPlanOutcome, PolicyError>> {
+        self.terminal
+            .as_ref()
+            .map(|result| result.as_ref().map_err(|error| *error))
+    }
+
+    /// Moves the terminal result out without cloning a plan.
+    pub fn take_result(&mut self) -> Option<Result<RenderPlanOutcome, PolicyError>> {
+        let result = self.terminal.take();
+        if result.is_some() {
+            self.stats.clear_retained();
+            self.result_taken = true;
+        }
+        result
+    }
+
+    /// Advances at most the validated nonzero work budget.
+    pub fn poll(
+        &mut self,
+        budget: PolicyPollBudget,
+        cancellation: &dyn PolicyCancellation,
+    ) -> PolicyJobPoll {
+        if self.terminal.is_some() || self.result_taken {
+            return PolicyJobPoll::Ready;
+        }
+        for _ in 0..budget.work_units().get() {
+            if cancellation.is_cancelled() {
+                self.fail(PolicyError::cancelled());
+                return PolicyJobPoll::Ready;
+            }
+            if let Err(error) = self.stats.charge_work() {
+                self.fail(error);
+                return PolicyJobPoll::Ready;
+            }
+            match self.step(cancellation) {
+                Ok(true) => return PolicyJobPoll::Ready,
+                Ok(false) => {}
+                Err(error) => {
+                    self.fail(error);
+                    return PolicyJobPoll::Ready;
+                }
+            }
+        }
+        PolicyJobPoll::Pending
+    }
+
+    fn step(&mut self, cancellation: &dyn PolicyCancellation) -> Result<bool, PolicyError> {
+        match self.phase {
+            RenderPlanJobPhase::Validate => self.step_validate(),
+            RenderPlanJobPhase::Canonicalize => self.step_canonicalize(cancellation),
+            RenderPlanJobPhase::HashCanonical => self.step_hash_canonical(),
+            RenderPlanJobPhase::Initialize => self.step_initialize(),
+            RenderPlanJobPhase::AllocateContent => self.step_allocate_content(),
+            RenderPlanJobPhase::BuildContent => self.step_build_content(),
+            RenderPlanJobPhase::AllocateManifest => self.step_allocate_manifest(),
+            RenderPlanJobPhase::BuildManifest => self.step_build_manifest(),
+            RenderPlanJobPhase::EncodeManifest => self.step_encode_manifest(cancellation),
+            RenderPlanJobPhase::HashManifest => self.step_hash_manifest(),
+            RenderPlanJobPhase::AllocateTiles => self.step_allocate_tiles(),
+            RenderPlanJobPhase::BuildTiles => self.step_build_tiles(),
+            RenderPlanJobPhase::Publish => self.step_publish(),
+        }
+    }
+
+    fn step_validate(&mut self) -> Result<bool, PolicyError> {
+        let decision = self
+            .decision
+            .as_ref()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        if decision.status() != CapabilityStatus::Supported {
+            let decision = self
+                .decision
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?;
+            self.terminal = Some(Ok(RenderPlanOutcome::NotPublishable(decision)));
+            return Ok(true);
+        }
+        self.phase = RenderPlanJobPhase::Canonicalize;
+        Ok(false)
+    }
+
+    fn step_canonicalize(
+        &mut self,
+        cancellation: &dyn PolicyCancellation,
+    ) -> Result<bool, PolicyError> {
+        struct Observer<'a> {
+            cancellation: &'a dyn PolicyCancellation,
+            limit: u64,
+            observed: u64,
+            error: Option<PolicyError>,
+        }
+        impl SceneCanonicalObserver for Observer<'_> {
+            fn observe(&mut self, fragment: &[u8]) -> bool {
+                if self.cancellation.is_cancelled() {
+                    self.error = Some(PolicyError::cancelled());
+                    return false;
+                }
+                let Ok(additional) = u64::try_from(fragment.len()) else {
+                    self.error = Some(PolicyError::numeric_overflow());
+                    return false;
+                };
+                let Some(attempted) = self.observed.checked_add(additional) else {
+                    self.error = Some(PolicyError::numeric_overflow());
+                    return false;
+                };
+                if attempted > self.limit {
+                    self.error = Some(PolicyError::resource(
+                        PolicyLimitKind::AtomicCanonicalBytes,
+                        self.limit,
+                        self.observed,
+                        additional,
+                    ));
+                    return false;
+                }
+                self.observed = attempted;
+                true
+            }
+        }
+        let mut observer = Observer {
+            cancellation,
+            limit: self.job_limits.max_atomic_canonical_bytes(),
+            observed: 0,
+            error: None,
+        };
+        let canonical = match self.scene.canonical_json_bytes_observed(&mut observer) {
+            Ok(value) => value,
+            Err(error) if error.code() == SceneErrorCode::CanonicalizationInterrupted => {
+                return Err(observer
+                    .error
+                    .unwrap_or_else(PolicyError::scene_canonicalization));
+            }
+            Err(_) => return Err(PolicyError::scene_canonicalization()),
+        };
+        let retained = render_vec_capacity_bytes(&canonical)?;
+        self.stats.charge_allocation(retained, self.job_limits)?;
+        self.stats.set_atomic_canonical_bytes(
+            u64::try_from(canonical.len()).map_err(|_| PolicyError::numeric_overflow())?,
+        );
+        let mut hasher = CanonicalHasher::new(b"scene/canonical-json/v1");
+        hasher.u64(u64::try_from(canonical.len()).map_err(|_| PolicyError::numeric_overflow())?);
+        self.canonical = Some(canonical);
+        self.canonical_hasher = Some(hasher);
+        self.phase = RenderPlanJobPhase::HashCanonical;
+        Ok(false)
+    }
+
+    fn step_hash_canonical(&mut self) -> Result<bool, PolicyError> {
+        let canonical = self
+            .canonical
+            .as_ref()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        if let Some(chunk) = canonical
+            .get(self.canonical_offset..)
+            .and_then(|remaining| remaining.chunks(4 * 1024).next())
+        {
+            self.canonical_hasher
+                .as_mut()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .bytes(chunk);
+            self.canonical_offset = self
+                .canonical_offset
+                .checked_add(chunk.len())
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        let scene_hash = SceneHash::new(
+            self.canonical_hasher
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .finish()?,
+        );
+        self.actual_subject = Some(CapabilitySubject::from_scene_hash(
+            &self.scene,
+            self.decision
+                .as_ref()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .subject()
+                .document_revision(),
+            scene_hash,
+        ));
+        let released = render_vec_capacity_bytes(
+            self.canonical
+                .as_ref()
+                .ok_or_else(PolicyError::identity_mismatch)?,
+        )?;
+        self.canonical = None;
+        self.stats.release(released)?;
+        self.phase = RenderPlanJobPhase::Initialize;
+        Ok(false)
+    }
+
+    fn step_initialize(&mut self) -> Result<bool, PolicyError> {
+        let decision = self
+            .decision
+            .as_ref()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let actual_subject = self
+            .actual_subject
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        if actual_subject != decision.subject()
+            || decision.missing_total() != 0
+            || !decision.missing().is_empty()
+            || decision.rejection_code().is_some()
+        {
+            return Err(PolicyError::identity_mismatch());
+        }
+        ensure_plan_dimensions(self.request.clip(), self.limits)?;
+        let geometry_hash = hash_geometry(self.scene.geometry())?;
+        self.viewport = Some(ViewportIdentity {
+            generation: self.request.generation(),
+            geometry_hash,
+            clip: self.request.clip(),
+            zoom: self.request.zoom(),
+            device_scale_milli: self.request.device_scale_milli(),
+            rotation: self.request.rotation(),
+            optional_content: self.request.optional_content(),
+            annotation_revision: self.request.annotation_revision(),
+        });
+        let (tile_width, tile_height) = self.config.tile_size();
+        self.columns = ceil_div(self.request.clip().width(), tile_width)?;
+        self.rows = ceil_div(self.request.clip().height(), tile_height)?;
+        self.tile_count = self
+            .columns
+            .checked_mul(self.rows)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        if self.tile_count > self.limits.max_tiles() {
+            return Err(PolicyError::resource(
+                PolicyLimitKind::Tiles,
+                u64::from(self.limits.max_tiles()),
+                0,
+                u64::from(self.tile_count),
+            ));
+        }
+        self.phase = RenderPlanJobPhase::AllocateContent;
+        Ok(false)
+    }
+
+    fn step_allocate_content(&mut self) -> Result<bool, PolicyError> {
+        render_reserve_job_vec(
+            &mut self.content_keys,
+            usize::try_from(self.tile_count).map_err(|_| PolicyError::numeric_overflow())?,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        self.phase = RenderPlanJobPhase::BuildContent;
+        Ok(false)
+    }
+
+    fn step_build_content(&mut self) -> Result<bool, PolicyError> {
+        if self.tile_index == self.tile_count {
+            self.phase = RenderPlanJobPhase::AllocateManifest;
+            return Ok(false);
+        }
+        let subject = self
+            .actual_subject
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let viewport = self.viewport.ok_or_else(PolicyError::identity_mismatch)?;
+        let row = self.tile_index / self.columns;
+        let column = self.tile_index % self.columns;
+        let (tile_width, tile_height) = self.config.tile_size();
+        let x_offset = column
+            .checked_mul(tile_width)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        let y_offset = row
+            .checked_mul(tile_height)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        let tile = DeviceRect::new(
+            add_unsigned_i32(self.request.clip().x(), x_offset)?,
+            add_unsigned_i32(self.request.clip().y(), y_offset)?,
+            self.request
+                .clip()
+                .width()
+                .checked_sub(x_offset)
+                .ok_or_else(PolicyError::numeric_overflow)?
+                .min(tile_width),
+            self.request
+                .clip()
+                .height()
+                .checked_sub(y_offset)
+                .ok_or_else(PolicyError::numeric_overflow)?
+                .min(tile_height),
+        )?;
+        let mut key = TileContentKey {
+            source: subject.source(),
+            document_revision: subject.document_revision(),
+            revision_startxref: subject.revision_startxref(),
+            page_index: subject.page_index(),
+            page_object_number: subject.page_object_number(),
+            page_object_generation: subject.page_object_generation(),
+            scene_hash: subject.scene_hash(),
+            decision_hash: self
+                .decision
+                .as_ref()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .hash(),
+            geometry_hash: viewport.geometry_hash(),
+            viewport_clip: self.request.clip(),
+            zoom: self.request.zoom(),
+            device_scale_milli: self.request.device_scale_milli(),
+            rotation: self.request.rotation(),
+            optional_content: self.request.optional_content(),
+            annotation_revision: self.request.annotation_revision(),
+            tile,
+            quality: self.config.quality(),
+            output_profile: self.config.output_profile(),
+            render_config_hash: self.config.hash(),
+            renderer_epoch: self.renderer_epoch,
+            backend: self.config.backend(),
+            hash: TileContentHash::new([0; 32]),
+        };
+        key.hash = TileContentHash::new(hash_tile_content(&key)?);
+        self.content_keys.push(key);
+        self.tile_index = self
+            .tile_index
+            .checked_add(1)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        Ok(false)
+    }
+
+    fn step_allocate_manifest(&mut self) -> Result<bool, PolicyError> {
+        let capacity =
+            usize::try_from(self.tile_count).map_err(|_| PolicyError::numeric_overflow())?;
+        render_reserve_job_vec(
+            &mut self.manifest_regions,
+            capacity,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        render_reserve_job_vec(
+            &mut self.manifest_hashes,
+            capacity,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        self.phase = RenderPlanJobPhase::BuildManifest;
+        Ok(false)
+    }
+
+    fn step_build_manifest(&mut self) -> Result<bool, PolicyError> {
+        if let Some(tile) = self.content_keys.get(self.manifest_index) {
+            let rectangle = tile.tile();
+            self.manifest_regions.push(pdf_rs_protocol::SurfaceRegion {
+                page_index: tile.page_index(),
+                x: rectangle.x(),
+                y: rectangle.y(),
+                width: rectangle.width(),
+                height: rectangle.height(),
+                coordinate_space: pdf_rs_protocol::SurfaceCoordinateSpace::DevicePixelsTopLeft,
+            });
+            self.manifest_hashes
+                .push(pdf_rs_protocol::TileContentHash::new(
+                    tile.hash().into_digest(),
+                ));
+            self.manifest_index = self
+                .manifest_index
+                .checked_add(1)
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        let decision = self
+            .decision
+            .as_ref()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        let subject = decision.subject();
+        let viewport = self.viewport.ok_or_else(PolicyError::identity_mismatch)?;
+        let clip = viewport.clip();
+        let manifest = pdf_rs_protocol::RenderPlanManifest {
+            plan_schema_version: RENDER_PLAN_SCHEMA_VERSION,
+            document_revision: subject.document_revision(),
+            render_config: pdf_rs_protocol::RenderConfigHash::new(self.config.hash().into_digest()),
+            renderer_epoch: pdf_rs_protocol::RendererEpoch::new(self.renderer_epoch.value()),
+            plan_id: RenderPlanId::new(self.request.generation()),
+            generation: self.request.generation(),
+            scene_hash: pdf_rs_protocol::SceneHash::new(subject.scene_hash().into_digest()),
+            decision_hash: pdf_rs_protocol::CapabilityDecisionHash::new(
+                decision.hash().into_digest(),
+            ),
+            geometry_hash: pdf_rs_protocol::GeometryHash::new(
+                viewport.geometry_hash().into_digest(),
+            ),
+            viewport_clip: pdf_rs_protocol::SurfaceRegion {
+                page_index: subject.page_index(),
+                x: clip.x(),
+                y: clip.y(),
+                width: clip.width(),
+                height: clip.height(),
+                coordinate_space: pdf_rs_protocol::SurfaceCoordinateSpace::DevicePixelsTopLeft,
+            },
+            zoom_numerator: viewport.zoom().numerator(),
+            zoom_denominator: viewport.zoom().denominator(),
+            device_scale_milli: viewport.device_scale_milli(),
+            rotation: protocol_page_rotation(viewport.rotation()),
+            optional_content: viewport.optional_content().value(),
+            annotation_revision: viewport.annotation_revision(),
+            backend: match self.config.backend() {
+                NativeBackend::ReferenceCpu => pdf_rs_protocol::NativeBackend::ReferenceCpu,
+                NativeBackend::FastCpu => pdf_rs_protocol::NativeBackend::FastCpu,
+            },
+            output_profile: pdf_rs_protocol::OutputProfile::Srgb,
+            quality: match self.config.quality() {
+                QualityPolicy::Preview => pdf_rs_protocol::QualityPolicy::Preview,
+                QualityPolicy::Full => pdf_rs_protocol::QualityPolicy::Full,
+            },
+            regions: std::mem::take(&mut self.manifest_regions),
+            tile_content_hashes: std::mem::take(&mut self.manifest_hashes),
+        };
+        if !manifest.wire_invariants_valid() {
+            return Err(PolicyError::identity_mismatch());
+        }
+        self.manifest = Some(manifest);
+        self.phase = RenderPlanJobPhase::EncodeManifest;
+        Ok(false)
+    }
+
+    fn step_encode_manifest(
+        &mut self,
+        cancellation: &dyn PolicyCancellation,
+    ) -> Result<bool, PolicyError> {
+        let estimated = u64::from(self.tile_count)
+            .checked_mul(256)
+            .and_then(|value| value.checked_add(4 * 1024))
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        if estimated
+            > self
+                .job_limits
+                .max_retained_bytes()
+                .saturating_sub(self.stats.retained_bytes())
+        {
+            return Err(PolicyError::resource(
+                PolicyLimitKind::JobRetainedBytes,
+                self.job_limits.max_retained_bytes(),
+                self.stats.retained_bytes(),
+                estimated,
+            ));
+        }
+        let mut work = CancellationWork::new(cancellation, self.limits.cancellation_interval())?;
+        let preimage = crate::protocol_projection::render_plan_manifest_hash_preimage(
+            self.manifest
+                .as_ref()
+                .ok_or_else(PolicyError::identity_mismatch)?,
+            &mut work,
+        )?;
+        let retained = render_vec_capacity_bytes(&preimage)?;
+        self.stats.charge_allocation(retained, self.job_limits)?;
+        self.manifest_preimage = Some(preimage);
+        self.manifest_hasher = Some(PreimageHasher::new());
+        self.phase = RenderPlanJobPhase::HashManifest;
+        Ok(false)
+    }
+
+    fn step_hash_manifest(&mut self) -> Result<bool, PolicyError> {
+        let preimage = self
+            .manifest_preimage
+            .as_ref()
+            .ok_or_else(PolicyError::identity_mismatch)?;
+        if let Some(chunk) = preimage
+            .get(self.manifest_preimage_offset..)
+            .and_then(|remaining| remaining.chunks(4 * 1024).next())
+        {
+            self.manifest_hasher
+                .as_mut()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .update(chunk)?;
+            self.manifest_preimage_offset = self
+                .manifest_preimage_offset
+                .checked_add(chunk.len())
+                .ok_or_else(PolicyError::numeric_overflow)?;
+            return Ok(false);
+        }
+        self.plan_hash = Some(RenderPlanHash::new(
+            self.manifest_hasher
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?
+                .finish()?,
+        ));
+        let released = render_vec_capacity_bytes(
+            self.manifest_preimage
+                .as_ref()
+                .ok_or_else(PolicyError::identity_mismatch)?,
+        )?;
+        self.manifest_preimage = None;
+        self.stats.release(released)?;
+        self.phase = RenderPlanJobPhase::AllocateTiles;
+        Ok(false)
+    }
+
+    fn step_allocate_tiles(&mut self) -> Result<bool, PolicyError> {
+        render_reserve_job_vec(
+            &mut self.tiles,
+            usize::try_from(self.tile_count).map_err(|_| PolicyError::numeric_overflow())?,
+            self.job_limits,
+            &mut self.stats,
+        )?;
+        self.phase = RenderPlanJobPhase::BuildTiles;
+        Ok(false)
+    }
+
+    fn step_build_tiles(&mut self) -> Result<bool, PolicyError> {
+        let Some(content_key) = self.content_keys.get(self.planned_tile_index).cloned() else {
+            let released = render_vec_capacity_bytes(&self.content_keys)?;
+            self.content_keys = Vec::new();
+            self.stats.release(released)?;
+            self.phase = RenderPlanJobPhase::Publish;
+            return Ok(false);
+        };
+        let ordinal =
+            u32::try_from(self.planned_tile_index).map_err(|_| PolicyError::numeric_overflow())?;
+        let id = RenderPlanId::new(self.request.generation());
+        let plan_hash = self.plan_hash.ok_or_else(PolicyError::identity_mismatch)?;
+        let hash = PlannedTileHash::new(hash_planned_tile(
+            ordinal,
+            &content_key,
+            self.request.generation(),
+            id,
+            plan_hash,
+        )?);
+        self.tiles.push(PlannedTileIdentity {
+            ordinal,
+            content_key,
+            generation: self.request.generation(),
+            plan_id: id,
+            plan_hash,
+            hash,
+        });
+        self.planned_tile_index = self
+            .planned_tile_index
+            .checked_add(1)
+            .ok_or_else(PolicyError::numeric_overflow)?;
+        Ok(false)
+    }
+
+    fn step_publish(&mut self) -> Result<bool, PolicyError> {
+        if self.tiles.len()
+            != usize::try_from(self.tile_count).map_err(|_| PolicyError::numeric_overflow())?
+        {
+            return Err(PolicyError::identity_mismatch());
+        }
+        let plan = RenderPlan {
+            schema_version: RENDER_PLAN_SCHEMA_VERSION,
+            id: RenderPlanId::new(self.request.generation()),
+            hash: self.plan_hash.ok_or_else(PolicyError::identity_mismatch)?,
+            decision: self
+                .decision
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?,
+            viewport: self.viewport.ok_or_else(PolicyError::identity_mismatch)?,
+            config: self.config,
+            renderer_epoch: self.renderer_epoch,
+            manifest: self
+                .manifest
+                .take()
+                .ok_or_else(PolicyError::identity_mismatch)?,
+            tiles: std::mem::take(&mut self.tiles),
+        };
+        self.terminal = Some(Ok(RenderPlanOutcome::Ready(plan)));
+        Ok(true)
+    }
+
+    fn fail(&mut self, error: PolicyError) {
+        self.canonical = None;
+        self.content_keys = Vec::new();
+        self.manifest_regions = Vec::new();
+        self.manifest_hashes = Vec::new();
+        self.manifest = None;
+        self.manifest_preimage = None;
+        self.tiles = Vec::new();
+        self.stats.clear_retained();
+        self.terminal = Some(Err(error));
+    }
+}
+
+impl fmt::Debug for RenderPlanJob {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RenderPlanJob")
+            .field("request", &self.request)
+            .field("renderer_epoch", &self.renderer_epoch)
+            .field("job_limits", &self.job_limits)
+            .field("stats", &self.stats)
+            .field("phase", &self.phase)
+            .field("terminal", &self.terminal.as_ref().map(Result::is_ok))
+            .field("scene", &"[REDACTED]")
+            .field("working_bytes", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// Creates a complete immutable Native plan or preserves a nonpublishable decision.
 #[allow(
     clippy::too_many_arguments,
@@ -539,155 +1287,86 @@ pub fn create_render_plan(
     limits: PolicyLimits,
     cancellation: &dyn PolicyCancellation,
 ) -> Result<RenderPlanOutcome, PolicyError> {
-    if decision.status() != CapabilityStatus::Supported {
-        return Ok(RenderPlanOutcome::NotPublishable(decision));
-    }
-    let mut work = CancellationWork::new(cancellation, limits.cancellation_interval())?;
-    let actual_subject =
-        subject_for_scene(scene, decision.subject().document_revision(), &mut work)?;
-    if actual_subject != decision.subject()
-        || decision.missing_total() != 0
-        || !decision.missing().is_empty()
-        || decision.rejection_code().is_some()
-    {
-        return Err(PolicyError::identity_mismatch());
-    }
-
-    ensure_plan_dimensions(request.clip(), limits)?;
-    let geometry_hash = hash_geometry(scene.geometry())?;
-    let viewport = ViewportIdentity {
-        generation: request.generation(),
-        geometry_hash,
-        clip: request.clip(),
-        zoom: request.zoom(),
-        device_scale_milli: request.device_scale_milli(),
-        rotation: request.rotation(),
-        optional_content: request.optional_content(),
-        annotation_revision: request.annotation_revision(),
-    };
-
-    let (tile_width, tile_height) = config.tile_size();
-    let columns = ceil_div(request.clip().width(), tile_width)?;
-    let rows = ceil_div(request.clip().height(), tile_height)?;
-    let tile_count = columns
-        .checked_mul(rows)
-        .ok_or_else(PolicyError::numeric_overflow)?;
-    if tile_count > limits.max_tiles() {
-        return Err(PolicyError::resource(
-            PolicyLimitKind::Tiles,
-            u64::from(limits.max_tiles()),
-            0,
-            u64::from(tile_count),
-        ));
-    }
-
-    let tile_capacity = usize::try_from(tile_count).map_err(|_| PolicyError::numeric_overflow())?;
-    let mut content_keys = Vec::new();
-    content_keys
-        .try_reserve_exact(tile_capacity)
-        .map_err(|_| PolicyError::allocation())?;
-    for row in 0..rows {
-        let y_offset = row
-            .checked_mul(tile_height)
-            .ok_or_else(PolicyError::numeric_overflow)?;
-        let y = add_unsigned_i32(request.clip().y(), y_offset)?;
-        let remaining_height = request
-            .clip()
-            .height()
-            .checked_sub(y_offset)
-            .ok_or_else(PolicyError::numeric_overflow)?;
-        let height = remaining_height.min(tile_height);
-        for column in 0..columns {
-            let x_offset = column
-                .checked_mul(tile_width)
-                .ok_or_else(PolicyError::numeric_overflow)?;
-            let x = add_unsigned_i32(request.clip().x(), x_offset)?;
-            let remaining_width = request
-                .clip()
-                .width()
-                .checked_sub(x_offset)
-                .ok_or_else(PolicyError::numeric_overflow)?;
-            let width = remaining_width.min(tile_width);
-            let tile = DeviceRect::new(x, y, width, height)?;
-            let mut key = TileContentKey {
-                source: actual_subject.source(),
-                document_revision: actual_subject.document_revision(),
-                revision_startxref: actual_subject.revision_startxref(),
-                page_index: actual_subject.page_index(),
-                page_object_number: actual_subject.page_object_number(),
-                page_object_generation: actual_subject.page_object_generation(),
-                scene_hash: actual_subject.scene_hash(),
-                decision_hash: decision.hash(),
-                geometry_hash,
-                viewport_clip: request.clip(),
-                zoom: request.zoom(),
-                device_scale_milli: request.device_scale_milli(),
-                rotation: request.rotation(),
-                optional_content: request.optional_content(),
-                annotation_revision: request.annotation_revision(),
-                tile,
-                quality: config.quality(),
-                output_profile: config.output_profile(),
-                render_config_hash: config.hash(),
-                renderer_epoch,
-                backend: config.backend(),
-                hash: TileContentHash::new([0; 32]),
-            };
-            key.hash = TileContentHash::new(hash_tile_content(&key)?);
-            content_keys.push(key);
-            work.step()?;
+    let scene = Arc::new(scene.clone());
+    let job_limits =
+        PolicyJobLimits::synchronous_compatibility(canonical_scene_upper_bound(&scene), u64::MAX);
+    let mut job = RenderPlanJob::new_compatibility(
+        scene,
+        decision,
+        config,
+        request,
+        renderer_epoch,
+        limits,
+        job_limits,
+    );
+    let budget = PolicyPollBudget::new(
+        NonZeroU32::new(4_096).expect("fixed synchronous poll budget is nonzero"),
+    )?;
+    loop {
+        match job.poll(budget, cancellation) {
+            PolicyJobPoll::Pending => {}
+            PolicyJobPoll::Ready => {
+                return job
+                    .take_result()
+                    .ok_or_else(PolicyError::identity_mismatch)?;
+            }
         }
     }
-    if content_keys.len() != tile_capacity {
-        return Err(PolicyError::identity_mismatch());
-    }
+}
 
-    let id = RenderPlanId::new(request.generation());
-    let manifest = crate::protocol_projection::render_plan_manifest(
-        &decision,
-        viewport,
-        config,
-        renderer_epoch,
-        id,
-        &content_keys,
-        &mut work,
-    )?;
-    let plan_hash = RenderPlanHash::new(hash_render_plan_manifest(&manifest, &mut work)?);
-    let mut tiles = Vec::new();
-    tiles
-        .try_reserve_exact(tile_capacity)
-        .map_err(|_| PolicyError::allocation())?;
-    for (ordinal, content_key) in content_keys.into_iter().enumerate() {
-        let ordinal = u32::try_from(ordinal).map_err(|_| PolicyError::numeric_overflow())?;
-        let hash = PlannedTileHash::new(hash_planned_tile(
-            ordinal,
-            &content_key,
-            request.generation(),
-            id,
-            plan_hash,
-        )?);
-        tiles.push(PlannedTileIdentity {
-            ordinal,
-            content_key,
-            generation: request.generation(),
-            plan_id: id,
-            plan_hash,
-            hash,
-        });
-        work.step()?;
+fn render_vec_capacity_bytes<T>(values: &Vec<T>) -> Result<u64, PolicyError> {
+    u64::try_from(values.capacity())
+        .ok()
+        .and_then(|count| {
+            u64::try_from(size_of::<T>())
+                .ok()
+                .and_then(|width| count.checked_mul(width))
+        })
+        .ok_or_else(PolicyError::numeric_overflow)
+}
+
+fn render_reserve_job_vec<T>(
+    values: &mut Vec<T>,
+    capacity: usize,
+    limits: PolicyJobLimits,
+    stats: &mut PolicyJobStats,
+) -> Result<(), PolicyError> {
+    if capacity == 0 {
+        return Ok(());
     }
-    work.check()?;
-    Ok(RenderPlanOutcome::Ready(RenderPlan {
-        schema_version: RENDER_PLAN_SCHEMA_VERSION,
-        id,
-        hash: plan_hash,
-        decision,
-        viewport,
-        config,
-        renderer_epoch,
-        manifest,
-        tiles,
-    }))
+    let requested = u64::try_from(capacity)
+        .ok()
+        .and_then(|count| {
+            u64::try_from(size_of::<T>())
+                .ok()
+                .and_then(|width| count.checked_mul(width))
+        })
+        .ok_or_else(PolicyError::numeric_overflow)?;
+    if requested
+        > limits
+            .max_retained_bytes()
+            .saturating_sub(stats.retained_bytes())
+    {
+        return Err(PolicyError::resource(
+            PolicyLimitKind::JobRetainedBytes,
+            limits.max_retained_bytes(),
+            stats.retained_bytes(),
+            requested,
+        ));
+    }
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| PolicyError::allocation())?;
+    stats.charge_allocation(render_vec_capacity_bytes(values)?, limits)
+}
+
+const fn protocol_page_rotation(rotation: PageRotation) -> pdf_rs_protocol::PageRotation {
+    match rotation {
+        PageRotation::Degrees0 => pdf_rs_protocol::PageRotation::Degrees0,
+        PageRotation::Degrees90 => pdf_rs_protocol::PageRotation::Degrees90,
+        PageRotation::Degrees180 => pdf_rs_protocol::PageRotation::Degrees180,
+        PageRotation::Degrees270 => pdf_rs_protocol::PageRotation::Degrees270,
+    }
 }
 
 fn ensure_plan_dimensions(clip: DeviceRect, limits: PolicyLimits) -> Result<(), PolicyError> {
@@ -767,6 +1446,7 @@ fn hash_tile_content(key: &TileContentKey) -> Result<[u8; 32], PolicyError> {
     hasher.finish()
 }
 
+#[cfg(test)]
 fn hash_render_plan_manifest(
     manifest: &pdf_rs_protocol::RenderPlanManifest,
     work: &mut CancellationWork<'_>,
