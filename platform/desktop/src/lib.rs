@@ -14,6 +14,7 @@ mod error;
 mod limits;
 mod native_adapter;
 mod process;
+mod sandbox;
 mod source;
 mod supervisor;
 #[cfg(unix)]
@@ -29,6 +30,10 @@ pub use limits::{DesktopIpcLimitConfig, DesktopIpcLimits};
 pub use process::{
     DESKTOP_CHILD_PANIC_EXIT_CODE, DesktopEpochManager, DesktopHostProcess, PendingDesktopRecord,
     run_child_stdio,
+};
+pub use sandbox::{
+    DESKTOP_PRODUCT_SANDBOX_TARGET_ID, DesktopProductSandboxAvailability,
+    desktop_product_sandbox_availability,
 };
 pub use source::{HostRangeBridge, HostSourceSnapshot, SourceSegment};
 pub use supervisor::{

@@ -22,6 +22,8 @@ pub enum DesktopIpcErrorCode {
     TransportTimeout,
     /// Child lifecycle, shutdown, or restart state is invalid.
     Lifecycle,
+    /// Product launch lacks a verified operating-system isolation boundary.
+    IsolationUnavailable,
     /// A child panic was contained at the process boundary.
     ChildPanic,
     /// Checked arithmetic or a bounded allocation failed.

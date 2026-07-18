@@ -414,9 +414,12 @@ fn crash_restarts_new_epoch_cleans_resources_and_rejects_late_record_and_fd() {
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(2, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, cleanup_resources(limits))
-            .expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(
+        worker_path(),
+        config,
+        cleanup_resources(limits),
+    )
+    .expect("initial child");
     let old_worker = supervisor.worker_id().expect("old worker");
     let old_epoch = supervisor.worker_epoch().expect("old epoch");
     let handshake = negotiate(&mut supervisor, limits);
@@ -510,9 +513,12 @@ fn queued_render_disconnect_before_worker_execution_retires_epoch_and_restarts_o
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, cleanup_resources(limits))
-            .expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(
+        worker_path(),
+        config,
+        cleanup_resources(limits),
+    )
+    .expect("initial child");
     let old_worker = supervisor.worker_id().expect("old worker");
     let old_epoch = supervisor.worker_epoch().expect("old epoch");
     let handshake = negotiate(&mut supervisor, limits);
@@ -601,8 +607,8 @@ fn nonzero_child_exit_maps_to_fault_and_rehandshakes_once() {
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, ()).expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(worker_path(), config, ())
+        .expect("initial child");
     let old_epoch = supervisor.worker_epoch().expect("old epoch");
     let handshake = negotiate(&mut supervisor, limits);
     let malformed = supervisor
@@ -626,8 +632,8 @@ fn abort_child_maps_to_panic_and_restarts_once() {
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, ()).expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(worker_path(), config, ())
+        .expect("initial child");
     let old_epoch = supervisor.worker_epoch().expect("old epoch");
     let handshake = negotiate(&mut supervisor, limits);
 
@@ -646,8 +652,8 @@ fn idle_transport_timeout_fault_restarts_and_rehandshakes() {
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, ()).expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(worker_path(), config, ())
+        .expect("initial child");
     let old_epoch = supervisor.worker_epoch().expect("old epoch");
     let handshake = negotiate(&mut supervisor, limits);
     supervisor
@@ -671,8 +677,8 @@ fn graceful_shutdown_never_restarts() {
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(2, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, ()).expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(worker_path(), config, ())
+        .expect("initial child");
     let handshake = negotiate(&mut supervisor, limits);
     let decoder = DesktopFrameDecoder::for_handshake(handshake);
     supervisor
@@ -717,8 +723,8 @@ fn restart_limit_is_terminal_and_cannot_storm() {
     let limits = limits();
     let config =
         DesktopSupervisorConfig::new(2, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor =
-        DesktopChildSupervisor::start(worker_path(), config, ()).expect("initial child");
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(worker_path(), config, ())
+        .expect("initial child");
     let mut last_epoch = supervisor.worker_epoch().expect("initial epoch");
 
     for fault_index in 0_u8..=2 {

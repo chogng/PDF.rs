@@ -363,7 +363,7 @@ fn rejects_adversarial_child_transfer_without_fd_leak(case: AdversarialCase) {
     let before_spawn = open_fd_count();
     let config =
         DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor = DesktopChildSupervisor::start(
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(
         fixture.path().to_str().expect("UTF-8 fixture path"),
         config,
         RetiredEpochs::default(),

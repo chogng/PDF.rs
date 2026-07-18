@@ -1,0 +1,97 @@
+schema = 1
+id = "m4.macos-app-sandbox-inherited-worker.v1"
+selected = true
+status = "prerequisite_only"
+release_eligible = false
+m4_09_status = "in_progress"
+m4_10_status = "planned"
+
+[target]
+os = "macos"
+architectures = ["arm64", "x86_64"]
+ui = "AppKit host with NSOpenPanel PowerBox acquisition"
+ipc = "launch-private Unix socketpair plus authenticated fixed_le_v1 records and SCM_RIGHTS"
+sandbox = "signed macOS App Sandbox host with directly spawned inherited helper"
+surface = "unlinked read-only POSIX shared memory or sandbox-container private-file fallback"
+
+[entitlements]
+host = "platform/desktop/macos/host.entitlements"
+worker = "platform/desktop/macos/worker.entitlements"
+host_exact = [
+  "com.apple.security.app-sandbox",
+  "com.apple.security.files.user-selected.read-only",
+]
+worker_exact = [
+  "com.apple.security.app-sandbox",
+  "com.apple.security.inherit",
+]
+network = "none"
+broad_filesystem = "none"
+temporary_exceptions = "none"
+app_groups = "none"
+
+[isolation_contract]
+source_owner = "host"
+source_delivery = "exact immutable authenticated Range bytes through read-only transferred handles"
+source_path_to_worker = false
+source_file_descriptor_to_worker = false
+powerbox_extension_to_worker = false
+worker_network_entitlement = false
+worker_arbitrary_filesystem_entitlement = false
+worker_filesystem = "inherited parent-app container and sandbox-provided temporary storage only; no arbitrary external paths"
+worker_ipc = "only the inherited authenticated socket and validated transferred read-only handles"
+
+[surface_probe]
+backend_must_be_recorded = true
+sandbox_tmpdir_fallback_required_when_posix_shm_is_denied = true
+read_only_reopen_required = true
+unlink_before_scm_rights_required = true
+receiver_extent_and_rights_validation_required = true
+worker_exit_zero_residual_objects_required = true
+app_group_shm_exception_allowed = false
+
+[spawn_fd_contract]
+current = "crate-created socket and transferred handles are CLOEXEC; a crate-local lock serializes socketpair-to-exec"
+required = "Darwin POSIX_SPAWN_CLOEXEC_DEFAULT with explicit stdin/stdout file actions through a separately reviewed repository-owned unsafe wrapper, plus a real inherited-FD allowlist probe"
+implemented = false
+security_claim = "FD hygiene only; never an operating-system sandbox"
+residual_risk = "unrelated host threads can deliberately create a non-CLOEXEC descriptor outside the crate-local lock"
+
+[product_gate]
+api = "DesktopChildSupervisor::start_product_macos"
+current = "IsolationUnavailable before spawn"
+transport_fixture_feature = "transport-fixture"
+transport_fixture_feature_default = false
+transport_fixture_feature_product_allowed = false
+caller_attestation_accepted = false
+environment_attestation_accepted = false
+unsigned_binary_accepted = false
+transport_fixture_is_product = false
+
+[required_closure]
+items = [
+  "signed parent .app with the exact host entitlement set",
+  "embedded helper signed on copy with the exact worker entitlement set",
+  "codesign verification of identifiers, hardened runtime, nested code, and exact entitlements",
+  "product Cargo feature closure rejects transport-fixture",
+  "real child denial probes for a host-readable PowerBox file and a live loopback network listener",
+  "real child success probes for the inherited authenticated socket and read-only shared-memory transfer",
+  "recorded sandbox Surface backend proving inherited parent-app TMPDIR fallback when POSIX shared memory is denied",
+  "read-only reopen, unlink-before-SCM_RIGHTS, receiver validation, and zero residual shared objects after child exit",
+  "no app-group or temporary-exception widening for /pdf-rs-* shared-memory names",
+  "separately reviewed repository-owned Darwin spawn wrapper retaining the safe desktop crate's forbid(unsafe_code) boundary",
+  "atomic default-close FD spawn with an inherited-descriptor allowlist probe",
+  "package and CI artifact hashes bound to the selected universal macOS target",
+]
+
+[prohibited]
+mechanisms = [
+  "sandbox-exec",
+  "sandbox_init",
+  "private Seatbelt APIs",
+  "caller booleans, strings, environment variables, or self-authored evidence as isolation proof",
+]
+
+[references]
+helper = "https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app"
+inheritance = "https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html"

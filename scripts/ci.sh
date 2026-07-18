@@ -26,6 +26,7 @@ cargo run --quiet --package pdf-rs-quality -- "$lane"
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo test --locked --package pdf-rs-desktop --all-targets --features transport-fixture
 cargo run --quiet --package pdf-rs-protocol-codegen -- --check .
 cargo run --quiet --package pdf-rs-generate -- \
     tests/cases/infrastructure/synthetic-failure-bundle-001/source.dsl \

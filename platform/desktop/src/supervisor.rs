@@ -13,7 +13,7 @@ use pdf_rs_surface::WorkerEpoch;
 use crate::{
     DesktopCapabilityTable, DesktopEpochManager, DesktopHostProcess, DesktopIpcError,
     DesktopIpcErrorCode, DesktopIpcLimits, DesktopWireRecord, HostRangeBridge, error::error,
-    process::DESKTOP_CHILD_PANIC_EXIT_CODE,
+    process::DESKTOP_CHILD_PANIC_EXIT_CODE, sandbox::DesktopProductSandboxGate,
 };
 
 const DEFAULT_RESTART_LIMIT: u8 = 2;
@@ -240,6 +240,7 @@ impl<A: DesktopEpochCleanup, B: DesktopEpochCleanup> DesktopEpochCleanup for (A,
 pub struct DesktopChildSupervisor<C: DesktopEpochCleanup> {
     program: String,
     config: DesktopSupervisorConfig,
+    launch: DesktopSupervisorLaunch,
     epochs: DesktopEpochManager,
     current: Option<DesktopHostProcess>,
     cleanup: C,
@@ -247,28 +248,73 @@ pub struct DesktopChildSupervisor<C: DesktopEpochCleanup> {
     state: DesktopSupervisorState,
 }
 
+enum DesktopSupervisorLaunch {
+    #[cfg(any(test, feature = "transport-fixture"))]
+    TransportFixture,
+    ProductMacos(DesktopProductSandboxGate),
+}
+
 impl<C: DesktopEpochCleanup> DesktopChildSupervisor<C> {
-    /// Spawns the initial isolated child and begins a supervised epoch lineage.
-    pub fn start(
+    /// Spawns a transport-only test child and begins a supervised epoch lineage.
+    ///
+    /// This exercises the authenticated process boundary but is not evidence of
+    /// filesystem or network isolation.
+    #[cfg(any(test, feature = "transport-fixture"))]
+    pub fn start_transport_fixture(
         program: impl Into<String>,
         config: DesktopSupervisorConfig,
         cleanup: C,
+    ) -> Result<Self, DesktopIpcError> {
+        Self::start_with_launch(
+            program,
+            config,
+            cleanup,
+            DesktopSupervisorLaunch::TransportFixture,
+        )
+    }
+
+    fn start_with_launch(
+        program: impl Into<String>,
+        config: DesktopSupervisorConfig,
+        cleanup: C,
+        launch: DesktopSupervisorLaunch,
     ) -> Result<Self, DesktopIpcError> {
         let program = program.into();
         if program.is_empty() {
             return Err(error(DesktopIpcErrorCode::InvalidConfiguration));
         }
         let mut epochs = DesktopEpochManager::new();
-        let current = epochs.spawn_with_timeout(&program, config.transport_timeout())?;
+        let current =
+            Self::spawn_for_launch(&mut epochs, &program, config.transport_timeout(), &launch)?;
         Ok(Self {
             program,
             config,
+            launch,
             epochs,
             current: Some(current),
             cleanup,
             restarts: 0,
             state: DesktopSupervisorState::Running,
         })
+    }
+
+    /// Starts the selected signed macOS product worker or fails closed.
+    ///
+    /// The gate cannot be supplied by a caller. Until signed parent/helper
+    /// packaging and live sandbox probes are committed, this returns
+    /// [`DesktopIpcErrorCode::IsolationUnavailable`] without spawning.
+    pub fn start_product_macos(
+        program: impl Into<String>,
+        config: DesktopSupervisorConfig,
+        cleanup: C,
+    ) -> Result<Self, DesktopIpcError> {
+        let gate = DesktopProductSandboxGate::acquire()?;
+        Self::start_with_launch(
+            program,
+            config,
+            cleanup,
+            DesktopSupervisorLaunch::ProductMacos(gate),
+        )
     }
 
     /// Returns the current supervisor state.
@@ -496,10 +542,12 @@ impl<C: DesktopEpochCleanup> DesktopChildSupervisor<C> {
         }
         self.restarts += 1;
         fault.restart_attempt = Some(self.restarts);
-        match self
-            .epochs
-            .spawn_with_timeout(&self.program, self.config.transport_timeout())
-        {
+        match Self::spawn_for_launch(
+            &mut self.epochs,
+            &self.program,
+            self.config.transport_timeout(),
+            &self.launch,
+        ) {
             Ok(replacement) => {
                 let replacement_worker = replacement.worker_id();
                 let replacement_epoch = replacement.worker_epoch();
@@ -514,6 +562,23 @@ impl<C: DesktopEpochCleanup> DesktopChildSupervisor<C> {
             }
         }
         Some(fault)
+    }
+
+    fn spawn_for_launch(
+        epochs: &mut DesktopEpochManager,
+        program: &str,
+        transport_timeout: Duration,
+        launch: &DesktopSupervisorLaunch,
+    ) -> Result<DesktopHostProcess, DesktopIpcError> {
+        match launch {
+            #[cfg(any(test, feature = "transport-fixture"))]
+            DesktopSupervisorLaunch::TransportFixture => {
+                epochs.spawn_transport_fixture_with_timeout(program, transport_timeout)
+            }
+            DesktopSupervisorLaunch::ProductMacos(gate) => {
+                epochs.spawn_product_macos_with_timeout(program, transport_timeout, gate)
+            }
+        }
     }
 
     fn retire_current(&mut self) -> bool {
@@ -572,9 +637,9 @@ fn classify_failure(
         | DesktopIpcErrorCode::Capability
         | DesktopIpcErrorCode::Source => DesktopWorkerFaultKind::ProtocolViolation,
         DesktopIpcErrorCode::ResourceLimit => DesktopWorkerFaultKind::ResourceLimit,
-        DesktopIpcErrorCode::InvalidConfiguration | DesktopIpcErrorCode::Lifecycle => {
-            DesktopWorkerFaultKind::Lifecycle
-        }
+        DesktopIpcErrorCode::InvalidConfiguration
+        | DesktopIpcErrorCode::Lifecycle
+        | DesktopIpcErrorCode::IsolationUnavailable => DesktopWorkerFaultKind::Lifecycle,
         DesktopIpcErrorCode::ChildPanic => DesktopWorkerFaultKind::ChildPanic,
         DesktopIpcErrorCode::TransportTimeout => DesktopWorkerFaultKind::TransportTimeout,
     }
@@ -584,7 +649,8 @@ fn classify_failure(
 mod tests {
     use super::{
         DesktopChildSupervisor, DesktopEpochCleanup, DesktopSupervisorConfig,
-        DesktopSupervisorState, DesktopWorkerFault, DesktopWorkerFaultKind, classify_failure,
+        DesktopSupervisorLaunch, DesktopSupervisorState, DesktopWorkerFault,
+        DesktopWorkerFaultKind, classify_failure,
     };
     use crate::{
         DesktopEpochManager, DesktopHostProcess, DesktopIpcErrorCode, error::error,
@@ -612,6 +678,19 @@ mod tests {
         assert!(DesktopSupervisorConfig::new(9, Duration::from_secs(1)).is_err());
         assert!(DesktopSupervisorConfig::new(1, Duration::ZERO).is_err());
         assert!(DesktopSupervisorConfig::new(1, Duration::from_secs(31)).is_err());
+    }
+
+    #[test]
+    fn product_macos_start_fails_before_program_launch() {
+        let config = DesktopSupervisorConfig::default();
+        let failure = DesktopChildSupervisor::start_product_macos(
+            "/path/that-must-never-be-launched",
+            config,
+            (),
+        )
+        .err()
+        .expect("workspace has no signed product sandbox attestation");
+        assert_eq!(failure.code(), DesktopIpcErrorCode::IsolationUnavailable);
     }
 
     #[test]
@@ -673,6 +752,7 @@ mod tests {
             let mut supervisor = DesktopChildSupervisor {
                 program: "/must/not/spawn".into(),
                 config: DesktopSupervisorConfig::new(2, Duration::from_secs(1)).expect("config"),
+                launch: DesktopSupervisorLaunch::TransportFixture,
                 epochs: DesktopEpochManager::new(),
                 current: Some(process),
                 cleanup: CountingCleanup(Arc::clone(&cleanup_calls)),

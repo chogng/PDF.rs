@@ -1,6 +1,27 @@
 # Desktop transport provenance
 
-M4-09 owns the host-to-child Native worker boundary. It reuses the canonical
+M4-09 owns the host-to-child Native worker boundary. The current
+`spawn_transport_fixture` and `start_transport_fixture` entrypoints prove the
+process transport but do not claim filesystem or network isolation. They are
+compiled only by the default-off `transport-fixture` feature; the product
+release build does not enable that feature. The
+separate `start_product_macos` entrypoint cannot accept a caller-provided flag,
+environment value, or self-authored attestation and currently returns stable
+`IsolationUnavailable` before spawn.
+
+The selected product target is
+`macos/sandbox-target.toml`: a signed macOS App Sandbox host acquires a local
+file through NSOpenPanel/PowerBox and directly launches an embedded helper
+signed with exactly `com.apple.security.app-sandbox` and
+`com.apple.security.inherit`. The helper receives neither the source path nor
+the host's dynamic PowerBox extension. Neither entitlement template grants
+network access, arbitrary external filesystem access, an app group, or a
+temporary sandbox exception. The worker may use only storage made available by
+its inherited parent-app container and sandbox-provided temporary directory.
+The repository does not yet contain the signed parent app/package or live
+denial evidence, so M4-09 remains in progress and product launch fails closed.
+
+The transport reuses the canonical
 generated protocol validator and the repository's Native engine, syntax,
 Scene, policy, and raster crates. The current vertical fixture validates the
 PDF header and builds a self-authored nonblank Scene; it does not claim general
@@ -14,6 +35,11 @@ PID, launch token, direction, and epoch. POSIX shared memory is created RW,
 written, independently reopened RDONLY, and unlinked before transfer. Sandboxed
 macOS hosts which deny `shm_open` use the same unlink-before-transfer and
 independent-RDONLY-reopen invariant with a private temporary file.
+Packaged sandbox closure must record which Surface backend actually ran and
+prove the worker's sandbox-provided TMPDIR fallback, read-only reopen, unlink
+before `SCM_RIGHTS`, receiver rights/extent validation, and zero residual
+objects after child exit. It may not add an app group or temporary exception to
+make `/pdf-rs-*` shared-memory names available.
 
 `rustix 1.1.4` is deliberately the sole platform boundary: its safe owned-FD
 APIs replace raw libc calls and ensure rejected or extra descriptors close
@@ -39,8 +65,14 @@ reap, kill, or wait failure retains the old child handle and Host resource
 ownership, enters `RestartFailed`, and neither increments the restart attempt
 count nor starts a replacement.
 
-On macOS, `SOCK_CLOEXEC` is unavailable. The desktop worker spawn path
+On macOS, `SOCK_CLOEXEC` is unavailable. The transport-fixture spawn path
 serializes its socketpair-to-exec interval, marks both original endpoints
 close-on-exec, and lets `Stdio` install only the child endpoint as fd 0/1.
-This constrains concurrent spawns through this crate; a future OS sandbox gate
-must still prevent unrelated host threads from deliberately exporting FDs.
+This constrains concurrent spawns through this crate, but unrelated host
+threads can still deliberately export a non-CLOEXEC descriptor. Product
+closure therefore requires Darwin `POSIX_SPAWN_CLOEXEC_DEFAULT`, explicit
+stdin/stdout file actions through a separately reviewed repository-owned
+platform wrapper, and a real inherited-FD allowlist probe. The safe desktop
+crate keeps `forbid(unsafe_code)`. This is FD hygiene only, not an
+operating-system sandbox. Deprecated sandbox tooling and private Seatbelt APIs
+are not product mechanisms.

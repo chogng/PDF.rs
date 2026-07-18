@@ -538,7 +538,7 @@ fn post_plan_proxy_disconnect_never_publishes_surface_and_restarts_once() {
     let before_spawn = open_fd_count();
     let config =
         DesktopSupervisorConfig::new(1, Duration::from_secs(2)).expect("supervisor config");
-    let mut supervisor = DesktopChildSupervisor::start(
+    let mut supervisor = DesktopChildSupervisor::start_transport_fixture(
         fixture.path().to_str().expect("UTF-8 fixture path"),
         config,
         cleanup_resources(limits),

@@ -1,0 +1,32 @@
+schema = 1
+captured_at = 2026-07-17
+purpose = "M4-09 sandbox prerequisite capability audit; not release evidence"
+
+[environment]
+os = "macOS 26.4.1"
+build = "25E253"
+architecture = "arm64"
+rustc = "1.93.0 (254b59607 2026-01-19)"
+
+[signing]
+command = "security find-identity -v -p codesigning"
+valid_identities = 0
+ad_hoc_app_sandbox_probe = "terminated with SIGABRT before probe execution"
+conclusion = "This workspace cannot create trusted parent/helper App Sandbox enforcement evidence."
+
+[selection]
+record = "platform/desktop/macos/sandbox-target.toml"
+host_entitlements = "platform/desktop/macos/host.entitlements"
+worker_entitlements = "platform/desktop/macos/worker.entitlements"
+product_gate = "IsolationUnavailable"
+m4_09 = "in_progress"
+
+[open_gates]
+items = [
+  "signed parent app and embedded helper packaging",
+  "exact codesign and entitlement verification",
+  "live child filesystem and network denial probes",
+  "live inherited authenticated socket and read-only shared-memory success probes",
+  "recorded sandbox Surface backend, inherited parent-app TMPDIR fallback, read-only reopen, unlink-before-SCM_RIGHTS, and zero residual objects without app-group widening",
+  "Darwin default-close spawn and inherited-FD allowlist proof",
+]

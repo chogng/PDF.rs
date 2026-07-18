@@ -371,7 +371,9 @@ fn generated_engine_hello_event_has_directional_host_validator() {
 fn real_child_authenticates_and_shuts_down_cleanly() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("spawn child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("spawn child");
     let record = host
         .new_host_record(
             1,
@@ -388,7 +390,9 @@ fn real_child_authenticates_and_shuts_down_cleanly() {
 fn real_child_completes_generated_shared_memory_handshake() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("spawn child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("spawn child");
     let worker = host.worker_id();
     let hello = ProtocolHello {
         major: PROTOCOL_MAJOR,
@@ -459,7 +463,9 @@ fn real_child_runs_native_source_surface_release_and_shutdown_flow() {
 
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("spawn child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("spawn child");
     let worker = host.worker_id();
     let epoch = host.worker_epoch();
     let handshake = negotiate(&mut host, limits);
@@ -716,7 +722,9 @@ fn real_child_runs_native_source_surface_release_and_shutdown_flow() {
 fn malformed_canonical_payload_causes_child_disconnect_without_echo() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("spawn child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("spawn child");
     let record = host
         .new_host_record(1, vec![1], Vec::new(), limits)
         .expect("authenticated envelope");
@@ -729,7 +737,9 @@ fn malformed_canonical_payload_causes_child_disconnect_without_echo() {
 fn structurally_valid_header_with_empty_hello_payload_is_rejected() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("spawn child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("spawn child");
     let mut frame = hello_frame(1, host.worker_id().value());
     frame.truncate(20);
     let record = host
@@ -810,7 +820,9 @@ fn read_only_shared_region_rejects_wrong_extent() {
 fn restart_rejects_a_late_record_from_the_old_launch() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut old = epochs.spawn(worker_path()).expect("old child");
+    let mut old = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("old child");
     let late = old
         .new_host_record(
             1,
@@ -821,7 +833,9 @@ fn restart_rejects_a_late_record_from_the_old_launch() {
         .expect("old launch record");
     old.shutdown();
 
-    let mut replacement = epochs.spawn(worker_path()).expect("replacement child");
+    let mut replacement = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("replacement child");
     assert!(replacement.worker_epoch().value() > old.worker_epoch().value());
     assert!(replacement.send(&late, &[], limits).is_err());
     replacement.shutdown();
@@ -831,7 +845,9 @@ fn restart_rejects_a_late_record_from_the_old_launch() {
 fn dropped_uncommitted_engine_hello_poison_closes_process() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("spawn child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("spawn child");
     let record = host
         .new_host_record(
             1,
@@ -860,7 +876,9 @@ fn dropped_uncommitted_engine_hello_poison_closes_process() {
 fn host_records_reject_foreign_class_epoch_and_aggregate_bytes() {
     let limits = limits();
     let mut epochs = DesktopEpochManager::new();
-    let mut host = epochs.spawn(worker_path()).expect("child");
+    let mut host = epochs
+        .spawn_transport_fixture(worker_path())
+        .expect("child");
     let epoch = host.worker_epoch();
     let foreign_class = DesktopCapability::new(
         1,

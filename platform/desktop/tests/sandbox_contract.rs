@@ -1,0 +1,172 @@
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use pdf_rs_desktop::{
+    DESKTOP_PRODUCT_SANDBOX_TARGET_ID, DesktopChildSupervisor, DesktopIpcErrorCode,
+    DesktopProductSandboxAvailability, DesktopSupervisorConfig,
+    desktop_product_sandbox_availability,
+};
+
+const HOST_ENTITLEMENTS: &str = include_str!("../macos/host.entitlements");
+const WORKER_ENTITLEMENTS: &str = include_str!("../macos/worker.entitlements");
+const TARGET: &str = include_str!("../macos/sandbox-target.toml");
+const M4_PLAN: &str = include_str!("../../../plan/m4.toml");
+
+const EXPECTED_HOST_ENTITLEMENTS: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ",
+    "\"https://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+    "<plist version=\"1.0\">\n",
+    "<dict>\n",
+    "    <key>com.apple.security.app-sandbox</key>\n",
+    "    <true/>\n",
+    "    <key>com.apple.security.files.user-selected.read-only</key>\n",
+    "    <true/>\n",
+    "</dict>\n",
+    "</plist>\n",
+);
+
+const EXPECTED_WORKER_ENTITLEMENTS: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ",
+    "\"https://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+    "<plist version=\"1.0\">\n",
+    "<dict>\n",
+    "    <key>com.apple.security.app-sandbox</key>\n",
+    "    <true/>\n",
+    "    <key>com.apple.security.inherit</key>\n",
+    "    <true/>\n",
+    "</dict>\n",
+    "</plist>\n",
+);
+
+fn assert_unique_assignment(document: &str, expected: &str) {
+    let key = expected
+        .split_once('=')
+        .expect("target scalar assignment")
+        .0
+        .trim();
+    let assignments = document
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .filter(|line| {
+            line.split_once('=')
+                .is_some_and(|(candidate, _)| candidate.trim() == key)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assignments, [expected], "target assignment for {key}");
+}
+
+struct ProgramSentinel {
+    consumed: Arc<AtomicBool>,
+}
+
+impl From<ProgramSentinel> for String {
+    fn from(sentinel: ProgramSentinel) -> Self {
+        sentinel.consumed.store(true, Ordering::SeqCst);
+        "/path/that-must-not-be-launched".to_owned()
+    }
+}
+
+#[test]
+fn selected_target_and_entitlements_are_exact_and_narrow() {
+    assert_eq!(HOST_ENTITLEMENTS, EXPECTED_HOST_ENTITLEMENTS);
+    assert_eq!(WORKER_ENTITLEMENTS, EXPECTED_WORKER_ENTITLEMENTS);
+    assert_unique_assignment(
+        TARGET,
+        &format!("id = \"{DESKTOP_PRODUCT_SANDBOX_TARGET_ID}\""),
+    );
+    for exact in [
+        "selected = true",
+        "status = \"prerequisite_only\"",
+        "release_eligible = false",
+        "m4_09_status = \"in_progress\"",
+        "network = \"none\"",
+        "broad_filesystem = \"none\"",
+        "app_groups = \"none\"",
+        "transport_fixture_feature = \"transport-fixture\"",
+        "transport_fixture_feature_default = false",
+        "transport_fixture_feature_product_allowed = false",
+        "powerbox_extension_to_worker = false",
+        "worker_network_entitlement = false",
+        "sandbox_tmpdir_fallback_required_when_posix_shm_is_denied = true",
+        "read_only_reopen_required = true",
+        "unlink_before_scm_rights_required = true",
+        "worker_exit_zero_residual_objects_required = true",
+        "app_group_shm_exception_allowed = false",
+        "implemented = false",
+        "caller_attestation_accepted = false",
+        "environment_attestation_accepted = false",
+        "transport_fixture_is_product = false",
+    ] {
+        assert_unique_assignment(TARGET, exact);
+    }
+}
+
+#[test]
+fn product_supervisor_fails_closed_without_packaging_attestation() {
+    let expected = if cfg!(target_os = "macos") {
+        DesktopProductSandboxAvailability::PackagingProofRequired
+    } else {
+        DesktopProductSandboxAvailability::UnsupportedTarget
+    };
+    assert_eq!(desktop_product_sandbox_availability(), expected);
+
+    let consumed = Arc::new(AtomicBool::new(false));
+
+    let failure = DesktopChildSupervisor::start_product_macos(
+        ProgramSentinel {
+            consumed: Arc::clone(&consumed),
+        },
+        DesktopSupervisorConfig::default(),
+        (),
+    )
+    .err()
+    .expect("unsigned workspace must fail before spawning");
+    assert_eq!(failure.code(), DesktopIpcErrorCode::IsolationUnavailable);
+    assert!(
+        !consumed.load(Ordering::SeqCst),
+        "product gate consumed the program before attestation"
+    );
+}
+
+#[test]
+fn plan_keeps_isolation_open_and_transport_fixture_explicit() {
+    let m4_09 = M4_PLAN
+        .split("[[work_item]]")
+        .find(|item| item.contains("id = \"M4-09\""))
+        .expect("M4-09 work item");
+    assert!(m4_09.contains("status = \"in_progress\""));
+    assert!(
+        m4_09.contains("selected_target_record = \"platform/desktop/macos/sandbox-target.toml\"")
+    );
+    assert!(m4_09.contains("signed parent app"));
+    assert!(m4_09.contains("reject the transport-fixture Cargo feature"));
+    assert!(m4_09.contains("default-close spawn file actions"));
+    assert!(m4_09.contains("safe desktop crate retains forbid(unsafe_code)"));
+    assert!(m4_09.contains("inherited sandbox TMPDIR fallback"));
+    assert!(m4_09.contains("zero residual objects without app-group widening"));
+
+    for entry in std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+        .expect("desktop product sources")
+    {
+        let path = entry.expect("source entry").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read product source");
+        for forbidden in ["sandbox-exec", "sandbox_init", "seatbelt"] {
+            assert!(
+                !source.to_ascii_lowercase().contains(forbidden),
+                "{} imports prohibited sandbox mechanism {forbidden}",
+                path.display()
+            );
+        }
+    }
+}

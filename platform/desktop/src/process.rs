@@ -35,7 +35,9 @@ use crate::{
     native_adapter::{
         DesktopNativeEvent, DesktopNativePoll, DesktopNativeWorker, NativeDesktopPhase,
     },
-    receive_capability_fds, send_capability_fds,
+    receive_capability_fds,
+    sandbox::DesktopProductSandboxGate,
+    send_capability_fds,
     unix::{read_read_only_fd, try_receive_capability_fds, wait_receive_capability_fds},
     validate_read_only_fd,
 };
@@ -43,6 +45,7 @@ use crate::{
 // Serializes this crate's socketpair-to-exec interval on platforms without
 // SOCK_CLOEXEC, so another desktop worker cannot inherit a sibling endpoint.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(any(test, feature = "transport-fixture"))]
 const DEFAULT_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(2);
 const EXIT_OBSERVATION_GRACE: Duration = Duration::from_millis(100);
 
@@ -146,12 +149,38 @@ impl DesktopEpochManager {
             next_worker: 1,
         }
     }
-    /// Spawns a new isolated worker with an epoch never reused by this manager.
-    pub fn spawn(&mut self, program: &str) -> Result<DesktopHostProcess, DesktopIpcError> {
-        self.spawn_with_timeout(program, DEFAULT_TRANSPORT_TIMEOUT)
+    /// Spawns an authenticated transport fixture without claiming an OS sandbox.
+    ///
+    /// Product code must enter through
+    /// [`DesktopChildSupervisor::start_product_macos`](crate::DesktopChildSupervisor::start_product_macos),
+    /// whose isolation gate currently fails closed.
+    #[cfg(any(test, feature = "transport-fixture"))]
+    pub fn spawn_transport_fixture(
+        &mut self,
+        program: &str,
+    ) -> Result<DesktopHostProcess, DesktopIpcError> {
+        self.spawn_transport_fixture_with_timeout(program, DEFAULT_TRANSPORT_TIMEOUT)
     }
 
-    pub(crate) fn spawn_with_timeout(
+    #[cfg(any(test, feature = "transport-fixture"))]
+    pub(crate) fn spawn_transport_fixture_with_timeout(
+        &mut self,
+        program: &str,
+        transport_timeout: Duration,
+    ) -> Result<DesktopHostProcess, DesktopIpcError> {
+        self.spawn_selected_epoch(program, transport_timeout)
+    }
+
+    pub(crate) fn spawn_product_macos_with_timeout(
+        &mut self,
+        program: &str,
+        transport_timeout: Duration,
+        _gate: &DesktopProductSandboxGate,
+    ) -> Result<DesktopHostProcess, DesktopIpcError> {
+        self.spawn_selected_epoch(program, transport_timeout)
+    }
+
+    fn spawn_selected_epoch(
         &mut self,
         program: &str,
         transport_timeout: Duration,
@@ -638,7 +667,7 @@ impl Drop for DesktopHostProcess {
     }
 }
 
-/// Runs the isolated authenticated child transport and bounded Native actor loop.
+/// Runs the separate-process authenticated transport and bounded Native actor loop.
 pub fn run_child_stdio(limits: DesktopIpcLimits) -> Result<(), DesktopIpcError> {
     let run = catch_unwind(AssertUnwindSafe(|| {
         // `StdinLock` may prefetch stream bytes while reading bootstrap data.

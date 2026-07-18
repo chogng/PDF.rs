@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+default = []
+transport-fixture = []
+
 [[bin]]
 name = "pdf-rs-desktop-worker"
 path = "src/main.rs"
@@ -16,11 +20,23 @@ doc = false
 name = "adversarial_child_transport"
 path = "tests/adversarial_child_transport.rs"
 harness = false
+required-features = ["transport-fixture"]
+
+[[test]]
+name = "child_supervisor"
+path = "tests/child_supervisor.rs"
+required-features = ["transport-fixture"]
+
+[[test]]
+name = "child_transport"
+path = "tests/child_transport.rs"
+required-features = ["transport-fixture"]
 
 [[test]]
 name = "render_disconnect_proxy"
 path = "tests/render_disconnect_proxy.rs"
 harness = false
+required-features = ["transport-fixture"]
 
 [dependencies]
 pdf-rs-bytes = { path = "../../core/bytes" }

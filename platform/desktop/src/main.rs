@@ -1,4 +1,4 @@
-//! Isolated authenticated desktop Native worker entrypoint.
+//! Separate-process authenticated desktop Native worker entrypoint.
 
 use pdf_rs_desktop::{
     DESKTOP_CHILD_PANIC_EXIT_CODE, DesktopIpcErrorCode, DesktopIpcLimitConfig, DesktopIpcLimits,
