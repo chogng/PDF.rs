@@ -11,24 +11,25 @@ use pdf_rs_bytes::{
     SourceStableId, SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentFontLimitConfig, ContentFontLimitKind, ContentFontLimits, ContentFontProfile,
-    ContentFontStats, ContentFormPoll, ContentFormProfile, ContentGraphicsLimitConfig,
-    ContentGraphicsLimitKind, ContentGraphicsLimits, ContentImageLimitConfig,
-    ContentImageLimitKind, ContentImageLimits, ContentImageProfile, ContentLimits,
-    ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure,
-    ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll, InterpretFormJob,
-    InterpretPageJob,
+    ContentExtGStateAcquisitionProfile, ContentExtGStateJobContext, ContentFontLimitConfig,
+    ContentFontLimitKind, ContentFontLimits, ContentFontProfile, ContentFontStats, ContentFormPoll,
+    ContentFormProfile, ContentGraphicsLimitConfig, ContentGraphicsLimitKind,
+    ContentGraphicsLimits, ContentImageLimitConfig, ContentImageLimitKind, ContentImageLimits,
+    ContentImageProfile, ContentLimits, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
+    ContentVmFailure, ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll,
+    InterpretFormJob, InterpretPageJob,
 };
 use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
     FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind, FormXObjectJobContext,
     FormXObjectPoll, ImageXObjectJobContext, ImageXObjectLimits,
     NeverCancelled as DocumentNeverCancelled, PageContentJobContext, PageContentLimits,
-    PageContentPoll, PageFontLookupLimits, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
-    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
-    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
-    PageXObjectLookupLimits, PageXObjectLookupOutcome, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
+    PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits, PageIndexBuildPoll,
+    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
+    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig,
+    PageTreeLimits, PageXObjectLookupLimits, PageXObjectLookupOutcome,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
@@ -4489,14 +4490,18 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
     let input = acquire_with_objects(
         b"",
         b"<< /XObject << /Fm0 5 0 R >> >>",
-        &[(
-            5,
-            form_object(
+        &[
+            (
                 5,
-                b"/BBox [0 0 10 10] /Matrix [2 0 0 3 4 5] /Resources << >>",
-                b"0 0 10 10 re 1 0 0 rg f",
+                form_object(
+                    5,
+                    b"/BBox [0 0 10 10] /Matrix [2 0 0 3 4 5] \
+                      /Resources << /ExtGState << /Fade 6 0 R >> >>",
+                    b"/Fade gs 0 0 10 10 re 1 0 0 rg f",
+                ),
             ),
-        )],
+            (6, b"6 0 obj\n<< /ca 0.5 >>\nendobj\n".to_vec()),
+        ],
         0xf5,
     );
     let VmInput {
@@ -4573,7 +4578,7 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
         ContentImageLimits::default(),
     );
     let font_profile = ContentFontProfile::new(
-        authority,
+        authority.clone(),
         PageFontLookupLimits::default(),
         font_context(35_201),
         FontResourceLimits::default(),
@@ -4600,7 +4605,16 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
         font_profile,
         GraphicsSceneLimits::default(),
     )
-    .expect("representable invocation and Form matrices");
+    .expect("representable invocation and Form matrices")
+    .with_dynamic_ext_gstates(ContentExtGStateAcquisitionProfile::new(
+        authority,
+        PageExtGStateLookupLimits::default(),
+        ContentExtGStateJobContext::new(
+            JobId::new(35_301),
+            ResumeCheckpoint::new(35_302),
+            RequestPriority::VisiblePage,
+        ),
+    ));
     let interpreted = match job.poll(&store, &DocumentNeverCancelled) {
         ContentFormPoll::Ready(form) => form,
         outcome => panic!("path-only Form must interpret: {outcome:?}"),
@@ -4618,6 +4632,15 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
         graphics.commands().last().map(|record| record.command()),
         Some(GraphicsCommand::Restore)
     ));
+    assert_eq!(
+        graphics.commands().iter().find_map(|record| {
+            let GraphicsCommand::Fill { paint, .. } = record.command() else {
+                return None;
+            };
+            Some(paint.alpha())
+        }),
+        Some(SceneUnit::from_u16(32_768))
+    );
     let Some((path_id, transform)) = graphics.commands().iter().find_map(|record| {
         let GraphicsCommand::Fill {
             path, transform, ..

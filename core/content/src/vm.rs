@@ -20,16 +20,17 @@ use pdf_rs_scene::{
 };
 use pdf_rs_syntax::ObjectRef;
 
+use crate::ext_gstate::{ContentExtGStateRuntime, ContentExtGStateRuntimePoll, ResolvedExtGState};
 use crate::scanner::{ScanTerminal, run_scan};
 use crate::{
-    ContentCancellation, ContentExtGStateProfile, ContentFontLimits, ContentFontStats,
-    ContentGraphicsLimits, ContentImageLimits, ContentImageStats, ContentLimits, ContentName,
-    ContentNumber, ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats,
-    ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
-    ContentVmFailure, ContentVmLimit, ContentVmLimitKind, ContentVmLimits, ContentVmPhase,
-    ContentVmStats, DecodedContentStream, InterpretedForm, InterpretedPage, LocatedOperand,
-    OperatorContext, OperatorKind, OperatorOperandShape, ResolvedFontUse, ResolvedFormUse,
-    ResolvedImageUse, ResolvedPropertyUse,
+    ContentCancellation, ContentExtGStateAcquisitionProfile, ContentExtGStateProfile,
+    ContentFontLimits, ContentFontStats, ContentGraphicsLimits, ContentImageLimits,
+    ContentImageStats, ContentLimits, ContentName, ContentNumber, ContentOperand,
+    ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
+    ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
+    ContentVmLimitKind, ContentVmLimits, ContentVmPhase, ContentVmStats, DecodedContentStream,
+    InterpretedForm, InterpretedPage, LocatedOperand, OperatorContext, OperatorKind,
+    OperatorOperandShape, ResolvedFontUse, ResolvedFormUse, ResolvedImageUse, ResolvedPropertyUse,
 };
 
 mod font;
@@ -179,6 +180,7 @@ pub struct ContentFormProfile {
     property_limits: PagePropertyLookupLimits,
     image_profile: ContentImageProfile,
     font_profile: ContentFontProfile,
+    ext_gstate_profile: Option<ContentExtGStateAcquisitionProfile>,
     scene_limits: GraphicsSceneLimits,
 }
 
@@ -224,8 +226,26 @@ impl ContentFormProfile {
             property_limits,
             image_profile,
             font_profile,
+            ext_gstate_profile: None,
             scene_limits,
         })
+    }
+
+    /// Enables Form-local dynamic ExtGState resolution under the same revision authority.
+    pub fn with_ext_gstates(
+        mut self,
+        profile: ContentExtGStateAcquisitionProfile,
+    ) -> Result<Self, ContentVmError> {
+        let expected = self.authority.as_attested();
+        let ext_gstate = profile.authority().as_attested();
+        if expected.snapshot() != ext_gstate.snapshot()
+            || expected.revision_id() != ext_gstate.revision_id()
+            || expected.startxref() != ext_gstate.startxref()
+        {
+            return Err(ContentVmError::new(ContentVmErrorCode::InvalidLimits, None));
+        }
+        self.ext_gstate_profile = Some(profile);
+        Ok(self)
     }
 
     fn child(&self) -> Option<Self> {
@@ -240,6 +260,7 @@ impl ContentFormProfile {
             property_limits: self.property_limits,
             image_profile: self.image_profile.clone(),
             font_profile: self.font_profile.clone(),
+            ext_gstate_profile: self.ext_gstate_profile.clone(),
             scene_limits: self.scene_limits,
         })
     }
@@ -345,6 +366,7 @@ pub struct InterpretPageJob {
     image_runtime: Option<ImageRuntime>,
     font_runtime: Option<FontRuntime>,
     ext_gstate_profile: Option<ContentExtGStateProfile>,
+    ext_gstate_runtime: Option<ContentExtGStateRuntime>,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -373,6 +395,7 @@ pub struct InterpretFormJob {
     image_runtime: Option<ImageRuntime>,
     font_runtime: Option<FontRuntime>,
     ext_gstate_profile: Option<ContentExtGStateProfile>,
+    ext_gstate_runtime: Option<ContentExtGStateRuntime>,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -413,6 +436,7 @@ impl InterpretPageJob {
             image_runtime: None,
             font_runtime: None,
             ext_gstate_profile: None,
+            ext_gstate_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -450,6 +474,7 @@ impl InterpretPageJob {
             image_runtime: None,
             font_runtime: None,
             ext_gstate_profile: None,
+            ext_gstate_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -493,6 +518,7 @@ impl InterpretPageJob {
             image_runtime: Some(ImageRuntime::new(image_profile)),
             font_runtime: None,
             ext_gstate_profile: None,
+            ext_gstate_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -536,6 +562,7 @@ impl InterpretPageJob {
             image_runtime: None,
             font_runtime: Some(FontRuntime::new(font_profile)),
             ext_gstate_profile: None,
+            ext_gstate_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -581,6 +608,7 @@ impl InterpretPageJob {
             image_runtime: Some(ImageRuntime::new(image_profile)),
             font_runtime: Some(FontRuntime::new(font_profile)),
             ext_gstate_profile: None,
+            ext_gstate_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -624,6 +652,12 @@ impl InterpretPageJob {
         );
         job.ext_gstate_profile = Some(ext_gstate_profile);
         job
+    }
+
+    /// Enables Page-local proof-bound ExtGState lookup and resumable object acquisition.
+    pub fn with_dynamic_ext_gstates(mut self, profile: ContentExtGStateAcquisitionProfile) -> Self {
+        self.ext_gstate_runtime = Some(ContentExtGStateRuntime::new(profile));
+        self
     }
 
     /// Enables bounded Form XObject classification and recursive execution for `Do`.
@@ -711,6 +745,7 @@ impl InterpretPageJob {
                 self.image_runtime.as_mut(),
                 self.font_runtime.as_mut(),
                 self.ext_gstate_profile.as_ref(),
+                self.ext_gstate_runtime.as_mut(),
                 self.scan_stats,
                 self.xobject_stats,
                 self.scan_peak_retained,
@@ -763,6 +798,8 @@ impl InterpretPageJob {
                 ));
                 self.image_runtime.take();
                 self.font_runtime.take();
+                self.ext_gstate_profile.take();
+                self.ext_gstate_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Ready(Arc::clone(&page));
@@ -772,6 +809,8 @@ impl InterpretPageJob {
                 self.acquired.take();
                 self.image_runtime.take();
                 self.font_runtime.take();
+                self.ext_gstate_profile.take();
+                self.ext_gstate_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Unsupported(error);
@@ -781,6 +820,8 @@ impl InterpretPageJob {
                 self.acquired.take();
                 self.image_runtime.take();
                 self.font_runtime.take();
+                self.ext_gstate_profile.take();
+                self.ext_gstate_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = JobState::Failed(error);
@@ -875,6 +916,7 @@ impl InterpretFormJob {
             image_runtime: Some(ImageRuntime::new(image_profile)),
             font_runtime: Some(FontRuntime::new(font_profile)),
             ext_gstate_profile: None,
+            ext_gstate_runtime: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -892,6 +934,12 @@ impl InterpretFormJob {
     /// Installs a proof-bound external graphics-state registry owned by this Form scope.
     pub fn with_ext_gstates(mut self, profile: ContentExtGStateProfile) -> Self {
         self.ext_gstate_profile = Some(profile);
+        self
+    }
+
+    /// Enables Form-local proof-bound ExtGState lookup and resumable object acquisition.
+    pub fn with_dynamic_ext_gstates(mut self, profile: ContentExtGStateAcquisitionProfile) -> Self {
+        self.ext_gstate_runtime = Some(ContentExtGStateRuntime::new(profile));
         self
     }
 
@@ -950,6 +998,7 @@ impl InterpretFormJob {
                 self.image_runtime.as_mut(),
                 self.font_runtime.as_mut(),
                 self.ext_gstate_profile.as_ref(),
+                self.ext_gstate_runtime.as_mut(),
                 self.scan_stats,
                 self.xobject_stats,
                 self.scan_peak_retained,
@@ -1003,6 +1052,7 @@ impl InterpretFormJob {
                 self.image_runtime.take();
                 self.font_runtime.take();
                 self.ext_gstate_profile.take();
+                self.ext_gstate_runtime.take();
                 self.program.take();
                 self.plan.take();
                 self.state = FormJobState::Ready(Arc::clone(&form));
@@ -1035,6 +1085,7 @@ impl InterpretFormJob {
         self.image_runtime.take();
         self.font_runtime.take();
         self.ext_gstate_profile.take();
+        self.ext_gstate_runtime.take();
         self.program.take();
         self.plan.take();
     }
@@ -1051,7 +1102,10 @@ impl fmt::Debug for InterpretFormJob {
             )
             .field("images_enabled", &self.image_runtime.is_some())
             .field("fonts_enabled", &self.font_runtime.is_some())
-            .field("ext_gstates_enabled", &self.ext_gstate_profile.is_some())
+            .field(
+                "ext_gstates_enabled",
+                &(self.ext_gstate_profile.is_some() || self.ext_gstate_runtime.is_some()),
+            )
             .field("program_retained", &self.program.is_some())
             .field("plan_retained", &self.plan.is_some())
             .field("scan_stats", &self.scan_stats)
@@ -1537,6 +1591,7 @@ fn run_interpretation(
     mut image_runtime: Option<&mut ImageRuntime>,
     mut font_runtime: Option<&mut FontRuntime>,
     ext_gstate_profile: Option<&ContentExtGStateProfile>,
+    mut ext_gstate_runtime: Option<&mut ContentExtGStateRuntime>,
     mut scan_stats: ContentScanStats,
     mut xobject_stats: PageXObjectLookupStats,
     mut scan_peak_retained: u64,
@@ -1678,6 +1733,7 @@ fn run_interpretation(
             image_runtime.as_deref_mut(),
             font_runtime.as_deref_mut(),
             ext_gstate_profile,
+            ext_gstate_runtime.as_deref_mut(),
             source,
             cancellation,
             &mut accounting,
@@ -2980,6 +3036,7 @@ fn build_execution_plan(
     mut image_runtime: Option<&mut ImageRuntime>,
     mut font_runtime: Option<&mut FontRuntime>,
     ext_gstate_profile: Option<&ContentExtGStateProfile>,
+    mut ext_gstate_runtime: Option<&mut ContentExtGStateRuntime>,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
     accounting: &mut Accounting,
@@ -3333,7 +3390,97 @@ fn build_execution_plan(
                     let ValidatedOperands::Name(name) = validated else {
                         unreachable!("validated gs operands have name shape");
                     };
-                    let Some(profile) = ext_gstate_profile else {
+                    let resolved = if let Some(profile) = ext_gstate_profile {
+                        let Some(resource) = profile.find(name.bytes()) else {
+                            return prioritize(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                Some(operator_source),
+                                RunTerminal::Unsupported(ContentUnsupported::new(
+                                    ContentUnsupportedKind::ExtGStateResource,
+                                    operator_source,
+                                )),
+                            );
+                        };
+                        ResolvedExtGState {
+                            stroking_alpha: resource.stroking_alpha(),
+                            nonstroking_alpha: resource.nonstroking_alpha(),
+                            blend_mode: resource.blend_mode(),
+                        }
+                    } else if let Some(runtime) = ext_gstate_runtime.as_deref_mut() {
+                        match runtime.resolve(
+                            input.resources(),
+                            name.bytes(),
+                            byte_source,
+                            cancellation,
+                        ) {
+                            ContentExtGStateRuntimePoll::Ready(value) => value,
+                            ContentExtGStateRuntimePoll::Pending {
+                                ticket,
+                                missing,
+                                checkpoint,
+                            } => {
+                                return RunTerminal::Pending {
+                                    ticket,
+                                    missing,
+                                    checkpoint,
+                                };
+                            }
+                            ContentExtGStateRuntimePoll::Unsupported => {
+                                return prioritize(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    Some(operator_source),
+                                    RunTerminal::Unsupported(ContentUnsupported::new(
+                                        ContentUnsupportedKind::ExtGStateResource,
+                                        operator_source,
+                                    )),
+                                );
+                            }
+                            ContentExtGStateRuntimePoll::Failed(error) => {
+                                let terminal =
+                                    ContentUnsupported::from_document(error, operator_source)
+                                        .map_or_else(
+                                            || {
+                                                RunTerminal::Failed(ContentVmFailure::Document(
+                                                    error,
+                                                ))
+                                            },
+                                            RunTerminal::Unsupported,
+                                        );
+                                return prioritize(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    Some(operator_source),
+                                    terminal,
+                                );
+                            }
+                            ContentExtGStateRuntimePoll::ResourceLimit => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    ContentVmError::new(
+                                        ContentVmErrorCode::ResourceLimit,
+                                        Some(operator_source),
+                                    ),
+                                );
+                            }
+                            ContentExtGStateRuntimePoll::Internal => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    vm_error(ContentVmErrorCode::InternalState, operator_source),
+                                );
+                            }
+                        }
+                    } else {
                         return prioritize(
                             snapshot,
                             byte_source,
@@ -3345,22 +3492,10 @@ fn build_execution_plan(
                             )),
                         );
                     };
-                    let Some(resource) = profile.find(name.bytes()) else {
-                        return prioritize(
-                            snapshot,
-                            byte_source,
-                            cancellation,
-                            Some(operator_source),
-                            RunTerminal::Unsupported(ContentUnsupported::new(
-                                ContentUnsupportedKind::ExtGStateResource,
-                                operator_source,
-                            )),
-                        );
-                    };
                     graphics.apply_ext_gstate(
-                        resource.stroking_alpha(),
-                        resource.nonstroking_alpha(),
-                        resource.blend_mode(),
+                        resolved.stroking_alpha,
+                        resolved.nonstroking_alpha,
+                        resolved.blend_mode,
                     );
                 }
                 OperatorKind::SaveGraphicsState => {

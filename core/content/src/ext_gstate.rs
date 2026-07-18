@@ -1,8 +1,101 @@
 use std::fmt;
 
-use pdf_rs_document::AttestedObject;
+use pdf_rs_bytes::{ByteSource, DataTicket, JobId, RequestPriority, ResumeCheckpoint, SmallRanges};
+use pdf_rs_document::{
+    AttestedObject, AttestedObjectJobContext, AttestedObjectPoll, DocumentCancellation,
+    DocumentError, OpenAttestedObjectJob, PageExtGStateLookupLimits, PageResourceScope,
+    SharedAttestedRevisionIndex,
+};
 use pdf_rs_scene::{BlendMode, SceneUnit};
 use pdf_rs_syntax::{ObjectRef, PdfReal, SyntaxObject};
+
+/// Runtime-owned identity namespace for resumable ExtGState object access.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContentExtGStateJobContext {
+    job: JobId,
+    checkpoint_base: ResumeCheckpoint,
+    priority: RequestPriority,
+}
+
+impl ContentExtGStateJobContext {
+    /// Creates a deterministic namespace whose per-resource identities are derived from scope and
+    /// source-order ordinal.
+    pub const fn new(
+        job: JobId,
+        checkpoint_base: ResumeCheckpoint,
+        priority: RequestPriority,
+    ) -> Self {
+        Self {
+            job,
+            checkpoint_base,
+            priority,
+        }
+    }
+
+    fn object_context(
+        self,
+        scope: ObjectRef,
+        ordinal: u64,
+        max_resources: u64,
+    ) -> Option<AttestedObjectJobContext> {
+        let stride = max_resources.checked_mul(3)?.checked_add(3)?;
+        let scope_key = u64::from(scope.number())
+            .checked_mul(u64::from(u16::MAX).checked_add(1)?)?
+            .checked_add(u64::from(scope.generation()))?;
+        let offset = scope_key
+            .checked_mul(stride)?
+            .checked_add(ordinal.checked_mul(3)?)?;
+        Some(AttestedObjectJobContext::new(
+            self.job,
+            ResumeCheckpoint::new(self.checkpoint_base.value().checked_add(offset)?),
+            ResumeCheckpoint::new(
+                self.checkpoint_base
+                    .value()
+                    .checked_add(offset)?
+                    .checked_add(1)?,
+            ),
+            self.priority,
+        ))
+    }
+}
+
+/// Proof authority and bounded lookup context for Page- or Form-local ExtGState resolution.
+#[derive(Clone, Debug)]
+pub struct ContentExtGStateAcquisitionProfile {
+    authority: SharedAttestedRevisionIndex,
+    lookup_limits: PageExtGStateLookupLimits,
+    context: ContentExtGStateJobContext,
+}
+
+impl ContentExtGStateAcquisitionProfile {
+    /// Creates a dynamic ExtGState profile bound to one attested revision.
+    pub const fn new(
+        authority: SharedAttestedRevisionIndex,
+        lookup_limits: PageExtGStateLookupLimits,
+        context: ContentExtGStateJobContext,
+    ) -> Self {
+        Self {
+            authority,
+            lookup_limits,
+            context,
+        }
+    }
+
+    /// Borrows the revision authority used to reopen selected state dictionaries.
+    pub const fn authority(&self) -> &SharedAttestedRevisionIndex {
+        &self.authority
+    }
+
+    /// Returns the per-resource name lookup limits.
+    pub const fn lookup_limits(&self) -> PageExtGStateLookupLimits {
+        self.lookup_limits
+    }
+
+    /// Returns the runtime-owned object-access namespace.
+    pub const fn context(&self) -> ContentExtGStateJobContext {
+        self.context
+    }
+}
 
 /// Stable reason why a selected external graphics state is outside the registered subset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,6 +412,157 @@ impl ContentExtGStateProfile {
     pub fn resources(&self) -> &[ContentExtGStateResource] {
         &self.resources
     }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ResolvedExtGState {
+    pub(super) stroking_alpha: Option<SceneUnit>,
+    pub(super) nonstroking_alpha: Option<SceneUnit>,
+    pub(super) blend_mode: Option<BlendMode>,
+}
+
+impl ResolvedExtGState {
+    fn from_resource(resource: &ContentExtGStateResource) -> Self {
+        Self {
+            stroking_alpha: resource.stroking_alpha(),
+            nonstroking_alpha: resource.nonstroking_alpha(),
+            blend_mode: resource.blend_mode(),
+        }
+    }
+}
+
+struct ActiveExtGState {
+    name: Vec<u8>,
+    job: OpenAttestedObjectJob,
+}
+
+pub(super) struct ContentExtGStateRuntime {
+    profile: ContentExtGStateAcquisitionProfile,
+    resources: Vec<ContentExtGStateResource>,
+    active: Option<ActiveExtGState>,
+}
+
+impl ContentExtGStateRuntime {
+    pub(super) fn new(profile: ContentExtGStateAcquisitionProfile) -> Self {
+        Self {
+            profile,
+            resources: Vec::new(),
+            active: None,
+        }
+    }
+
+    pub(super) fn resolve(
+        &mut self,
+        scope: &PageResourceScope,
+        name: &[u8],
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> ContentExtGStateRuntimePoll {
+        if let Some(resource) = self
+            .resources
+            .iter()
+            .find(|resource| resource.name() == name)
+        {
+            return ContentExtGStateRuntimePoll::Ready(ResolvedExtGState::from_resource(resource));
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.name != name)
+        {
+            return ContentExtGStateRuntimePoll::Internal;
+        }
+        if self.active.is_none() {
+            let ordinal = match u64::try_from(self.resources.len()) {
+                Ok(value) if value < self.profile.lookup_limits.max_lookups() => value,
+                _ => return ContentExtGStateRuntimePoll::ResourceLimit,
+            };
+            let mut resolver = scope.ext_gstate_resolver(self.profile.lookup_limits);
+            let proof = match resolver.lookup_ext_gstate(name, source, cancellation) {
+                Ok(value) => value,
+                Err(error) => return ContentExtGStateRuntimePoll::Failed(error),
+            };
+            let authority = self.profile.authority.as_attested();
+            if proof.snapshot() != authority.snapshot()
+                || proof.revision_id() != authority.revision_id()
+                || proof.revision_startxref() != authority.startxref()
+            {
+                return ContentExtGStateRuntimePoll::Internal;
+            }
+            let Some(context) = self.profile.context.object_context(
+                scope.defining_object(),
+                ordinal,
+                self.profile.lookup_limits.max_lookups(),
+            ) else {
+                return ContentExtGStateRuntimePoll::Internal;
+            };
+            let job = match authority.open_object_with_attested_work_caps(proof.target(), context) {
+                Ok(value) => value,
+                Err(error) => return ContentExtGStateRuntimePoll::Failed(error),
+            };
+            let mut retained_name = Vec::new();
+            if retained_name.try_reserve_exact(name.len()).is_err() {
+                return ContentExtGStateRuntimePoll::ResourceLimit;
+            }
+            retained_name.extend_from_slice(name);
+            self.active = Some(ActiveExtGState {
+                name: retained_name,
+                job,
+            });
+        }
+
+        let poll = {
+            let active = self
+                .active
+                .as_mut()
+                .expect("an unresolved ExtGState installs one active object job");
+            active.job.poll(source, cancellation)
+        };
+        match poll {
+            AttestedObjectPoll::Ready(object) => {
+                let active = self
+                    .active
+                    .take()
+                    .expect("ready ExtGState retains its resource name");
+                let resource = match ContentExtGStateResource::new(active.name, object) {
+                    Ok(value) => value,
+                    Err(_) => return ContentExtGStateRuntimePoll::Unsupported,
+                };
+                let resolved = ResolvedExtGState::from_resource(&resource);
+                if self.resources.try_reserve_exact(1).is_err() {
+                    return ContentExtGStateRuntimePoll::ResourceLimit;
+                }
+                self.resources.push(resource);
+                ContentExtGStateRuntimePoll::Ready(resolved)
+            }
+            AttestedObjectPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => ContentExtGStateRuntimePoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            },
+            AttestedObjectPoll::Failed(error) => {
+                self.active.take();
+                ContentExtGStateRuntimePoll::Failed(error)
+            }
+        }
+    }
+}
+
+pub(super) enum ContentExtGStateRuntimePoll {
+    Ready(ResolvedExtGState),
+    Pending {
+        ticket: DataTicket,
+        missing: SmallRanges,
+        checkpoint: ResumeCheckpoint,
+    },
+    Unsupported,
+    Failed(DocumentError),
+    ResourceLimit,
+    Internal,
 }
 
 fn duplicate(reference: ObjectRef, offset: u64) -> ContentExtGStateError {

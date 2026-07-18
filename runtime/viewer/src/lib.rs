@@ -8,7 +8,6 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,18 +18,16 @@ use pdf_rs_bytes::{
     SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentCancellation, ContentErrorCategory, ContentExtGStateProfile, ContentExtGStateResource,
-    ContentFontLimits, ContentFontProfile, ContentFormProfile, ContentGraphicsLimits,
-    ContentImageLimits, ContentImageProfile, ContentLimits, ContentOperand, ContentVmErrorCategory,
-    ContentVmFailure, ContentVmLimits, ContentVmPoll, DecodedContentStream, InterpretPageJob,
-    OperatorKind, scan_content_streams,
+    ContentCancellation, ContentErrorCategory, ContentExtGStateAcquisitionProfile,
+    ContentExtGStateJobContext, ContentFontLimits, ContentFontProfile, ContentFormProfile,
+    ContentGraphicsLimits, ContentImageLimits, ContentImageProfile, ContentLimits,
+    ContentVmErrorCategory, ContentVmFailure, ContentVmLimits, ContentVmPoll, InterpretPageJob,
 };
 use pdf_rs_document::{
-    AcquiredObjectJobContext, AcquiredPageContent, AcquiredPageCountPoll, AttestRevisionJob,
-    AttestedObjectJobContext, AttestedObjectPoll, CandidateRevisionIndex, DocumentCancellation,
-    DocumentError, DocumentErrorCategory, DocumentLimits, FontResourceJobContext,
-    FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext, ImageXObjectLimits,
-    NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
+    AcquiredObjectJobContext, AcquiredPageCountPoll, AttestRevisionJob, CandidateRevisionIndex,
+    DocumentCancellation, DocumentError, DocumentErrorCategory, DocumentLimits,
+    FontResourceJobContext, FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext,
+    ImageXObjectLimits, NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
     OpenStrictBaseRevisionJob, PageContentJobContext, PageContentLimits, PageContentPoll,
     PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex, PageIndexBuildPoll,
     PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
@@ -46,7 +43,7 @@ use pdf_rs_fast_raster::fast::{
     FastRasterCancellation, FastRasterErrorCategory, FastRasterJob, FastRasterLimits,
 };
 use pdf_rs_filters::DecodeLimits;
-use pdf_rs_object::{ObjectLimits, ObjectWorkCaps};
+use pdf_rs_object::ObjectLimits;
 use pdf_rs_policy::{
     CapabilityEvaluator, CapabilityProfile, DeviceRect, OptionalContentIdentity,
     PolicyCancellation, PolicyErrorCategory, PolicyLimits, RenderConfig, RenderConfigInput,
@@ -878,8 +875,15 @@ fn render_strict_page(
         FontResourceLimits::default(),
         ContentFontLimits::default(),
     );
-    let ext_gstate_profile =
-        acquire_ext_gstate_profile(&acquired, authority, snapshot, source, ids, &cancellation)?;
+    let ext_gstate_profile = ContentExtGStateAcquisitionProfile::new(
+        authority.clone(),
+        PageExtGStateLookupLimits::default(),
+        ContentExtGStateJobContext::new(
+            ids.content,
+            ResumeCheckpoint::new(ids.base + 700),
+            RequestPriority::FirstViewportResource,
+        ),
+    );
     let form_profile = ContentFormProfile::new(
         authority.clone(),
         FormXObjectJobContext::new(
@@ -898,8 +902,9 @@ fn render_strict_page(
         font_profile.clone(),
         GraphicsSceneLimits::default(),
     )
+    .and_then(|profile| profile.with_ext_gstates(ext_gstate_profile.clone()))
     .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
-    let mut vm = InterpretPageJob::new_graphics_v2_with_resources(
+    let mut vm = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
         acquired,
         ContentLimits::default(),
         ContentVmLimits::default(),
@@ -907,9 +912,9 @@ fn render_strict_page(
         PagePropertyLookupLimits::default(),
         image_profile,
         font_profile,
-        ext_gstate_profile,
         GraphicsSceneLimits::default(),
     )
+    .with_dynamic_ext_gstates(ext_gstate_profile)
     .with_forms(form_profile)
     .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
     let vm_store = range_store(snapshot)?;
@@ -1005,150 +1010,6 @@ struct RenderJobs {
     image: JobId,
     font: JobId,
     form: JobId,
-}
-
-fn acquire_ext_gstate_profile(
-    acquired: &AcquiredPageContent,
-    authority: &SharedAttestedRevisionIndex,
-    snapshot: SourceSnapshot,
-    source: &[u8],
-    ids: RenderJobs,
-    cancellation: &CancellationAdapter<'_>,
-) -> Result<ContentExtGStateProfile, NativeViewerError> {
-    let decoded = acquired
-        .streams()
-        .iter()
-        .enumerate()
-        .map(|(index, stream)| {
-            let ordinal = u32::try_from(index)
-                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-            Ok(DecodedContentStream::new(
-                stream.reference(),
-                ordinal,
-                stream.decoded_bytes(),
-            ))
-        })
-        .collect::<Result<Vec<_>, NativeViewerError>>()?;
-    let program = scan_content_streams(&decoded, ContentLimits::default(), cancellation).map_err(
-        |error| {
-            let code = match error.category() {
-                ContentErrorCategory::Cancellation => NativeViewerErrorCode::Cancelled,
-                ContentErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
-                _ => NativeViewerErrorCode::Content,
-            };
-            NativeViewerError::new(code)
-        },
-    )?;
-    let ext_gstate_limits = PageExtGStateLookupLimits::default();
-    let mut names = BTreeSet::new();
-    for operator in program.operators() {
-        if operator.operator().known() != Some(OperatorKind::SetGraphicsState) {
-            continue;
-        }
-        let [operand] = operator.operands() else {
-            return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
-        };
-        let ContentOperand::Name(name) = operand.value() else {
-            return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
-        };
-        if name.bytes().is_empty() || name.bytes().len() > 127 {
-            return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
-        }
-        if !names.contains(name.bytes())
-            && u64::try_from(names.len())
-                .map_or(true, |count| count >= ext_gstate_limits.max_lookups())
-        {
-            return Err(NativeViewerError::new(NativeViewerErrorCode::ResourceLimit));
-        }
-        names.insert(name.bytes().to_vec());
-    }
-
-    let lookup_store = range_store(snapshot)?;
-    let mut resolver = acquired
-        .page()
-        .resources()
-        .ext_gstate_resolver(ext_gstate_limits);
-    let object_limits = authority.as_attested().object_limits();
-    let work_caps = ObjectWorkCaps::new(
-        object_limits.max_total_read_bytes(),
-        object_limits.max_total_parse_bytes(),
-    )
-    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
-    let mut resources = Vec::new();
-    resources
-        .try_reserve_exact(names.len())
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-    for (index, name) in names.into_iter().enumerate() {
-        let proof = resolver
-            .lookup_ext_gstate(&name, &lookup_store, cancellation)
-            .map_err(document_failure)?;
-        if proof.snapshot() != authority.as_attested().snapshot()
-            || proof.revision_id() != authority.as_attested().revision_id()
-            || proof.revision_startxref() != authority.as_attested().startxref()
-        {
-            return Err(NativeViewerError::new(NativeViewerErrorCode::Internal));
-        }
-        let ordinal = u64::try_from(index)
-            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-        let job_value = ids
-            .base
-            .checked_add(600)
-            .and_then(|value| {
-                ordinal
-                    .checked_mul(3)
-                    .and_then(|step| value.checked_add(step))
-            })
-            .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
-        let job = JobId::new(job_value);
-        let envelope = ResumeCheckpoint::new(
-            job_value
-                .checked_add(1)
-                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?,
-        );
-        let boundary = ResumeCheckpoint::new(
-            job_value
-                .checked_add(2)
-                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?,
-        );
-        let mut open = authority
-            .as_attested()
-            .open_object(
-                proof.target(),
-                AttestedObjectJobContext::new(
-                    job,
-                    envelope,
-                    boundary,
-                    RequestPriority::FirstViewportResource,
-                ),
-                work_caps,
-            )
-            .map_err(document_failure)?;
-        let object = loop {
-            match open.poll(&lookup_store, cancellation) {
-                AttestedObjectPoll::Ready(object) => break object,
-                AttestedObjectPoll::Pending {
-                    ticket,
-                    missing,
-                    checkpoint,
-                } => complete_pending(
-                    &lookup_store,
-                    snapshot,
-                    source,
-                    job,
-                    ticket,
-                    &missing,
-                    checkpoint,
-                )?,
-                AttestedObjectPoll::Failed(error) => return Err(document_failure(error)),
-            }
-        };
-        resources.push(
-            ContentExtGStateResource::new(name, object)
-                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Unsupported))?,
-        );
-    }
-    ContentExtGStateProfile::new(resources)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Unsupported))
 }
 
 fn source_snapshot(source: &[u8], source_len: u64) -> SourceSnapshot {

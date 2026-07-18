@@ -435,6 +435,25 @@ impl fmt::Debug for OpenAttestedObjectJob {
 }
 
 impl AttestedRevisionIndex {
+    /// Reopens an attested value under the revision's complete validated object work ceilings.
+    ///
+    /// Higher semantic layers use this when they need proof-preserving lazy resource access but do
+    /// not own a narrower object work policy.
+    pub fn open_object_with_attested_work_caps(
+        &self,
+        reference: ObjectRef,
+        context: AttestedObjectJobContext,
+    ) -> Result<OpenAttestedObjectJob, DocumentError> {
+        let work_caps = ObjectWorkCaps::new(
+            self.object_limits.max_total_read_bytes(),
+            self.object_limits.max_total_parse_bytes(),
+        )
+        .map_err(|_| {
+            DocumentError::for_code(DocumentErrorCode::InternalState, Some(reference), None)
+        })?;
+        self.open_object(reference, context, work_caps)
+    }
+
     /// Creates the only public job capable of reopening a parsed value from retained attestation.
     pub fn open_object(
         &self,

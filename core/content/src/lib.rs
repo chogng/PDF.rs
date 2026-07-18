@@ -30,8 +30,8 @@ pub use error::{
     ContentRecoverability,
 };
 pub use ext_gstate::{
-    ContentExtGStateError, ContentExtGStateErrorKind, ContentExtGStateProfile,
-    ContentExtGStateResource,
+    ContentExtGStateAcquisitionProfile, ContentExtGStateError, ContentExtGStateErrorKind,
+    ContentExtGStateJobContext, ContentExtGStateProfile, ContentExtGStateResource,
 };
 pub use font_limits::{ContentFontLimitConfig, ContentFontLimits};
 pub use graphics_limits::{ContentGraphicsLimitConfig, ContentGraphicsLimits};
