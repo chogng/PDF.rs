@@ -49,6 +49,34 @@ test("persistent bridge opens and renders a readable two-page PDF", async () => 
   }
 });
 
+test("bridge cancels active Rust rendering without losing the document", async () => {
+  const bridge = new PdfRsBridge();
+  try {
+    const opened = await bridge.open(readablePdf);
+    const controller = new AbortController();
+    const started = Date.now();
+    const rendering = bridge.render(opened.documentId, 0, 480, {
+      signal: controller.signal,
+    });
+    controller.abort();
+    await assert.rejects(
+      rendering,
+      (error) => error?.code === "cancelled",
+    );
+    assert.ok(
+      Date.now() - started < 2_000,
+      "cooperative cancellation must not wait for a complete Reference render",
+    );
+
+    const surface = await bridge.render(opened.documentId, 1, 128);
+    assert.equal(surface.page, 1);
+    assert.equal(surface.width, 128);
+    await bridge.close(opened.documentId);
+  } finally {
+    await bridge.shutdown();
+  }
+});
+
 test("bridge returns structured errors for unsupported ownership", async () => {
   const bridge = new PdfRsBridge();
   try {

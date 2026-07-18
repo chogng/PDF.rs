@@ -34,6 +34,7 @@ const smokeEvidence = smokeScreenshot
 let bridge;
 let mainWindow;
 let currentDocument;
+let activeRenderController;
 let quitting = false;
 let smokeCaptured = false;
 let smokeHandling = false;
@@ -188,6 +189,8 @@ const handleSmokePreview = async () => {
 };
 
 const openPath = async (path) => {
+  activeRenderController?.abort();
+  activeRenderController = undefined;
   if (currentDocument) {
     await bridge.close(currentDocument.documentId).catch(() => undefined);
     currentDocument = undefined;
@@ -288,8 +291,16 @@ ipcMain.handle("pdf-rs:render", async (event, request) => {
   ) {
     return { ok: false, code: "invalid-input" };
   }
+  activeRenderController?.abort();
+  const controller = new AbortController();
+  activeRenderController = controller;
   try {
-    const surface = await bridge.render(request.documentId, request.page, request.width);
+    const surface = await bridge.render(
+      request.documentId,
+      request.page,
+      request.width,
+      { signal: controller.signal },
+    );
     if (smokeScreenshot) {
       console.log(
         `PDF_RS_ELECTRON_RENDERED ${surface.page} ${surface.width} ${surface.height}`,
@@ -298,6 +309,10 @@ ipcMain.handle("pdf-rs:render", async (event, request) => {
     return { ok: true, ...surface };
   } catch (error) {
     return safeFailure(error);
+  } finally {
+    if (activeRenderController === controller) {
+      activeRenderController = undefined;
+    }
   }
 });
 
@@ -306,6 +321,8 @@ ipcMain.handle("pdf-rs:close", async (event) => {
   if (!currentDocument) {
     return { ok: true };
   }
+  activeRenderController?.abort();
+  activeRenderController = undefined;
   const document = currentDocument;
   currentDocument = undefined;
   try {
@@ -339,6 +356,8 @@ app.on("before-quit", (event) => {
   }
   event.preventDefault();
   quitting = true;
+  activeRenderController?.abort();
+  activeRenderController = undefined;
   void bridge.shutdown().finally(() => app.exit(0));
 });
 

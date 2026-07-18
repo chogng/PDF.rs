@@ -62,10 +62,11 @@ export class PdfRsBridge {
     return this.#request(`OPEN {id} ${encoded}`, "OPENED");
   }
 
-  async render(documentId, page, width) {
+  async render(documentId, page, width, options = {}) {
     return this.#request(
       `RENDER {id} ${integer(documentId)} ${integer(page)} ${integer(width)}`,
       "SURFACE",
+      options.signal,
     );
   }
 
@@ -92,9 +93,12 @@ export class PdfRsBridge {
     }
   }
 
-  #request(template, expected) {
+  #request(template, expected, signal) {
     if (this.#closed) {
       return Promise.reject(new PdfRsBridgeError("bridge-closed"));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(new PdfRsBridgeError("cancelled"));
     }
     const id = this.#nextRequest;
     this.#nextRequest += 1;
@@ -102,19 +106,30 @@ export class PdfRsBridge {
       return Promise.reject(new PdfRsBridgeError("request-exhausted"));
     }
     return new Promise((resolveRequest, rejectRequest) => {
+      const abort = signal
+        ? () => {
+            if (!this.#pending.has(id)) {
+              return;
+            }
+            void this.#request(`CANCEL {id} ${id}`, "CANCELLED").catch(
+              () => undefined,
+            );
+          }
+        : undefined;
       this.#pending.set(id, {
         expected,
         resolve: resolveRequest,
         reject: rejectRequest,
+        signal,
+        abort,
       });
+      signal?.addEventListener("abort", abort, { once: true });
       const command = `${template.replace("{id}", String(id))}\n`;
       this.#child.stdin.write(command, "ascii", (error) => {
         if (!error) {
           return;
         }
-        const pending = this.#pending.get(id);
-        this.#pending.delete(id);
-        pending?.reject(new PdfRsBridgeError("bridge-write"));
+        this.#reject(id, new PdfRsBridgeError("bridge-write"));
       });
     });
   }
@@ -170,9 +185,7 @@ export class PdfRsBridge {
       throw new PdfRsBridgeError("invalid-response");
     }
     if (type === "ERROR" && fields.length === 3) {
-      const pending = this.#pending.get(request);
-      this.#pending.delete(request);
-      pending?.reject(new PdfRsBridgeError(fields[2]));
+      this.#reject(request, new PdfRsBridgeError(fields[2]));
       return;
     }
     if (type === "OPENED" && fields.length === 4) {
@@ -186,6 +199,14 @@ export class PdfRsBridge {
       this.#resolve(request, type, {
         documentId: parsedInteger(fields[2]),
       });
+      return;
+    }
+    if (type === "CANCELLED" && fields.length === 3) {
+      const target = parsedInteger(fields[2]);
+      if (!target) {
+        throw new PdfRsBridgeError("invalid-response");
+      }
+      this.#resolve(request, type, { target });
       return;
     }
     if (type === "BYE" && fields.length === 2) {
@@ -232,7 +253,18 @@ export class PdfRsBridge {
       throw new PdfRsBridgeError("unexpected-response");
     }
     this.#pending.delete(request);
+    pending.signal?.removeEventListener("abort", pending.abort);
     pending.resolve(value);
+  }
+
+  #reject(request, error) {
+    const pending = this.#pending.get(request);
+    if (!pending) {
+      return;
+    }
+    this.#pending.delete(request);
+    pending.signal?.removeEventListener("abort", pending.abort);
+    pending.reject(error);
   }
 
   #failAll(code) {
@@ -241,6 +273,7 @@ export class PdfRsBridge {
     }
     this.#closed = true;
     for (const pending of this.#pending.values()) {
+      pending.signal?.removeEventListener("abort", pending.abort);
       pending.reject(new PdfRsBridgeError(code));
     }
     this.#pending.clear();
