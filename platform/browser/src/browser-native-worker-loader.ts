@@ -1260,6 +1260,7 @@ export class BrowserNativeWorkerInstance {
   #memoryEpoch: number;
   #closed = false;
   #ready = false;
+  #stopped = false;
 
   constructor(
     hostHelloFrame: Uint8Array,
@@ -1419,6 +1420,10 @@ export class BrowserNativeWorkerInstance {
     return this.#ready;
   }
 
+  get stopped(): boolean {
+    return this.#stopped;
+  }
+
   get connection(): CompatibleHandshake {
     return this.#connection;
   }
@@ -1575,6 +1580,7 @@ export class BrowserNativeWorkerInstance {
     }
     this.#closed = true;
     this.#ready = false;
+    this.#stopped = true;
     if (!beginNativeWorkerShutdown(this.#instance)) {
       return;
     }
@@ -1783,6 +1789,10 @@ export class BrowserNativeWorkerInstance {
     if (!pending.commitSequence()) {
       this.#poison("InvalidMessage");
     }
+    if (pending.envelope.event.type === "WorkerStopped") {
+      this.#stopped = true;
+      this.#ready = false;
+    }
     return Object.freeze({
       dispatch: output,
       envelope: pending.envelope,
@@ -1793,6 +1803,7 @@ export class BrowserNativeWorkerInstance {
     if (!this.#closed) {
       this.#closed = true;
       this.#ready = false;
+      this.#stopped = true;
       if (beginNativeWorkerShutdown(this.#instance)) {
         try {
           void this.#exports.shutdown();

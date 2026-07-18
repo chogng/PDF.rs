@@ -59,9 +59,55 @@ Rust panic is a WebAssembly trap and the loader maps it to `EngineTrap` for
 supervisor restart. Status `0xffff` remains reserved only for unwind-capable
 internal embeddings. The Wasm ABI exposes same-instance memory operations only
 to that glue. Raw pointers and `WebAssembly.Memory` never enter a protocol frame
-or cross a Worker realm; every Worker message still uses the generated
-boundary. The fixture and verifier exercise this same real EngineHello/Ready
-bootstrap rather than injecting protocol state.
+or cross a Worker realm. Every engine control/event message still uses the
+generated boundary; the one private exact start record carries only supervisor
+identity before Host Hello. The fixture and verifier exercise this same real
+EngineHello/Ready bootstrap rather than injecting protocol state.
+
+`browser-native-worker-entry.ts` is the production-ready Worker-realm
+controller prerequisite. One exact own-data start record binds the supervisor
+identity before canonical Host Hello; the controller then copies the
+transferred control buffer, calls the real loader bootstrap, forwards Native
+EngineHello, accepts only the supervisor's HelloAccept, forwards Native Ready,
+and moves subsequent physical resource tables without decoding PDF semantics.
+Callbacks perform only bounded structural snapshot/byte charging, then queue an
+admitted start/physical record or a stable fault; no protocol or Native work
+runs inline. Control length is rejected before copying above the generated
+message maximum plus its 20-byte header; resource bytes use a checked
+per-message sum bounded by the Native maximum memory, so the count-bounded queue
+also charges an independent cumulative byte budget no larger than that memory
+before any control copy. Shifting or releasing a record returns its charge.
+Cancelable actor turns bound Native and poll work, and another turn is requested
+only for queued input, queued bootstrap completion, a required post-dispatch
+probe, or Native's pending bit. WorkerStopped, fault, explicit close, and late
+completion each release listeners, scheduled work, loader ownership, and the
+Worker realm once.
+
+`browser-dedicated-worker.ts` adapts that controller to the existing
+`BrowserWorkerFactory` consumed by the supervisor and reader. It installs all
+Host listeners before posting the one start record, snapshots the injected
+constructor function, invalidates late callbacks on termination, and validates
+the exact `[control, ...resources]` transfer table. The private canonical entry
+URL is unaffected if an embedding mutates the reference's public diagnostic
+`URL` object. Browsers expose no normal-exit event for Dedicated Workers, so
+the adapter never fabricates `onTerminated`: protocol WorkerStopped closes the
+clean path, browser error/messageerror feeds the fault path, and Host teardown
+actively calls the idempotent port termination. Silent UA termination requires
+the request/watchdog liveness proof still outstanding in M5-07/M5-09.
+
+The entry URL reference is deliberately named
+`UnverifiedBrowserNativeWorkerEntryReference`: the brand prevents an accidental
+raw string but proves neither same-origin deployment, integrity, registration,
+nor executable entry installation. The current generated
+`engine-worker.generated.js` only exports the artifact record and loader
+factory; it is not a top-level Worker entry and must not be passed to the
+adapter. Its resource kind and network class are `native-loader-module` and
+`native-loader-glue`; precaching only makes that immutable dependency available
+offline and grants it no Worker-entry role. Accordingly,
+`worker_graph.entrypoints` remains exactly empty. M5-09 must emit and
+hash-register a real module bundle that invokes
+`installBrowserNativeWorkerEntry`, then create the unverified reference from
+that registered URL and exercise it in real browsers.
 
 ## Product resource closure
 
@@ -82,7 +128,7 @@ ambient or aliased network, Worker, service-worker, and dynamic-execution
 primitives. Bounded static-string propagation covers constant fragments and
 template interpolation, while every computed member access and direct Reflect
 member is held to the exact reviewed per-module inventory; computed capability
-invocation is forbidden. The four currently reviewed `fetch` call shapes are
+invocation is forbidden. The five currently reviewed `fetch` call shapes are
 also exact. The check rejects comment-separated external module specifiers,
 constant-built external URLs, dynamic imports, source maps, additional
 executables or Wasm payloads, nonzero Wasm imports, ABI/export drift, and any
@@ -109,15 +155,17 @@ trusting a trace-supplied resource label, binds every trace record to its
 registered identity, requires exact Native artifact byte lengths and hashes,
 and rejects arbitrary same-origin suffixes, fragments, cross-origin,
 missing-resource, zero-byte, identity, and length substitutions. Viewer
-requests cover each of the twelve registered ESM projections exactly once;
+requests cover each of the fourteen registered ESM projections exactly once;
 Worker and Wasm byte and request budgets cover the initial artifact epoch plus
 sixteen bounded restarts.
 
 This is currently the static purity and trace-validation foundation, not the
-M5-08 runtime proof: the product graph still has no production Dedicated Worker
-constructor/entry adapter, no production viewer bundle, and no real browser
-trace. M5-09 must register those final resources and feed observed
-Chromium/Firefox/WebKit requests into the validator before M5-08 can complete.
+M5-08 runtime proof. The graph now registers one exact Dedicated/module Worker
+constructor site and its controller/adapter source, but deliberately has no
+installed executable entry bundle, no integrity-bound reference creation, no
+production viewer bundle, and no real browser trace. M5-09 must register those
+final resources and feed observed Chromium/Firefox/WebKit requests into the
+validator before M5-08 can complete.
 
 ## Boundary
 

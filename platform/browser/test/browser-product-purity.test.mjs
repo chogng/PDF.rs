@@ -75,6 +75,34 @@ test("unregistered executable and Wasm payloads fail closed", async () => {
   });
 });
 
+test("generated Native glue is registered only as a loader dependency", () => {
+  const glue = policy.resources.find(
+    (resource) =>
+      resource.path === "dist/native/engine-worker.generated.js",
+  );
+  assert.equal(glue?.kind, "native-loader-module");
+  assert.equal(
+    policy.network_manifest.some(
+      (resource) => resource.id === "native-worker-entry",
+    ),
+    false,
+  );
+  assert.deepEqual(policy.worker_graph.entrypoints, []);
+
+  const mislabeled = structuredClone(policy);
+  const mislabeledGlue = mislabeled.resources.find(
+    (resource) =>
+      resource.path === "dist/native/engine-worker.generated.js",
+  );
+  mislabeledGlue.kind = "worker-module";
+  assert.throws(
+    () => validateBrowserProductPolicy(mislabeled),
+    (error) =>
+      error instanceof BrowserProductPurityError
+      && error.code === "RPE-BROWSER-PURITY-0005",
+  );
+});
+
 test("dependency lock rejects an unregistered external engine leaf", async () => {
   await withBrowserFixture(async (fixture) => {
     const lockPath = join(fixture, "package-lock.json");
@@ -273,6 +301,77 @@ test("module graph rejects external engines and dynamic executable downloads", (
   );
 });
 
+test("Dedicated Worker constructor registry rejects omission, extras, and drift", async () => {
+  for (const mutate of [
+    (candidate) => {
+      candidate.worker_graph.worker_constructor_sites = [];
+    },
+    (candidate) => {
+      candidate.worker_graph.worker_constructor_sites.push(
+        structuredClone(
+          candidate.worker_graph.worker_constructor_sites[0],
+        ),
+      );
+    },
+    (candidate) => {
+      candidate.worker_graph.worker_constructor_sites[0].worker_type =
+        "classic";
+    },
+    (candidate) => {
+      candidate.worker_graph.worker_constructor_sites[0].entry_binding =
+        "RawUrl";
+    },
+  ]) {
+    const candidate = structuredClone(policy);
+    mutate(candidate);
+    assert.throws(
+      () => validateBrowserProductPolicy(candidate),
+      (error) =>
+        error instanceof BrowserProductPurityError
+        && error.code === "RPE-BROWSER-PURITY-0008",
+    );
+  }
+
+  for (const mutate of [
+    (source) => source.replace("new Worker(", "new URL("),
+    (source) => source.replace(
+      "new Worker(",
+      "new Worker(entryUrl); new Worker(",
+    ),
+    (source) => source.replace('type: "module"', 'type: "classic"'),
+    (source) => source.replace(
+      "entryUrl = snapshotEntryReference(configuration.entry)",
+      "entryUrl = new URL(configuration.entry.url.href)",
+    ),
+    (source) => source.replace(
+      "ENTRY_REFERENCE_URLS.set(reference, canonical);",
+      "",
+    ),
+    (source) => source.replace(
+      "const canonical = ENTRY_REFERENCE_URLS.get(value);",
+      "const canonical = descriptor.value.href;",
+    ),
+  ]) {
+    await withBrowserFixture(async (fixture) => {
+      const sourcePath = join(
+        fixture,
+        "src/browser-dedicated-worker.ts",
+      );
+      const source = await readFile(sourcePath, "utf8");
+      await writeFile(sourcePath, mutate(source));
+      await assert.rejects(
+        checkBrowserProductPurity({
+          browserRoot: fixture,
+          repositoryRoot,
+        }),
+        (error) =>
+          error instanceof BrowserProductPurityError
+          && error.code === "RPE-BROWSER-PURITY-0008",
+      );
+    });
+  }
+});
+
 test("CSP and service Worker precache are closed canonical registries", async () => {
   await withBrowserFixture(async (fixture) => {
     const mutated = structuredClone(policy);
@@ -323,7 +422,7 @@ test("network trace binds exact product and selected-source identities", () => {
   const viewerModuleUrls = policy.module_graph.files.map((path) =>
     new URL(path.replace(/\.ts$/u, ".js"), productBaseUrl).href
   );
-  const nativeWorker = policy.resources.find(
+  const nativeLoader = policy.resources.find(
     (resource) =>
       resource.path === "dist/native/engine-worker.generated.js",
   );
@@ -338,9 +437,9 @@ test("network trace binds exact product and selected-source identities", () => {
       url,
     })),
     {
-      bytes: nativeWorker.byte_length,
-      identity: nativeWorker.sha256,
-      resource_id: "native-worker-entry",
+      bytes: nativeLoader.byte_length,
+      identity: nativeLoader.sha256,
+      resource_id: "native-loader-glue",
       url: `${productBaseUrl}native/engine-worker.generated.js`,
     },
     {

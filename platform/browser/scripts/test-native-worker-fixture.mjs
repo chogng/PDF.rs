@@ -5,9 +5,16 @@ const glue = await import(
   new URL("../dist/native/engine-worker.generated.js", import.meta.url)
 );
 const {
-  BrowserNativeWorkerLoader,
+  BROWSER_NATIVE_WORKER_MAX_TRANSFER_BYTES,
+  createBrowserNativeWorkerStart,
+  installBrowserNativeWorkerEntry,
 } = await import(
-  new URL("../.test-dist/src/browser-native-worker-loader.js", import.meta.url)
+  new URL("../.test-dist/src/browser-native-worker-entry.js", import.meta.url)
+);
+const {
+  negotiateBrowserHello,
+} = await import(
+  new URL("../.test-dist/src/browser-handshake.js", import.meta.url)
 );
 const protocol = await import(
   new URL("../.test-dist/generated/engine-protocol.js", import.meta.url)
@@ -158,72 +165,222 @@ const decodeDispatch = (dispatch) => {
   });
 };
 
-const loader = glue.createNativeWorkerEngineLoader(
-  BrowserNativeWorkerLoader,
+class FixtureScheduler {
+  #next = 1;
+  #callbacks = new Map();
+
+  get pending() {
+    return this.#callbacks.size;
+  }
+
+  request(callback) {
+    const handle = this.#next;
+    this.#next += 1;
+    this.#callbacks.set(handle, callback);
+    return handle;
+  }
+
+  cancel(handle) {
+    this.#callbacks.delete(handle);
+  }
+
+  runOne() {
+    const next = this.#callbacks.entries().next();
+    if (next.done) {
+      return false;
+    }
+    const [handle, callback] = next.value;
+    this.#callbacks.delete(handle);
+    callback();
+    return true;
+  }
+}
+
+class FixtureWorkerScope {
+  #listeners = new Map();
+  #scheduler;
+  posted = [];
+  closeCount = 0;
+
+  constructor(scheduler) {
+    this.#scheduler = scheduler;
+  }
+
+  addEventListener(type, listener) {
+    let listeners = this.#listeners.get(type);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.#listeners.set(type, listeners);
+    }
+    listeners.add(listener);
+  }
+
+  removeEventListener(type, listener) {
+    this.#listeners.get(type)?.delete(listener);
+  }
+
+  postMessage(value, transfer) {
+    assert.deepEqual(value, transfer);
+    this.posted.push(structuredClone(value, { transfer }));
+  }
+
+  close() {
+    this.closeCount += 1;
+  }
+
+  setTimeout(callback, milliseconds) {
+    assert.equal(milliseconds, 0);
+    return this.#scheduler.request(callback);
+  }
+
+  clearTimeout(handle) {
+    this.#scheduler.cancel(handle);
+  }
+
+  emit(value, transfer = []) {
+    const cloned = structuredClone(value, { transfer });
+    const event = new MessageEvent("message", { data: cloned });
+    for (const listener of this.#listeners.get("message") ?? []) {
+      listener(event);
+    }
+  }
+
+  emitPhysical(control, transfers = []) {
+    const value = [control.buffer, ...transfers];
+    this.emit(value, value);
+  }
+}
+
+const scheduler = new FixtureScheduler();
+const scope = new FixtureWorkerScope(scheduler);
+const faults = [];
+const controller = installBrowserNativeWorkerEntry({
+  scope,
+  artifact: glue.NATIVE_WORKER_ARTIFACT,
   runtime,
+  limits: Object.freeze({
+    maxInboundMessages: 64,
+    maxQueuedBytes: BROWSER_NATIVE_WORKER_MAX_TRANSFER_BYTES,
+    maxTurn: 64,
+    maxTransferBytes: BROWSER_NATIVE_WORKER_MAX_TRANSFER_BYTES,
+    maxTransferSlots: protocol.MAX_TRANSFER_SLOTS,
+  }),
+  fatal: (code) => {
+    faults.push(code);
+  },
+});
+const seen = [];
+const takePosted = () => {
+  while (scope.posted.length > 0) {
+    const physical = scope.posted.shift();
+    assert.ok(Array.isArray(physical));
+    const [control, ...transfers] = physical;
+    assert.ok(control instanceof ArrayBuffer);
+    const event = decodeDispatch({
+      frame: new Uint8Array(control),
+      transfers,
+    });
+    assert.notEqual(event, undefined);
+    seen.push(event);
+  }
+};
+const driveUntil = async (predicate, label) => {
+  for (let turn = 0; turn < MAX_FIXTURE_NATIVE_TURNS; turn += 1) {
+    if (scheduler.runOne()) {
+      takePosted();
+    }
+    takePosted();
+    if (predicate(seen)) {
+      return seen.at(-1);
+    }
+    if (faults.length > 0) {
+      throw new Error(`Native Worker controller faulted: ${faults[0]}`);
+    }
+    if (
+      controller.state !== "Loading"
+      && scheduler.pending === 0
+    ) {
+      throw new Error(
+        `Native Worker controller became idle while waiting for ${label}`,
+      );
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(
+    `Native Worker exceeded ${MAX_FIXTURE_NATIVE_TURNS} controller turns waiting for ${label}`,
+  );
+};
+const send = (command, correlation, transfers = []) => {
+  scope.emitPhysical(
+    encodeFrame(command, correlation),
+    transfers,
+  );
+};
+
+scope.emit(createBrowserNativeWorkerStart(supervisorIdentity));
+send(
+  { type: "Hello", payload: { hello: hostHello } },
+  { worker: supervisorIdentity.worker },
 );
-const worker = await loader.bootstrap(
-  encodeFrame(
-    { type: "Hello", payload: { hello: hostHello } },
-    { worker: supervisorIdentity.worker },
-  ),
-  supervisorIdentity,
+await driveUntil(
+  (events) => events.some((event) => event.event.type === "EngineHello"),
+  "EngineHello",
 );
-const engineHello = decodeDispatch(worker.engineHello);
-assert.equal(engineHello?.event.type, "EngineHello");
+const engineHello = seen.find(
+  (event) => event.event.type === "EngineHello",
+);
+assert.notEqual(engineHello, undefined);
 assert.equal(
   engineHello.event.payload.hello.endpoint_role,
   protocol.EndpointRole.Engine,
 );
-const connection = worker.connection;
-const ready = decodeDispatch(worker.accept(
-  encodeFrame(
-    {
-      type: "HelloAccept",
-      payload: {
-        negotiated_minor: connection.minor,
-        schema_hash: protocol.SCHEMA_HASH.slice(),
-      },
+const connection = negotiateBrowserHello(
+  hostHello,
+  engineHello.event.payload.hello,
+);
+send(
+  {
+    type: "HelloAccept",
+    payload: {
+      negotiated_minor: connection.minor,
+      schema_hash: protocol.SCHEMA_HASH.slice(),
     },
-    { worker: supervisorIdentity.worker },
-  ),
-));
-assert.equal(ready?.event.type, "Ready");
-assert.equal(worker.ready, true);
-const seen = [engineHello, ready];
+  },
+  { worker: supervisorIdentity.worker },
+);
+await driveUntil(
+  (events) => events.some((event) => event.event.type === "Ready"),
+  "Ready",
+);
+assert.equal(controller.state, "Ready");
+
 const dispatch = (command, correlation, transfers = []) => {
-  const event = decodeDispatch(
-    worker.dispatch(encodeFrame(command, correlation), transfers),
-  );
-  if (event !== undefined) {
-    seen.push(event);
-  }
-  return event;
+  send(command, correlation, transfers);
 };
-const pollUntil = (predicate, label) => {
+const pollUntil = async (predicate, label) => {
   const existing = seen.at(-1);
   if (existing !== undefined && predicate(existing, seen)) {
     return existing;
   }
-  for (let turn = 0; turn < MAX_FIXTURE_NATIVE_TURNS; turn += 1) {
-    const polled = worker.poll();
-    const event = decodeDispatch(polled.output);
-    if (event !== undefined) {
-      seen.push(event);
-      if (predicate(event, seen)) {
-        return event;
-      }
-    }
-    if (!polled.pending) {
-      throw new Error(
-        `Native Worker became idle while waiting for ${label}`,
-      );
-    }
-  }
-  throw new Error(
-    `Native Worker exceeded ${MAX_FIXTURE_NATIVE_TURNS} turns waiting for ${label}`,
+  await driveUntil(
+    (events) => {
+      const latest = events.at(-1);
+      return latest !== undefined && predicate(latest, events);
+    },
+    label,
   );
+  const matching = seen.findLast((event) => predicate(event, seen));
+  if (matching === undefined) {
+    throw new Error(`Native Worker did not publish ${label}`);
+  }
+  return matching;
 };
+
+/*
+ * The full fixture below now drives the same controller physical-message path
+ * as the supervisor. No direct BrowserNativeWorkerInstance dispatch or poll is
+ * used after bootstrap.
+ */
 
 const pdf = new TextEncoder().encode("%PDF-1.7\n");
 const source = {
@@ -243,7 +400,7 @@ dispatch(
   },
   { worker: supervisorIdentity.worker, request: 1n },
 );
-const needData = pollUntil(
+const needData = await pollUntil(
   (event) => event.event.type === "NeedData",
   "NeedData",
 );
@@ -272,7 +429,7 @@ dispatch(
   { worker: supervisorIdentity.worker, session },
   dataTransfers,
 );
-const documentReady = pollUntil(
+const documentReady = await pollUntil(
   (event) => event.event.type === "DocumentReady",
   "DocumentReady",
 );
@@ -289,7 +446,7 @@ dispatch(
   },
   { worker: supervisorIdentity.worker, session, request: 2n },
 );
-const pageMetrics = pollUntil(
+const pageMetrics = await pollUntil(
   (event) => event.event.type === "PageMetrics",
   "PageMetrics",
 );
@@ -331,7 +488,7 @@ dispatch(
   },
   { worker: supervisorIdentity.worker, session, generation: 1n },
 );
-pollUntil(
+await pollUntil(
   (_event, events) =>
     events.some((event) => event.event.type === "CapabilityReported")
     && events.some((event) => event.event.type === "SurfaceReady")
@@ -357,7 +514,7 @@ dispatch(
   },
   { worker: supervisorIdentity.worker, session },
 );
-pollUntil(
+await pollUntil(
   (_event, events) =>
     events.some((event) => event.event.type === "SurfaceReleaseAcknowledged"),
   "SurfaceReleaseAcknowledged",
@@ -367,7 +524,7 @@ dispatch(
   { type: "CloseSession", payload: {} },
   { worker: supervisorIdentity.worker, session },
 );
-pollUntil(
+await pollUntil(
   (_event, events) =>
     events.some((event) => event.event.type === "CloseSessionAcknowledged")
     && events.some((event) => event.event.type === "SessionClosed"),
@@ -378,15 +535,16 @@ dispatch(
   { type: "Shutdown", payload: { deadline_ms: 1_000 } },
   { worker: supervisorIdentity.worker },
 );
-pollUntil(
+await pollUntil(
   (_event, events) =>
     events.some((event) => event.event.type === "ShutdownAcknowledged")
     && events.some((event) => event.event.type === "WorkerStopped"),
   "ShutdownAcknowledged and WorkerStopped",
 );
-worker.shutdown();
-assert.equal(worker.closed, true);
-loader.close();
+assert.equal(controller.state, "Closed");
+assert.equal(scope.closeCount, 1);
+assert.equal(scheduler.pending, 0);
+assert.deepEqual(faults, []);
 
 const requiredEvents = [
   "EngineHello",

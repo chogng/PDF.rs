@@ -112,13 +112,22 @@ export interface BrowserWorkerHandlers {
   readonly onMessage: (value: unknown) => void;
   readonly onMessageError: () => void;
   readonly onError: () => void;
+  /**
+   * Optional platform-observed unexpected exit. Web Dedicated Workers expose
+   * no normal-exit event, so the browser production adapter never fabricates
+   * this callback; clean WorkerStopped and active `terminate()` own that path.
+   */
   readonly onTerminated: () => void;
 }
 
 /**
  * Minimal Dedicated Worker adapter.
  *
- * Implementations translate native Worker callbacks into these handlers.
+ * Implementations translate platform-observable callbacks into these handlers.
+ * `onTerminated` is available to ports with an actual exit signal; the Web
+ * Dedicated Worker adapter has none and never infers one. Protocol/error and
+ * active teardown remain available; the embedding must add bounded
+ * request/watchdog liveness before claiming silent-UA-termination coverage.
  * `postMessage` receives an ordinary physical resource table and the exact
  * ArrayBuffers whose ownership is transferred.
  */

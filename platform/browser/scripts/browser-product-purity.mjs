@@ -69,25 +69,45 @@ const REQUIRED_NATIVE_FILES = Object.freeze([
 const REQUIRED_RESOURCE_PATHS = Object.freeze(
   REQUIRED_NATIVE_FILES.map((path) => `dist/native/${path}`),
 );
+const REQUIRED_RESOURCE_BINDINGS = Object.freeze({
+  "dist/native/engine-manifest.json": Object.freeze({
+    executable: false,
+    hash_binding: "canonical-sha256",
+    kind: "native-artifact-manifest",
+    ownership: "PDF.rs browser release",
+  }),
+  "dist/native/engine-worker.generated.js": Object.freeze({
+    executable: true,
+    hash_binding: "engine-manifest.json#/glue/sha256",
+    kind: "native-loader-module",
+    ownership: "PDF.rs browser host",
+  }),
+  "dist/native/engine.wasm": Object.freeze({
+    executable: true,
+    hash_binding: "engine-manifest.json#/engine/sha256",
+    kind: "native-wasm-engine",
+    ownership: "PDF.rs Native engine",
+  }),
+});
 const REQUIRED_PRECACHE = Object.freeze(
   REQUIRED_NATIVE_FILES.map((path) => `./native/${path}`),
 );
 const REQUIRED_NETWORK_IDS = Object.freeze([
+  "native-loader-glue",
   "native-wasm",
-  "native-worker-entry",
   "selected-source",
   "viewer-module-graph",
 ]);
 const REQUIRED_NETWORK_BINDINGS = Object.freeze({
+  "native-loader-glue": Object.freeze({
+    kind: "integrity-bound-product-resource",
+    location: "./native/engine-worker.generated.js",
+    ownership: "PDF.rs browser host",
+  }),
   "native-wasm": Object.freeze({
     kind: "integrity-bound-product-resource",
     location: "./native/engine.wasm",
     ownership: "PDF.rs Native engine",
-  }),
-  "native-worker-entry": Object.freeze({
-    kind: "integrity-bound-product-resource",
-    location: "./native/engine-worker.generated.js",
-    ownership: "PDF.rs browser host",
   }),
   "selected-source": Object.freeze({
     kind: "host-selected-immutable-pdf-source",
@@ -100,6 +120,16 @@ const REQUIRED_NETWORK_BINDINGS = Object.freeze({
     ownership: "PDF.rs browser viewer",
   }),
 });
+const REQUIRED_WORKER_CONSTRUCTOR_SITE = Object.freeze({
+  constructor_kind: "DedicatedWorker",
+  credentials: "same-origin",
+  entry_binding: "UnverifiedBrowserNativeWorkerEntryReference",
+  path: "src/browser-dedicated-worker.ts",
+  worker_type: "module",
+});
+const REQUIRED_WORKER_CONSTRUCTOR_SITE_KEYS = Object.freeze(
+  Object.keys(REQUIRED_WORKER_CONSTRUCTOR_SITE).sort(),
+);
 const FORBIDDEN_AMBIENT_IDENTIFIERS = Object.freeze(new Set([
   "EventSource",
   "Function",
@@ -125,8 +155,10 @@ const EXPECTED_COMPUTED_MEMBER_ACCESS_COUNTS = Object.freeze({
   "generated/engine-protocol.ts": 77,
   "src/browser-command-admission.ts": 4,
   "src/browser-command-boundary.ts": 10,
+  "src/browser-dedicated-worker.ts": 14,
   "src/browser-event-boundary.ts": 8,
   "src/browser-handshake.ts": 0,
+  "src/browser-native-worker-entry.ts": 11,
   "src/browser-native-worker-loader.ts": 52,
   "src/browser-reader-client.ts": 7,
   "src/browser-source-bridge.ts": 63,
@@ -142,7 +174,12 @@ const EXPECTED_REFLECT_MEMBER_COUNTS = Object.freeze({
     ownKeys: 1,
   }),
   "src/browser-command-boundary.ts": Object.freeze({ ownKeys: 1 }),
+  "src/browser-dedicated-worker.ts": Object.freeze({
+    apply: 1,
+    ownKeys: 2,
+  }),
   "src/browser-event-boundary.ts": Object.freeze({ apply: 3, ownKeys: 1 }),
+  "src/browser-native-worker-entry.ts": Object.freeze({ ownKeys: 1 }),
   "src/browser-reader-client.ts": Object.freeze({ get: 1 }),
   "src/browser-source-bridge.ts": Object.freeze({ get: 1 }),
   "src/browser-surface-bridge.ts": Object.freeze({ ownKeys: 2 }),
@@ -433,8 +470,10 @@ const validatePolicy = (policy) => {
   let resourceBytes = 0;
   for (const resource of policy.resources) {
     checkRelativePath(resource.path, "resource path");
+    const required = REQUIRED_RESOURCE_BINDINGS[resource.path];
     if (
-      !safePositiveInteger(resource.byte_length, 128 * 1024 * 1024)
+      required === undefined
+      || !safePositiveInteger(resource.byte_length, 128 * 1024 * 1024)
       || typeof resource.executable !== "boolean"
       || typeof resource.hash_binding !== "string"
       || typeof resource.kind !== "string"
@@ -443,6 +482,10 @@ const validatePolicy = (policy) => {
       || resource.byte_length > resource.max_bytes
       || typeof resource.sha256 !== "string"
       || !/^[0-9a-f]{64}$/u.test(resource.sha256)
+      || resource.executable !== required.executable
+      || resource.hash_binding !== required.hash_binding
+      || resource.kind !== required.kind
+      || resource.ownership !== required.ownership
     ) {
       fail("RPE-BROWSER-PURITY-0005", `invalid resource ${resource.path}`);
     }
@@ -499,8 +542,8 @@ const validatePolicy = (policy) => {
   const nativeWasmNetwork = policy.network_manifest.find(
     (resource) => resource.id === "native-wasm",
   );
-  const nativeWorkerNetwork = policy.network_manifest.find(
-    (resource) => resource.id === "native-worker-entry",
+  const nativeLoaderNetwork = policy.network_manifest.find(
+    (resource) => resource.id === "native-loader-glue",
   );
   const viewerNetwork = policy.network_manifest.find(
     (resource) => resource.id === "viewer-module-graph",
@@ -510,9 +553,9 @@ const validatePolicy = (policy) => {
     || nativeWasmNetwork.max_bytes
       !== resourceByPath.get("dist/native/engine.wasm").byte_length
         * nativeWasmNetwork.max_requests_per_open
-    || nativeWorkerNetwork.max_bytes
+    || nativeLoaderNetwork.max_bytes
       !== resourceByPath.get("dist/native/engine-worker.generated.js").byte_length
-        * nativeWorkerNetwork.max_requests_per_open
+        * nativeLoaderNetwork.max_requests_per_open
     || viewerNetwork.max_requests_per_open !== moduleFiles.length
   ) {
     fail("RPE-BROWSER-PURITY-0009", "network request budget is inconsistent");
@@ -587,11 +630,16 @@ const validatePolicy = (policy) => {
     ])
     || policy.worker_graph.max_workers !== 1
     || JSON.stringify(policy.worker_graph.entrypoints)
-      !== JSON.stringify(["dist/native/engine-worker.generated.js"])
+      !== JSON.stringify([])
     || JSON.stringify(policy.worker_graph.wasm_payloads)
       !== JSON.stringify(["dist/native/engine.wasm"])
     || !Array.isArray(policy.worker_graph.worker_constructor_sites)
-    || policy.worker_graph.worker_constructor_sites.length !== 0
+    || policy.worker_graph.worker_constructor_sites.length !== 1
+    || policy.worker_graph.worker_constructor_sites.some((site) =>
+      !exactKeys(site, REQUIRED_WORKER_CONSTRUCTOR_SITE_KEYS)
+    )
+    || canonicalJson(policy.worker_graph.worker_constructor_sites)
+      !== canonicalJson([REQUIRED_WORKER_CONSTRUCTOR_SITE])
   ) {
     fail("RPE-BROWSER-PURITY-0008", "Worker graph drifted");
   }
@@ -1527,8 +1575,15 @@ const inspectSensitiveCapabilities = (path, text, tokens) => {
     if (
       identifier === "Worker"
       && !(
-        path === "generated/engine-protocol.ts"
-        && (before?.value === "." || after?.value === "=")
+        (
+          path === "generated/engine-protocol.ts"
+          && (before?.value === "." || after?.value === "=")
+        )
+        || (
+          path === REQUIRED_WORKER_CONSTRUCTOR_SITE.path
+          && before?.value === "new"
+          && after?.value === "("
+        )
       )
     ) {
       fail("RPE-BROWSER-PURITY-0008", `${path} references an unregistered Worker`);
@@ -1543,6 +1598,108 @@ const inspectSensitiveCapabilities = (path, text, tokens) => {
 const maskTypeScriptNonCode = (path, text) =>
   lexTypeScript(path, text).code;
 
+const inspectRegisteredWorkerConstructorSites = (path, text) => {
+  const lexical = lexTypeScript(path, text);
+  const { code, tokens } = lexical;
+  const constructors = [
+    ...code.matchAll(/\bnew\s+(?:Shared)?Worker\s*\(/gu),
+  ];
+  if (constructors.length === 0) {
+    return [];
+  }
+  const workerTokenIndex = tokens.findIndex(
+    (token, index) =>
+      token.value === "Worker"
+      && tokens[index - 1]?.value === "new"
+      && tokens[index + 1]?.value === "(",
+  );
+  let workerCallEnd = workerTokenIndex + 2;
+  let workerCallDepth = 1;
+  while (
+    workerTokenIndex >= 0
+    && workerCallEnd < tokens.length
+    && workerCallDepth > 0
+  ) {
+    if (tokens[workerCallEnd].value === "(") workerCallDepth += 1;
+    if (tokens[workerCallEnd].value === ")") workerCallDepth -= 1;
+    workerCallEnd += 1;
+  }
+  const workerCall = workerTokenIndex < 0 || workerCallDepth !== 0
+    ? []
+    : tokens
+      .slice(workerTokenIndex - 1, workerCallEnd)
+      .map((token) => token.value);
+  const exactWorkerCall = [
+    "new",
+    "Worker",
+    "(",
+    "entryUrl",
+    ",",
+    "Object",
+    ".",
+    "freeze",
+    "(",
+    "{",
+    "credentials",
+    ":",
+    "same-origin",
+    ",",
+    "name",
+    ":",
+    "workerName",
+    ",",
+    "type",
+    ":",
+    "module",
+    ",",
+    "}",
+    ")",
+    ",",
+    ")",
+  ];
+  const exactBrand =
+    /\bENTRY_REFERENCES\s*=\s*new\s+WeakSet\s*<\s*object\s*>\s*\(\s*\)/u;
+  const exactBrandAdmission =
+    /\bENTRY_REFERENCES\.has\s*\(\s*value\s*\)/u;
+  const exactBrandCreation =
+    /\bENTRY_REFERENCES\.add\s*\(\s*reference\s*\)/u;
+  const exactCanonicalStore =
+    /\bENTRY_REFERENCE_URLS\s*=\s*new\s+WeakMap\s*<\s*object\s*,\s*string\s*>\s*\(\s*\)/u;
+  const exactCanonicalSnapshot =
+    /\bcanonical\s*=\s*URL\.prototype\.toString\.call\s*\(\s*snapshot\s*\)/u;
+  const exactCanonicalSet =
+    /\bENTRY_REFERENCE_URLS\.set\s*\(\s*reference\s*,\s*canonical\s*\)/u;
+  const exactCanonicalGet =
+    /\bcanonical\s*=\s*ENTRY_REFERENCE_URLS\.get\s*\(\s*value\s*\)/u;
+  const exactCanonicalConstruction =
+    /\bsnapshot\s*=\s*new\s+URL\s*\(\s*canonical\s*\)/u;
+  const mutableEntryUrlRead =
+    /(?:\bconfiguration\.entry\.url\b|\bdescriptor\.value\s*\.\s*href\b|\bvalue\.url\b|\bURL\.prototype\.toString\.call\s*\(\s*descriptor\.value\s*\))/u;
+  const exactFactoryBinding =
+    /\bentryUrl\s*=\s*snapshotEntryReference\s*\(\s*configuration\.entry\s*\)/u;
+  const exactConstructBinding =
+    /\bdedicated\s*=\s*construct\s*\(\s*new\s+URL\s*\(\s*entryUrl\.href\s*\)\s*,\s*workerName\s*,?\s*\)/u;
+  if (
+    path !== REQUIRED_WORKER_CONSTRUCTOR_SITE.path
+    || constructors.length !== 1
+    || canonicalJson(workerCall) !== canonicalJson(exactWorkerCall)
+    || !exactBrand.test(code)
+    || !exactBrandAdmission.test(code)
+    || !exactBrandCreation.test(code)
+    || !exactCanonicalStore.test(code)
+    || !exactCanonicalSnapshot.test(code)
+    || !exactCanonicalSet.test(code)
+    || !exactCanonicalGet.test(code)
+    || !exactCanonicalConstruction.test(code)
+    || mutableEntryUrlRead.test(code)
+    || !exactFactoryBinding.test(code)
+    || !exactConstructBinding.test(code)
+  ) {
+    fail("RPE-BROWSER-PURITY-0008", `${path} contains an unregistered Worker`);
+  }
+  return [REQUIRED_WORKER_CONSTRUCTOR_SITE];
+};
+
 export const inspectProductModuleText = (path, text) => {
   if (/\bimport\s*\(/u.test(text)) {
     fail("RPE-BROWSER-PURITY-0004", `${path} contains dynamic import`);
@@ -1555,9 +1712,7 @@ export const inspectProductModuleText = (path, text) => {
   ) {
     fail("RPE-BROWSER-PURITY-0004", `${path} contains dynamic executable code`);
   }
-  if (/\bnew\s+(?:Shared)?Worker\s*\(/u.test(text)) {
-    fail("RPE-BROWSER-PURITY-0008", `${path} contains an unregistered Worker`);
-  }
+  inspectRegisteredWorkerConstructorSites(path, text);
   if (/\bnavigator\s*\.\s*serviceWorker\b/u.test(text)) {
     fail("RPE-BROWSER-PURITY-0008", `${path} registers a service Worker`);
   }
@@ -1649,6 +1804,7 @@ const inspectModuleGraph = async (browserRoot, policy) => {
   );
   const modules = [];
   const edges = [];
+  const workerConstructorSites = [];
   for (const path of policy.module_graph.files) {
     const absolute = resolve(browserRoot, path);
     if (relative(browserRoot, absolute).startsWith(`..${sep}`)) {
@@ -1656,6 +1812,9 @@ const inspectModuleGraph = async (browserRoot, policy) => {
     }
     const text = await readBoundedText(absolute, MAX_SOURCE_BYTES, `module ${path}`);
     const imports = inspectProductModuleText(path, text);
+    workerConstructorSites.push(
+      ...inspectRegisteredWorkerConstructorSites(path, text),
+    );
     modules.push({ imports, path, sha256: digestText(text), text });
     for (const specifier of imports) {
       const target = resolveModuleSpecifier(absolute, specifier);
@@ -1670,6 +1829,12 @@ const inspectModuleGraph = async (browserRoot, policy) => {
   }
   if (edges.length > policy.budgets.max_module_edges) {
     fail("RPE-BROWSER-PURITY-0004", "module edge budget exceeded");
+  }
+  if (
+    canonicalJson(workerConstructorSites)
+      !== canonicalJson(policy.worker_graph.worker_constructor_sites)
+  ) {
+    fail("RPE-BROWSER-PURITY-0008", "Worker constructor registry drifted");
   }
   edges.sort((left, right) =>
     left.from.localeCompare(right.from) || left.to.localeCompare(right.to)
@@ -2165,7 +2330,7 @@ export const validateBrowserNetworkTrace = (
   );
 
   const expectedUrls = new Map();
-  for (const resourceId of ["native-wasm", "native-worker-entry"]) {
+  for (const resourceId of ["native-loader-glue", "native-wasm"]) {
     const registration = registrations.get(resourceId);
     const expected = new URL(registration.location, productBase).href;
     expectedUrls.set(resourceId, Object.freeze([expected]));
@@ -2182,7 +2347,7 @@ export const validateBrowserNetworkTrace = (
       ).sha256,
     ],
     [
-      "native-worker-entry",
+      "native-loader-glue",
       policy.resources.find(
         (resource) =>
           resource.path === "dist/native/engine-worker.generated.js",
@@ -2236,7 +2401,7 @@ export const validateBrowserNetworkTrace = (
     }
     const staticPath = {
       "native-wasm": "dist/native/engine.wasm",
-      "native-worker-entry": "dist/native/engine-worker.generated.js",
+      "native-loader-glue": "dist/native/engine-worker.generated.js",
     }[request.resource_id];
     if (
       staticPath !== undefined
