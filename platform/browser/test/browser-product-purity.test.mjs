@@ -46,8 +46,12 @@ const withBrowserFixture = async (callback) => {
 test("canonical product closure binds every Native browser surface", async () => {
   assert.equal(validateBrowserProductPolicy(policy), true);
   const report = await checkBrowserProductPurity({ browserRoot });
-  assert.equal(report.bundleFileCount, 3);
+  assert.equal(report.bundleFileCount, 5);
   assert.equal(report.moduleFileCount, policy.module_graph.files.length);
+  assert.equal(
+    report.workerModuleFileCount,
+    policy.worker_graph.module_files.length,
+  );
   assert.equal(report.shippedThirdPartyLeafCount, 0);
   assert.equal(report.wasmImportCount, 0);
   for (const digest of [
@@ -75,19 +79,28 @@ test("unregistered executable and Wasm payloads fail closed", async () => {
   });
 });
 
-test("generated Native glue is registered only as a loader dependency", () => {
+test("generated Native entry, Host registration, and loader are exact", () => {
   const glue = policy.resources.find(
     (resource) =>
       resource.path === "dist/native/engine-worker.generated.js",
   );
   assert.equal(glue?.kind, "native-loader-module");
-  assert.equal(
-    policy.network_manifest.some(
-      (resource) => resource.id === "native-worker-entry",
-    ),
-    false,
+  const entry = policy.resources.find(
+    (resource) =>
+      resource.path
+        === "dist/native/engine-worker-entry.generated.js",
   );
-  assert.deepEqual(policy.worker_graph.entrypoints, []);
+  assert.equal(entry?.kind, "native-worker-entry-module");
+  const host = policy.resources.find(
+    (resource) =>
+      resource.path
+        === "dist/native/engine-worker-host.generated.js",
+  );
+  assert.equal(host?.kind, "native-worker-host-registration-module");
+  assert.deepEqual(
+    policy.worker_graph.entrypoints,
+    ["dist/native/engine-worker-entry.generated.js"],
+  );
 
   const mislabeled = structuredClone(policy);
   const mislabeledGlue = mislabeled.resources.find(
@@ -101,6 +114,34 @@ test("generated Native glue is registered only as a loader dependency", () => {
       error instanceof BrowserProductPurityError
       && error.code === "RPE-BROWSER-PURITY-0005",
   );
+
+  const missingEntry = structuredClone(policy);
+  missingEntry.worker_graph.entrypoints = [];
+  assert.throws(
+    () => validateBrowserProductPolicy(missingEntry),
+    (error) =>
+      error instanceof BrowserProductPurityError
+      && error.code === "RPE-BROWSER-PURITY-0008",
+  );
+
+  for (const mutate of [
+    (candidate) => {
+      candidate.worker_graph.module_files.pop();
+    },
+    (candidate) => {
+      candidate.worker_graph.host_registration.entry_reference_export =
+        "RawUrl";
+    },
+  ]) {
+    const candidate = structuredClone(policy);
+    mutate(candidate);
+    assert.throws(
+      () => validateBrowserProductPolicy(candidate),
+      (error) =>
+        error instanceof BrowserProductPurityError
+        && error.code === "RPE-BROWSER-PURITY-0008",
+    );
+  }
 });
 
 test("dependency lock rejects an unregistered external engine leaf", async () => {
@@ -321,6 +362,10 @@ test("Dedicated Worker constructor registry rejects omission, extras, and drift"
       candidate.worker_graph.worker_constructor_sites[0].entry_binding =
         "RawUrl";
     },
+    (candidate) => {
+      candidate.worker_graph.worker_constructor_sites[0]
+        .registration_binding = "RawUrl";
+    },
   ]) {
     const candidate = structuredClone(policy);
     mutate(candidate);
@@ -348,6 +393,18 @@ test("Dedicated Worker constructor registry rejects omission, extras, and drift"
       "",
     ),
     (source) => source.replace(
+      "Object.getOwnPropertyDescriptor(candidate, \"sha256\")",
+      "undefined",
+    ),
+    (source) => source.replace(
+      "urlDescriptor.writable !== false",
+      "false",
+    ),
+    (source) => source.replace(
+      "URL_TO_STRING = URL.prototype.toString",
+      "URL_TO_STRING = String",
+    ),
+    (source) => source.replace(
       "const canonical = ENTRY_REFERENCE_URLS.get(value);",
       "const canonical = descriptor.value.href;",
     ),
@@ -367,6 +424,83 @@ test("Dedicated Worker constructor registry rejects omission, extras, and drift"
         (error) =>
           error instanceof BrowserProductPurityError
           && error.code === "RPE-BROWSER-PURITY-0008",
+      );
+    });
+  }
+});
+
+test("generated Host registration rejects tuple or call-site drift", async () => {
+  for (const mutate of [
+    (source) => source.replace(
+      "    NATIVE_WORKER_ENTRY_ARTIFACT,\n  );",
+      "    Object.freeze({ ...NATIVE_WORKER_ENTRY_ARTIFACT, byteLength: 1 }),\n  );",
+    ),
+    (source) => source.replace(
+      "createUnverifiedBrowserNativeWorkerEntryReference(",
+      "Object.freeze(",
+    ),
+  ]) {
+    await withBrowserFixture(async (fixture) => {
+      const hostPath = join(
+        fixture,
+        "dist/native/engine-worker-host.generated.js",
+      );
+      const source = await readFile(hostPath, "utf8");
+      const mutatedHost = mutate(source);
+      await writeFile(hostPath, mutatedHost);
+      const hostSha256 = createHash("sha256")
+        .update(mutatedHost, "utf8")
+        .digest("hex");
+      const manifestPath = join(
+        fixture,
+        "dist/native/engine-manifest.json",
+      );
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifest.host.byte_length = Buffer.byteLength(mutatedHost, "utf8");
+      manifest.host.sha256 = hostSha256;
+      const manifestText = canonicalJson(manifest);
+      await writeFile(manifestPath, manifestText);
+      const policyPath = join(
+        fixture,
+        "product/browser-product-policy.json",
+      );
+      const fixturePolicy = JSON.parse(
+        await readFile(policyPath, "utf8"),
+      );
+      const hostResource = fixturePolicy.resources.find(
+        (resource) =>
+          resource.path
+            === "dist/native/engine-worker-host.generated.js",
+      );
+      hostResource.byte_length = Buffer.byteLength(
+        mutatedHost,
+        "utf8",
+      );
+      hostResource.sha256 = hostSha256;
+      const hostNetwork = fixturePolicy.network_manifest.find(
+        (resource) => resource.id === "native-worker-host",
+      );
+      hostNetwork.max_bytes = hostResource.byte_length;
+      const manifestResource = fixturePolicy.resources.find(
+        (resource) =>
+          resource.path === "dist/native/engine-manifest.json",
+      );
+      manifestResource.byte_length = Buffer.byteLength(
+        manifestText,
+        "utf8",
+      );
+      manifestResource.sha256 = createHash("sha256")
+        .update(manifestText, "utf8")
+        .digest("hex");
+      await writeFile(policyPath, canonicalJson(fixturePolicy));
+      await assert.rejects(
+        checkBrowserProductPurity({
+          browserRoot: fixture,
+          repositoryRoot,
+        }),
+        (error) =>
+          error instanceof BrowserProductPurityError
+          && error.code === "RPE-BROWSER-PURITY-0005",
       );
     });
   }
@@ -419,21 +553,34 @@ test("network trace binds exact product and selected-source identities", () => {
   const selectedSourceIdentity = createHash("sha256")
     .update(canonicalJson(selectedSource), "utf8")
     .digest("hex");
-  const viewerModuleUrls = policy.module_graph.files.map((path) =>
+  const productModuleUrls = policy.module_graph.files.map((path) =>
+    new URL(path.replace(/\.ts$/u, ".js"), productBaseUrl).href
+  );
+  const workerModuleUrls = policy.worker_graph.module_files.map((path) =>
     new URL(path.replace(/\.ts$/u, ".js"), productBaseUrl).href
   );
   const nativeLoader = policy.resources.find(
     (resource) =>
       resource.path === "dist/native/engine-worker.generated.js",
   );
+  const nativeEntry = policy.resources.find(
+    (resource) =>
+      resource.path
+        === "dist/native/engine-worker-entry.generated.js",
+  );
+  const nativeHost = policy.resources.find(
+    (resource) =>
+      resource.path
+        === "dist/native/engine-worker-host.generated.js",
+  );
   const nativeWasm = policy.resources.find(
     (resource) => resource.path === "dist/native/engine.wasm",
   );
   const trace = [
-    ...viewerModuleUrls.map((url) => ({
+    ...productModuleUrls.map((url) => ({
       bytes: 2048,
       identity: policy.module_graph.sha256,
-      resource_id: "viewer-module-graph",
+      resource_id: "product-module-graph",
       url,
     })),
     {
@@ -441,6 +588,20 @@ test("network trace binds exact product and selected-source identities", () => {
       identity: nativeLoader.sha256,
       resource_id: "native-loader-glue",
       url: `${productBaseUrl}native/engine-worker.generated.js`,
+    },
+    {
+      bytes: nativeEntry.byte_length,
+      identity: nativeEntry.sha256,
+      resource_id: "native-worker-entry",
+      url:
+        `${productBaseUrl}native/engine-worker-entry.generated.js`,
+    },
+    {
+      bytes: nativeHost.byte_length,
+      identity: nativeHost.sha256,
+      resource_id: "native-worker-host",
+      url:
+        `${productBaseUrl}native/engine-worker-host.generated.js`,
     },
     {
       bytes: nativeWasm.byte_length,
@@ -463,7 +624,57 @@ test("network trace binds exact product and selected-source identities", () => {
   ];
   assert.deepEqual(
     validateBrowserNetworkTrace(policy, trace, options),
-    { requestCount: viewerModuleUrls.length + 4, resourceCount: 4 },
+    { requestCount: productModuleUrls.length + 6, resourceCount: 6 },
+  );
+  const workerModuleRequests = workerModuleUrls.map((url) => ({
+    bytes: 2048,
+    identity: policy.module_graph.sha256,
+    resource_id: "product-module-graph",
+    url,
+  }));
+  const maximalRealmTrace = [
+    ...trace,
+    ...Array.from(
+      { length: 17 },
+      () => workerModuleRequests,
+    ).flat(),
+    ...Array.from({ length: 17 }, () => ({
+      bytes: nativeLoader.byte_length,
+      identity: nativeLoader.sha256,
+      resource_id: "native-loader-glue",
+      url: `${productBaseUrl}native/engine-worker.generated.js`,
+    })),
+    ...Array.from({ length: 16 }, () => ({
+      bytes: nativeEntry.byte_length,
+      identity: nativeEntry.sha256,
+      resource_id: "native-worker-entry",
+      url:
+        `${productBaseUrl}native/engine-worker-entry.generated.js`,
+    })),
+    ...Array.from({ length: 16 }, () => ({
+      bytes: nativeWasm.byte_length,
+      identity: nativeWasm.sha256,
+      resource_id: "native-wasm",
+      url: `${productBaseUrl}native/engine.wasm`,
+    })),
+  ];
+  assert.equal(
+    validateBrowserNetworkTrace(
+      policy,
+      maximalRealmTrace,
+      options,
+    ).resourceCount,
+    6,
+  );
+  assert.throws(
+    () => validateBrowserNetworkTrace(
+      policy,
+      [...maximalRealmTrace, workerModuleRequests[0]],
+      options,
+    ),
+    (error) =>
+      error instanceof BrowserProductPurityError
+      && error.code === "RPE-BROWSER-PURITY-0009",
   );
   const crossedOrigin = structuredClone(trace);
   const wasmIndex = crossedOrigin.findIndex(
@@ -479,6 +690,8 @@ test("network trace binds exact product and selected-source identities", () => {
   for (const invalid of [
     [],
     trace.filter((entry) => entry.resource_id !== "native-wasm"),
+    trace.filter((entry) => entry.resource_id !== "native-worker-entry"),
+    trace.filter((entry) => entry.resource_id !== "native-worker-host"),
     trace.map((entry, index) => index === 0 ? { ...entry, bytes: 0 } : entry),
     trace.map((entry, index) => index === 2
       ? {

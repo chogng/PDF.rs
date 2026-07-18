@@ -5,10 +5,14 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  MAX_NATIVE_WORKER_ENTRY_BYTES,
+  MAX_NATIVE_WORKER_HOST_BYTES,
   NATIVE_WORKER_ABI_SHA256,
   NATIVE_WORKER_ABI_VERSION,
   NATIVE_WORKER_EXPORTS,
+  renderNativeWorkerEntry,
   renderNativeWorkerGlue,
+  renderNativeWorkerHost,
   sha256,
   validateNativeWorkerModule,
 } from "./native-worker-contract.mjs";
@@ -29,6 +33,8 @@ const MAX_LEXICAL_NESTING = 256;
 const MAX_STATIC_STRING_LENGTH = 64 * 1024;
 const MAX_STATIC_STRING_BINDINGS = 4_096;
 const MAX_STATIC_EVALUATION_STEPS = 1_000_000;
+const MAX_PRODUCT_MODULE_NETWORK_BYTES = 16 * 1_024 * 1_024;
+const MAX_WORKER_EPOCHS_PER_OPEN = 17;
 const FORBIDDEN_ENGINE_TOKENS = Object.freeze([
   "pdfium",
   "pdf.js",
@@ -63,6 +69,8 @@ const REQUIRED_CSP = Object.freeze({
 });
 const REQUIRED_NATIVE_FILES = Object.freeze([
   "engine-manifest.json",
+  "engine-worker-entry.generated.js",
+  "engine-worker-host.generated.js",
   "engine-worker.generated.js",
   "engine.wasm",
 ]);
@@ -82,6 +90,18 @@ const REQUIRED_RESOURCE_BINDINGS = Object.freeze({
     kind: "native-loader-module",
     ownership: "PDF.rs browser host",
   }),
+  "dist/native/engine-worker-entry.generated.js": Object.freeze({
+    executable: true,
+    hash_binding: "engine-manifest.json#/entry/sha256",
+    kind: "native-worker-entry-module",
+    ownership: "PDF.rs browser host",
+  }),
+  "dist/native/engine-worker-host.generated.js": Object.freeze({
+    executable: true,
+    hash_binding: "engine-manifest.json#/host/sha256",
+    kind: "native-worker-host-registration-module",
+    ownership: "PDF.rs browser host",
+  }),
   "dist/native/engine.wasm": Object.freeze({
     executable: true,
     hash_binding: "engine-manifest.json#/engine/sha256",
@@ -95,8 +115,10 @@ const REQUIRED_PRECACHE = Object.freeze(
 const REQUIRED_NETWORK_IDS = Object.freeze([
   "native-loader-glue",
   "native-wasm",
+  "native-worker-entry",
+  "native-worker-host",
+  "product-module-graph",
   "selected-source",
-  "viewer-module-graph",
 ]);
 const REQUIRED_NETWORK_BINDINGS = Object.freeze({
   "native-loader-glue": Object.freeze({
@@ -109,22 +131,49 @@ const REQUIRED_NETWORK_BINDINGS = Object.freeze({
     location: "./native/engine.wasm",
     ownership: "PDF.rs Native engine",
   }),
+  "native-worker-entry": Object.freeze({
+    kind: "integrity-bound-product-resource",
+    location: "./native/engine-worker-entry.generated.js",
+    ownership: "PDF.rs browser host",
+  }),
+  "native-worker-host": Object.freeze({
+    kind: "integrity-bound-product-resource",
+    location: "./native/engine-worker-host.generated.js",
+    ownership: "PDF.rs browser host",
+  }),
+  "product-module-graph": Object.freeze({
+    kind: "same-origin-static-product-modules",
+    location: "module-graph:",
+    ownership: "PDF.rs browser product",
+  }),
   "selected-source": Object.freeze({
     kind: "host-selected-immutable-pdf-source",
     location: "selected-source:",
     ownership: "PDF.rs source bridge",
   }),
-  "viewer-module-graph": Object.freeze({
-    kind: "same-origin-static-product-modules",
-    location: "module-graph:",
-    ownership: "PDF.rs browser viewer",
-  }),
+});
+const REQUIRED_WORKER_MODULE_FILES = Object.freeze([
+  "generated/engine-protocol.ts",
+  "src/browser-command-admission.ts",
+  "src/browser-command-boundary.ts",
+  "src/browser-event-boundary.ts",
+  "src/browser-handshake.ts",
+  "src/browser-native-worker-entry.ts",
+  "src/browser-native-worker-loader.ts",
+  "src/native-worker-abi.generated.ts",
+]);
+const REQUIRED_HOST_REGISTRATION = Object.freeze({
+  artifact: "dist/native/engine-worker-host.generated.js",
+  entry_artifact_export: "NATIVE_WORKER_ENTRY_ARTIFACT",
+  entry_reference_export: "NATIVE_WORKER_ENTRY_REFERENCE",
 });
 const REQUIRED_WORKER_CONSTRUCTOR_SITE = Object.freeze({
   constructor_kind: "DedicatedWorker",
   credentials: "same-origin",
   entry_binding: "UnverifiedBrowserNativeWorkerEntryReference",
   path: "src/browser-dedicated-worker.ts",
+  registration_binding:
+    "dist/native/engine-worker-host.generated.js#NATIVE_WORKER_ENTRY_REFERENCE",
   worker_type: "module",
 });
 const REQUIRED_WORKER_CONSTRUCTOR_SITE_KEYS = Object.freeze(
@@ -176,7 +225,7 @@ const EXPECTED_REFLECT_MEMBER_COUNTS = Object.freeze({
   "src/browser-command-boundary.ts": Object.freeze({ ownKeys: 1 }),
   "src/browser-dedicated-worker.ts": Object.freeze({
     apply: 1,
-    ownKeys: 2,
+    ownKeys: 3,
   }),
   "src/browser-event-boundary.ts": Object.freeze({ apply: 3, ownKeys: 1 }),
   "src/browser-native-worker-entry.ts": Object.freeze({ ownKeys: 1 }),
@@ -545,8 +594,14 @@ const validatePolicy = (policy) => {
   const nativeLoaderNetwork = policy.network_manifest.find(
     (resource) => resource.id === "native-loader-glue",
   );
-  const viewerNetwork = policy.network_manifest.find(
-    (resource) => resource.id === "viewer-module-graph",
+  const nativeEntryNetwork = policy.network_manifest.find(
+    (resource) => resource.id === "native-worker-entry",
+  );
+  const nativeHostNetwork = policy.network_manifest.find(
+    (resource) => resource.id === "native-worker-host",
+  );
+  const productModuleNetwork = policy.network_manifest.find(
+    (resource) => resource.id === "product-module-graph",
   );
   if (
     maximumRequests !== policy.budgets.max_network_requests_per_open
@@ -556,7 +611,28 @@ const validatePolicy = (policy) => {
     || nativeLoaderNetwork.max_bytes
       !== resourceByPath.get("dist/native/engine-worker.generated.js").byte_length
         * nativeLoaderNetwork.max_requests_per_open
-    || viewerNetwork.max_requests_per_open !== moduleFiles.length
+    || nativeEntryNetwork.max_bytes
+      !== resourceByPath
+        .get("dist/native/engine-worker-entry.generated.js").byte_length
+        * nativeEntryNetwork.max_requests_per_open
+    || nativeHostNetwork.max_bytes
+      !== resourceByPath
+        .get("dist/native/engine-worker-host.generated.js").byte_length
+        * nativeHostNetwork.max_requests_per_open
+    || nativeHostNetwork.max_requests_per_open !== 1
+    || nativeEntryNetwork.max_requests_per_open
+      !== MAX_WORKER_EPOCHS_PER_OPEN
+    || nativeWasmNetwork.max_requests_per_open
+      !== MAX_WORKER_EPOCHS_PER_OPEN
+    || nativeLoaderNetwork.max_requests_per_open
+      !== nativeEntryNetwork.max_requests_per_open
+        + nativeHostNetwork.max_requests_per_open
+    || productModuleNetwork.max_bytes
+      !== MAX_PRODUCT_MODULE_NETWORK_BYTES
+    || productModuleNetwork.max_requests_per_open
+      !== moduleFiles.length
+        + REQUIRED_WORKER_MODULE_FILES.length
+          * nativeEntryNetwork.max_requests_per_open
   ) {
     fail("RPE-BROWSER-PURITY-0009", "network request budget is inconsistent");
   }
@@ -624,13 +700,21 @@ const validatePolicy = (policy) => {
   if (
     !exactKeys(policy.worker_graph, [
       "entrypoints",
+      "host_registration",
       "max_workers",
+      "module_files",
       "wasm_payloads",
       "worker_constructor_sites",
     ])
     || policy.worker_graph.max_workers !== 1
     || JSON.stringify(policy.worker_graph.entrypoints)
-      !== JSON.stringify([])
+      !== JSON.stringify([
+        "dist/native/engine-worker-entry.generated.js",
+      ])
+    || canonicalJson(policy.worker_graph.host_registration)
+      !== canonicalJson(REQUIRED_HOST_REGISTRATION)
+    || JSON.stringify(policy.worker_graph.module_files)
+      !== JSON.stringify(REQUIRED_WORKER_MODULE_FILES)
     || JSON.stringify(policy.worker_graph.wasm_payloads)
       !== JSON.stringify(["dist/native/engine.wasm"])
     || !Array.isArray(policy.worker_graph.worker_constructor_sites)
@@ -1666,19 +1750,35 @@ const inspectRegisteredWorkerConstructorSites = (path, text) => {
   const exactCanonicalStore =
     /\bENTRY_REFERENCE_URLS\s*=\s*new\s+WeakMap\s*<\s*object\s*,\s*string\s*>\s*\(\s*\)/u;
   const exactCanonicalSnapshot =
-    /\bcanonical\s*=\s*URL\.prototype\.toString\.call\s*\(\s*snapshot\s*\)/u;
+    /\bcanonical\s*=\s*REFLECT_APPLY\s*\(\s*URL_TO_STRING\s*,\s*snapshot\s*,\s*\[\s*\]\s*\)/u;
   const exactCanonicalSet =
     /\bENTRY_REFERENCE_URLS\.set\s*\(\s*reference\s*,\s*canonical\s*\)/u;
   const exactCanonicalGet =
     /\bcanonical\s*=\s*ENTRY_REFERENCE_URLS\.get\s*\(\s*value\s*\)/u;
   const exactCanonicalConstruction =
-    /\bsnapshot\s*=\s*new\s+URL\s*\(\s*canonical\s*\)/u;
+    /\bsnapshot\s*=\s*new\s+URL_CONSTRUCTOR\s*\(\s*canonical\s*\)/u;
+  const exactRegistrationInput =
+    /\bcreateUnverifiedBrowserNativeWorkerEntryReference\s*\(\s*candidate\s*:\s*BrowserNativeWorkerEntryArtifactCandidate\s*,?\s*\)/u;
+  const exactRegistrationUrl =
+    /\burlDescriptor\s*=\s*Object\.getOwnPropertyDescriptor\s*\(\s*candidate\s*,\s*["']url["']\s*\)/u;
+  const exactRegistrationHash =
+    /\bsha256Descriptor\s*=\s*Object\.getOwnPropertyDescriptor\s*\(\s*candidate\s*,\s*["']sha256["']\s*\)/u;
+  const exactRegistrationLength =
+    /\bbyteLengthDescriptor\s*=\s*Object\.getOwnPropertyDescriptor\s*\(\s*candidate\s*,\s*["']byteLength["']\s*\)/u;
+  const exactRegistrationDescriptors =
+    /\burlDescriptor\.configurable\s*!==\s*false[\s\S]*\burlDescriptor\.enumerable\s*!==\s*true[\s\S]*\burlDescriptor\.writable\s*!==\s*false/u;
+  const exactUrlIntrinsic =
+    /\bserialized\s*=\s*REFLECT_APPLY\s*\(\s*URL_TO_STRING\s*,\s*urlDescriptor\.value\s*,\s*\[\s*\]\s*,?\s*\)/u;
+  const exactUrlIntrinsicsCapture =
+    /\bURL_CONSTRUCTOR\s*=\s*URL\s*;[\s\S]*\bURL_TO_STRING\s*=\s*URL\.prototype\.toString\s*;/u;
+  const exactRegisteredEntryFile =
+    /\bREGISTERED_ENTRY_FILE\s*=\s*["']engine-worker-entry\.generated\.js["']/u;
   const mutableEntryUrlRead =
-    /(?:\bconfiguration\.entry\.url\b|\bdescriptor\.value\s*\.\s*href\b|\bvalue\.url\b|\bURL\.prototype\.toString\.call\s*\(\s*descriptor\.value\s*\))/u;
+    /(?:\bconfiguration\.entry\.url\b|\bdescriptor\.value\s*\.\s*href\b|\bvalue\.url\b|\burlDescriptor\.value\s+instanceof\s+URL\b|\bURL\.prototype\.toString\.call\s*\(\s*descriptor\.value\s*\))/u;
   const exactFactoryBinding =
     /\bentryUrl\s*=\s*snapshotEntryReference\s*\(\s*configuration\.entry\s*\)/u;
   const exactConstructBinding =
-    /\bdedicated\s*=\s*construct\s*\(\s*new\s+URL\s*\(\s*entryUrl\.href\s*\)\s*,\s*workerName\s*,?\s*\)/u;
+    /\bdedicated\s*=\s*construct\s*\(\s*new\s+URL_CONSTRUCTOR\s*\(\s*entryUrl\s*\)\s*,\s*workerName\s*,?\s*\)/u;
   if (
     path !== REQUIRED_WORKER_CONSTRUCTOR_SITE.path
     || constructors.length !== 1
@@ -1691,6 +1791,14 @@ const inspectRegisteredWorkerConstructorSites = (path, text) => {
     || !exactCanonicalSet.test(code)
     || !exactCanonicalGet.test(code)
     || !exactCanonicalConstruction.test(code)
+    || !exactRegistrationInput.test(text)
+    || !exactRegistrationUrl.test(text)
+    || !exactRegistrationHash.test(text)
+    || !exactRegistrationLength.test(text)
+    || !exactRegistrationDescriptors.test(code)
+    || !exactUrlIntrinsic.test(code)
+    || !exactUrlIntrinsicsCapture.test(code)
+    || !exactRegisteredEntryFile.test(text)
     || mutableEntryUrlRead.test(code)
     || !exactFactoryBinding.test(code)
     || !exactConstructBinding.test(code)
@@ -1836,6 +1944,30 @@ const inspectModuleGraph = async (browserRoot, policy) => {
   ) {
     fail("RPE-BROWSER-PURITY-0008", "Worker constructor registry drifted");
   }
+  const importsByModule = new Map();
+  for (const path of policy.module_graph.files) {
+    importsByModule.set(path, []);
+  }
+  for (const edge of edges) {
+    importsByModule.get(edge.from).push(edge.to);
+  }
+  const workerModuleClosure = new Set();
+  const pendingWorkerModules = ["src/browser-native-worker-entry.ts"];
+  while (pendingWorkerModules.length > 0) {
+    const path = pendingWorkerModules.pop();
+    if (workerModuleClosure.has(path)) continue;
+    workerModuleClosure.add(path);
+    for (const imported of importsByModule.get(path) ?? []) {
+      pendingWorkerModules.push(imported);
+    }
+  }
+  const workerModuleFiles = [...workerModuleClosure].sort();
+  if (
+    JSON.stringify(workerModuleFiles)
+      !== JSON.stringify(policy.worker_graph.module_files)
+  ) {
+    fail("RPE-BROWSER-PURITY-0008", "Worker module closure drifted");
+  }
   edges.sort((left, right) =>
     left.from.localeCompare(right.from) || left.to.localeCompare(right.to)
   );
@@ -1857,6 +1989,7 @@ const inspectModuleGraph = async (browserRoot, policy) => {
     edgeCount: edges.length,
     fileCount: modules.length,
     sha256: graphSha256,
+    workerModuleFileCount: workerModuleFiles.length,
   };
 };
 
@@ -2171,7 +2304,13 @@ const inspectNativeArtifacts = async (browserRoot, policy) => {
     policy.resources.map((resource) => [resource.path, resource]),
   );
   const manifestResource = resourceByPath.get("dist/native/engine-manifest.json");
+  const entryResource = resourceByPath.get(
+    "dist/native/engine-worker-entry.generated.js",
+  );
   const glueResource = resourceByPath.get("dist/native/engine-worker.generated.js");
+  const hostResource = resourceByPath.get(
+    "dist/native/engine-worker-host.generated.js",
+  );
   const engineResource = resourceByPath.get("dist/native/engine.wasm");
   const manifestDocument = await parseCanonicalJson(
     resolve(output, "engine-manifest.json"),
@@ -2189,14 +2328,49 @@ const inspectNativeArtifacts = async (browserRoot, policy) => {
     glueResource.max_bytes,
     "Native Worker glue",
   );
+  const entryBytes = await readBounded(
+    resolve(output, "engine-worker-entry.generated.js"),
+    entryResource.max_bytes,
+    "Native Worker entry",
+  );
+  const hostBytes = await readBounded(
+    resolve(output, "engine-worker-host.generated.js"),
+    hostResource.max_bytes,
+    "Native Worker Host registration",
+  );
   const glue = new TextDecoder("utf-8", { fatal: true }).decode(glueBytes);
+  const entry = new TextDecoder("utf-8", { fatal: true }).decode(entryBytes);
+  const host = new TextDecoder("utf-8", { fatal: true }).decode(hostBytes);
   const contract = await validateNativeWorkerModule(engine);
   const manifestBytes = new TextEncoder().encode(manifestDocument.text);
   if (
-    manifestResource.byte_length !== manifestBytes.byteLength
+    !exactKeys(manifest, [
+      "engine",
+      "entry",
+      "glue",
+      "host",
+      "product",
+      "protocol_schema_sha256",
+      "schema",
+    ])
+    || !exactKeys(manifest.entry, [
+      "byte_length",
+      "file",
+      "sha256",
+    ])
+    || !exactKeys(manifest.host, [
+      "byte_length",
+      "file",
+      "sha256",
+    ])
+    || manifestResource.byte_length !== manifestBytes.byteLength
     || manifestResource.sha256 !== sha256(manifestBytes)
     || glueResource.byte_length !== glueBytes.byteLength
     || glueResource.sha256 !== sha256(glueBytes)
+    || entryResource.byte_length !== entryBytes.byteLength
+    || entryResource.sha256 !== sha256(entryBytes)
+    || hostResource.byte_length !== hostBytes.byteLength
+    || hostResource.sha256 !== sha256(hostBytes)
     || engineResource.byte_length !== engine.byteLength
     || engineResource.sha256 !== sha256(engine)
     || manifest.schema !== 1
@@ -2213,6 +2387,14 @@ const inspectNativeArtifacts = async (browserRoot, policy) => {
     || manifest.glue?.file !== "engine-worker.generated.js"
     || manifest.glue?.byte_length !== glueBytes.byteLength
     || manifest.glue?.sha256 !== sha256(glueBytes)
+    || manifest.entry?.file !== "engine-worker-entry.generated.js"
+    || manifest.entry?.byte_length !== entryBytes.byteLength
+    || manifest.entry?.byte_length > MAX_NATIVE_WORKER_ENTRY_BYTES
+    || manifest.entry?.sha256 !== sha256(entryBytes)
+    || manifest.host?.file !== "engine-worker-host.generated.js"
+    || manifest.host?.byte_length !== hostBytes.byteLength
+    || manifest.host?.byte_length > MAX_NATIVE_WORKER_HOST_BYTES
+    || manifest.host?.sha256 !== sha256(hostBytes)
   ) {
     fail("RPE-BROWSER-PURITY-0006", "Native artifact manifest drifted");
   }
@@ -2221,11 +2403,27 @@ const inspectNativeArtifacts = async (browserRoot, policy) => {
     sha256: manifest.engine.sha256,
     minimumMemoryPages: contract.memory.minimum,
     maximumMemoryPages: contract.memory.maximum,
+    entryByteLength: entryBytes.byteLength,
+    entrySha256: sha256(entryBytes),
   });
-  if (glue !== canonicalGlue) {
-    fail("RPE-BROWSER-PURITY-0005", "Native Worker glue is not generated canonically");
+  const canonicalEntry = renderNativeWorkerEntry();
+  const canonicalHost = renderNativeWorkerHost();
+  if (
+    glue !== canonicalGlue
+    || entry !== canonicalEntry
+    || host !== canonicalHost
+  ) {
+    fail(
+      "RPE-BROWSER-PURITY-0005",
+      "Native Worker generated modules are not canonical",
+    );
   }
   inspectProductModuleText("dist/native/engine-worker.generated.js", glue);
+  inspectProductModuleText(
+    "dist/native/engine-worker-host.generated.js",
+    host,
+  );
+  assertNoForbiddenToken(entry, "Native Worker entry");
   const wasmImports = WebAssembly.Module.imports(contract.module);
   const wasmExports = WebAssembly.Module.exports(contract.module)
     .map((entry) => entry.name)
@@ -2242,7 +2440,11 @@ const inspectNativeArtifacts = async (browserRoot, policy) => {
     bundleFileCount: names.length,
     bundleManifestSha256: digestText(manifestDocument.text),
     bundleTotalBytes:
-      manifestDocument.text.length + engine.byteLength + glueBytes.byteLength,
+      manifestDocument.text.length
+      + engine.byteLength
+      + glueBytes.byteLength
+      + entryBytes.byteLength
+      + hostBytes.byteLength,
     wasmImportCount: wasmImports.length,
   };
 };
@@ -2324,18 +2526,35 @@ export const validateBrowserNetworkTrace = (
     selectedSourceDescriptor.url,
     "selected source URL",
   );
-  const viewerRegistration = registrations.get("viewer-module-graph");
-  const viewerModuleUrls = policy.module_graph.files.map((path) =>
+  const productModuleRegistration = registrations.get(
+    "product-module-graph",
+  );
+  const productModuleUrls = policy.module_graph.files.map((path) =>
     new URL(path.replace(/\.ts$/u, ".js"), productBase).href
+  );
+  const workerModuleUrls = new Set(
+    policy.worker_graph.module_files.map((path) =>
+      new URL(path.replace(/\.ts$/u, ".js"), productBase).href
+    ),
   );
 
   const expectedUrls = new Map();
-  for (const resourceId of ["native-loader-glue", "native-wasm"]) {
+  for (
+    const resourceId of [
+      "native-loader-glue",
+      "native-wasm",
+      "native-worker-entry",
+      "native-worker-host",
+    ]
+  ) {
     const registration = registrations.get(resourceId);
     const expected = new URL(registration.location, productBase).href;
     expectedUrls.set(resourceId, Object.freeze([expected]));
   }
-  expectedUrls.set("viewer-module-graph", Object.freeze([...viewerModuleUrls]));
+  expectedUrls.set(
+    "product-module-graph",
+    Object.freeze([...productModuleUrls]),
+  );
   expectedUrls.set("selected-source", Object.freeze([selectedSource.href]));
 
   const resourceByUrl = new Map();
@@ -2353,8 +2572,24 @@ export const validateBrowserNetworkTrace = (
           resource.path === "dist/native/engine-worker.generated.js",
       ).sha256,
     ],
+    [
+      "native-worker-entry",
+      policy.resources.find(
+        (resource) =>
+          resource.path
+            === "dist/native/engine-worker-entry.generated.js",
+      ).sha256,
+    ],
+    [
+      "native-worker-host",
+      policy.resources.find(
+        (resource) =>
+          resource.path
+            === "dist/native/engine-worker-host.generated.js",
+      ).sha256,
+    ],
     ["selected-source", digestText(canonicalJson(selectedSourceDescriptor))],
-    ["viewer-module-graph", policy.module_graph.sha256],
+    ["product-module-graph", policy.module_graph.sha256],
   ]);
   for (const [resourceId, urls] of expectedUrls) {
     for (const url of urls) {
@@ -2402,6 +2637,10 @@ export const validateBrowserNetworkTrace = (
     const staticPath = {
       "native-wasm": "dist/native/engine.wasm",
       "native-loader-glue": "dist/native/engine-worker.generated.js",
+      "native-worker-entry":
+        "dist/native/engine-worker-entry.generated.js",
+      "native-worker-host":
+        "dist/native/engine-worker-host.generated.js",
     }[request.resource_id];
     if (
       staticPath !== undefined
@@ -2442,11 +2681,23 @@ export const validateBrowserNetworkTrace = (
       );
     }
   }
+  const workerRealmMultiplicity =
+    registrations.get("native-worker-entry").max_requests_per_open;
   if (
-    viewerModuleUrls.some((url) => countsByUrl.get(url) !== 1)
-    || counts.get("viewer-module-graph") !== viewerModuleUrls.length
+    productModuleUrls.some((url) => {
+      const count = countsByUrl.get(url);
+      const maximum = workerModuleUrls.has(url)
+        ? 1 + workerRealmMultiplicity
+        : 1;
+      return count === undefined || count < 1 || count > maximum;
+    })
+    || counts.get("product-module-graph")
+      > productModuleRegistration.max_requests_per_open
   ) {
-    fail("RPE-BROWSER-PURITY-0009", "viewer module trace is not exact");
+    fail(
+      "RPE-BROWSER-PURITY-0009",
+      "product module trace exceeds registered realm multiplicity",
+    );
   }
   return {
     requestCount: trace.length,
@@ -2480,6 +2731,7 @@ export const checkBrowserProductPurity = async ({
     moduleEdgeCount: moduleGraph.edgeCount,
     moduleFileCount: moduleGraph.fileCount,
     moduleGraphSha256: moduleGraph.sha256,
+    workerModuleFileCount: moduleGraph.workerModuleFileCount,
     networkManifestSha256: digestText(canonicalJson(policy.network_manifest)),
     policySha256: digestText(policyDocument.text),
     precacheSha256: digestText(canonicalJson(policy.service_worker)),

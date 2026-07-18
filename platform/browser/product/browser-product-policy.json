@@ -1,12 +1,12 @@
 {
   "budgets": {
-    "max_bundle_files": 3,
+    "max_bundle_files": 5,
     "max_cargo_packages": 16,
     "max_module_edges": 64,
     "max_module_files": 16,
-    "max_native_artifact_bytes": 67256320,
-    "max_network_requests_per_open": 4144,
-    "max_precache_entries": 3,
+    "max_native_artifact_bytes": 67321856,
+    "max_network_requests_per_open": 4299,
+    "max_precache_entries": 5,
     "max_shipped_third_party_leaves": 0,
     "max_worker_count": 1
   },
@@ -125,15 +125,15 @@
       "src/browser-worker-supervisor.ts",
       "src/native-worker-abi.generated.ts"
     ],
-    "sha256": "55d5d722f32cf51301db871d1994ca323dc94a29224f56f42a5c70c5d19521d1"
+    "sha256": "49d9876cd03fdec2e563f1f876b661443ff8766dd5167923403ac773d63ee9b1"
   },
   "network_manifest": [
     {
       "id": "native-loader-glue",
       "kind": "integrity-bound-product-resource",
       "location": "./native/engine-worker.generated.js",
-      "max_bytes": 10880,
-      "max_requests_per_open": 17,
+      "max_bytes": 15714,
+      "max_requests_per_open": 18,
       "ownership": "PDF.rs browser host"
     },
     {
@@ -145,43 +145,79 @@
       "ownership": "PDF.rs Native engine"
     },
     {
+      "id": "native-worker-entry",
+      "kind": "integrity-bound-product-resource",
+      "location": "./native/engine-worker-entry.generated.js",
+      "max_bytes": 14263,
+      "max_requests_per_open": 17,
+      "ownership": "PDF.rs browser host"
+    },
+    {
+      "id": "native-worker-host",
+      "kind": "integrity-bound-product-resource",
+      "location": "./native/engine-worker-host.generated.js",
+      "max_bytes": 387,
+      "max_requests_per_open": 1,
+      "ownership": "PDF.rs browser host"
+    },
+    {
+      "id": "product-module-graph",
+      "kind": "same-origin-static-product-modules",
+      "location": "module-graph:",
+      "max_bytes": 16777216,
+      "max_requests_per_open": 150,
+      "ownership": "PDF.rs browser product"
+    },
+    {
       "id": "selected-source",
       "kind": "host-selected-immutable-pdf-source",
       "location": "selected-source:",
       "max_bytes": 536870912,
       "max_requests_per_open": 4096,
       "ownership": "PDF.rs source bridge"
-    },
-    {
-      "id": "viewer-module-graph",
-      "kind": "same-origin-static-product-modules",
-      "location": "module-graph:",
-      "max_bytes": 4194304,
-      "max_requests_per_open": 14,
-      "ownership": "PDF.rs browser viewer"
     }
   ],
   "product": "PDF.rs Native Browser",
   "resources": [
     {
-      "byte_length": 1529,
+      "byte_length": 1869,
       "executable": false,
       "hash_binding": "canonical-sha256",
       "kind": "native-artifact-manifest",
       "max_bytes": 16384,
       "ownership": "PDF.rs browser release",
       "path": "dist/native/engine-manifest.json",
-      "sha256": "57682c53006a7ec446487409ef46bd7415a1e0df9c9d3c343f0d69d089a0259a"
+      "sha256": "19347ebf58a24cb67a5e5cdfe2da3212656da1289b1ba024b5f67d516b79e95a"
     },
     {
-      "byte_length": 640,
+      "byte_length": 839,
+      "executable": true,
+      "hash_binding": "engine-manifest.json#/entry/sha256",
+      "kind": "native-worker-entry-module",
+      "max_bytes": 65536,
+      "ownership": "PDF.rs browser host",
+      "path": "dist/native/engine-worker-entry.generated.js",
+      "sha256": "e5c70dc060e172af4b1b3888fa97091a5178359024344dc9b526a94ae6ac5e01"
+    },
+    {
+      "byte_length": 387,
+      "executable": true,
+      "hash_binding": "engine-manifest.json#/host/sha256",
+      "kind": "native-worker-host-registration-module",
+      "max_bytes": 65536,
+      "ownership": "PDF.rs browser host",
+      "path": "dist/native/engine-worker-host.generated.js",
+      "sha256": "b3ea5369aca3c1e0d41da1c5b9e7d00df50dc93cc97a0df28566fcaf23b06202"
+    },
+    {
+      "byte_length": 873,
       "executable": true,
       "hash_binding": "engine-manifest.json#/glue/sha256",
       "kind": "native-loader-module",
       "max_bytes": 65536,
       "ownership": "PDF.rs browser host",
       "path": "dist/native/engine-worker.generated.js",
-      "sha256": "c36b38dcb8ee6deedcce19e7e9247476774e4146caf9d0371abc3685e95311c2"
+      "sha256": "b6b6e7ca7fe613df9d16f2ca5dbff262ebbc9d5cb8c19ab65fd66acf2b1f6b99"
     },
     {
       "byte_length": 978458,
@@ -198,6 +234,8 @@
   "service_worker": {
     "precache": [
       "./native/engine-manifest.json",
+      "./native/engine-worker-entry.generated.js",
+      "./native/engine-worker-host.generated.js",
       "./native/engine-worker.generated.js",
       "./native/engine.wasm"
     ],
@@ -214,8 +252,25 @@
     ]
   },
   "worker_graph": {
-    "entrypoints": [],
+    "entrypoints": [
+      "dist/native/engine-worker-entry.generated.js"
+    ],
+    "host_registration": {
+      "artifact": "dist/native/engine-worker-host.generated.js",
+      "entry_artifact_export": "NATIVE_WORKER_ENTRY_ARTIFACT",
+      "entry_reference_export": "NATIVE_WORKER_ENTRY_REFERENCE"
+    },
     "max_workers": 1,
+    "module_files": [
+      "generated/engine-protocol.ts",
+      "src/browser-command-admission.ts",
+      "src/browser-command-boundary.ts",
+      "src/browser-event-boundary.ts",
+      "src/browser-handshake.ts",
+      "src/browser-native-worker-entry.ts",
+      "src/browser-native-worker-loader.ts",
+      "src/native-worker-abi.generated.ts"
+    ],
     "wasm_payloads": [
       "dist/native/engine.wasm"
     ],
@@ -225,6 +280,7 @@
         "credentials": "same-origin",
         "entry_binding": "UnverifiedBrowserNativeWorkerEntryReference",
         "path": "src/browser-dedicated-worker.ts",
+        "registration_binding": "dist/native/engine-worker-host.generated.js#NATIVE_WORKER_ENTRY_REFERENCE",
         "worker_type": "module"
       }
     ]

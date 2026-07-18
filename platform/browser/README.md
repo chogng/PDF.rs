@@ -35,13 +35,14 @@ that generated TypeScript is unchanged, type-checks the generated declarations
 and strict browser code with `noEmit`, executes protocol and runtime-vector
 tests with Node's built-in test runner, tests the Rust worker crate on the native
 host, builds the fixed Native Wasm Worker ABI, and verifies its one-engine,
-one-generated-glue manifest.
+three-generated-module manifest.
 
 `npm run wasm:check` is also available separately for a fast target check.
 `npm run wasm:build` links `target/wasm32-unknown-unknown/release/pdf-rs-browser-worker.wasm`,
-hash-binds it, and emits exactly one generated loader entry plus a manifest.
-The generated entry has no build-tree imports: application code injects the
-package's exported `BrowserNativeWorkerLoader` into its artifact-bound factory.
+hash-binds it, and emits separate generated loader glue, module-Worker entry,
+Host registration, and manifest resources. The entry deliberately imports the
+pinned `generated/` and `src/` projections; those imports are part of the
+registered Worker dependency closure, not a self-contained bundle.
 ABI v2 requires `bootstrap(hostHelloFrame, supervisorIdentity)`, snapshots the
 canonical Host Hello, splits the explicit Worker and Worker-epoch `u64` values
 into the five-`u32` initialize call, and then performs the real two-stage Native
@@ -64,8 +65,8 @@ generated boundary; the one private exact start record carries only supervisor
 identity before Host Hello. The fixture and verifier exercise this same real
 EngineHello/Ready bootstrap rather than injecting protocol state.
 
-`browser-native-worker-entry.ts` is the production-ready Worker-realm
-controller prerequisite. One exact own-data start record binds the supervisor
+`browser-native-worker-entry.ts` is the bounded Worker-realm controller
+projection. One exact own-data start record binds the supervisor
 identity before canonical Host Hello; the controller then copies the
 transferred control buffer, calls the real loader bootstrap, forwards Native
 EngineHello, accepts only the supervisor's HelloAccept, forwards Native Ready,
@@ -97,22 +98,28 @@ the request/watchdog liveness proof still outstanding in M5-07/M5-09.
 
 The entry URL reference is deliberately named
 `UnverifiedBrowserNativeWorkerEntryReference`: the brand prevents an accidental
-raw string but proves neither same-origin deployment, integrity, registration,
-nor executable entry installation. The current generated
-`engine-worker.generated.js` only exports the artifact record and loader
-factory; it is not a top-level Worker entry and must not be passed to the
-adapter. Its resource kind and network class are `native-loader-module` and
-`native-loader-glue`; precaching only makes that immutable dependency available
-offline and grants it no Worker-entry role. Accordingly,
-`worker_graph.entrypoints` remains exactly empty. M5-09 must emit and
-hash-register a real module bundle that invokes
-`installBrowserNativeWorkerEntry`, then create the unverified reference from
-that registered URL and exercise it in real browsers.
+raw string. Its public input is only a frozen, exactly described structural
+candidate containing a bounded canonical entry filename, byte length, and
+SHA-256; arbitrary callers can still construct another candidate, so the input
+is not described as a trusted registry. The generated
+`engine-worker-host.generated.js` is the real build boundary: product purity
+checks its exact bytes and it executes
+`createUnverifiedBrowserNativeWorkerEntryReference(NATIVE_WORKER_ENTRY_ARTIFACT)`
+at module top level. This build binding still proves neither same-origin
+deployment, bytes actually returned by a browser, nor runtime integrity.
+Generated `engine-worker.generated.js` remains loader glue and is never
+mislabeled as the entry; it exports the manifest-bound entry artifact record
+consumed by the Host registration. The separate generated
+`engine-worker-entry.generated.js` is the sole `worker_graph.entrypoints`
+member. It statically imports the registered loader/controller projections and
+calls `installBrowserNativeWorkerEntry` at module-Worker top level. All three
+generated modules have independent manifest hashes, resource kinds, network
+identities, and precache entries.
 
 ## Product resource closure
 
 `product/browser-product-policy.json` is the canonical, sorted browser product
-registry. It binds the exact TypeScript module graph, three Native output
+registry. It binds the exact TypeScript module graph, five Native output
 resources, generated Wasm ABI, single-Worker graph, closed CSP, service-Worker
 precache, bounded network classes, and build-only npm leaves. Every registered
 leaf records source, integrity, license, semantic ownership, an installed-byte
@@ -133,6 +140,7 @@ also exact. The check rejects comment-separated external module specifiers,
 constant-built external URLs, dynamic imports, source maps, additional
 executables or Wasm payloads, nonzero Wasm imports, ABI/export drift, and any
 resource outside `engine-manifest.json`,
+`engine-worker-entry.generated.js`, `engine-worker-host.generated.js`,
 `engine-worker.generated.js`, and `engine.wasm`. Source files that define
 rejection tests are not treated as shipped resources; only the exact registered
 module and artifact closure is scanned. The module graph and every Native
@@ -149,23 +157,28 @@ isolated closure using a freshly generated browser-only workspace lock. The
 command never moves, renames, or reads the real `../pdfium` checkout.
 
 The network trace validator requires a canonical product base URL, an exact
-Host-selected immutable source identity, and the exact viewer-module URLs
+Host-selected immutable source identity, and the exact product-module URLs
 derived from the pinned module graph. It classifies requests by URL rather than
 trusting a trace-supplied resource label, binds every trace record to its
 registered identity, requires exact Native artifact byte lengths and hashes,
 and rejects arbitrary same-origin suffixes, fragments, cross-origin,
-missing-resource, zero-byte, identity, and length substitutions. Viewer
-requests cover each of the fourteen registered ESM projections exactly once;
-Worker and Wasm byte and request budgets cover the initial artifact epoch plus
-sixteen bounded restarts.
+missing-resource, zero-byte, identity, and length substitutions. Each of the
+fourteen product ESM projections must appear at least once. The exact
+eight-module Worker closure may appear once more in each of seventeen
+Dedicated Worker realms because module maps are not shared with the Host realm;
+the other six projections remain single-request. The loader glue budget is
+eighteen requests—one Host-registration import plus seventeen Worker epochs—
+while entry and Wasm budgets cover the initial epoch plus sixteen bounded
+restarts.
 
 This is currently the static purity and trace-validation foundation, not the
 M5-08 runtime proof. The graph now registers one exact Dedicated/module Worker
-constructor site and its controller/adapter source, but deliberately has no
-installed executable entry bundle, no integrity-bound reference creation, no
-production viewer bundle, and no real browser trace. M5-09 must register those
-final resources and feed observed Chromium/Firefox/WebKit requests into the
-validator before M5-08 can complete.
+constructor site, its controller/adapter source, a distinct executable entry,
+and the exact generated Host registration. It deliberately has no production
+viewer bundle, deployment-origin proof, request/watchdog liveness proof, or real
+browser trace. M5-07 remains open for liveness; M5-08 and M5-09 remain open
+until observed Chromium/Firefox/WebKit requests are fed through the registered
+URL and into the validator.
 
 ## Boundary
 

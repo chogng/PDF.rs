@@ -6,7 +6,9 @@ import {
   NATIVE_WORKER_ABI_SHA256,
   NATIVE_WORKER_ABI_VERSION,
   NATIVE_WORKER_EXPORTS,
+  renderNativeWorkerEntry,
   renderNativeWorkerGlue,
+  renderNativeWorkerHost,
   sha256,
   validateNativeWorkerModule,
 } from "./native-worker-contract.mjs";
@@ -20,7 +22,15 @@ const sourceArtifact = fileURLToPath(new URL(
 ));
 const outputDirectory = new URL("../dist/native/", import.meta.url);
 const engineUrl = new URL("engine.wasm", outputDirectory);
+const entryUrl = new URL(
+  "engine-worker-entry.generated.js",
+  outputDirectory,
+);
 const glueUrl = new URL("engine-worker.generated.js", outputDirectory);
+const hostUrl = new URL(
+  "engine-worker-host.generated.js",
+  outputDirectory,
+);
 const manifestUrl = new URL("engine-manifest.json", outputDirectory);
 
 const exportedFunctions = NATIVE_WORKER_EXPORTS.filter(
@@ -92,13 +102,19 @@ if (schemaMatch === null) {
   throw new Error("generated protocol schema hash was not found");
 }
 
+const entry = renderNativeWorkerEntry();
+const entryBytes = new TextEncoder().encode(entry);
 const glue = renderNativeWorkerGlue({
   byteLength: engine.byteLength,
   sha256: engineSha256,
   minimumMemoryPages: contract.memory.minimum,
   maximumMemoryPages: contract.memory.maximum,
+  entryByteLength: entryBytes.byteLength,
+  entrySha256: sha256(entryBytes),
 });
 const glueBytes = new TextEncoder().encode(glue);
+const host = renderNativeWorkerHost();
+const hostBytes = new TextEncoder().encode(host);
 const manifest = {
   schema: 1,
   product: "PDF.rs Native Wasm Engine Worker",
@@ -118,12 +134,24 @@ const manifest = {
     byte_length: glueBytes.byteLength,
     sha256: sha256(glueBytes),
   },
+  entry: {
+    file: "engine-worker-entry.generated.js",
+    byte_length: entryBytes.byteLength,
+    sha256: sha256(entryBytes),
+  },
+  host: {
+    file: "engine-worker-host.generated.js",
+    byte_length: hostBytes.byteLength,
+    sha256: sha256(hostBytes),
+  },
 };
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
 await writeFile(engineUrl, engine);
+await writeFile(entryUrl, entryBytes);
 await writeFile(glueUrl, glueBytes);
+await writeFile(hostUrl, hostBytes);
 await writeFile(
   manifestUrl,
   canonicalJson(manifest),

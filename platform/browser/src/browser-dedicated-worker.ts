@@ -16,11 +16,27 @@ import type {
 } from "./browser-worker-supervisor.js";
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const MAX_ENTRY_ARTIFACT_BYTES = 64 * 1_024;
 const MAX_ENTRY_URL_BYTES = 4_096;
 const MAX_WORKER_NAME_BYTES = 128;
+const REGISTERED_ENTRY_FILE = "engine-worker-entry.generated.js";
 const ENTRY_REFERENCES = new WeakSet<object>();
 const ENTRY_REFERENCE_URLS = new WeakMap<object, string>();
 const REFLECT_APPLY = Reflect.apply;
+const URL_CONSTRUCTOR = URL;
+const URL_TO_STRING = URL.prototype.toString;
+const URL_PROTOCOL_GETTER =
+  Object.getOwnPropertyDescriptor(URL.prototype, "protocol")?.get;
+const URL_USERNAME_GETTER =
+  Object.getOwnPropertyDescriptor(URL.prototype, "username")?.get;
+const URL_PASSWORD_GETTER =
+  Object.getOwnPropertyDescriptor(URL.prototype, "password")?.get;
+const URL_PATHNAME_GETTER =
+  Object.getOwnPropertyDescriptor(URL.prototype, "pathname")?.get;
+const URL_SEARCH_GETTER =
+  Object.getOwnPropertyDescriptor(URL.prototype, "search")?.get;
+const URL_HASH_GETTER =
+  Object.getOwnPropertyDescriptor(URL.prototype, "hash")?.get;
 const ARRAY_BUFFER_BYTE_LENGTH_DESCRIPTOR =
   Object.getOwnPropertyDescriptor(
     ArrayBuffer.prototype,
@@ -81,14 +97,29 @@ export interface BrowserDedicatedWorkerFactoryConfiguration {
  * Opaque but unverified module URL ownership selected by an embedding.
  *
  * This brand prevents accidental raw-string construction only. It does not
- * prove same-origin deployment, integrity, product registration, or that the
- * target installs the controller; M5-09 must bind all of those properties.
+ * prove same-origin deployment, runtime integrity, or that fetched bytes
+ * install the controller; those properties remain browser-evidence gates.
  */
 export interface UnverifiedBrowserNativeWorkerEntryReference {
   /**
    * A diagnostic copy only. Mutating this URL never changes the private,
    * canonical construction URL captured when the reference was created.
    */
+  readonly url: URL;
+}
+
+/**
+ * Structurally bounded artifact candidate consumed before constructing a URL.
+ *
+ * This public shape is not a trusted registry: arbitrary callers can construct
+ * another candidate. The generated Host registration artifact and product
+ * purity gate separately prove that the product call site supplies the
+ * manifest's canonical tuple. Neither layer proves what a browser later
+ * fetches, deployment origin, or runtime integrity.
+ */
+export interface BrowserNativeWorkerEntryArtifactCandidate {
+  readonly byteLength: number;
+  readonly sha256: string;
   readonly url: URL;
 }
 
@@ -114,33 +145,123 @@ const isU32 = (value: unknown): value is number =>
   && value >= 0
   && value <= 0xffff_ffff;
 
-/** Takes an immutable, bounded URL copy without claiming release registration. */
+/**
+ * Takes an immutable URL from one exact structural artifact candidate.
+ *
+ * The product's generated Host module supplies the manifest-bound candidate,
+ * but this public function does not authenticate arbitrary callers. The
+ * returned brand remains deliberately unverified at runtime and does not
+ * replace same-origin or network-trace evidence.
+ */
 export function createUnverifiedBrowserNativeWorkerEntryReference(
-  entryUrl: URL,
+  candidate: BrowserNativeWorkerEntryArtifactCandidate,
 ): UnverifiedBrowserNativeWorkerEntryReference {
   let snapshot: URL;
   try {
-    if (!(entryUrl instanceof URL)) {
+    if (
+      typeof candidate !== "object"
+      || candidate === null
+      || Object.getPrototypeOf(candidate) !== Object.prototype
+    ) {
       throw new TypeError("InvalidEntry");
     }
-    const serialized = URL.prototype.toString.call(entryUrl);
+    const keys = Reflect.ownKeys(candidate);
+    const byteLengthDescriptor =
+      Object.getOwnPropertyDescriptor(candidate, "byteLength");
+    const sha256Descriptor =
+      Object.getOwnPropertyDescriptor(candidate, "sha256");
+    const urlDescriptor =
+      Object.getOwnPropertyDescriptor(candidate, "url");
     if (
+      keys.length !== 3
+      || !keys.includes("byteLength")
+      || !keys.includes("sha256")
+      || !keys.includes("url")
+      || byteLengthDescriptor === undefined
+      || sha256Descriptor === undefined
+      || urlDescriptor === undefined
+      || !Object.hasOwn(byteLengthDescriptor, "value")
+      || !Object.hasOwn(sha256Descriptor, "value")
+      || !Object.hasOwn(urlDescriptor, "value")
+      || byteLengthDescriptor.configurable !== false
+      || byteLengthDescriptor.enumerable !== true
+      || byteLengthDescriptor.writable !== false
+      || sha256Descriptor.configurable !== false
+      || sha256Descriptor.enumerable !== true
+      || sha256Descriptor.writable !== false
+      || urlDescriptor.configurable !== false
+      || urlDescriptor.enumerable !== true
+      || urlDescriptor.writable !== false
+      || !Number.isSafeInteger(byteLengthDescriptor.value)
+      || byteLengthDescriptor.value <= 0
+      || byteLengthDescriptor.value > MAX_ENTRY_ARTIFACT_BYTES
+      || typeof sha256Descriptor.value !== "string"
+      || !/^[0-9a-f]{64}$/u.test(sha256Descriptor.value)
+      || typeof URL_PROTOCOL_GETTER !== "function"
+      || typeof URL_USERNAME_GETTER !== "function"
+      || typeof URL_PASSWORD_GETTER !== "function"
+      || typeof URL_PATHNAME_GETTER !== "function"
+      || typeof URL_SEARCH_GETTER !== "function"
+      || typeof URL_HASH_GETTER !== "function"
+    ) {
+      throw new TypeError("InvalidEntry");
+    }
+    const serialized = REFLECT_APPLY(
+      URL_TO_STRING,
+      urlDescriptor.value,
+      [],
+    );
+    if (
+      typeof serialized !== "string"
+      ||
       new TextEncoder().encode(serialized).byteLength
         > MAX_ENTRY_URL_BYTES
     ) {
       throw new TypeError("InvalidEntry");
     }
-    snapshot = new URL(serialized);
+    snapshot = new URL_CONSTRUCTOR(serialized);
+    const protocol = REFLECT_APPLY(
+      URL_PROTOCOL_GETTER,
+      snapshot,
+      [],
+    );
+    const username = REFLECT_APPLY(
+      URL_USERNAME_GETTER,
+      snapshot,
+      [],
+    );
+    const password = REFLECT_APPLY(
+      URL_PASSWORD_GETTER,
+      snapshot,
+      [],
+    );
+    const pathname = REFLECT_APPLY(
+      URL_PATHNAME_GETTER,
+      snapshot,
+      [],
+    );
+    const search = REFLECT_APPLY(URL_SEARCH_GETTER, snapshot, []);
+    const hash = REFLECT_APPLY(URL_HASH_GETTER, snapshot, []);
     if (
-      snapshot.protocol !== "https:"
-      && snapshot.protocol !== "http:"
+      protocol !== "https:"
+      && protocol !== "http:"
+      || username !== ""
+      || password !== ""
+      || search !== ""
+      || hash !== ""
+      || typeof pathname !== "string"
+      || pathname.split("/").at(-1)
+        !== REGISTERED_ENTRY_FILE
     ) {
       throw new TypeError("InvalidEntry");
     }
   } catch {
     throw new TypeError("InvalidEntry");
   }
-  const canonical = URL.prototype.toString.call(snapshot);
+  const canonical = REFLECT_APPLY(URL_TO_STRING, snapshot, []);
+  if (typeof canonical !== "string") {
+    throw new TypeError("InvalidEntry");
+  }
   const reference = Object.freeze({ url: snapshot });
   ENTRY_REFERENCES.add(reference);
   ENTRY_REFERENCE_URLS.set(reference, canonical);
@@ -149,7 +270,7 @@ export function createUnverifiedBrowserNativeWorkerEntryReference(
 
 const snapshotEntryReference = (
   value: UnverifiedBrowserNativeWorkerEntryReference,
-): URL | undefined => {
+): string | undefined => {
   try {
     if (
       typeof value !== "object"
@@ -173,18 +294,23 @@ const snapshotEntryReference = (
     if (canonical === undefined) {
       return undefined;
     }
-    const snapshot = new URL(canonical);
+    const snapshot = new URL_CONSTRUCTOR(canonical);
+    const protocol = typeof URL_PROTOCOL_GETTER === "function"
+      ? REFLECT_APPLY(URL_PROTOCOL_GETTER, snapshot, [])
+      : undefined;
+    const serialized = REFLECT_APPLY(URL_TO_STRING, snapshot, []);
     if (
       (
-        snapshot.protocol !== "https:"
-        && snapshot.protocol !== "http:"
+        protocol !== "https:"
+        && protocol !== "http:"
       )
+      || serialized !== canonical
       || new TextEncoder().encode(canonical).byteLength
         > MAX_ENTRY_URL_BYTES
     ) {
       return undefined;
     }
-    return snapshot;
+    return canonical;
   } catch {
     return undefined;
   }
@@ -388,8 +514,9 @@ const validWorker = (value: bigint): boolean =>
  *
  * Each factory call constructs one module Worker, posts one exact identity
  * start record, and returns a port whose callbacks become inert on terminate.
- * The unverified entry reference is an M5-09 prerequisite, not a product
- * resource or integrity proof. Browsers expose no DedicatedWorker normal-exit
+ * The generated product boundary supplies this unverified reference, but the
+ * reference is not a fetched-byte or runtime-integrity proof. Browsers expose
+ * no DedicatedWorker normal-exit
  * event, so this adapter never synthesizes `onTerminated`: protocol
  * WorkerStopped closes cleanly, message/error paths fault, and Host teardown
  * calls the returned port's idempotent `terminate`.
@@ -398,7 +525,7 @@ export function createBrowserDedicatedWorkerFactory(
   configuration: BrowserDedicatedWorkerFactoryConfiguration,
 ): BrowserWorkerFactory {
   let workerNamePrefix: string | undefined;
-  let entryUrl: URL | undefined;
+  let entryUrl: string | undefined;
   let construct: BrowserDedicatedWorkerRuntime["construct"];
   try {
     entryUrl = snapshotEntryReference(configuration.entry);
@@ -443,7 +570,7 @@ export function createBrowserDedicatedWorkerFactory(
     let constructed: BrowserDedicatedWorker | undefined;
     try {
       dedicated = construct(
-        new URL(entryUrl.href),
+        new URL_CONSTRUCTOR(entryUrl),
         workerName,
       );
       constructed = dedicated;

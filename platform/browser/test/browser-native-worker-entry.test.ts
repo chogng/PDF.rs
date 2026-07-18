@@ -39,6 +39,18 @@ const identity = Object.freeze({
   workerEpoch: 3n,
 });
 
+const entryRegistration = (
+  href = "https://viewer.example/native/engine-worker-entry.generated.js",
+): Readonly<{
+  byteLength: number;
+  sha256: string;
+  url: URL;
+}> => Object.freeze({
+  byteLength: 1_024,
+  sha256: "a".repeat(64),
+  url: new URL(href),
+});
+
 const frame = (byte: number): Uint8Array<ArrayBuffer> =>
   Uint8Array.from([byte]);
 
@@ -700,7 +712,7 @@ test("Host factory posts one exact start record and invalidates late epoch callb
     workerName: string;
   }>[] = [];
   const entry = createUnverifiedBrowserNativeWorkerEntryReference(
-    new URL("https://viewer.example/native/entry.js"),
+    entryRegistration(),
   );
   entry.url.href = "data:text/javascript,throw%200";
   Object.setPrototypeOf(entry.url, null);
@@ -719,7 +731,7 @@ test("Host factory posts one exact start record and invalidates late epoch callb
   assert.equal(
     constructed[0]?.entryUrl instanceof URL
       ? constructed[0].entryUrl.href
-        === "https://viewer.example/native/entry.js"
+        === "https://viewer.example/native/engine-worker-entry.generated.js"
       : false,
     true,
   );
@@ -796,7 +808,7 @@ test("Host factory fails closed on start, listener, and transfer-table faults", 
   let invalidConstructTerminateCount = 0;
   const invalidConstructFactory = createBrowserDedicatedWorkerFactory({
     entry: createUnverifiedBrowserNativeWorkerEntryReference(
-      new URL("https://viewer.example/native/entry.js"),
+      entryRegistration(),
     ),
     rendererEpoch: 1,
     workerNamePrefix: "pdf-rs",
@@ -818,7 +830,7 @@ test("Host factory fails closed on start, listener, and transfer-table faults", 
   startup.throwPost = true;
   const startupFactory = createBrowserDedicatedWorkerFactory({
     entry: createUnverifiedBrowserNativeWorkerEntryReference(
-      new URL("https://viewer.example/native/entry.js"),
+      entryRegistration(),
     ),
     rendererEpoch: 1,
     workerNamePrefix: "pdf-rs",
@@ -836,7 +848,7 @@ test("Host factory fails closed on start, listener, and transfer-table faults", 
   listener.throwListener = true;
   const listenerFactory = createBrowserDedicatedWorkerFactory({
     entry: createUnverifiedBrowserNativeWorkerEntryReference(
-      new URL("https://viewer.example/native/entry.js"),
+      entryRegistration(),
     ),
     rendererEpoch: 1,
     workerNamePrefix: "pdf-rs",
@@ -851,7 +863,7 @@ test("Host factory fails closed on start, listener, and transfer-table faults", 
   const transfer = new ThrowingDedicatedWorker();
   const transferFactory = createBrowserDedicatedWorkerFactory({
     entry: createUnverifiedBrowserNativeWorkerEntryReference(
-      new URL("https://viewer.example/native/entry.js"),
+      entryRegistration(),
     ),
     rendererEpoch: 1,
     workerNamePrefix: "pdf-rs",
@@ -977,7 +989,59 @@ test("Host factory fails closed on start, listener, and transfer-table faults", 
   );
   assert.throws(
     () => createUnverifiedBrowserNativeWorkerEntryReference(
-      new URL("data:text/javascript,void%200"),
+      entryRegistration("data:text/javascript,void%200"),
+    ),
+  );
+  for (const invalidRegistration of [
+    Object.freeze({
+      ...entryRegistration(),
+      byteLength: 0,
+    }),
+    Object.freeze({
+      ...entryRegistration(),
+      sha256: "not-a-hash",
+    }),
+    entryRegistration(
+      "https://viewer.example/native/engine-worker.generated.js",
+    ),
+    Object.freeze({
+      ...entryRegistration(),
+      extra: true,
+    }),
+    {
+      ...entryRegistration(),
+    },
+    Object.freeze({
+      ...entryRegistration(),
+      url: Object.create(URL.prototype) as URL,
+    }),
+  ]) {
+    assert.throws(
+      () => createUnverifiedBrowserNativeWorkerEntryReference(
+        invalidRegistration,
+      ),
+    );
+  }
+  const accessorCandidate = {
+    byteLength: 1_024,
+    sha256: "a".repeat(64),
+  } as {
+    byteLength: number;
+    sha256: string;
+    url: URL;
+  };
+  Object.defineProperty(accessorCandidate, "url", {
+    configurable: false,
+    enumerable: true,
+    get: () =>
+      new URL(
+        "https://viewer.example/native/engine-worker-entry.generated.js",
+      ),
+  });
+  Object.freeze(accessorCandidate);
+  assert.throws(
+    () => createUnverifiedBrowserNativeWorkerEntryReference(
+      accessorCandidate,
     ),
   );
 
@@ -987,7 +1051,7 @@ test("Host factory fails closed on start, listener, and transfer-table faults", 
   };
   const boundFactory = createBrowserDedicatedWorkerFactory({
     entry: createUnverifiedBrowserNativeWorkerEntryReference(
-      new URL("https://viewer.example/native/entry.js"),
+      entryRegistration(),
     ),
     rendererEpoch: 1,
     workerNamePrefix: "pdf-rs",
