@@ -90,6 +90,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-engine"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-cache",
+ "pdf-rs-policy",
+ "pdf-rs-protocol",
+ "pdf-rs-raster",
+ "pdf-rs-scene",
+ "pdf-rs-scheduler",
+ "pdf-rs-surface",
+ "pdf-rs-syntax",
+]
+
+[[package]]
 name = "pdf-rs-filters"
 version = "0.1.0"
 dependencies = [

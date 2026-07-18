@@ -15,6 +15,34 @@ pub(crate) const RENDER_PLAN_SCHEMA_VERSION: u16 = 1;
 const TILE_KEY_SCHEMA_VERSION: u16 = 1;
 const PLANNED_TILE_SCHEMA_VERSION: u16 = 1;
 
+/// Returns the canonical wire-visible identity for one source-bound page geometry.
+///
+/// The identity binds the exact Scene boxes and intrinsic rotation to the immutable
+/// source revision and logical/indirect page identities. The final coordinate-space
+/// tag identifies PDF points with a bottom-left origin.
+pub fn page_geometry_identity(scene: &Scene) -> Result<[u8; 32], PolicyError> {
+    let binding = scene.binding();
+    let source = binding.source();
+    let page_object = binding.page_object();
+    let geometry = scene.geometry();
+    let mut hasher = CanonicalHasher::new(b"wire-page-geometry-identity/v1");
+    hasher.bytes(source.stable_id().digest().as_slice());
+    hasher.u64(source.revision().value());
+    hasher.u64(binding.revision_startxref());
+    hasher.u32(binding.page_index());
+    hasher.u32(page_object.number());
+    hasher.u16(page_object.generation());
+    for coordinate in geometry.media_box().coordinates() {
+        hasher.i64(coordinate.scaled());
+    }
+    for coordinate in geometry.crop_box().coordinates() {
+        hasher.i64(coordinate.scaled());
+    }
+    hasher.u16(geometry.rotation().degrees());
+    hasher.u8(1);
+    hasher.finish()
+}
+
 /// Canonical reduced positive zoom ratio.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ZoomRatio {

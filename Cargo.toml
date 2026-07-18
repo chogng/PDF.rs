@@ -4,6 +4,7 @@ members = [
     "core/*",
     "platform/browser/worker",
     "runtime/cache",
+    "runtime/engine",
     "runtime/policy",
     "runtime/protocol",
     "runtime/scheduler",

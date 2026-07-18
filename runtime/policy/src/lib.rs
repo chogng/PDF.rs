@@ -40,4 +40,5 @@ pub use render_config::{
 pub use render_plan::{
     DeviceRect, PlannedTileIdentity, RenderPlan, RenderPlanId, RenderPlanOutcome,
     RenderPlanRequest, TileContentKey, ViewportIdentity, ZoomRatio, create_render_plan,
+    page_geometry_identity,
 };

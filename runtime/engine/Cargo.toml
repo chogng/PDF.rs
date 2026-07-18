@@ -1,0 +1,19 @@
+[package]
+name = "pdf-rs-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-cache = { path = "../cache" }
+pdf-rs-policy = { path = "../policy" }
+pdf-rs-protocol = { path = "../protocol" }
+pdf-rs-raster = { path = "../../core/raster" }
+pdf-rs-scene = { path = "../../core/scene" }
+pdf-rs-scheduler = { path = "../scheduler" }
+pdf-rs-surface = { path = "../surface" }
+
+[dev-dependencies]
+pdf-rs-syntax = { path = "../../core/syntax" }
