@@ -1164,3 +1164,6 @@ page-count and absent-outline jobs to completion while proving the diagnostic le
 - 2026-07-18: Added a constrained single-revision xref-stream normalization bridge into the
   existing candidate index and strict attestation path, retaining fail-closed handling for hybrid,
   incremental, null, compressed, and self-row container geometry.
+- 2026-07-18: Added bounded no-I/O Page `/ExtGState` name lookup with exact indirect-reference
+  provenance so higher layers can reopen selected dictionaries through ordinary attested-object
+  authority.

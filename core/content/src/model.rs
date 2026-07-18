@@ -487,6 +487,8 @@ pub enum OperatorKind {
     SaveGraphicsState,
     /// Restore graphics state (`Q`).
     RestoreGraphicsState,
+    /// Apply a named external graphics-state dictionary (`gs`).
+    SetGraphicsState,
     /// Concatenate current transformation matrix (`cm`).
     ConcatMatrix,
     /// Begin text object (`BT`).
@@ -655,6 +657,7 @@ impl OperatorKind {
         match token {
             b"q" => Some(Self::SaveGraphicsState),
             b"Q" => Some(Self::RestoreGraphicsState),
+            b"gs" => Some(Self::SetGraphicsState),
             b"cm" => Some(Self::ConcatMatrix),
             b"BT" => Some(Self::BeginText),
             b"ET" => Some(Self::EndText),
@@ -732,6 +735,13 @@ impl OperatorKind {
                 OperatorFailurePolicy::Execute,
                 1,
             ),
+            Self::SetGraphicsState => spec(
+                b"gs",
+                OperatorOperandShape::Name,
+                OperatorContext::Any,
+                OperatorFailurePolicy::Execute,
+                2,
+            ),
             Self::ConcatMatrix => spec(
                 b"cm",
                 OperatorOperandShape::SixNumbers,
@@ -753,13 +763,15 @@ impl OperatorKind {
                 OperatorFailurePolicy::Execute,
                 1,
             ),
-            Self::SetCharacterSpacing => text_spec(b"Tc", OperatorOperandShape::OneNumber, 2),
-            Self::SetWordSpacing => text_spec(b"Tw", OperatorOperandShape::OneNumber, 2),
-            Self::SetHorizontalScaling => text_spec(b"Tz", OperatorOperandShape::OneNumber, 2),
-            Self::SetTextLeading => text_spec(b"TL", OperatorOperandShape::OneNumber, 2),
-            Self::SetTextFont => text_spec(b"Tf", OperatorOperandShape::NameAndNumber, 3),
-            Self::SetTextRenderMode => text_spec(b"Tr", OperatorOperandShape::OneInteger, 2),
-            Self::SetTextRise => text_spec(b"Ts", OperatorOperandShape::OneNumber, 2),
+            Self::SetCharacterSpacing => text_state_spec(b"Tc", OperatorOperandShape::OneNumber, 2),
+            Self::SetWordSpacing => text_state_spec(b"Tw", OperatorOperandShape::OneNumber, 2),
+            Self::SetHorizontalScaling => {
+                text_state_spec(b"Tz", OperatorOperandShape::OneNumber, 2)
+            }
+            Self::SetTextLeading => text_state_spec(b"TL", OperatorOperandShape::OneNumber, 2),
+            Self::SetTextFont => text_state_spec(b"Tf", OperatorOperandShape::NameAndNumber, 3),
+            Self::SetTextRenderMode => text_state_spec(b"Tr", OperatorOperandShape::OneInteger, 2),
+            Self::SetTextRise => text_state_spec(b"Ts", OperatorOperandShape::OneNumber, 2),
             Self::MoveTextPosition => text_spec(b"Td", OperatorOperandShape::TwoNumbers, 3),
             Self::MoveTextPositionSetLeading => {
                 text_spec(b"TD", OperatorOperandShape::TwoNumbers, 4)
@@ -1070,6 +1082,20 @@ const fn text_spec(
         token,
         operand_shape,
         OperatorContext::TextObject,
+        OperatorFailurePolicy::Execute,
+        base_fuel,
+    )
+}
+
+const fn text_state_spec(
+    token: &'static [u8],
+    operand_shape: OperatorOperandShape,
+    base_fuel: u16,
+) -> OperatorSpec {
+    spec(
+        token,
+        operand_shape,
+        OperatorContext::Any,
         OperatorFailurePolicy::Execute,
         base_fuel,
     )

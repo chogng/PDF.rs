@@ -657,6 +657,10 @@ pub enum ContentUnsupportedKind {
     DirectPagePropertyDictionary,
     /// A registered graphics operator requires the explicit graphics-v2 profile.
     GraphicsV2Operator,
+    /// A registered `gs` operator requires a proof-bound external graphics-state profile.
+    ExtGStateProfileRequired,
+    /// A selected external graphics-state name is absent from the proof-bound profile.
+    ExtGStateResource,
     /// A registered `Do` operator requires an explicit proof-bound Content image profile.
     ImageProfileRequired,
     /// The selected Page XObject or Image XObject representation is outside the registered subset.
@@ -777,6 +781,8 @@ impl ContentUnsupported {
             ContentUnsupportedKind::IndirectPageProperties => "RPE-CONTENT-UNSUPPORTED-0005",
             ContentUnsupportedKind::DirectPagePropertyDictionary => "RPE-CONTENT-UNSUPPORTED-0006",
             ContentUnsupportedKind::GraphicsV2Operator => "RPE-CONTENT-UNSUPPORTED-0007",
+            ContentUnsupportedKind::ExtGStateProfileRequired => "RPE-CONTENT-UNSUPPORTED-0014",
+            ContentUnsupportedKind::ExtGStateResource => "RPE-CONTENT-UNSUPPORTED-0015",
             ContentUnsupportedKind::ImageProfileRequired => "RPE-CONTENT-UNSUPPORTED-0008",
             ContentUnsupportedKind::ImageXObject => "RPE-CONTENT-UNSUPPORTED-0009",
             ContentUnsupportedKind::FontProfileRequired => "RPE-CONTENT-UNSUPPORTED-0010",

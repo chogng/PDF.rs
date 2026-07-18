@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -17,29 +18,32 @@ use pdf_rs_bytes::{
     SourceValidatorKind,
 };
 use pdf_rs_content::{
-    ContentFontLimits, ContentFontProfile, ContentGraphicsLimits, ContentImageLimits,
-    ContentImageProfile, ContentLimits, ContentVmLimits, ContentVmPoll, InterpretPageJob,
+    ContentExtGStateProfile, ContentExtGStateResource, ContentFontLimits, ContentFontProfile,
+    ContentGraphicsLimits, ContentImageLimits, ContentImageProfile, ContentLimits, ContentOperand,
+    ContentVmLimits, ContentVmPoll, DecodedContentStream, InterpretPageJob,
+    NeverCancelled as NeverContentCancelled, OperatorKind, scan_content_streams,
 };
 use pdf_rs_document::{
-    AcquiredObjectJobContext, AcquiredPageCountPoll, AttestRevisionJob, CandidateRevisionIndex,
-    DocumentError, DocumentErrorCategory, DocumentLimits, FontResourceJobContext,
-    FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits, NeverCancelSourceRevisionChain,
-    NeverCancelled, OpenSourceRevisionChainJob, OpenStrictBaseRevisionJob, PageContentJobContext,
-    PageContentLimits, PageContentPoll, PageFontLookupLimits, PageIndex, PageIndexBuildPoll,
-    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
-    PageMaterializationPoll, PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits,
-    PageXObjectLookupLimits, RevisionAttestationJobContext, RevisionAttestationLimits,
-    RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex, SourceAcquiredDocument,
-    SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain, SourceRevisionChainError,
-    SourceRevisionChainErrorCategory, SourceRevisionChainJobContext, SourceRevisionChainLimits,
-    SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits,
-    StrictBaseOpenPoll,
+    AcquiredObjectJobContext, AcquiredPageContent, AcquiredPageCountPoll, AttestRevisionJob,
+    AttestedObjectJobContext, AttestedObjectPoll, CandidateRevisionIndex, DocumentError,
+    DocumentErrorCategory, DocumentLimits, FontResourceJobContext, FontResourceLimits,
+    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelSourceRevisionChain, NeverCancelled,
+    OpenSourceRevisionChainJob, OpenStrictBaseRevisionJob, PageContentJobContext,
+    PageContentLimits, PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex,
+    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
+    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
+    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
+    SourceAcquiredDocument, SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain,
+    SourceRevisionChainError, SourceRevisionChainErrorCategory, SourceRevisionChainJobContext,
+    SourceRevisionChainLimits, SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError,
+    StrictBaseOpenLimits, StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterJob, FastRasterLimits, NeverCancelled as NeverFastCancelled,
 };
 use pdf_rs_filters::DecodeLimits;
-use pdf_rs_object::ObjectLimits;
+use pdf_rs_object::{ObjectLimits, ObjectWorkCaps};
 use pdf_rs_policy::{
     CapabilityEvaluator, CapabilityProfile, DeviceRect, NeverCancelled as NeverPolicyCancelled,
     OptionalContentIdentity, PolicyLimits, RenderConfig, RenderConfigInput, RenderPlanOutcome,
@@ -782,7 +786,9 @@ fn render_strict_page(
         FontResourceLimits::default(),
         ContentFontLimits::default(),
     );
-    let mut vm = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
+    let ext_gstate_profile =
+        acquire_ext_gstate_profile(&acquired, authority, snapshot, source, ids)?;
+    let mut vm = InterpretPageJob::new_graphics_v2_with_resources(
         acquired,
         ContentLimits::default(),
         ContentVmLimits::default(),
@@ -790,6 +796,7 @@ fn render_strict_page(
         PagePropertyLookupLimits::default(),
         image_profile,
         font_profile,
+        ext_gstate_profile,
         GraphicsSceneLimits::default(),
     );
     let vm_store = range_store(snapshot)?;
@@ -859,6 +866,141 @@ struct RenderJobs {
     content: JobId,
     image: JobId,
     font: JobId,
+}
+
+fn acquire_ext_gstate_profile(
+    acquired: &AcquiredPageContent,
+    authority: &SharedAttestedRevisionIndex,
+    snapshot: SourceSnapshot,
+    source: &[u8],
+    ids: RenderJobs,
+) -> Result<ContentExtGStateProfile, NativeViewerError> {
+    let decoded = acquired
+        .streams()
+        .iter()
+        .enumerate()
+        .map(|(index, stream)| {
+            let ordinal = u32::try_from(index)
+                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+            Ok(DecodedContentStream::new(
+                stream.reference(),
+                ordinal,
+                stream.decoded_bytes(),
+            ))
+        })
+        .collect::<Result<Vec<_>, NativeViewerError>>()?;
+    let program = scan_content_streams(&decoded, ContentLimits::default(), &NeverContentCancelled)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Content))?;
+    let ext_gstate_limits = PageExtGStateLookupLimits::default();
+    let mut names = BTreeSet::new();
+    for operator in program.operators() {
+        if operator.operator().known() != Some(OperatorKind::SetGraphicsState) {
+            continue;
+        }
+        let [operand] = operator.operands() else {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
+        };
+        let ContentOperand::Name(name) = operand.value() else {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::Content));
+        };
+        if name.bytes().is_empty() || name.bytes().len() > 127 {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::Unsupported));
+        }
+        if !names.contains(name.bytes())
+            && u64::try_from(names.len())
+                .map_or(true, |count| count >= ext_gstate_limits.max_lookups())
+        {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::ResourceLimit));
+        }
+        names.insert(name.bytes().to_vec());
+    }
+
+    let lookup_store = range_store(snapshot)?;
+    let mut resolver = acquired
+        .page()
+        .resources()
+        .ext_gstate_resolver(ext_gstate_limits);
+    let object_limits = authority.as_attested().object_limits();
+    let work_caps = ObjectWorkCaps::new(
+        object_limits.max_total_read_bytes(),
+        object_limits.max_total_parse_bytes(),
+    )
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Internal))?;
+    let mut resources = Vec::new();
+    resources
+        .try_reserve_exact(names.len())
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+    for (index, name) in names.into_iter().enumerate() {
+        let proof = resolver
+            .lookup_ext_gstate(&name, &lookup_store, &NeverCancelled)
+            .map_err(document_failure)?;
+        if proof.snapshot() != authority.as_attested().snapshot()
+            || proof.revision_id() != authority.as_attested().revision_id()
+            || proof.revision_startxref() != authority.as_attested().startxref()
+        {
+            return Err(NativeViewerError::new(NativeViewerErrorCode::Internal));
+        }
+        let ordinal = u64::try_from(index)
+            .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+        let job_value = ids
+            .base
+            .checked_add(600)
+            .and_then(|value| {
+                ordinal
+                    .checked_mul(3)
+                    .and_then(|step| value.checked_add(step))
+            })
+            .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
+        let job = JobId::new(job_value);
+        let envelope = ResumeCheckpoint::new(
+            job_value
+                .checked_add(1)
+                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?,
+        );
+        let boundary = ResumeCheckpoint::new(
+            job_value
+                .checked_add(2)
+                .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?,
+        );
+        let mut open = authority
+            .as_attested()
+            .open_object(
+                proof.target(),
+                AttestedObjectJobContext::new(
+                    job,
+                    envelope,
+                    boundary,
+                    RequestPriority::FirstViewportResource,
+                ),
+                work_caps,
+            )
+            .map_err(document_failure)?;
+        let object = loop {
+            match open.poll(&lookup_store, &NeverCancelled) {
+                AttestedObjectPoll::Ready(object) => break object,
+                AttestedObjectPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => complete_pending(
+                    &lookup_store,
+                    snapshot,
+                    source,
+                    job,
+                    ticket,
+                    &missing,
+                    checkpoint,
+                )?,
+                AttestedObjectPoll::Failed(error) => return Err(document_failure(error)),
+            }
+        };
+        resources.push(
+            ContentExtGStateResource::new(name, object)
+                .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Unsupported))?,
+        );
+    }
+    ContentExtGStateProfile::new(resources)
+        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Unsupported))
 }
 
 struct NeverRasterCancelled;

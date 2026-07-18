@@ -12,6 +12,7 @@
 #![deny(missing_docs)]
 
 mod error;
+mod ext_gstate;
 mod font_limits;
 mod graphics_limits;
 mod image_limits;
@@ -27,6 +28,10 @@ mod vm_model;
 pub use error::{
     ContentError, ContentErrorCategory, ContentErrorCode, ContentLimit, ContentLimitKind,
     ContentRecoverability,
+};
+pub use ext_gstate::{
+    ContentExtGStateError, ContentExtGStateErrorKind, ContentExtGStateProfile,
+    ContentExtGStateResource,
 };
 pub use font_limits::{ContentFontLimitConfig, ContentFontLimits};
 pub use graphics_limits::{ContentGraphicsLimitConfig, ContentGraphicsLimits};

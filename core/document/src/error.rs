@@ -159,6 +159,10 @@ pub enum DocumentLimitKind {
     PageFontLookups,
     /// Outer resource and inner Font dictionary entries visited during Font lookup.
     PageFontEntryVisits,
+    /// Page external graphics-state names resolved through one borrowed resource resolver.
+    PageExtGStateLookups,
+    /// Outer resource and inner ExtGState dictionary entries visited during lookup.
+    PageExtGStateEntryVisits,
     /// Polls admitted while one embedded Font acquisition remained active.
     FontResourcePolls,
     /// Proof-preserving Font, descriptor, and FontFile2 objects opened.
@@ -417,6 +421,8 @@ pub enum DocumentErrorCode {
     ImageXObjectDecodeFailure,
     /// `/Font` or one requested Page Font name has an invalid semantic shape.
     InvalidPageFontResource,
+    /// `/ExtGState` or one requested Page graphics-state name has an invalid semantic shape.
+    InvalidPageExtGStateResource,
     /// Runtime identity or checkpoints for Font resource acquisition are inconsistent.
     InvalidFontResourceJobContext,
     /// A selected simple Font, descriptor, or embedded program has malformed metadata.
@@ -846,6 +852,11 @@ impl DocumentError {
                 DocumentErrorCategory::Syntax,
                 DocumentRecoverability::CorrectInput,
                 "RPE-DOCUMENT-0082",
+            ),
+            DocumentErrorCode::InvalidPageExtGStateResource => (
+                DocumentErrorCategory::Syntax,
+                DocumentRecoverability::CorrectInput,
+                "RPE-DOCUMENT-0087",
             ),
             DocumentErrorCode::InvalidFontResourceJobContext => (
                 DocumentErrorCategory::Configuration,

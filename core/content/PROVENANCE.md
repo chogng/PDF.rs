@@ -285,3 +285,6 @@ Scene, and VM failures retain their original structured types rather than being 
   font-cache Pending resumption, complete registered text state/operators, PDF Widths advances,
   deterministic positioned glyph outlines, aggregate Font/VM/glyph retention and statistics,
   cooperative source/cancellation guards, atomic Scene publication, and zero-copy Scene handoff.
+- 2026-07-18: Added proof-bound `gs` execution for the registered `/CA`, `/ca`, and
+  Normal/Multiply/Screen `/BM` subset, with fixed-point alpha parsing, complete `q`/`Q`
+  restoration, and text-state parameter selection outside `BT`/`ET` as permitted by PDF.

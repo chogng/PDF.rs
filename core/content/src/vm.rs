@@ -22,13 +22,13 @@ use pdf_rs_syntax::ObjectRef;
 
 use crate::scanner::{ScanTerminal, run_scan};
 use crate::{
-    ContentCancellation, ContentFontLimits, ContentFontStats, ContentGraphicsLimits,
-    ContentImageLimits, ContentImageStats, ContentLimits, ContentName, ContentNumber,
-    ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats, ContentUnsupported,
-    ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure, ContentVmLimit,
-    ContentVmLimitKind, ContentVmLimits, ContentVmPhase, ContentVmStats, DecodedContentStream,
-    InterpretedPage, LocatedOperand, OperatorContext, OperatorKind, OperatorOperandShape,
-    ResolvedFontUse, ResolvedImageUse, ResolvedPropertyUse,
+    ContentCancellation, ContentExtGStateProfile, ContentFontLimits, ContentFontStats,
+    ContentGraphicsLimits, ContentImageLimits, ContentImageStats, ContentLimits, ContentName,
+    ContentNumber, ContentOperand, ContentOperatorSource, ContentProgram, ContentScanStats,
+    ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
+    ContentVmFailure, ContentVmLimit, ContentVmLimitKind, ContentVmLimits, ContentVmPhase,
+    ContentVmStats, DecodedContentStream, InterpretedPage, LocatedOperand, OperatorContext,
+    OperatorKind, OperatorOperandShape, ResolvedFontUse, ResolvedImageUse, ResolvedPropertyUse,
 };
 
 mod font;
@@ -221,6 +221,7 @@ pub struct InterpretPageJob {
     profile: ContentVmProfile,
     image_runtime: Option<ImageRuntime>,
     font_runtime: Option<FontRuntime>,
+    ext_gstate_profile: Option<ContentExtGStateProfile>,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -253,6 +254,7 @@ impl InterpretPageJob {
             profile: ContentVmProfile::SceneV1 { scene_limits },
             image_runtime: None,
             font_runtime: None,
+            ext_gstate_profile: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -289,6 +291,7 @@ impl InterpretPageJob {
             },
             image_runtime: None,
             font_runtime: None,
+            ext_gstate_profile: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -331,6 +334,7 @@ impl InterpretPageJob {
             },
             image_runtime: Some(ImageRuntime::new(image_profile)),
             font_runtime: None,
+            ext_gstate_profile: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -373,6 +377,7 @@ impl InterpretPageJob {
             },
             image_runtime: None,
             font_runtime: Some(FontRuntime::new(font_profile)),
+            ext_gstate_profile: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -417,6 +422,7 @@ impl InterpretPageJob {
             },
             image_runtime: Some(ImageRuntime::new(image_profile)),
             font_runtime: Some(FontRuntime::new(font_profile)),
+            ext_gstate_profile: None,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -429,6 +435,37 @@ impl InterpretPageJob {
             font_lookup_stats: PageFontLookupStats::default(),
             font_stats: ContentFontStats::default(),
         }
+    }
+
+    /// Creates a graphics-v2 interpreter with images, embedded TrueType fonts, and proof-bound
+    /// external alpha/blend graphics states.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the combined constructor keeps all proof authorities and independent limits explicit"
+    )]
+    pub fn new_graphics_v2_with_resources(
+        acquired: AcquiredPageContent,
+        scan_limits: ContentLimits,
+        vm_limits: ContentVmLimits,
+        graphics_limits: ContentGraphicsLimits,
+        property_limits: PagePropertyLookupLimits,
+        image_profile: ContentImageProfile,
+        font_profile: ContentFontProfile,
+        ext_gstate_profile: ContentExtGStateProfile,
+        scene_limits: GraphicsSceneLimits,
+    ) -> Self {
+        let mut job = Self::new_graphics_v2_with_images_and_fonts(
+            acquired,
+            scan_limits,
+            vm_limits,
+            graphics_limits,
+            property_limits,
+            image_profile,
+            font_profile,
+            scene_limits,
+        );
+        job.ext_gstate_profile = Some(ext_gstate_profile);
+        job
     }
 
     /// Returns the pending or terminal phase.
@@ -505,6 +542,7 @@ impl InterpretPageJob {
                 self.profile,
                 self.image_runtime.as_mut(),
                 self.font_runtime.as_mut(),
+                self.ext_gstate_profile.as_ref(),
                 self.scan_stats,
                 self.xobject_stats,
                 self.scan_peak_retained,
@@ -974,6 +1012,7 @@ fn run_interpretation(
     profile: ContentVmProfile,
     mut image_runtime: Option<&mut ImageRuntime>,
     mut font_runtime: Option<&mut FontRuntime>,
+    ext_gstate_profile: Option<&ContentExtGStateProfile>,
     mut scan_stats: ContentScanStats,
     mut xobject_stats: PageXObjectLookupStats,
     mut scan_peak_retained: u64,
@@ -1126,6 +1165,7 @@ fn run_interpretation(
             profile,
             image_runtime.as_deref_mut(),
             font_runtime.as_deref_mut(),
+            ext_gstate_profile,
             source,
             cancellation,
             &mut accounting,
@@ -2207,6 +2247,7 @@ fn build_execution_plan(
     profile: ContentVmProfile,
     mut image_runtime: Option<&mut ImageRuntime>,
     mut font_runtime: Option<&mut FontRuntime>,
+    ext_gstate_profile: Option<&ContentExtGStateProfile>,
     byte_source: &dyn ByteSource,
     cancellation: &dyn DocumentCancellation,
     accounting: &mut Accounting,
@@ -2514,6 +2555,52 @@ fn build_execution_plan(
             }
 
             match kind {
+                OperatorKind::SetGraphicsState => {
+                    let Some(graphics) = graphics_v2.as_mut() else {
+                        return prioritize(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            Some(operator_source),
+                            RunTerminal::Unsupported(ContentUnsupported::new(
+                                ContentUnsupportedKind::GraphicsV2Operator,
+                                operator_source,
+                            )),
+                        );
+                    };
+                    let ValidatedOperands::Name(name) = validated else {
+                        unreachable!("validated gs operands have name shape");
+                    };
+                    let Some(profile) = ext_gstate_profile else {
+                        return prioritize(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            Some(operator_source),
+                            RunTerminal::Unsupported(ContentUnsupported::new(
+                                ContentUnsupportedKind::ExtGStateProfileRequired,
+                                operator_source,
+                            )),
+                        );
+                    };
+                    let Some(resource) = profile.find(name.bytes()) else {
+                        return prioritize(
+                            snapshot,
+                            byte_source,
+                            cancellation,
+                            Some(operator_source),
+                            RunTerminal::Unsupported(ContentUnsupported::new(
+                                ContentUnsupportedKind::ExtGStateResource,
+                                operator_source,
+                            )),
+                        );
+                    };
+                    graphics.apply_ext_gstate(
+                        resource.stroking_alpha(),
+                        resource.nonstroking_alpha(),
+                        resource.blend_mode(),
+                    );
+                }
                 OperatorKind::SaveGraphicsState => {
                     let saved_len = graphics_v2
                         .as_ref()

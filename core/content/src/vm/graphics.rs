@@ -474,6 +474,26 @@ impl GraphicsVm {
         self.current.ctm = value;
     }
 
+    pub(super) fn apply_ext_gstate(
+        &mut self,
+        stroking_alpha: Option<SceneUnit>,
+        nonstroking_alpha: Option<SceneUnit>,
+        blend_mode: Option<BlendMode>,
+    ) {
+        let stroking = self.current.stroking;
+        let nonstroking = self.current.nonstroking;
+        self.current.stroking = Paint::new(
+            stroking.color(),
+            stroking_alpha.unwrap_or(stroking.alpha()),
+            blend_mode.unwrap_or(stroking.blend_mode()),
+        );
+        self.current.nonstroking = Paint::new(
+            nonstroking.color(),
+            nonstroking_alpha.unwrap_or(nonstroking.alpha()),
+            blend_mode.unwrap_or(nonstroking.blend_mode()),
+        );
+    }
+
     pub(super) fn saved(&self) -> &[GraphicsState] {
         &self.saved
     }
@@ -984,6 +1004,7 @@ impl GraphicsVm {
             }
             OperatorKind::SaveGraphicsState
             | OperatorKind::RestoreGraphicsState
+            | OperatorKind::SetGraphicsState
             | OperatorKind::ConcatMatrix
             | OperatorKind::BeginText
             | OperatorKind::EndText

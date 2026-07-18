@@ -36,11 +36,67 @@ fn uncompressed_single_revision_xref_stream_reuses_strict_rendering() {
 }
 
 #[test]
+fn indirect_ext_gstate_applies_constant_alpha() {
+    let mut document =
+        NativeDocument::open(ext_gstate_pdf()).expect("proof-bound ExtGState PDF opens");
+    let surface = document
+        .render_page(0, 100)
+        .expect("supported ExtGState alpha renders");
+    let center = &surface.pixels()[((50 * 100 + 50) * 4)..][..4];
+    assert_eq!(center[0], 255);
+    assert!((126..=129).contains(&center[1]));
+    assert!((126..=129).contains(&center[2]));
+    assert_eq!(center[3], 255);
+}
+
+#[test]
 fn oversized_valid_stream_boundary_remains_a_resource_limit() {
     let error = NativeDocument::open(traditional_pdf(REAL_WORLD_BOUNDARY_PADDING, None))
         .err()
         .expect("the fixed object-boundary budget rejects oversized padding");
     assert_eq!(error.code(), NativeViewerErrorCode::ResourceLimit);
+}
+
+fn ext_gstate_pdf() -> Vec<u8> {
+    let mut pdf = b"%PDF-1.7\n%\x80\x81\x82\x83\n".to_vec();
+    let mut offsets = Vec::new();
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        1,
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+    );
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        2,
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    );
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        3,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /Fade 5 0 R >> >> /Contents 4 0 R >>",
+    );
+    append_object(
+        &mut pdf,
+        &mut offsets,
+        4,
+        b"<< /Length 34 >>\nstream\n/Fade gs 1 0 0 rg 0 0 100 100 re f\nendstream",
+    );
+    append_object(&mut pdf, &mut offsets, 5, b"<< /ca 0.5 /CA 1 >>");
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in offsets {
+        writeln!(pdf, "{offset:010} 00000 n ").expect("xref row");
+    }
+    write!(
+        pdf,
+        "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n"
+    )
+    .expect("traditional trailer");
+    pdf
 }
 
 fn traditional_pdf(boundary_padding: usize, previous: Option<u64>) -> Vec<u8> {

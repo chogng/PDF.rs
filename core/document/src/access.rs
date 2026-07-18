@@ -8,7 +8,7 @@ use pdf_rs_object::{
     ObjectJobContext, ObjectLimits, ObjectPhase, ObjectPoll, ObjectStats, ObjectWorkCaps,
     OpenObjectJob,
 };
-use pdf_rs_syntax::{ByteSpan, ObjectRef, SyntaxLimits};
+use pdf_rs_syntax::{ByteSpan, Located, ObjectRef, SyntaxLimits, SyntaxObject};
 
 use crate::{
     AttestedRevisionIndex, DocumentCancellation, DocumentError, DocumentErrorCode,
@@ -199,6 +199,14 @@ impl AttestedObject {
     /// Borrows the parsed direct value or strictly framed stream retained beside its proof.
     pub const fn value(&self) -> &IndirectObjectValue {
         self.object.value()
+    }
+
+    /// Borrows the source-located direct value, or returns `None` for a framed stream.
+    pub const fn direct_value(&self) -> Option<&Located<SyntaxObject>> {
+        match self.object.value() {
+            IndirectObjectValue::Direct(value) => Some(value),
+            IndirectObjectValue::Stream(_) => None,
+        }
     }
 }
 
