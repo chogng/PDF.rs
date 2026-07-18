@@ -847,11 +847,15 @@ impl ImageRuntime {
         acquired: &pdf_rs_document::AcquiredImageXObject,
         source: ContentOperatorSource,
     ) -> Result<(), ContentVmFailure> {
-        let decoded_len =
+        let packed_len =
             u64::try_from(acquired.decoded_bytes().len()).map_err(|_| vm_failure(source))?;
-        if acquired.stats().decoded_bytes() != decoded_len {
+        if acquired.stats().decoded_bytes() != packed_len {
             return Err(vm_failure(source));
         }
+        let decoded_len = u64::from(acquired.width())
+            .checked_mul(u64::from(acquired.height()))
+            .and_then(|pixels| pixels.checked_mul(u64::from(acquired.components())))
+            .ok_or_else(|| vm_failure(source))?;
         self.profile
             .content_limits()
             .preflight(
@@ -861,21 +865,23 @@ impl ImageRuntime {
                 Some(source),
             )
             .map_err(ContentVmFailure::Vm)?;
+        let decoded_slots = usize::try_from(decoded_len).map_err(|_| vm_failure(source))?;
         let mut decoded = Vec::new();
-        decoded
-            .try_reserve_exact(acquired.decoded_bytes().len())
-            .map_err(|_| {
-                ContentVmFailure::Vm(ContentVmError::image_resource(
-                    ContentImageLimit::new(
-                        ContentImageLimitKind::DecodedAllocation,
-                        self.profile.content_limits().max_decoded_bytes(),
-                        self.stats.decoded_bytes(),
-                        decoded_len,
-                    ),
-                    Some(source),
-                ))
-            })?;
-        decoded.extend_from_slice(acquired.decoded_bytes());
+        decoded.try_reserve_exact(decoded_slots).map_err(|_| {
+            ContentVmFailure::Vm(ContentVmError::image_resource(
+                ContentImageLimit::new(
+                    ContentImageLimitKind::DecodedAllocation,
+                    self.profile.content_limits().max_decoded_bytes(),
+                    self.stats.decoded_bytes(),
+                    decoded_len,
+                ),
+                Some(source),
+            ))
+        })?;
+        normalize_image_samples(acquired, &mut decoded, source)?;
+        if decoded.len() != decoded_slots {
+            return Err(vm_failure(source));
+        }
         let resource_source = GraphicsResourceSource::new(
             acquired.reference(),
             acquired.proof().revision_startxref(),
@@ -886,7 +892,7 @@ impl ImageRuntime {
             acquired.width(),
             acquired.height(),
             scene_color_space(acquired.color_space()),
-            acquired.bits_per_component(),
+            8,
             acquired.interpolate(),
             decoded,
         )
@@ -939,6 +945,72 @@ impl ImageRuntime {
         self.stats.record_plan_retained(retained);
         Ok(())
     }
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "packed-image normalization preserves the complete VM failure contract"
+)]
+fn normalize_image_samples(
+    acquired: &pdf_rs_document::AcquiredImageXObject,
+    output: &mut Vec<u8>,
+    source: ContentOperatorSource,
+) -> Result<(), ContentVmFailure> {
+    let packed = acquired.decoded_bytes();
+    let stride = usize::try_from(acquired.stride_bytes()).map_err(|_| vm_failure(source))?;
+    let height = usize::try_from(acquired.height()).map_err(|_| vm_failure(source))?;
+    let expected_packed = stride
+        .checked_mul(height)
+        .ok_or_else(|| vm_failure(source))?;
+    if packed.len() != expected_packed {
+        return Err(vm_failure(source));
+    }
+    let samples_per_row = usize::try_from(acquired.width())
+        .ok()
+        .and_then(|width| width.checked_mul(usize::from(acquired.components())))
+        .ok_or_else(|| vm_failure(source))?;
+    let bits = acquired.bits_per_component();
+    match bits {
+        8 => output.extend_from_slice(packed),
+        16 => {
+            for row in packed.chunks_exact(stride) {
+                for sample in row.chunks_exact(2).take(samples_per_row) {
+                    let value = u32::from(u16::from_be_bytes([sample[0], sample[1]]));
+                    let normalized = value
+                        .checked_mul(255)
+                        .and_then(|scaled| scaled.checked_add(32_767))
+                        .map(|scaled| scaled / 65_535)
+                        .and_then(|scaled| u8::try_from(scaled).ok())
+                        .ok_or_else(|| vm_failure(source))?;
+                    output.push(normalized);
+                }
+            }
+        }
+        1 | 2 | 4 => {
+            let mask = (1_u8 << bits) - 1;
+            for row in packed.chunks_exact(stride) {
+                for sample_index in 0..samples_per_row {
+                    let bit_offset = sample_index
+                        .checked_mul(usize::from(bits))
+                        .ok_or_else(|| vm_failure(source))?;
+                    let byte = *row.get(bit_offset / 8).ok_or_else(|| vm_failure(source))?;
+                    let shift = 8_usize
+                        .checked_sub(usize::from(bits))
+                        .and_then(|value| value.checked_sub(bit_offset % 8))
+                        .ok_or_else(|| vm_failure(source))?;
+                    let sample = (byte >> shift) & mask;
+                    let normalized = u16::from(sample)
+                        .checked_mul(255)
+                        .map(|value| value / u16::from(mask))
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(|| vm_failure(source))?;
+                    output.push(normalized);
+                }
+            }
+        }
+        _ => return Err(vm_failure(source)),
+    }
+    Ok(())
 }
 
 #[allow(

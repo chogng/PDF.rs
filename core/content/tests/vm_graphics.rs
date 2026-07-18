@@ -370,6 +370,24 @@ fn image_object(number: u32, dictionary_entries: &[u8], decoded: &[u8]) -> Vec<u
     object
 }
 
+fn packed_gray_image_object(
+    number: u32,
+    width: u32,
+    height: u32,
+    bits_per_component: u8,
+    packed: &[u8],
+) -> Vec<u8> {
+    let mut object = format!(
+        "{number} 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceGray /BitsPerComponent {bits_per_component} /Length {} >>\nstream\n",
+        packed.len()
+    )
+    .into_bytes();
+    object.extend_from_slice(packed);
+    object.extend_from_slice(b"\nendstream\nendobj\n");
+    object
+}
+
 fn form_object(number: u32, dictionary_entries: &[u8], content: &[u8]) -> Vec<u8> {
     let mut object = format!(
         "{number} 0 obj\n<< /Type /XObject /Subtype /Form /Length {} ",
@@ -1053,6 +1071,38 @@ fn image_xobjects_publish_ctm_sampling_paint_provenance_and_exact_cache_identity
     assert_eq!(page.image_stats().encoded_bytes(), 6);
     assert_eq!(page.image_stats().decoded_bytes(), 6);
     assert!(page.image_stats().cache_retained_bytes() > 0);
+}
+
+#[test]
+fn packed_image_samples_normalize_to_eight_bit_scene_resources() {
+    let objects = [(
+        5,
+        packed_gray_image_object(5, 8, 2, 1, &[0b1010_1010, 0b0101_0101]),
+    )];
+    let (mut job, store) = image_job(
+        b"/Im0 Do",
+        b"<< /XObject << /Im0 5 0 R >> >>",
+        &objects,
+        0x60,
+        ContentImageLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("packed image must normalize into the Scene: {outcome:?}"),
+    };
+    let graphics = page.scene().graphics().unwrap();
+    let GraphicsResource::Image(image) = graphics.resources()[0].resource() else {
+        panic!("packed image publishes one Scene image")
+    };
+    assert_eq!(image.bits_per_component(), 8);
+    assert_eq!(
+        image.decoded(),
+        [
+            255, 0, 255, 0, 255, 0, 255, 0, 0, 255, 0, 255, 0, 255, 0, 255
+        ]
+    );
+    assert_eq!(page.image_stats().encoded_bytes(), 2);
+    assert_eq!(page.image_stats().decoded_bytes(), 16);
 }
 
 #[test]
