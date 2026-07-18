@@ -93,7 +93,7 @@ const THIRD_PARTY_PRODUCT_PACKAGES: &[ThirdPartyProductPackage; 7] = &[
     },
 ];
 
-const PRODUCT_PACKAGE_COUNT: usize = 19;
+const PRODUCT_PACKAGE_COUNT: usize = 20;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -154,6 +154,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "platform/desktop/Cargo.toml",
         package_name: "pdf-rs-desktop",
         crate_name: "pdf_rs_desktop",
+    },
+    ProductPackage {
+        manifest: "platform/macos-spawn/Cargo.toml",
+        package_name: "pdf-rs-macos-spawn",
+        crate_name: "pdf_rs_macos_spawn",
     },
     ProductPackage {
         manifest: "runtime/cache/Cargo.toml",
@@ -1723,6 +1728,11 @@ mod tests {
             manifest: "platform/desktop/Cargo.toml",
             package_name: "pdf-rs-desktop",
             crate_name: "pdf_rs_desktop",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "platform/macos-spawn/Cargo.toml",
+            package_name: "pdf-rs-macos-spawn",
+            crate_name: "pdf_rs_macos_spawn",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "runtime/engine/Cargo.toml",

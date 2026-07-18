@@ -114,6 +114,7 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-engine",
+ "pdf-rs-macos-spawn",
  "pdf-rs-policy",
  "pdf-rs-protocol",
  "pdf-rs-raster",
@@ -171,6 +172,14 @@ name = "pdf-rs-generate"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-digest",
+]
+
+[[package]]
+name = "pdf-rs-macos-spawn"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

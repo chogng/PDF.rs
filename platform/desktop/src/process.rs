@@ -1,11 +1,19 @@
 use std::io::{self, Read, Write};
+#[cfg(target_os = "macos")]
+use std::os::fd::AsFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::process::ExitStatus;
+#[cfg(any(test, feature = "transport-fixture"))]
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use pdf_rs_macos_spawn::{SpawnedChild as MacosSpawnedChild, spawn_desktop_worker};
 use pdf_rs_protocol::{
     Command as ProtocolCommand, CommandEnvelope, DesktopFrameDecoder, ENVELOPE_HEADER_BYTES,
     EndpointCapabilities, EndpointRole, Event, EventEnvelope, HandshakeFrameDecoder,
@@ -65,18 +73,58 @@ trait ChildLifecycle {
     fn wait(&mut self) -> io::Result<ExitStatus>;
 }
 
-impl ChildLifecycle for Child {
+enum DesktopSpawnedChild {
+    #[cfg(any(test, feature = "transport-fixture"))]
+    TransportFixture(Child),
+    #[cfg(target_os = "macos")]
+    ProductMacos(MacosSpawnedChild),
+}
+
+impl DesktopSpawnedChild {
+    fn id(&self) -> u32 {
+        match self {
+            #[cfg(any(test, feature = "transport-fixture"))]
+            Self::TransportFixture(child) => child.id(),
+            #[cfg(target_os = "macos")]
+            Self::ProductMacos(child) => child.id(),
+        }
+    }
+}
+
+impl ChildLifecycle for DesktopSpawnedChild {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        Child::try_wait(self)
+        match self {
+            #[cfg(any(test, feature = "transport-fixture"))]
+            Self::TransportFixture(child) => child.try_wait(),
+            #[cfg(target_os = "macos")]
+            Self::ProductMacos(child) => child.try_wait(),
+        }
     }
 
     fn kill(&mut self) -> io::Result<()> {
-        Child::kill(self)
+        match self {
+            #[cfg(any(test, feature = "transport-fixture"))]
+            Self::TransportFixture(child) => child.kill(),
+            #[cfg(target_os = "macos")]
+            Self::ProductMacos(child) => child.kill(),
+        }
     }
 
     fn wait(&mut self) -> io::Result<ExitStatus> {
-        Child::wait(self)
+        match self {
+            #[cfg(any(test, feature = "transport-fixture"))]
+            Self::TransportFixture(child) => child.wait(),
+            #[cfg(target_os = "macos")]
+            Self::ProductMacos(child) => child.wait(),
+        }
     }
+}
+
+#[derive(Clone, Copy)]
+enum DesktopProcessLaunch {
+    #[cfg(any(test, feature = "transport-fixture"))]
+    TransportFixture,
+    ProductMacos,
 }
 
 fn terminate_child(
@@ -118,9 +166,45 @@ fn terminate_child_slot<T: ChildLifecycle>(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequiredChildCleanup {
+    Reaped(ExitStatus),
+    Abort(DesktopChildTerminationFailure),
+}
+
+fn required_child_cleanup(
+    child: &mut impl ChildLifecycle,
+    observation_grace: Duration,
+) -> RequiredChildCleanup {
+    match terminate_child(child, observation_grace) {
+        Ok(status) => RequiredChildCleanup::Reaped(status),
+        Err(failure) => RequiredChildCleanup::Abort(failure),
+    }
+}
+
+pub(crate) fn abort_unresolved_child(_failure: DesktopChildTerminationFailure) -> ! {
+    std::process::abort()
+}
+
+fn cleanup_failed_spawn_or_abort(child: &mut impl ChildLifecycle, observation_grace: Duration) {
+    match required_child_cleanup(child, observation_grace) {
+        RequiredChildCleanup::Reaped(_) => {}
+        RequiredChildCleanup::Abort(failure) => abort_unresolved_child(failure),
+    }
+}
+
+fn unresolved_drop_failure<T>(
+    child: &Option<T>,
+    failure: Option<DesktopChildTerminationFailure>,
+) -> Option<DesktopChildTerminationFailure> {
+    child
+        .as_ref()
+        .map(|_| failure.unwrap_or(DesktopChildTerminationFailure::Reap))
+}
+
 /// One Host-owned child process epoch. Restart drops every old transport resource.
 pub struct DesktopHostProcess {
-    child: Option<Child>,
+    child: Option<DesktopSpawnedChild>,
     socket: Option<UnixStream>,
     auth: DesktopLaunchAuth,
     epoch: WorkerEpoch,
@@ -168,37 +252,66 @@ impl DesktopEpochManager {
         program: &str,
         transport_timeout: Duration,
     ) -> Result<DesktopHostProcess, DesktopIpcError> {
-        self.spawn_selected_epoch(program, transport_timeout)
+        self.spawn_selected_epoch(
+            program,
+            transport_timeout,
+            DesktopProcessLaunch::TransportFixture,
+        )
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn spawn_product_macos_with_timeout(
         &mut self,
         program: &str,
         transport_timeout: Duration,
         _gate: &DesktopProductSandboxGate,
     ) -> Result<DesktopHostProcess, DesktopIpcError> {
-        self.spawn_selected_epoch(program, transport_timeout)
+        self.spawn_selected_epoch(
+            program,
+            transport_timeout,
+            DesktopProcessLaunch::ProductMacos,
+        )
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn spawn_product_macos_with_timeout(
+        &mut self,
+        _program: &str,
+        _transport_timeout: Duration,
+        _gate: &DesktopProductSandboxGate,
+    ) -> Result<DesktopHostProcess, DesktopIpcError> {
+        Err(error(DesktopIpcErrorCode::IsolationUnavailable))
     }
 
     fn spawn_selected_epoch(
         &mut self,
         program: &str,
         transport_timeout: Duration,
+        launch: DesktopProcessLaunch,
     ) -> Result<DesktopHostProcess, DesktopIpcError> {
+        self.with_reserved_identity(|epoch, worker| {
+            DesktopHostProcess::spawn_for_epoch(program, epoch, worker, transport_timeout, launch)
+        })
+    }
+
+    fn with_reserved_identity<T>(
+        &mut self,
+        launch: impl FnOnce(WorkerEpoch, WorkerId) -> Result<T, DesktopIpcError>,
+    ) -> Result<T, DesktopIpcError> {
         let epoch = WorkerEpoch::new(self.next_epoch)
             .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
         let worker = WorkerId::new(self.next_worker);
-        let process =
-            DesktopHostProcess::spawn_for_epoch(program, epoch, worker, transport_timeout)?;
-        self.next_epoch = self
+        let next_epoch = self
             .next_epoch
             .checked_add(1)
             .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
-        self.next_worker = self
+        let next_worker = self
             .next_worker
             .checked_add(1)
             .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
-        Ok(process)
+        self.next_epoch = next_epoch;
+        self.next_worker = next_worker;
+        launch(epoch, worker)
     }
 }
 
@@ -369,6 +482,7 @@ impl DesktopHostProcess {
         epoch: WorkerEpoch,
         worker: WorkerId,
         transport_timeout: Duration,
+        launch: DesktopProcessLaunch,
     ) -> Result<Self, DesktopIpcError> {
         if transport_timeout.is_zero() {
             return Err(error(DesktopIpcErrorCode::InvalidConfiguration));
@@ -385,30 +499,53 @@ impl DesktopHostProcess {
             None,
         )
         .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
-        // macOS lacks SOCK_CLOEXEC.  Mark both originals close-on-exec before
-        // Stdio performs its controlled dup2 into child stdin/stdout.
+        // macOS lacks SOCK_CLOEXEC. Mark both originals close-on-exec before
+        // either fixture Stdio or the product default-close wrapper installs
+        // the one permitted child transport endpoint.
         rustix::io::fcntl_setfd(&host_fd, rustix::io::FdFlags::CLOEXEC)
             .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
-        let child_stdout =
-            rustix::io::dup(&child_fd).map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
         rustix::io::fcntl_setfd(&child_fd, rustix::io::FdFlags::CLOEXEC)
             .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
-        rustix::io::fcntl_setfd(&child_stdout, rustix::io::FdFlags::CLOEXEC)
-            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
-        let mut child = Command::new(program)
-            .arg("--pdf-rs-desktop-child")
-            .stdin(Stdio::from(child_fd))
-            .stdout(Stdio::from(child_stdout))
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
+        let mut child = match launch {
+            #[cfg(any(test, feature = "transport-fixture"))]
+            DesktopProcessLaunch::TransportFixture => {
+                let child_stdout = rustix::io::dup(&child_fd)
+                    .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
+                rustix::io::fcntl_setfd(&child_stdout, rustix::io::FdFlags::CLOEXEC)
+                    .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
+                DesktopSpawnedChild::TransportFixture(
+                    Command::new(program)
+                        .arg("--pdf-rs-desktop-child")
+                        .stdin(Stdio::from(child_fd))
+                        .stdout(Stdio::from(child_stdout))
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?,
+                )
+            }
+            DesktopProcessLaunch::ProductMacos => {
+                #[cfg(target_os = "macos")]
+                {
+                    let spawned = spawn_desktop_worker(Path::new(program), child_fd.as_fd())
+                        .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
+                    DesktopSpawnedChild::ProductMacos(spawned)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return Err(error(DesktopIpcErrorCode::IsolationUnavailable));
+                }
+            }
+        };
         let mut socket = UnixStream::from(host_fd);
-        socket
+        let socket_configuration = socket
             .set_read_timeout(Some(transport_timeout))
-            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
-        socket
-            .set_write_timeout(Some(transport_timeout))
-            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
+            .and_then(|()| socket.set_write_timeout(Some(transport_timeout)))
+            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle));
+        if let Err(failure) = socket_configuration {
+            drop(socket);
+            cleanup_failed_spawn_or_abort(&mut child, EXIT_OBSERVATION_GRACE);
+            return Err(failure);
+        }
         let bootstrap = (|| {
             socket
                 .write_all(&auth.launch().value().to_le_bytes())
@@ -429,21 +566,18 @@ impl DesktopHostProcess {
         })();
         if let Err(failure) = bootstrap {
             drop(socket);
-            let _ = child.kill();
-            let _ = child.wait();
+            cleanup_failed_spawn_or_abort(&mut child, EXIT_OBSERVATION_GRACE);
             return Err(failure);
         }
         match child.try_wait() {
             Ok(None) => {}
             Ok(Some(_)) => {
                 drop(socket);
-                let _ = child.wait();
                 return Err(error(DesktopIpcErrorCode::Lifecycle));
             }
             Err(_) => {
                 drop(socket);
-                let _ = child.kill();
-                let _ = child.wait();
+                cleanup_failed_spawn_or_abort(&mut child, EXIT_OBSERVATION_GRACE);
                 return Err(error(DesktopIpcErrorCode::Lifecycle));
             }
         }
@@ -561,7 +695,7 @@ impl DesktopHostProcess {
     fn child_pid(&self) -> Result<u32, DesktopIpcError> {
         self.child
             .as_ref()
-            .map(Child::id)
+            .map(DesktopSpawnedChild::id)
             .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))
     }
 
@@ -656,6 +790,10 @@ impl DesktopHostProcess {
         self.poison();
     }
 
+    pub(crate) fn unresolved_child_failure(&self) -> Option<DesktopChildTerminationFailure> {
+        unresolved_drop_failure(&self.child, self.last_termination_failure)
+    }
+
     fn poison(&mut self) {
         self.shutdown();
     }
@@ -664,6 +802,9 @@ impl DesktopHostProcess {
 impl Drop for DesktopHostProcess {
     fn drop(&mut self) {
         self.shutdown();
+        if let Some(failure) = self.unresolved_child_failure() {
+            abort_unresolved_child(failure);
+        }
     }
 }
 
@@ -1237,19 +1378,21 @@ fn event_message_type(event: &Event) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildLifecycle, DesktopChildTerminationFailure, run_authenticated_child,
-        terminate_child_slot,
+        ChildLifecycle, DesktopChildTerminationFailure, DesktopEpochManager, DesktopHostProcess,
+        DesktopSpawnedChild, RequiredChildCleanup, required_child_cleanup, run_authenticated_child,
+        terminate_child_slot, unresolved_drop_failure,
     };
     use crate::{
         DesktopIpcErrorCode, DesktopIpcLimitConfig, DesktopIpcLimits, DesktopLaunchAuth,
-        send_capability_fds,
+        error::error, send_capability_fds,
     };
     use pdf_rs_protocol::WorkerId;
     use pdf_rs_surface::WorkerEpoch;
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
     use std::io::{self, Write};
     use std::os::unix::net::UnixStream;
-    use std::process::ExitStatus;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, ExitStatus, Stdio};
     use std::time::Duration;
 
     struct InjectedChildLifecycle {
@@ -1306,7 +1449,121 @@ mod tests {
                 (child.try_wait_calls, child.kill_calls, child.wait_calls),
                 expected_calls
             );
+
+            let mut cleanup_child = InjectedChildLifecycle {
+                failure,
+                try_wait_calls: 0,
+                kill_calls: 0,
+                wait_calls: 0,
+            };
+            assert_eq!(
+                required_child_cleanup(&mut cleanup_child, Duration::ZERO),
+                RequiredChildCleanup::Abort(failure),
+                "post-spawn cleanup failure must select process abort"
+            );
+            assert_eq!(
+                (
+                    cleanup_child.try_wait_calls,
+                    cleanup_child.kill_calls,
+                    cleanup_child.wait_calls,
+                ),
+                expected_calls
+            );
+            assert_eq!(
+                unresolved_drop_failure(&Some(()), Some(failure)),
+                Some(failure),
+                "Drop with a retained child owner must select process abort"
+            );
+            assert_eq!(
+                unresolved_drop_failure::<()>(&None, Some(failure)),
+                None,
+                "a childless failure-injection stub must not abort"
+            );
         }
+    }
+
+    #[test]
+    fn failed_launch_attempt_consumes_reserved_epoch_and_worker_identity() {
+        let mut epochs = DesktopEpochManager::new();
+        let failure = epochs
+            .with_reserved_identity::<()>(|epoch, worker| {
+                assert_eq!(epoch.value(), 1);
+                assert_eq!(worker.value(), 1);
+                Err(error(DesktopIpcErrorCode::Lifecycle))
+            })
+            .expect_err("modeled launch failure");
+        assert_eq!(failure.code(), DesktopIpcErrorCode::Lifecycle);
+
+        let (epoch, worker) = epochs
+            .with_reserved_identity(|epoch, worker| Ok((epoch, worker)))
+            .expect("reserve identity after failed launch");
+        assert_eq!(epoch.value(), 2);
+        assert_eq!(worker.value(), 2);
+    }
+
+    #[test]
+    fn already_reaped_cleanup_never_selects_abort() {
+        struct ReapedChild {
+            status: ExitStatus,
+        }
+
+        impl ChildLifecycle for ReapedChild {
+            fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+                Ok(Some(self.status))
+            }
+
+            fn kill(&mut self) -> io::Result<()> {
+                panic!("already-reaped cleanup must not kill")
+            }
+
+            fn wait(&mut self) -> io::Result<ExitStatus> {
+                panic!("already-reaped cleanup must not wait again")
+            }
+        }
+
+        let status = ExitStatus::from_raw(0);
+        let mut child = ReapedChild { status };
+        assert_eq!(
+            required_child_cleanup(&mut child, Duration::ZERO),
+            RequiredChildCleanup::Reaped(status)
+        );
+    }
+
+    #[test]
+    fn retained_real_child_drop_aborts_subprocess() {
+        const ABORT_PROBE: &str = "PDF_RS_DESKTOP_UNREAPED_DROP_ABORT_PROBE";
+        const TEST_NAME: &str = "process::tests::retained_real_child_drop_aborts_subprocess";
+
+        if std::env::var_os(ABORT_PROBE).is_some() {
+            let child = Command::new("/usr/bin/true")
+                .spawn()
+                .expect("spawn real child for retained-owner abort probe");
+            let epoch = WorkerEpoch::new(1).expect("epoch");
+            let mut process = DesktopHostProcess::stub_with_termination_failure(
+                epoch,
+                WorkerId::new(1),
+                DesktopChildTerminationFailure::Wait,
+            )
+            .expect("Host process abort probe");
+            process.child = Some(DesktopSpawnedChild::TransportFixture(child));
+            drop(process);
+            panic!("Drop with an unreaped real child returned instead of aborting");
+        }
+
+        let status = Command::new(std::env::current_exe().expect("current desktop test binary"))
+            .arg(TEST_NAME)
+            .arg("--exact")
+            .env(ABORT_PROBE, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run retained-owner abort subprocess");
+        assert_eq!(
+            status.signal(),
+            Some(rustix::process::Signal::ABORT.as_raw()),
+            "unresolved real child ownership must terminate the Host with SIGABRT"
+        );
     }
 
     #[test]

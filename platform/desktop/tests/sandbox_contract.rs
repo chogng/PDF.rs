@@ -100,7 +100,11 @@ fn selected_target_and_entitlements_are_exact_and_narrow() {
         "unlink_before_scm_rights_required = true",
         "worker_exit_zero_residual_objects_required = true",
         "app_group_shm_exception_allowed = false",
-        "implemented = false",
+        "implemented = true",
+        "wrapper_crate = \"platform/macos-spawn\"",
+        "wrapper_api = \"spawn_desktop_worker\"",
+        "real_probe = \"platform/macos-spawn/tests/darwin_spawn.rs\"",
+        "child_lifecycle = \"owned positive PID with cached ExitStatus; rustix try_wait, SIGKILL, and wait; no implicit wrapper Drop reap; desktop post-spawn cleanup and final Host/Supervisor Drop abort if reap cannot be proven\"",
         "caller_attestation_accepted = false",
         "environment_attestation_accepted = false",
         "transport_fixture_is_product = false",
@@ -148,8 +152,11 @@ fn plan_keeps_isolation_open_and_transport_fixture_explicit() {
     );
     assert!(m4_09.contains("signed parent app"));
     assert!(m4_09.contains("reject the transport-fixture Cargo feature"));
-    assert!(m4_09.contains("default-close spawn file actions"));
+    assert!(m4_09.contains("Darwin default-close spawn file actions"));
+    assert!(m4_09.contains("real inherited-FD allowlist probe"));
     assert!(m4_09.contains("safe desktop crate retains forbid(unsafe_code)"));
+    assert!(m4_09.contains("launch identities are consumed before attempts"));
+    assert!(m4_09.contains("Drop cleanup aborts instead of discarding child ownership"));
     assert!(m4_09.contains("inherited sandbox TMPDIR fallback"));
     assert!(m4_09.contains("zero residual objects without app-group widening"));
 

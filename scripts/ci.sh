@@ -150,6 +150,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-raster \
     --package pdf-rs-scene \
     --package pdf-rs-browser-worker \
+    --package pdf-rs-macos-spawn \
     --package pdf-rs-cache \
     --package pdf-rs-engine \
     --package pdf-rs-policy \

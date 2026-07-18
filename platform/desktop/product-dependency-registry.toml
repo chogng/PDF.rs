@@ -1,6 +1,6 @@
 schema = 1
 product = "PDF.rs Native Desktop"
-policy = "registered safe Rust system boundary; never part of browser Wasm or an external PDF engine"
+policy = "registered Rust system boundaries; raw Darwin FFI is isolated in the repository-owned fixed spawn and worker-entry signal wrapper and never enters the safe desktop crate, browser Wasm, or an external PDF engine"
 
 [[leaf]]
 name = "bitflags"
@@ -32,7 +32,7 @@ version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 license = "MIT OR Apache-2.0"
-semantic_owner = "rustix target ABI declarations"
+semantic_owner = "rustix target ABI declarations and the repository-owned fixed Darwin posix_spawn plus worker-entry signal boundary"
 max_release_artifact_bytes = 16777216
 build_script = true
 replacement = "replace through rustix target support or repository-owned generated ABI declarations"
@@ -56,7 +56,7 @@ version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
-semantic_owner = "safe owned-FD, socketpair, SCM_RIGHTS, process, and shared-memory boundary"
+semantic_owner = "safe owned-FD, socketpair, SCM_RIGHTS, process lifecycle, spawn-source normalization, and shared-memory boundary"
 max_release_artifact_bytes = 33554432
 build_script = true
 replacement = "replace with repository-owned safe platform wrappers after equivalent containment review"

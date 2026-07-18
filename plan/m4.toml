@@ -182,11 +182,11 @@ selected_target_record = "platform/desktop/macos/sandbox-target.toml"
 progress = [
   "Authenticated child transport, exact read-only capability transfer, fault supervision, epoch retirement, bounded restart, and hostile transport containment have real process evidence.",
   "The selected macOS App Sandbox host/helper entitlement contract is exact; the default product build exposes only a non-forgeable fail-closed gate while transport launch APIs require the default-off transport-fixture feature.",
+  "A repository-owned macOS-only wrapper now gives the gated product launch path Darwin default-close spawn file actions, fixed argv and minimal environment, deterministic signal state, cached wait ownership, and a real inherited-FD allowlist probe with exact child-FD enumeration and challenged TMPDIR/signal state while the safe desktop crate retains forbid(unsafe_code); desktop launch identities are consumed before attempts and unresolved post-spawn or Drop cleanup aborts instead of discarding child ownership. This is FD hygiene, not sandbox evidence.",
 ]
 remaining = [
   "A signed parent app and embedded signed helper must supply real App Sandbox inheritance evidence; the current unsigned repository workspace cannot acquire the product gate.",
   "The signed product package and dependency closure must reject the transport-fixture Cargo feature.",
-  "A separately reviewed repository-owned Darwin wrapper must provide default-close spawn file actions and a real inherited-FD allowlist probe while the safe desktop crate retains forbid(unsafe_code).",
   "Real sandboxed-child probes must deny a host-readable PowerBox file and live network listener while preserving authenticated IPC and read-only shared-memory transfer.",
   "Packaged Surface proof must record the actual backend, exercise inherited sandbox TMPDIR fallback when shm_open is denied, preserve read-only reopen and unlink-before-SCM_RIGHTS, and leave zero residual objects without app-group widening.",
 ]

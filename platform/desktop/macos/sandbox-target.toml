@@ -51,11 +51,19 @@ worker_exit_zero_residual_objects_required = true
 app_group_shm_exception_allowed = false
 
 [spawn_fd_contract]
-current = "crate-created socket and transferred handles are CLOEXEC; a crate-local lock serializes socketpair-to-exec"
+current = "the gated product path uses the repository-owned Darwin default-close wrapper; the feature-only transport fixture retains crate-local CLOEXEC plus spawn serialization"
 required = "Darwin POSIX_SPAWN_CLOEXEC_DEFAULT with explicit stdin/stdout file actions through a separately reviewed repository-owned unsafe wrapper, plus a real inherited-FD allowlist probe"
-implemented = false
+implemented = true
+wrapper_crate = "platform/macos-spawn"
+wrapper_api = "spawn_desktop_worker"
+argv = "absolute program path plus --pdf-rs-desktop-child; no PATH search"
+environment = "validated absolute TMPDIR only when present"
+signal_state = "spawn attributes plus the worker's first safe entry hook restore SIGPIPE default and an empty signal mask after Rust startup"
+child_fds = "worker socket fd 0; /dev/null fd 1 and fd 2; all action sources at or above fd 3 and explicitly closed"
+child_lifecycle = "owned positive PID with cached ExitStatus; rustix try_wait, SIGKILL, and wait; no implicit wrapper Drop reap; desktop post-spawn cleanup and final Host/Supervisor Drop abort if reap cannot be proven"
+real_probe = "platform/macos-spawn/tests/darwin_spawn.rs"
 security_claim = "FD hygiene only; never an operating-system sandbox"
-residual_risk = "unrelated host threads can deliberately create a non-CLOEXEC descriptor outside the crate-local lock"
+residual_risk = "macOS socketpair creation is not atomically CLOEXEC against a foreign concurrent fork before fcntl; the product host must own and serialize process creation"
 
 [product_gate]
 api = "DesktopChildSupervisor::start_product_macos"
@@ -79,8 +87,6 @@ items = [
   "recorded sandbox Surface backend proving inherited parent-app TMPDIR fallback when POSIX shared memory is denied",
   "read-only reopen, unlink-before-SCM_RIGHTS, receiver validation, and zero residual shared objects after child exit",
   "no app-group or temporary-exception widening for /pdf-rs-* shared-memory names",
-  "separately reviewed repository-owned Darwin spawn wrapper retaining the safe desktop crate's forbid(unsafe_code) boundary",
-  "atomic default-close FD spawn with an inherited-descriptor allowlist probe",
   "package and CI artifact hashes bound to the selected universal macOS target",
 ]
 

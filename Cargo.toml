@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "core/*",
+    "platform/macos-spawn",
     "platform/desktop",
     "platform/browser/worker",
     "runtime/cache",

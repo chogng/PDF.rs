@@ -463,7 +463,7 @@ duration evidence, a nightly campaign, or CANARY-scale corpus evidence.
   closures, binaries, Wasm imports, dynamic libraries, packages, and network
   manifests remain separate release-blocking scans; this command does not claim
   that broader proof.
-- The separate fresh-release closure now admits exactly nineteen repository-owned
+- The separate fresh-release closure now admits exactly twenty repository-owned
   product crates. Desktop builds may additionally contain only the seven
   checksum-, source-, license-, ownership-, budget-, and replacement-bound leaves
   in `platform/desktop/product-dependency-registry.toml`; the expected subset is

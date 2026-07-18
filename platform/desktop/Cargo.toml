@@ -50,3 +50,8 @@ pdf-rs-syntax = { path = "../../core/syntax" }
 # Narrow Unix/macOS system boundary for socketpair, SCM_RIGHTS,
 # read-only shared-memory descriptors, and owned-FD cleanup. No raw libc calls.
 rustix = { version = "1.1.4", default-features = false, features = ["std", "fs", "net", "process", "shm"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Narrow repository-owned Darwin posix_spawn boundary. The desktop crate keeps
+# forbid(unsafe_code); this dependency provides FD hygiene, not App Sandbox.
+pdf-rs-macos-spawn = { path = "../macos-spawn" }

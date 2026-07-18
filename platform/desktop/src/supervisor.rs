@@ -12,8 +12,10 @@ use pdf_rs_surface::WorkerEpoch;
 
 use crate::{
     DesktopCapabilityTable, DesktopEpochManager, DesktopHostProcess, DesktopIpcError,
-    DesktopIpcErrorCode, DesktopIpcLimits, DesktopWireRecord, HostRangeBridge, error::error,
-    process::DESKTOP_CHILD_PANIC_EXIT_CODE, sandbox::DesktopProductSandboxGate,
+    DesktopIpcErrorCode, DesktopIpcLimits, DesktopWireRecord, HostRangeBridge,
+    error::error,
+    process::{DESKTOP_CHILD_PANIC_EXIT_CODE, abort_unresolved_child},
+    sandbox::DesktopProductSandboxGate,
 };
 
 const DEFAULT_RESTART_LIMIT: u8 = 2;
@@ -599,11 +601,19 @@ impl<C: DesktopEpochCleanup> DesktopChildSupervisor<C> {
 
 impl<C: DesktopEpochCleanup> Drop for DesktopChildSupervisor<C> {
     fn drop(&mut self) {
-        self.state = if self.retire_current() {
+        let retired = self.retire_current();
+        self.state = if retired {
             DesktopSupervisorState::Stopped
         } else {
             DesktopSupervisorState::RestartFailed
         };
+        if let Some(failure) = self
+            .current
+            .as_ref()
+            .and_then(DesktopHostProcess::unresolved_child_failure)
+        {
+            abort_unresolved_child(failure);
+        }
     }
 }
 

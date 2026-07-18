@@ -6,6 +6,10 @@ use pdf_rs_desktop::{
 };
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    if pdf_rs_macos_spawn::restore_desktop_worker_signal_state().is_err() {
+        std::process::exit(70);
+    }
     if std::env::args().nth(1).as_deref() != Some("--pdf-rs-desktop-child") {
         std::process::exit(64);
     }

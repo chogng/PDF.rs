@@ -21,6 +21,20 @@ worker_entitlements = "platform/desktop/macos/worker.entitlements"
 product_gate = "IsolationUnavailable"
 m4_09 = "in_progress"
 
+[fd_hygiene]
+captured_at = 2026-07-18
+wrapper = "platform/macos-spawn"
+desktop_unsafe = false
+darwin_default_close = true
+explicit_child_fds = "fd0 authenticated duplex worker socket; fd1/fd2 /dev/null"
+fixed_argv = "absolute executable, --pdf-rs-desktop-child"
+environment = "validated absolute TMPDIR only when present"
+signal_state = "spawn attributes plus the worker's first safe entry hook restore SIGPIPE default and an empty mask after Rust startup"
+real_probe = "platform/macos-spawn/tests/darwin_spawn.rs"
+probe_scope = "non-CLOEXEC fd 200/201 rejection plus exact child FD enumeration, fd0 duplex, /dev/null stdio, exact argv/TMPDIR propagation, challenged SIGPIPE default and empty mask, exit/wait/signal mapping, invalid paths/TMPDIR, and successful/failed-spawn FD stability"
+owner_cleanup = "post-spawn cleanup and final Host/Supervisor Drop abort instead of discarding an owned child when reap cannot be proven, including a real-Child subprocess SIGABRT probe; launch identities are consumed before each attempt"
+security_claim = "FD hygiene only; not App Sandbox enforcement or denial evidence"
+
 [open_gates]
 items = [
   "signed parent app and embedded helper packaging",
@@ -28,5 +42,4 @@ items = [
   "live child filesystem and network denial probes",
   "live inherited authenticated socket and read-only shared-memory success probes",
   "recorded sandbox Surface backend, inherited parent-app TMPDIR fallback, read-only reopen, unlink-before-SCM_RIGHTS, and zero residual objects without app-group widening",
-  "Darwin default-close spawn and inherited-FD allowlist proof",
 ]
