@@ -3289,10 +3289,9 @@ fn font_payload_pending_does_not_replan_lookup_or_publish_partial_scene() {
 fn every_font_checkpoint_resumes_the_same_plan_lookup_and_terminal_arc() {
     let mut program = font_support::foundational_font();
     program.resize(5_000, 0);
-    for (offset, checkpoint_value) in
-        [32_002_u64, 32_003, 32_006, 32_007, 32_008, 32_009, 32_010]
-            .into_iter()
-            .enumerate()
+    for (offset, checkpoint_value) in [32_002_u64, 32_003, 32_006, 32_007, 32_008, 32_009, 32_010]
+        .into_iter()
+        .enumerate()
     {
         let mut objects = embedded_font_objects(5, 6, 7, &program, 777);
         let resumes_ready = match checkpoint_value {
@@ -4638,6 +4637,8 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
                 ResumeCheckpoint::new(35_002),
                 ResumeCheckpoint::new(35_003),
                 ResumeCheckpoint::new(35_004),
+                ResumeCheckpoint::new(35_005),
+                ResumeCheckpoint::new(35_006),
                 RequestPriority::VisiblePage,
             ),
         )
@@ -4870,6 +4871,8 @@ fn page_do_recursively_classifies_forms_and_imports_their_scenes() {
             ResumeCheckpoint::new(36_202),
             ResumeCheckpoint::new(36_203),
             ResumeCheckpoint::new(36_204),
+            ResumeCheckpoint::new(36_205),
+            ResumeCheckpoint::new(36_206),
             RequestPriority::VisiblePage,
         ),
         4,

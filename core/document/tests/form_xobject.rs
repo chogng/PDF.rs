@@ -90,6 +90,30 @@ fn stream_body(number: u32, dictionary: &[u8], payload: &[u8]) -> Vec<u8> {
     body
 }
 
+fn zlib_stored(input: &[u8]) -> Vec<u8> {
+    let mut output = vec![0x78, 0x01];
+    let mut position = 0;
+    while position < input.len() {
+        let remaining = input.len() - position;
+        let length = remaining.min(usize::from(u16::MAX));
+        let final_block = position + length == input.len();
+        output.push(u8::from(final_block));
+        let length = u16::try_from(length).unwrap();
+        output.extend_from_slice(&length.to_le_bytes());
+        output.extend_from_slice(&(!length).to_le_bytes());
+        output.extend_from_slice(&input[position..position + usize::from(length)]);
+        position += usize::from(length);
+    }
+    let mut s1 = 1_u32;
+    let mut s2 = 0_u32;
+    for byte in input {
+        s1 = (s1 + u32::from(*byte)) % 65_521;
+        s2 = (s2 + s1) % 65_521;
+    }
+    output.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+    output
+}
+
 fn form_fixture(
     dictionary: &[u8],
     payload: &[u8],
@@ -201,6 +225,8 @@ fn form_context(seed: u64) -> FormXObjectJobContext {
         ResumeCheckpoint::new(seed + 1),
         ResumeCheckpoint::new(seed + 2),
         ResumeCheckpoint::new(seed + 3),
+        ResumeCheckpoint::new(seed + 4),
+        ResumeCheckpoint::new(seed + 5),
         RequestPriority::VisiblePage,
     )
 }
@@ -391,25 +417,59 @@ fn identity_form_retains_geometry_payload_and_its_own_resource_scope() {
 }
 
 #[test]
-fn filtered_form_is_a_typed_unsupported_capability() {
+fn flate_form_with_indirect_resources_retains_both_proofs_and_decoded_content() {
+    let payload = b"q 1 0 0 1 8 9 cm Q";
+    let encoded = zlib_stored(payload);
     let fixture = form_fixture(
-        b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> \
+        b"/Type /XObject /Subtype /Form /BBox [0 10 10 0] /Resources 5 0 R \
           /Filter /FlateDecode",
-        b"not-flate",
-        vec![],
-        5,
+        &encoded,
+        vec![(5, b"5 0 obj\n<< >>\nendobj\n".to_vec())],
+        6,
         72,
     );
     let prepared = prepare(&fixture, 13_501);
-    let unsupported = match acquire(&prepared, 13_601) {
+    let form = acquire_ready(&prepared, 13_601);
+
+    assert_eq!(form.content_bytes(), payload);
+    assert_eq!(
+        form.bbox()
+            .coordinates()
+            .map(pdf_rs_document::PageCoordinate::scaled),
+        [0, 0, 10_000_000_000, 10_000_000_000]
+    );
+    assert_eq!(
+        form.resources().resource_object(),
+        ObjectRef::new(5, 0).ok()
+    );
+    assert_eq!(
+        form.form_object().map(|object| object.reference()),
+        ObjectRef::new(4, 0).ok()
+    );
+    assert_eq!(form.stats().encoded_bytes(), encoded.len() as u64);
+    assert_eq!(form.stats().decoded_bytes(), payload.len() as u64);
+    assert!(form.stats().decode_fuel() > 0);
+}
+
+#[test]
+fn unknown_form_filter_is_a_typed_unsupported_capability() {
+    let fixture = form_fixture(
+        b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> \
+          /Filter /LZWDecode",
+        b"encoded",
+        vec![],
+        5,
+        75,
+    );
+    let prepared = prepare(&fixture, 14_101);
+    let unsupported = match acquire(&prepared, 14_201) {
         FormXObjectPoll::Unsupported(unsupported) => unsupported,
-        other => panic!("filtered Form must be typed unsupported, got {other:?}"),
+        other => panic!("unknown Form filter must be typed unsupported, got {other:?}"),
     };
     assert_eq!(
         unsupported.kind(),
         FormXObjectUnsupportedKind::UnsupportedFilter
     );
-    assert_eq!(unsupported.reference(), ObjectRef::new(4, 0).unwrap());
 }
 
 #[test]

@@ -903,6 +903,8 @@ fn render_strict_page(
             ResumeCheckpoint::new(ids.base + 9_001),
             ResumeCheckpoint::new(ids.base + 9_002),
             ResumeCheckpoint::new(ids.base + 9_003),
+            ResumeCheckpoint::new(ids.base + 9_004),
+            ResumeCheckpoint::new(ids.base + 9_005),
             RequestPriority::FirstViewportResource,
         ),
         64,
@@ -1115,7 +1117,7 @@ fn vm_pending_job(checkpoint: ResumeCheckpoint, jobs: RenderJobs) -> JobId {
         jobs.image
     } else if (501..=509).contains(&local) {
         jobs.font
-    } else if (9_001..=9_003).contains(&local) {
+    } else if (9_001..=9_005).contains(&local) {
         jobs.form
     } else {
         jobs.content
