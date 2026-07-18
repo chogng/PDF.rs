@@ -49,6 +49,8 @@ pub enum FastRasterLimitKind {
     IntermediateBytes,
     /// Deterministic scalar work units.
     Fuel,
+    /// Maximum deterministic work permitted inside one atomic tile render.
+    AtomicTileFuel,
     /// Maximum work units between cancellation probes.
     CancellationInterval,
 }

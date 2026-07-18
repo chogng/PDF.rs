@@ -23,8 +23,8 @@ use pdf_rs_protocol::{
     ReleaseSurfaceCommand, RendererEpoch as ProtocolRendererEpoch, RequestCancelledEvent,
     RequestFailedEvent, RequestId, SessionClosedEvent, SessionId as ProtocolSessionId,
     SetViewportCommand, ShutdownAcknowledgedEvent, ShutdownCommand, SourceDescriptor,
-    SourceFailureCode, SurfaceReadyEvent, SurfaceReclaimReason, SurfaceReclaimedEvent,
-    SurfaceReleaseAcknowledgedEvent, WorkerId, WorkerStoppedEvent,
+    SourceFailureCode, SurfaceMetadata, SurfaceReadyEvent, SurfaceReclaimReason,
+    SurfaceReclaimedEvent, SurfaceReleaseAcknowledgedEvent, WorkerId, WorkerStoppedEvent,
 };
 use pdf_rs_raster::fast::FastTileSet;
 use pdf_rs_scene::{PageRotation, Scene};
@@ -44,8 +44,8 @@ use crate::error::{
 };
 use crate::model::worker_correlation;
 use crate::model::{
-    NativePolicyCancellation, NativeRasterCancellation, NativeRasterReservation,
-    NativeSceneReservation, PolicyTaskTracker, RasterBudget, SceneBudget,
+    NativePolicyCancellation, NativePolicyPermit, NativeRasterCancellation,
+    NativeRasterReservation, NativeSceneReservation, PolicyTaskTracker, RasterBudget, SceneBudget,
 };
 use crate::{
     ActorProgress, EngineIntegrationError, ImportedSurfaceBytes, NativePolicyTask,
@@ -127,6 +127,16 @@ enum CacheCopyProgress {
     Miss,
 }
 
+struct CapabilityStage {
+    decision: CapabilityDecision,
+    permit: NativePolicyPermit,
+}
+
+struct PlanStage {
+    plan: Arc<RenderPlan>,
+    permit: NativePolicyPermit,
+}
+
 impl CompletedPlan {
     fn tile_count(&self) -> usize {
         match &self.tiles {
@@ -141,13 +151,13 @@ enum PageStage {
     CapabilityPending {
         cancellation: NativePolicyCancellation,
     },
-    CapabilityQueued(CapabilityDecision),
-    CapabilityDelivered(CapabilityDecision),
+    CapabilityQueued(CapabilityStage),
+    CapabilityDelivered(CapabilityStage),
     PlanPending {
         cancellation: NativePolicyCancellation,
     },
-    PlanQueued(Arc<RenderPlan>),
-    PlanDelivered(Arc<RenderPlan>),
+    PlanQueued(PlanStage),
+    PlanDelivered(PlanStage),
     CacheLookup(CacheLookupState),
     RasterPending {
         plan: Arc<RenderPlan>,
@@ -292,6 +302,7 @@ impl NativeWorkerRegistry {
         let policy_tasks = reserved_queue(limits.reentry_capacity)?;
         let policy_task_tracker = Arc::new(PolicyTaskTracker::new(
             limits.reentry_capacity,
+            limits.retained_policy_job_byte_capacity,
             config.worker_epoch(),
         ));
         let raster_tasks = reserved_queue(limits.reentry_capacity)?;
@@ -805,7 +816,7 @@ impl NativeWorkerRegistry {
 
     /// Enqueues a typed parser/range/raster/lifecycle completion with ownership
     /// retained on bounded rejection.
-    pub fn enqueue_reentry(&mut self, reentry: Reentry) -> Result<(), ReentryAdmissionError> {
+    pub fn enqueue_reentry(&mut self, mut reentry: Reentry) -> Result<(), ReentryAdmissionError> {
         let current_identity = match &reentry {
             Reentry::Open(OpenCompletion::Ready {
                 worker,
@@ -951,6 +962,14 @@ impl NativeWorkerRegistry {
         if queue.len() == capacity {
             return Err(ReentryAdmissionError::new(backpressure(), reentry));
         }
+        match &mut reentry {
+            Reentry::CapabilityCompleted(completion) => completion.permit.mark_internal(),
+            Reentry::PlanCompleted(completion) => completion.permit.mark_internal(),
+            Reentry::PolicyFailed(completion) => completion.permit.mark_internal(),
+            Reentry::RasterCompleted(completion) => completion.reservation.mark_internal(),
+            Reentry::RasterFailed(completion) => completion.reservation.mark_internal(),
+            _ => {}
+        }
         queue.push_back(reentry);
         Ok(())
     }
@@ -1027,7 +1046,9 @@ impl NativeWorkerRegistry {
     /// The executor can move but cannot decompose the opaque policy completion
     /// returned by the task, and must admit it through [`Self::enqueue_reentry`].
     pub fn next_policy_task(&mut self) -> Option<NativePolicyTask> {
-        self.policy_tasks.pop_front()
+        let mut task = self.policy_tasks.pop_front()?;
+        task.mark_external();
+        Some(task)
     }
 
     /// Removes the next Fast CPU task for execution outside the actor.
@@ -1035,7 +1056,9 @@ impl NativeWorkerRegistry {
     /// Long-running raster work therefore never borrows or blocks the registry.
     /// The executor must run the task and admit its returned [`Reentry`].
     pub fn next_raster_task(&mut self) -> Option<NativeRasterTask> {
-        self.raster_tasks.pop_front()
+        let mut task = self.raster_tasks.pop_front()?;
+        task.mark_external();
+        Some(task)
     }
 
     /// Imports one untrusted transferred handle exactly once and copies its
@@ -1050,6 +1073,89 @@ impl NativeWorkerRegistry {
         publication: &SurfacePublication,
         transfer: SurfaceTransfer,
     ) -> Result<ImportedSurfaceBytes, EngineIntegrationError> {
+        self.import_surface_bytes_bounded(
+            publication,
+            transfer,
+            self.config.limits().retained_raster_byte_capacity,
+        )
+    }
+
+    /// Reclaims a Surface publication that crossed the registry event boundary
+    /// but could not be represented by the platform adapter.
+    ///
+    /// No reclaim event is emitted because the Host never received the lease.
+    /// The exact delivered-lease entry is retired together with any published
+    /// or already-imported Surface storage.
+    pub fn reclaim_undelivered_surface(
+        &mut self,
+        publication: &SurfacePublication,
+    ) -> Result<(), EngineIntegrationError> {
+        self.reclaim_undelivered_surface_identity(
+            publication.correlation(),
+            &publication.event().metadata,
+        )
+    }
+
+    /// Reclaims a Surface after platform adaptation succeeded but publication
+    /// to the Host failed transactionally.
+    ///
+    /// This is an internal-delivery rollback, not a synthesized Host release:
+    /// the exact delivered lease and its published or imported storage are
+    /// retired without emitting an acknowledgement or reclaim event.
+    pub fn reclaim_undelivered_surface_identity(
+        &mut self,
+        correlation: &Correlation,
+        metadata: &SurfaceMetadata,
+    ) -> Result<(), EngineIntegrationError> {
+        let session = correlation.session.ok_or_else(identity_mismatch)?;
+        let generation = correlation.generation.ok_or_else(identity_mismatch)?;
+        if correlation.worker != self.worker()
+            || metadata.owner.worker != self.worker()
+            || metadata.owner.session != session
+            || metadata.generation != generation
+        {
+            return Err(identity_mismatch());
+        }
+        let index = self
+            .delivered_surface_position(Some(session), metadata.id, metadata.lease_token)
+            .ok_or_else(invalid_state)?;
+        let lease = &self.delivered_surfaces[index];
+        if lease.correlation.worker != correlation.worker
+            || lease.correlation.session != Some(session)
+            || lease.generation != generation
+        {
+            return Err(identity_mismatch());
+        }
+        let access = SurfaceAccess::new(
+            self.worker(),
+            session,
+            self.worker_epoch(),
+            metadata.id,
+            metadata.lease_token,
+        );
+        self.surfaces.release(access).map_err(|_| surface())?;
+        self.delivered_surfaces.remove(index);
+        Ok(())
+    }
+
+    /// Imports one Surface while enforcing an adapter-owned allocator-capacity
+    /// ceiling before the one-shot platform handle is consumed.
+    ///
+    /// Platform adapters use this when their destination buffer and this
+    /// temporary immutable import coexist. Allocation overcapacity therefore
+    /// fails before `SurfaceOwner::import`, leaving the publication available
+    /// for deterministic retry or reclaim.
+    pub fn import_surface_bytes_bounded(
+        &mut self,
+        publication: &SurfacePublication,
+        transfer: SurfaceTransfer,
+        max_retained_capacity: u64,
+    ) -> Result<ImportedSurfaceBytes, EngineIntegrationError> {
+        if max_retained_capacity == 0
+            || max_retained_capacity > self.config.limits().retained_raster_byte_capacity
+        {
+            return Err(invalid_config());
+        }
         let correlation = publication.correlation();
         let session_id = correlation.session.ok_or_else(identity_mismatch)?;
         let generation = correlation.generation.ok_or_else(identity_mismatch)?;
@@ -1072,12 +1178,18 @@ impl NativeWorkerRegistry {
         if declared_length > self.config.limits().surface.max_total_bytes() {
             return Err(identity_mismatch());
         }
+        if declared_length > max_retained_capacity {
+            return Err(backpressure());
+        }
         let expected_length = usize::try_from(declared_length).map_err(|_| identity_mismatch())?;
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(expected_length)
             .map_err(|_| backpressure())?;
         let retained_capacity = u64::try_from(bytes.capacity()).map_err(|_| backpressure())?;
+        if retained_capacity > max_retained_capacity {
+            return Err(backpressure());
+        }
         let reservation = self
             .raster_budget
             .try_reserve_bytes(retained_capacity)
@@ -1204,6 +1316,7 @@ impl NativeWorkerRegistry {
             self.scheduler.critical_len(),
             self.scheduler.in_flight_len(),
             self.policy_task_tracker.used(),
+            self.policy_task_tracker.bytes_used(),
             self.pending_resources.len()
                 + active_rasters
                 + queued_rasters
@@ -1212,6 +1325,7 @@ impl NativeWorkerRegistry {
             self.cache_resident_bytes(),
             self.scene_budget.used(),
             self.publications.len(),
+            self.delivered_surfaces.len(),
             self.critical_events.len()
                 + self.progress_events.len()
                 + self.pending_surface_reclaims.len()
@@ -1906,9 +2020,14 @@ impl NativeWorkerRegistry {
                 Ok(())
             }
             Reentry::CapabilityCompleted(completion) => {
-                let worker = completion.worker;
-                let worker_epoch = completion.worker_epoch;
-                let signal = completion.signal;
+                let crate::NativeCapabilityCompletion {
+                    worker,
+                    worker_epoch,
+                    signal,
+                    decision,
+                    event,
+                    permit,
+                } = completion;
                 if worker != self.worker() || worker_epoch != self.worker_epoch() {
                     return Ok(());
                 }
@@ -1929,19 +2048,24 @@ impl NativeWorkerRegistry {
                 let correlation = active.job.correlation.clone();
                 self.emit_critical(NativeWorkerEvent::CapabilityReported {
                     correlation,
-                    event: completion.event,
+                    event,
                     work_id: signal.work_id.get(),
                 })?;
                 self.active
                     .get_mut(&signal.work_id)
                     .ok_or_else(internal)?
-                    .stage = PageStage::CapabilityQueued(completion.decision);
+                    .stage = PageStage::CapabilityQueued(CapabilityStage { decision, permit });
                 Ok(())
             }
             Reentry::PlanCompleted(completion) => {
-                let worker = completion.worker;
-                let worker_epoch = completion.worker_epoch;
-                let signal = completion.signal;
+                let crate::NativePlanCompletion {
+                    worker,
+                    worker_epoch,
+                    signal,
+                    plan,
+                    event,
+                    permit,
+                } = completion;
                 if worker != self.worker() || worker_epoch != self.worker_epoch() {
                     return Ok(());
                 }
@@ -1955,9 +2079,9 @@ impl NativeWorkerRegistry {
                 };
                 if active.signal != signal
                     || !matches!(active.stage, PageStage::PlanPending { .. })
-                    || completion.plan.config().backend() != NativeBackend::FastCpu
-                    || completion.plan.renderer_epoch() != renderer_epoch
-                    || completion.plan.viewport().generation() != expected_generation
+                    || plan.config().backend() != NativeBackend::FastCpu
+                    || plan.renderer_epoch() != renderer_epoch
+                    || plan.viewport().generation() != expected_generation
                 {
                     return self
                         .fail_active(
@@ -1972,14 +2096,14 @@ impl NativeWorkerRegistry {
                     signal.work_id,
                     NativeWorkerEvent::GenerationPlanned {
                         correlation,
-                        event: completion.event,
+                        event,
                         work_id: signal.work_id.get(),
                     },
                 )?;
                 self.active
                     .get_mut(&signal.work_id)
                     .ok_or_else(internal)?
-                    .stage = PageStage::PlanQueued(completion.plan);
+                    .stage = PageStage::PlanQueued(PlanStage { plan, permit });
                 Ok(())
             }
             Reentry::PolicyFailed(completion) => {
@@ -3062,15 +3186,15 @@ impl NativeWorkerRegistry {
         };
         enum Action {
             Evaluate,
-            Plan(CapabilityDecision),
-            Raster(Arc<RenderPlan>),
+            Plan,
+            Raster,
             Cache,
             Wait,
         }
         let action = match &self.active.get(&work_id).ok_or_else(internal)?.stage {
             PageStage::Evaluate => Action::Evaluate,
-            PageStage::CapabilityDelivered(decision) => Action::Plan(decision.clone()),
-            PageStage::PlanDelivered(plan) => Action::Raster(Arc::clone(plan)),
+            PageStage::CapabilityDelivered(_) => Action::Plan,
+            PageStage::PlanDelivered(_) => Action::Raster,
             PageStage::CacheLookup(_) => Action::Cache,
             PageStage::CapabilityPending { .. }
             | PageStage::CapabilityQueued(_)
@@ -3081,8 +3205,8 @@ impl NativeWorkerRegistry {
         match action {
             Action::Wait => Ok(None),
             Action::Evaluate => self.evaluate_active(work_id).map(Some),
-            Action::Plan(decision) => self.plan_active(work_id, decision).map(Some),
-            Action::Raster(plan) => self.raster_active(work_id, plan).map(Some),
+            Action::Plan => self.plan_active(work_id).map(Some),
+            Action::Raster => self.raster_active(work_id).map(Some),
             Action::Cache => self.cache_active(work_id).map(Some),
         }
     }
@@ -3096,7 +3220,10 @@ impl NativeWorkerRegistry {
         }
         let (_, document_revision, scene) = self.active_scene(work_id)?;
         let signal = self.active.get(&work_id).ok_or_else(internal)?.signal;
-        let Some(permit) = self.policy_task_tracker.try_acquire(signal) else {
+        let Some(permit) = self
+            .policy_task_tracker
+            .try_acquire(signal, self.config.limits().policy_job.max_retained_bytes())
+        else {
             return Ok(ActorProgress::Idle);
         };
         let cancellation = NativePolicyCancellation::default();
@@ -3110,17 +3237,25 @@ impl NativeWorkerRegistry {
             scene,
             document_revision,
             self.config.limits().policy,
+            self.config.limits().policy_job,
             cancellation,
             permit,
         ));
         Ok(ActorProgress::Capability)
     }
 
-    fn plan_active(
-        &mut self,
-        work_id: WorkId,
-        decision: CapabilityDecision,
-    ) -> Result<ActorProgress, EngineIntegrationError> {
+    fn plan_active(&mut self, work_id: WorkId) -> Result<ActorProgress, EngineIntegrationError> {
+        if self.policy_tasks.len() == self.config.limits().reentry_capacity {
+            return Ok(ActorProgress::Idle);
+        }
+        let stage = {
+            let active = self.active.get_mut(&work_id).ok_or_else(internal)?;
+            std::mem::replace(&mut active.stage, PageStage::Evaluate)
+        };
+        let PageStage::CapabilityDelivered(CapabilityStage { decision, permit }) = stage else {
+            self.active.get_mut(&work_id).ok_or_else(internal)?.stage = stage;
+            return Err(internal());
+        };
         if decision.status() != CapabilityStatus::Supported {
             let active = self.active.get_mut(&work_id).ok_or_else(internal)?;
             active
@@ -3133,7 +3268,7 @@ impl NativeWorkerRegistry {
             }
             if self.scheduler.critical_len() == self.config.limits().scheduler.critical_capacity() {
                 active.page_cursor -= 1;
-                active.stage = PageStage::CapabilityDelivered(decision);
+                active.stage = PageStage::CapabilityDelivered(CapabilityStage { decision, permit });
                 return Ok(ActorProgress::Idle);
             }
             let active = self.active.remove(&work_id).ok_or_else(internal)?;
@@ -3151,9 +3286,6 @@ impl NativeWorkerRegistry {
                 .enqueue_failure(active.signal)
                 .map_err(|_| scheduler())?;
             return Ok(ActorProgress::Capability);
-        }
-        if self.policy_tasks.len() == self.config.limits().reentry_capacity {
-            return Ok(ActorProgress::Idle);
         }
         let (_, _, scene) = self.active_scene(work_id)?;
         let active = self.active.get(&work_id).ok_or_else(internal)?;
@@ -3192,9 +3324,6 @@ impl NativeWorkerRegistry {
                 EngineErrorCode::Internal,
             );
         };
-        let Some(permit) = self.policy_task_tracker.try_acquire(signal) else {
-            return Ok(ActorProgress::Idle);
-        };
         let cancellation = NativePolicyCancellation::default();
         self.active.get_mut(&work_id).ok_or_else(internal)?.stage = PageStage::PlanPending {
             cancellation: cancellation.clone(),
@@ -3209,27 +3338,35 @@ impl NativeWorkerRegistry {
             request,
             renderer_epoch,
             self.config.limits().policy,
+            self.config.limits().policy_job,
             cancellation,
             permit,
         ));
         Ok(ActorProgress::Capability)
     }
 
-    fn raster_active(
-        &mut self,
-        work_id: WorkId,
-        plan: Arc<RenderPlan>,
-    ) -> Result<ActorProgress, EngineIntegrationError> {
+    fn raster_active(&mut self, work_id: WorkId) -> Result<ActorProgress, EngineIntegrationError> {
         if self.raster_tasks.len() == self.config.limits().reentry_capacity {
             return Ok(ActorProgress::Idle);
         }
+        let stage = {
+            let active = self.active.get_mut(&work_id).ok_or_else(internal)?;
+            std::mem::replace(&mut active.stage, PageStage::Evaluate)
+        };
+        let PageStage::PlanDelivered(PlanStage { plan, permit }) = stage else {
+            self.active.get_mut(&work_id).ok_or_else(internal)?.stage = stage;
+            return Err(internal());
+        };
         let signal = self.active.get(&work_id).ok_or_else(internal)?.signal;
         let Some(reservation) = self
             .raster_budget
             .try_reserve(self.config.raster_task_byte_reservation(), signal)
         else {
+            self.active.get_mut(&work_id).ok_or_else(internal)?.stage =
+                PageStage::PlanDelivered(PlanStage { plan, permit });
             return Ok(ActorProgress::Idle);
         };
+        drop(permit);
         let cancellation = NativeRasterCancellation::default();
         let mut tiles = Vec::new();
         if tiles.try_reserve_exact(plan.tiles().len()).is_err() {
@@ -3321,6 +3458,8 @@ impl NativeWorkerRegistry {
             scene,
             plan,
             self.config.limits().raster,
+            self.config.limits().policy_job,
+            self.config.limits().raster_job,
             cancellation,
             reservation,
         ));
@@ -3863,6 +4002,9 @@ impl NativeWorkerRegistry {
         {
             return Err(invalid_identity());
         }
+        if self.policy_task_tracker.external() != 0 || self.raster_budget.external() != 0 {
+            return Err(backpressure());
+        }
         let limits = config.limits();
         let surfaces = SurfaceOwner::new(
             config.worker(),
@@ -3903,6 +4045,7 @@ impl NativeWorkerRegistry {
         let scheduler = ViewportScheduler::new(limits.scheduler);
         let policy_task_tracker = Arc::new(PolicyTaskTracker::new(
             limits.reentry_capacity,
+            limits.retained_policy_job_byte_capacity,
             config.worker_epoch(),
         ));
         let raster_budget = Arc::new(RasterBudget::new(

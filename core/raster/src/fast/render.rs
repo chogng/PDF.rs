@@ -66,6 +66,39 @@ impl<'a> FastRasterJob<'a> {
         })
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the owned job transfers every validated scene, plan, bin, and accounting component without cloning them"
+    )]
+    pub(super) fn from_prepared(
+        scene: &'a Scene,
+        plan: &'a RenderPlan,
+        limits: FastRasterLimits,
+        bins: FastTileBins,
+        product_pixels: u64,
+        bin_fuel: u64,
+        bin_cancellation_checks: u64,
+        bin_peak_intermediate: u64,
+    ) -> Result<Self, FastRasterError> {
+        let graphics = scene.graphics().ok_or_else(identity)?;
+        Ok(Self {
+            scene,
+            plan,
+            graphics,
+            limits,
+            identity: FastRasterIdentity::scalar_v1(plan.config().hash()),
+            bins,
+            product_pixels,
+            bin_fuel,
+            bin_cancellation_checks,
+            bin_peak_intermediate,
+        })
+    }
+
+    pub(super) fn into_bins(self) -> Vec<Vec<u32>> {
+        self.bins.into_inner_bins()
+    }
+
     /// Returns the complete implementation and RenderConfig identity.
     pub const fn identity(&self) -> FastRasterIdentity {
         self.identity
@@ -171,7 +204,7 @@ impl<'a> FastRasterJob<'a> {
         Ok(FastTileSet::new(self.plan.hash(), tiles, stats))
     }
 
-    fn render_one(
+    pub(super) fn render_one(
         &self,
         tile_index: usize,
         work: &mut Work<'_>,
@@ -505,7 +538,10 @@ impl<'a> FastRasterJob<'a> {
     }
 }
 
-fn validate_config(plan: &RenderPlan, limits: FastRasterLimits) -> Result<(), FastRasterError> {
+pub(super) fn validate_config(
+    plan: &RenderPlan,
+    limits: FastRasterLimits,
+) -> Result<(), FastRasterError> {
     let config = plan.config();
     let input = config.input();
     if input.backend != NativeBackend::FastCpu
@@ -535,7 +571,6 @@ fn validate_subject<'a>(
     plan: &RenderPlan,
     cancellation: &dyn FastRasterCancellation,
 ) -> Result<&'a GraphicsScene, FastRasterError> {
-    let graphics = scene.graphics().ok_or_else(identity)?;
     let subject = plan.decision().subject();
     let policy_limits = PolicyLimits::validate(PolicyLimitConfig {
         max_requirements: plan.decision().evaluated_requirements().max(1),
@@ -552,7 +587,21 @@ fn validate_subject<'a>(
             &PolicyCancellationAdapter(cancellation),
         )
         .map_err(map_policy_error)?;
-    if &evaluated != plan.decision() {
+    let graphics = validate_subject_base(scene, plan, &evaluated)?;
+    for ordinal in 0..plan.tiles().len() {
+        validate_tile_identity(scene, plan, ordinal)?;
+    }
+    Ok(graphics)
+}
+
+pub(super) fn validate_subject_base<'a>(
+    scene: &'a Scene,
+    plan: &RenderPlan,
+    evaluated: &pdf_rs_policy::CapabilityDecision,
+) -> Result<&'a GraphicsScene, FastRasterError> {
+    let graphics = scene.graphics().ok_or_else(identity)?;
+    let subject = plan.decision().subject();
+    if evaluated != plan.decision() {
         return Err(identity());
     }
     let binding = scene.binding();
@@ -571,29 +620,37 @@ fn validate_subject<'a>(
     {
         return Err(identity());
     }
-    for (ordinal, tile) in plan.tiles().iter().enumerate() {
-        let key = tile.content_key();
-        if tile.ordinal() != u32::try_from(ordinal).map_err(|_| numeric())?
-            || tile.plan_id() != plan.id()
-            || tile.plan_hash() != plan.hash()
-            || tile.generation() != plan.viewport().generation()
-            || key.source() != subject.source()
-            || key.document_revision() != subject.document_revision()
-            || key.revision_startxref() != subject.revision_startxref()
-            || key.page_index() != subject.page_index()
-            || key.page_object_number() != subject.page_object_number()
-            || key.page_object_generation() != subject.page_object_generation()
-            || key.scene_hash() != subject.scene_hash()
-            || key.decision_hash() != plan.decision().hash()
-            || key.geometry_hash() != plan.viewport().geometry_hash()
-            || key.render_config_hash() != plan.config().hash()
-            || key.renderer_epoch() != plan.renderer_epoch()
-            || key.backend() != NativeBackend::FastCpu
-        {
-            return Err(identity());
-        }
-    }
     Ok(graphics)
+}
+
+pub(super) fn validate_tile_identity(
+    _scene: &Scene,
+    plan: &RenderPlan,
+    ordinal: usize,
+) -> Result<(), FastRasterError> {
+    let subject = plan.decision().subject();
+    let tile = plan.tiles().get(ordinal).ok_or_else(identity)?;
+    let key = tile.content_key();
+    if tile.ordinal() != u32::try_from(ordinal).map_err(|_| numeric())?
+        || tile.plan_id() != plan.id()
+        || tile.plan_hash() != plan.hash()
+        || tile.generation() != plan.viewport().generation()
+        || key.source() != subject.source()
+        || key.document_revision() != subject.document_revision()
+        || key.revision_startxref() != subject.revision_startxref()
+        || key.page_index() != subject.page_index()
+        || key.page_object_number() != subject.page_object_number()
+        || key.page_object_generation() != subject.page_object_generation()
+        || key.scene_hash() != subject.scene_hash()
+        || key.decision_hash() != plan.decision().hash()
+        || key.geometry_hash() != plan.viewport().geometry_hash()
+        || key.render_config_hash() != plan.config().hash()
+        || key.renderer_epoch() != plan.renderer_epoch()
+        || key.backend() != NativeBackend::FastCpu
+    {
+        return Err(identity());
+    }
+    Ok(())
 }
 
 struct PolicyCancellationAdapter<'a>(&'a dyn FastRasterCancellation);
@@ -604,7 +661,7 @@ impl PolicyCancellation for PolicyCancellationAdapter<'_> {
     }
 }
 
-fn map_policy_error(error: pdf_rs_policy::PolicyError) -> FastRasterError {
+pub(super) fn map_policy_error(error: pdf_rs_policy::PolicyError) -> FastRasterError {
     match error.code() {
         PolicyErrorCode::Cancelled => FastRasterError::for_code(FastRasterErrorCode::Cancelled),
         PolicyErrorCode::Allocation => FastRasterError::for_code(FastRasterErrorCode::Allocation),
@@ -780,7 +837,7 @@ fn build_bins(
     Ok(FastTileBins::new(plan.hash(), bins, entries, retained))
 }
 
-fn command_belongs(
+pub(super) fn command_belongs(
     command: &GraphicsCommand,
     bounds: pdf_rs_scene::SceneBounds,
     tile: pdf_rs_policy::DeviceRect,
@@ -802,7 +859,7 @@ fn command_belongs(
     )
 }
 
-fn bins_retained_bytes(bins: &Vec<Vec<u32>>) -> Result<u64, FastRasterError> {
+pub(super) fn bins_retained_bytes(bins: &Vec<Vec<u32>>) -> Result<u64, FastRasterError> {
     bins.iter().try_fold(vector_bytes(bins)?, |total, bin| {
         total.checked_add(vector_bytes(bin)?).ok_or_else(numeric)
     })
@@ -837,24 +894,47 @@ fn validate_permutation(
     Ok(())
 }
 
-struct Work<'a> {
-    limits: FastRasterLimits,
+pub(super) struct Work<'a> {
+    pub(super) limits: FastRasterLimits,
     cancellation: &'a dyn FastRasterCancellation,
     interval: u64,
     next_probe: u64,
-    fuel: u64,
-    cancellation_checks: u64,
-    peak_intermediate: u64,
+    pub(super) fuel: u64,
+    pub(super) cancellation_checks: u64,
+    pub(super) peak_intermediate: u64,
+    turn_start_fuel: u64,
+    turn_fuel_limit: u64,
 }
 
 impl<'a> Work<'a> {
-    fn new(
+    pub(super) fn new(
         limits: FastRasterLimits,
         interval: u64,
         cancellation: &'a dyn FastRasterCancellation,
         fuel: u64,
         cancellation_checks: u64,
     ) -> Result<Self, FastRasterError> {
+        Self::new_bounded(
+            limits,
+            interval,
+            cancellation,
+            fuel,
+            cancellation_checks,
+            u64::MAX,
+        )
+    }
+
+    pub(super) fn new_bounded(
+        limits: FastRasterLimits,
+        interval: u64,
+        cancellation: &'a dyn FastRasterCancellation,
+        fuel: u64,
+        cancellation_checks: u64,
+        turn_fuel_limit: u64,
+    ) -> Result<Self, FastRasterError> {
+        if turn_fuel_limit == 0 {
+            return Err(invalid_config());
+        }
         if interval == 0 || interval > limits.max_cancellation_interval() {
             return Err(invalid_config());
         }
@@ -871,12 +951,14 @@ impl<'a> Work<'a> {
             fuel,
             cancellation_checks,
             peak_intermediate: 0,
+            turn_start_fuel: fuel,
+            turn_fuel_limit,
         };
         work.check()?;
         Ok(work)
     }
 
-    fn check(&mut self) -> Result<(), FastRasterError> {
+    pub(super) fn check(&mut self) -> Result<(), FastRasterError> {
         self.cancellation_checks = self
             .cancellation_checks
             .checked_add(1)
@@ -890,6 +972,18 @@ impl<'a> Work<'a> {
 
 impl KernelWork for Work<'_> {
     fn step(&mut self) -> Result<(), FastRasterError> {
+        let turn_fuel = self
+            .fuel
+            .checked_sub(self.turn_start_fuel)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(numeric)?;
+        if turn_fuel > self.turn_fuel_limit {
+            return Err(FastRasterError::resource(
+                FastRasterLimitKind::AtomicTileFuel,
+                self.turn_fuel_limit,
+                turn_fuel,
+            ));
+        }
         self.fuel = checked_total(
             FastRasterLimitKind::Fuel,
             self.fuel,
@@ -941,7 +1035,7 @@ fn state_payload_bytes(
         .ok_or_else(numeric)
 }
 
-fn logical_vector_bytes<T>(length: usize) -> Result<u64, FastRasterError> {
+pub(super) fn logical_vector_bytes<T>(length: usize) -> Result<u64, FastRasterError> {
     u64::try_from(length)
         .ok()
         .and_then(|count| {
@@ -952,7 +1046,7 @@ fn logical_vector_bytes<T>(length: usize) -> Result<u64, FastRasterError> {
         .ok_or_else(numeric)
 }
 
-fn reserve<T>(values: &mut Vec<T>, additional: usize) -> Result<(), FastRasterError> {
+pub(super) fn reserve<T>(values: &mut Vec<T>, additional: usize) -> Result<(), FastRasterError> {
     values
         .try_reserve_exact(additional)
         .map_err(|_| FastRasterError::for_code(FastRasterErrorCode::Allocation))
@@ -966,7 +1060,7 @@ fn invalid_config() -> FastRasterError {
     FastRasterError::for_code(FastRasterErrorCode::InvalidRenderConfig)
 }
 
-fn identity() -> FastRasterError {
+pub(super) fn identity() -> FastRasterError {
     FastRasterError::for_code(FastRasterErrorCode::IdentityMismatch)
 }
 
@@ -974,6 +1068,6 @@ fn command_sequence() -> FastRasterError {
     FastRasterError::for_code(FastRasterErrorCode::InvalidCommandSequence)
 }
 
-fn numeric() -> FastRasterError {
+pub(super) fn numeric() -> FastRasterError {
     FastRasterError::for_code(FastRasterErrorCode::NumericOverflow)
 }

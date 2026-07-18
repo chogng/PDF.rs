@@ -1,16 +1,19 @@
 mod support;
 
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use pdf_rs_engine::{
-    ActorProgress, NativeWorkerConfig, NativeWorkerEvent, NativeWorkerLimitConfig,
+    ActorProgress, NativeTaskPoll, NativeWorkerConfig, NativeWorkerEvent, NativeWorkerLimitConfig,
     NativeWorkerPhase, Reentry, SessionPhase,
 };
+use pdf_rs_policy::{NeverCancelled as NeverCancelledPolicy, PolicyPollBudget};
 use pdf_rs_protocol::{
     CancelCommand, CloseSessionCommand, FailDataCommand, GetPageMetricsCommand, OpenCommand,
     ReleaseSurfaceCommand, RequestId, SessionId, ShutdownCommand, SourceFailureCode, WorkerId,
 };
-use pdf_rs_raster::fast::{FastRasterLimitConfig, FastRasterLimits, NeverCancelled};
+use pdf_rs_raster::fast::{
+    FastRasterLimitConfig, FastRasterLimits, FastRasterPollBudget, NeverCancelled,
+};
 use pdf_rs_surface::WorkerEpoch;
 
 use support::{
@@ -1645,6 +1648,13 @@ fn surface_import_budget_rejection_does_not_consume_the_one_shot_transfer() {
     let retained_raster_byte_capacity = raster
         .max_retained_bytes()
         .checked_add(raster.max_intermediate_bytes())
+        .and_then(|bytes| {
+            bytes.checked_add(
+                NativeWorkerLimitConfig::default()
+                    .policy_job
+                    .max_retained_bytes(),
+            )
+        })
         .unwrap();
     let limits = NativeWorkerLimitConfig {
         raster,
@@ -1686,6 +1696,63 @@ fn surface_import_budget_rejection_does_not_consume_the_one_shot_transfer() {
         worker.resources().retained_raster_bytes(),
         u64::try_from(imported.retained_byte_capacity()).unwrap()
     );
+}
+
+#[test]
+fn undelivered_surface_reclaim_covers_preimport_and_postimport_failures() {
+    let mut preimport = worker();
+    let session = open_ready(&mut preimport, supported_scene());
+    preimport.next_event();
+    let publication = publish_one_surface(&mut preimport, session);
+    let expected_length = usize::try_from(publication.event().metadata.byte_length).unwrap();
+    let mut allocation_probe = Vec::<u8>::new();
+    allocation_probe.try_reserve_exact(expected_length).unwrap();
+    let actual_capacity = u64::try_from(allocation_probe.capacity()).unwrap();
+    assert!(actual_capacity > 0);
+    assert!(
+        preimport
+            .import_surface_bytes_bounded(
+                &publication,
+                publication.transfer().clone(),
+                actual_capacity - 1,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        preimport.resources().surface().published_surfaces(),
+        1,
+        "a pre-import budget failure must not consume the one-shot handle"
+    );
+    preimport.reclaim_undelivered_surface(&publication).unwrap();
+    assert!(preimport.resources().surface().has_zero_surface_resources());
+    assert!(
+        preimport.reclaim_undelivered_surface(&publication).is_err(),
+        "the registry delivery ledger is consumed exactly once"
+    );
+
+    let mut postimport = worker();
+    let session = open_ready(&mut postimport, supported_scene());
+    postimport.next_event();
+    let publication = publish_one_surface(&mut postimport, session);
+    let imported = postimport
+        .import_surface_bytes_bounded(
+            &publication,
+            publication.transfer().clone(),
+            actual_capacity,
+        )
+        .unwrap();
+    assert_eq!(postimport.resources().surface().imported_surfaces(), 1);
+    postimport
+        .reclaim_undelivered_surface(&publication)
+        .unwrap();
+    assert!(
+        postimport
+            .resources()
+            .surface()
+            .has_zero_surface_resources()
+    );
+    drop(imported);
+    assert_eq!(postimport.resources().retained_raster_bytes(), 0);
 }
 
 #[test]
@@ -2037,6 +2104,9 @@ fn external_raster_task_keeps_actor_lifecycle_live_and_observes_close_cancellati
             + NativeWorkerLimitConfig::default()
                 .raster
                 .max_intermediate_bytes()
+            + NativeWorkerLimitConfig::default()
+                .policy_job
+                .max_retained_bytes()
     );
 
     worker
@@ -2075,6 +2145,7 @@ fn external_policy_task_keeps_actor_lifecycle_live_and_observes_close_cancellati
         .next_policy_task()
         .expect("capability work must execute outside the actor");
     assert_eq!(worker.resources().pending_policy_tasks(), 1);
+    assert!(worker.resources().retained_policy_job_bytes() > 0);
 
     worker
         .close_session(
@@ -2092,7 +2163,100 @@ fn external_policy_task_keeps_actor_lifecycle_live_and_observes_close_cancellati
     }
     assert_eq!(worker.session_phase(session), Some(SessionPhase::Closed));
     assert_eq!(worker.resources().pending_policy_tasks(), 0);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), 0);
     assert!(worker.resources().surface().has_zero_surface_resources());
+}
+
+#[test]
+fn pending_policy_poll_retains_and_drop_releases_the_single_permit() {
+    let mut worker = worker();
+    let session = open_ready(&mut worker, supported_scene());
+    worker.next_event();
+    worker
+        .set_viewport(
+            &generation_correlation(worker.worker(), session, 1),
+            &viewport(1),
+        )
+        .unwrap();
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Scheduled);
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Capability);
+    let task = worker.next_policy_task().unwrap();
+    let budget = PolicyPollBudget::new(NonZeroU32::new(1).unwrap()).unwrap();
+    let pending = match task.poll(budget, &NeverCancelledPolicy) {
+        NativeTaskPoll::Pending(task) => task,
+        NativeTaskPoll::Ready(_) => panic!("one work unit must not finish capability policy"),
+    };
+    assert_eq!(worker.resources().pending_policy_tasks(), 1);
+    assert_eq!(
+        worker.resources().retained_policy_job_bytes(),
+        NativeWorkerLimitConfig::default()
+            .policy_job
+            .max_retained_bytes()
+    );
+    drop(pending);
+    assert_eq!(worker.resources().pending_policy_tasks(), 0);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), 0);
+}
+
+#[test]
+fn policy_byte_reservation_crosses_completion_and_delivery_barriers() {
+    let mut worker = worker();
+    let session = open_ready(&mut worker, supported_scene());
+    worker.next_event();
+    worker
+        .set_viewport(
+            &generation_correlation(worker.worker(), session, 1),
+            &viewport(1),
+        )
+        .unwrap();
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Scheduled);
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Capability);
+
+    complete_next_policy(&mut worker);
+    let reserved = NativeWorkerLimitConfig::default()
+        .policy_job
+        .max_retained_bytes();
+    assert_eq!(worker.resources().retained_policy_job_bytes(), reserved);
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), reserved);
+    assert!(matches!(
+        worker.next_event(),
+        Some(NativeWorkerEvent::CapabilityReported { .. })
+    ));
+    assert_eq!(worker.resources().retained_policy_job_bytes(), reserved);
+
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Capability);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), reserved);
+    complete_next_policy(&mut worker);
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), reserved);
+    assert!(matches!(
+        worker.next_event(),
+        Some(NativeWorkerEvent::GenerationPlanned { .. })
+    ));
+    assert_eq!(worker.resources().retained_policy_job_bytes(), reserved);
+
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Raster);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), 0);
+    drop(worker.next_raster_task().unwrap());
+    assert_eq!(worker.resources().retained_raster_bytes(), 0);
+}
+
+#[test]
+fn pending_raster_poll_retains_and_drop_releases_the_full_reservation() {
+    let mut worker = worker();
+    let session = open_ready(&mut worker, supported_scene());
+    worker.next_event();
+    let task = drive_to_raster_task(&mut worker, session, 1);
+    assert!(worker.resources().retained_raster_bytes() > 0);
+    let budget = FastRasterPollBudget::new(NonZeroU32::new(1).unwrap()).unwrap();
+    let pending = match task.poll(budget, &NeverCancelled) {
+        NativeTaskPoll::Pending(task) => task,
+        NativeTaskPoll::Ready(_) => panic!("one work unit must not finish Fast raster"),
+    };
+    assert!(worker.resources().retained_raster_bytes() > 0);
+    drop(pending);
+    assert_eq!(worker.resources().retained_raster_bytes(), 0);
 }
 
 #[test]
@@ -2127,7 +2291,7 @@ fn full_progress_queue_retains_opaque_plan_completion_until_delivery_frees_space
     assert_eq!(worker.pump().unwrap(), ActorProgress::Capability);
     complete_next_policy(&mut worker);
     assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
-    assert_eq!(worker.resources().pending_policy_tasks(), 0);
+    assert_eq!(worker.resources().pending_policy_tasks(), 1);
 
     let second = open_ready_with_request(&mut worker, supported_scene(), 2);
     assert!(matches!(
@@ -2149,10 +2313,10 @@ fn full_progress_queue_retains_opaque_plan_completion_until_delivery_frees_space
     ));
     assert_eq!(worker.pump().unwrap(), ActorProgress::Capability);
     complete_next_policy(&mut worker);
-    assert_eq!(worker.resources().pending_policy_tasks(), 1);
+    assert_eq!(worker.resources().pending_policy_tasks(), 2);
 
     assert_eq!(worker.pump().unwrap(), ActorProgress::Idle);
-    assert_eq!(worker.resources().pending_policy_tasks(), 1);
+    assert_eq!(worker.resources().pending_policy_tasks(), 2);
     assert!(matches!(
         worker.next_event(),
         Some(NativeWorkerEvent::GenerationPlanned { correlation, .. })
@@ -2160,12 +2324,18 @@ fn full_progress_queue_retains_opaque_plan_completion_until_delivery_frees_space
     ));
 
     assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
-    assert_eq!(worker.resources().pending_policy_tasks(), 0);
+    assert_eq!(worker.resources().pending_policy_tasks(), 2);
     assert!(matches!(
         worker.next_event(),
         Some(NativeWorkerEvent::GenerationPlanned { correlation, .. })
             if correlation.session == Some(second)
     ));
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Raster);
+    drop(worker.next_raster_task().unwrap());
+    assert_eq!(worker.resources().pending_policy_tasks(), 1);
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Raster);
+    drop(worker.next_raster_task().unwrap());
+    assert_eq!(worker.resources().pending_policy_tasks(), 0);
 }
 
 #[test]
@@ -2332,7 +2502,11 @@ fn cache_hit_copy_is_sliced_and_close_preempts_the_next_chunk() {
     let raster = NativeWorkerLimitConfig::default().raster;
     assert_eq!(
         worker.resources().retained_raster_bytes(),
-        raster.max_retained_bytes() + raster.max_intermediate_bytes(),
+        raster.max_retained_bytes()
+            + raster.max_intermediate_bytes()
+            + NativeWorkerLimitConfig::default()
+                .policy_job
+                .max_retained_bytes(),
         "one cache-copy chunk must leave the worst-case reservation live"
     );
     assert!(worker.next_raster_task().is_none());
@@ -2364,9 +2538,13 @@ fn raster_budget_charges_tasks_held_outside_the_actor() {
         ..Default::default()
     })
     .unwrap();
+    let task_bytes = 4_097
+        + NativeWorkerLimitConfig::default()
+            .policy_job
+            .max_retained_bytes();
     let invalid = NativeWorkerLimitConfig {
         raster,
-        retained_raster_byte_capacity: 4_096,
+        retained_raster_byte_capacity: task_bytes - 1,
         ..Default::default()
     };
     assert!(
@@ -2375,7 +2553,7 @@ fn raster_budget_charges_tasks_held_outside_the_actor() {
     );
     let limits = NativeWorkerLimitConfig {
         raster,
-        retained_raster_byte_capacity: 4_097,
+        retained_raster_byte_capacity: task_bytes,
         ..Default::default()
     };
     let mut worker = pdf_rs_engine::NativeWorkerRegistry::new(
@@ -2385,7 +2563,7 @@ fn raster_budget_charges_tasks_held_outside_the_actor() {
     let first = open_ready_with_request(&mut worker, supported_scene(), 1);
     worker.next_event();
     let held = drive_to_raster_task(&mut worker, first, 1);
-    assert_eq!(worker.resources().retained_raster_bytes(), 4_097);
+    assert_eq!(worker.resources().retained_raster_bytes(), task_bytes);
 
     let second = open_ready_with_request(&mut worker, supported_scene(), 2);
     worker.next_event();
@@ -2409,22 +2587,70 @@ fn raster_budget_charges_tasks_held_outside_the_actor() {
     assert_eq!(worker.resources().retained_raster_bytes(), 0);
     assert_eq!(worker.pump().unwrap(), ActorProgress::Raster);
     let second_task = worker.next_raster_task().unwrap();
-    assert_eq!(worker.resources().retained_raster_bytes(), 4_097);
+    assert_eq!(worker.resources().retained_raster_bytes(), task_bytes);
     drop(second_task);
     assert_eq!(worker.resources().retained_raster_bytes(), 0);
 }
 
 #[test]
-fn restart_uses_a_fresh_raster_budget_while_an_old_task_is_external() {
+fn restart_rejects_an_external_policy_task_before_mutation_then_succeeds_after_drop() {
+    let limits = NativeWorkerLimitConfig::default();
+    let mut worker = pdf_rs_engine::NativeWorkerRegistry::new(
+        NativeWorkerConfig::new(WorkerId::new(1), WorkerEpoch::new(1).unwrap(), 7, limits).unwrap(),
+    )
+    .unwrap();
+    let session = open_ready(&mut worker, supported_scene());
+    worker.next_event();
+    worker
+        .set_viewport(
+            &generation_correlation(worker.worker(), session, 1),
+            &viewport(1),
+        )
+        .unwrap();
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Scheduled);
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Capability);
+    let task = worker.next_policy_task().unwrap();
+    let scene_bytes = worker.resources().retained_scene_bytes();
+    assert!(scene_bytes > 0);
+    assert!(worker.resources().retained_policy_job_bytes() > 0);
+
+    let replacement = || Reentry::Restart {
+        config: NativeWorkerConfig::new(WorkerId::new(2), WorkerEpoch::new(2).unwrap(), 7, limits)
+            .unwrap(),
+    };
+    worker.enqueue_reentry(replacement()).unwrap();
+    assert_eq!(
+        worker.pump().unwrap_err().code(),
+        pdf_rs_engine::EngineIntegrationErrorCode::Backpressure
+    );
+    assert_eq!(worker.worker(), WorkerId::new(1));
+    assert_eq!(worker.worker_epoch(), WorkerEpoch::new(1).unwrap());
+    assert_eq!(worker.resources().retained_scene_bytes(), scene_bytes);
+    assert!(worker.resources().retained_policy_job_bytes() > 0);
+
+    drop(task);
+    assert_eq!(worker.resources().retained_policy_job_bytes(), 0);
+    worker.enqueue_reentry(replacement()).unwrap();
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
+    assert_eq!(worker.worker(), WorkerId::new(2));
+    assert_eq!(worker.resources().retained_scene_bytes(), 0);
+}
+
+#[test]
+fn restart_rejects_an_external_raster_task_before_mutation_then_succeeds_after_drop() {
     let raster = FastRasterLimits::validate(FastRasterLimitConfig {
         max_retained_bytes: 4_096,
         max_intermediate_bytes: 1,
         ..Default::default()
     })
     .unwrap();
+    let task_bytes = 4_097
+        + NativeWorkerLimitConfig::default()
+            .policy_job
+            .max_retained_bytes();
     let limits = NativeWorkerLimitConfig {
         raster,
-        retained_raster_byte_capacity: 4_097,
+        retained_raster_byte_capacity: task_bytes,
         ..Default::default()
     };
     let mut worker = pdf_rs_engine::NativeWorkerRegistry::new(
@@ -2434,7 +2660,7 @@ fn restart_uses_a_fresh_raster_budget_while_an_old_task_is_external() {
     let old_session = open_ready(&mut worker, supported_scene());
     worker.next_event();
     let old_task = drive_to_raster_task(&mut worker, old_session, 1);
-    assert_eq!(worker.resources().retained_raster_bytes(), 4_097);
+    assert_eq!(worker.resources().retained_raster_bytes(), task_bytes);
 
     worker
         .enqueue_reentry(Reentry::Restart {
@@ -2447,17 +2673,35 @@ fn restart_uses_a_fresh_raster_budget_while_an_old_task_is_external() {
             .unwrap(),
         })
         .unwrap();
-    assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
+    assert_eq!(
+        worker.pump().unwrap_err().code(),
+        pdf_rs_engine::EngineIntegrationErrorCode::Backpressure
+    );
+    assert_eq!(worker.worker(), WorkerId::new(1));
+    assert_eq!(worker.worker_epoch(), WorkerEpoch::new(1).unwrap());
+    assert_eq!(worker.resources().retained_raster_bytes(), task_bytes);
+
+    drop(old_task);
     assert_eq!(worker.resources().retained_raster_bytes(), 0);
+    worker
+        .enqueue_reentry(Reentry::Restart {
+            config: NativeWorkerConfig::new(
+                WorkerId::new(2),
+                WorkerEpoch::new(2).unwrap(),
+                7,
+                limits,
+            )
+            .unwrap(),
+        })
+        .unwrap();
+    assert_eq!(worker.pump().unwrap(), ActorProgress::Reentry);
 
     let current_session = open_ready(&mut worker, supported_scene());
     worker.next_event();
     let current_task = drive_to_raster_task(&mut worker, current_session, 1);
-    assert_eq!(worker.resources().retained_raster_bytes(), 4_097);
+    assert_eq!(worker.resources().retained_raster_bytes(), task_bytes);
 
     drop(current_task);
-    assert_eq!(worker.resources().retained_raster_bytes(), 0);
-    drop(old_task);
     assert_eq!(worker.resources().retained_raster_bytes(), 0);
 }
 
@@ -3106,12 +3350,29 @@ fn duplicate_need_data_fails_the_open_instead_of_leaving_it_hung() {
 }
 
 #[test]
-fn stale_raster_completion_is_rejected_across_worker_epoch_reuse() {
+fn external_raster_completion_blocks_restart_until_its_reservation_drops() {
     let mut worker = worker();
     let old_session = open_ready(&mut worker, supported_scene());
     worker.next_event();
     let old_completion = drive_to_raster_task(&mut worker, old_session, 1).run(&NeverCancelled);
 
+    worker
+        .enqueue_reentry(Reentry::Restart {
+            config: NativeWorkerConfig::new(
+                WorkerId::new(2),
+                WorkerEpoch::new(2).unwrap(),
+                7,
+                Default::default(),
+            )
+            .unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        worker.pump().unwrap_err().code(),
+        pdf_rs_engine::EngineIntegrationErrorCode::Backpressure
+    );
+    assert_eq!(worker.worker(), WorkerId::new(1));
+    drop(old_completion);
     worker
         .enqueue_reentry(Reentry::Restart {
             config: NativeWorkerConfig::new(
@@ -3129,12 +3390,6 @@ fn stale_raster_completion_is_rejected_across_worker_epoch_reuse() {
     worker.next_event();
     let current_task = drive_to_raster_task(&mut worker, current_session, 1);
 
-    let rejected = worker.enqueue_reentry(old_completion).unwrap_err();
-    assert_eq!(
-        rejected.error().code(),
-        pdf_rs_engine::EngineIntegrationErrorCode::InvalidIdentity
-    );
-    drop(rejected.into_reentry());
     worker
         .enqueue_reentry(current_task.run(&NeverCancelled))
         .unwrap();

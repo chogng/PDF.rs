@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    num::NonZeroU32,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -8,9 +9,10 @@ use std::{
 
 use pdf_rs_cache::TileCacheCancellation;
 use pdf_rs_policy::{
-    CapabilityDecision, CapabilityEvaluator, CapabilityProfile, PolicyCancellation,
-    PolicyErrorCode, PolicyLimits, RenderConfig, RenderPlan, RenderPlanOutcome, RenderPlanRequest,
-    RendererEpoch as PolicyRendererEpoch, create_render_plan,
+    CapabilityDecision, CapabilityEvaluationJob, CapabilityEvaluator, CapabilityProfile,
+    PolicyCancellation, PolicyErrorCode, PolicyJobLimits, PolicyJobPoll, PolicyLimits,
+    PolicyPollBudget, RenderConfig, RenderPlan, RenderPlanJob, RenderPlanOutcome,
+    RenderPlanRequest, RendererEpoch as PolicyRendererEpoch,
 };
 use pdf_rs_protocol::{
     CancelAcknowledgedEvent, CapabilityReportedEvent, CloseSessionAcknowledgedEvent, Correlation,
@@ -20,8 +22,8 @@ use pdf_rs_protocol::{
     SurfaceReclaimedEvent, SurfaceReleaseAcknowledgedEvent, WorkerId, WorkerStoppedEvent,
 };
 use pdf_rs_raster::fast::{
-    FastRasterCancellation, FastRasterError, FastRasterErrorCategory, FastRasterJob,
-    FastRasterLimits, FastTileSet,
+    FastRasterCancellation, FastRasterError, FastRasterErrorCategory, FastRasterJobLimits,
+    FastRasterJobPoll, FastRasterLimits, FastRasterOwnedJob, FastRasterPollBudget, FastTileSet,
 };
 use pdf_rs_scene::Scene;
 use pdf_rs_scheduler::TerminalSignal;
@@ -383,19 +385,32 @@ impl fmt::Debug for Reentry {
 }
 
 enum NativePolicyTaskKind {
-    Evaluate {
+    EvaluateInput {
         scene: Arc<Scene>,
         document_revision: u64,
         limits: PolicyLimits,
+        job_limits: PolicyJobLimits,
     },
-    Plan {
+    Evaluate(CapabilityEvaluationJob),
+    PlanInput {
         scene: Arc<Scene>,
         decision: CapabilityDecision,
         config: RenderConfig,
         request: RenderPlanRequest,
         renderer_epoch: PolicyRendererEpoch,
         limits: PolicyLimits,
+        job_limits: PolicyJobLimits,
     },
+    Plan(RenderPlanJob),
+    Terminal,
+}
+
+/// Ownership-typed result of advancing one external task by a bounded poll.
+pub enum NativeTaskPoll<T> {
+    /// The same owned task retains private state and requires another poll.
+    Pending(T),
+    /// The task reached one terminal actor reentry.
+    Ready(Reentry),
 }
 
 /// Owned capability or planning work dispatched out of the actor.
@@ -417,6 +432,7 @@ impl NativePolicyTask {
         scene: Arc<Scene>,
         document_revision: u64,
         limits: PolicyLimits,
+        job_limits: PolicyJobLimits,
         cancellation: NativePolicyCancellation,
         permit: NativePolicyPermit,
     ) -> Self {
@@ -424,10 +440,11 @@ impl NativePolicyTask {
             worker,
             worker_epoch,
             signal,
-            kind: NativePolicyTaskKind::Evaluate {
+            kind: NativePolicyTaskKind::EvaluateInput {
                 scene,
                 document_revision,
                 limits,
+                job_limits,
             },
             cancellation,
             permit,
@@ -445,6 +462,7 @@ impl NativePolicyTask {
         request: RenderPlanRequest,
         renderer_epoch: PolicyRendererEpoch,
         limits: PolicyLimits,
+        job_limits: PolicyJobLimits,
         cancellation: NativePolicyCancellation,
         permit: NativePolicyPermit,
     ) -> Self {
@@ -452,13 +470,14 @@ impl NativePolicyTask {
             worker,
             worker_epoch,
             signal,
-            kind: NativePolicyTaskKind::Plan {
+            kind: NativePolicyTaskKind::PlanInput {
                 scene,
                 decision,
                 config,
                 request,
                 renderer_epoch,
                 limits,
+                job_limits,
             },
             cancellation,
             permit,
@@ -470,127 +489,173 @@ impl NativePolicyTask {
         self.signal
     }
 
-    /// Runs policy work with executor-owned cooperative cancellation.
-    pub fn run(self, cancellation: &dyn PolicyCancellation) -> Reentry {
-        let Self {
-            worker,
-            worker_epoch,
-            signal,
-            kind,
-            cancellation: registry_cancellation,
-            permit,
-        } = self;
+    pub(crate) fn mark_external(&mut self) {
+        self.permit.mark_external();
+    }
+
+    /// Advances at most one explicit policy work budget.
+    pub fn poll(
+        mut self,
+        budget: PolicyPollBudget,
+        cancellation: &dyn PolicyCancellation,
+    ) -> NativeTaskPoll<Self> {
+        let registry_cancellation = self.cancellation.clone();
         let cancellation = CombinedPolicyCancellation {
             registry: &registry_cancellation,
             executor: cancellation,
         };
-        match kind {
-            NativePolicyTaskKind::Evaluate {
+        let kind = std::mem::replace(&mut self.kind, NativePolicyTaskKind::Terminal);
+        let kind = match kind {
+            NativePolicyTaskKind::EvaluateInput {
                 scene,
                 document_revision,
                 limits,
+                job_limits,
             } => {
-                let decision =
-                    match CapabilityEvaluator::new(CapabilityProfile::m3_reference_v1(), limits)
-                        .evaluate(&scene, document_revision, &cancellation)
-                    {
-                        Ok(decision) => decision,
-                        Err(error) => {
-                            return Reentry::PolicyFailed(NativePolicyFailure {
-                                worker,
-                                worker_epoch,
-                                signal,
-                                failure: policy_failure_code(error.code()),
-                                permit,
-                            });
-                        }
-                    };
-                let projection = match decision.protocol_projection() {
-                    Ok(projection) => projection,
-                    Err(error) => {
-                        return Reentry::PolicyFailed(NativePolicyFailure {
-                            worker,
-                            worker_epoch,
-                            signal,
-                            failure: policy_failure_code(error.code()),
-                            permit,
-                        });
-                    }
-                };
-                let event = CapabilityReportedEvent {
-                    decision: projection,
-                    decision_hash: pdf_rs_protocol::CapabilityDecisionHash::new(
-                        decision.hash().into_digest(),
-                    ),
-                };
-                Reentry::CapabilityCompleted(NativeCapabilityCompletion {
-                    worker,
-                    worker_epoch,
-                    signal,
-                    decision,
-                    event,
-                    permit,
-                })
+                match CapabilityEvaluator::new(CapabilityProfile::m3_reference_v1(), limits)
+                    .start_job(scene, document_revision, job_limits)
+                {
+                    Ok(job) => NativePolicyTaskKind::Evaluate(job),
+                    Err(error) => return self.policy_failure(policy_failure_code(error.code())),
+                }
             }
-            NativePolicyTaskKind::Plan {
+            NativePolicyTaskKind::PlanInput {
                 scene,
                 decision,
                 config,
                 request,
                 renderer_epoch,
                 limits,
-            } => {
-                let outcome = match create_render_plan(
-                    &scene,
-                    decision,
-                    config,
-                    request,
-                    renderer_epoch,
-                    limits,
-                    &cancellation,
-                ) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        return Reentry::PolicyFailed(NativePolicyFailure {
-                            worker,
-                            worker_epoch,
-                            signal,
-                            failure: policy_failure_code(error.code()),
-                            permit,
-                        });
-                    }
-                };
-                let RenderPlanOutcome::Ready(plan) = outcome else {
-                    return Reentry::PolicyFailed(NativePolicyFailure {
-                        worker,
-                        worker_epoch,
-                        signal,
-                        failure: EngineErrorCode::Internal,
-                        permit,
-                    });
-                };
-                let event = GenerationPlannedEvent {
-                    manifest: plan.protocol_manifest().clone(),
-                    plan_hash: pdf_rs_protocol::RenderPlanHash::new(plan.hash().into_digest()),
-                };
-                Reentry::PlanCompleted(NativePlanCompletion {
-                    worker,
-                    worker_epoch,
-                    signal,
-                    plan: Arc::new(plan),
-                    event,
-                    permit,
-                })
+                job_limits,
+            } => match RenderPlanJob::new(
+                scene,
+                decision,
+                config,
+                request,
+                renderer_epoch,
+                limits,
+                job_limits,
+            ) {
+                Ok(job) => NativePolicyTaskKind::Plan(job),
+                Err(error) => return self.policy_failure(policy_failure_code(error.code())),
+            },
+            NativePolicyTaskKind::Terminal => {
+                return self.policy_failure(EngineErrorCode::Internal);
+            }
+            job => job,
+        };
+        match kind {
+            NativePolicyTaskKind::Evaluate(mut job) => match job.poll(budget, &cancellation) {
+                PolicyJobPoll::Pending => {
+                    self.kind = NativePolicyTaskKind::Evaluate(job);
+                    NativeTaskPoll::Pending(self)
+                }
+                PolicyJobPoll::Ready => {
+                    let Some(result) = job.take_result() else {
+                        return self.policy_failure(EngineErrorCode::Internal);
+                    };
+                    let decision = match result {
+                        Ok(decision) => decision,
+                        Err(error) => {
+                            return self.policy_failure(policy_failure_code(error.code()));
+                        }
+                    };
+                    let projection = match decision.protocol_projection() {
+                        Ok(projection) => projection,
+                        Err(error) => {
+                            return self.policy_failure(policy_failure_code(error.code()));
+                        }
+                    };
+                    let event = CapabilityReportedEvent {
+                        decision: projection,
+                        decision_hash: pdf_rs_protocol::CapabilityDecisionHash::new(
+                            decision.hash().into_digest(),
+                        ),
+                    };
+                    NativeTaskPoll::Ready(Reentry::CapabilityCompleted(
+                        NativeCapabilityCompletion {
+                            worker: self.worker,
+                            worker_epoch: self.worker_epoch,
+                            signal: self.signal,
+                            decision,
+                            event,
+                            permit: self.permit,
+                        },
+                    ))
+                }
+            },
+            NativePolicyTaskKind::Plan(mut job) => match job.poll(budget, &cancellation) {
+                PolicyJobPoll::Pending => {
+                    self.kind = NativePolicyTaskKind::Plan(job);
+                    NativeTaskPoll::Pending(self)
+                }
+                PolicyJobPoll::Ready => {
+                    let Some(result) = job.take_result() else {
+                        return self.policy_failure(EngineErrorCode::Internal);
+                    };
+                    let outcome = match result {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            return self.policy_failure(policy_failure_code(error.code()));
+                        }
+                    };
+                    let RenderPlanOutcome::Ready(plan) = outcome else {
+                        return self.policy_failure(EngineErrorCode::Internal);
+                    };
+                    let event = GenerationPlannedEvent {
+                        manifest: plan.protocol_manifest().clone(),
+                        plan_hash: pdf_rs_protocol::RenderPlanHash::new(plan.hash().into_digest()),
+                    };
+                    NativeTaskPoll::Ready(Reentry::PlanCompleted(NativePlanCompletion {
+                        worker: self.worker,
+                        worker_epoch: self.worker_epoch,
+                        signal: self.signal,
+                        plan: Arc::new(plan),
+                        event,
+                        permit: self.permit,
+                    }))
+                }
+            },
+            NativePolicyTaskKind::EvaluateInput { .. }
+            | NativePolicyTaskKind::PlanInput { .. }
+            | NativePolicyTaskKind::Terminal => unreachable!("task input was normalized above"),
+        }
+    }
+
+    /// Runs the same resumable job to completion for synchronous executors.
+    pub fn run(self, cancellation: &dyn PolicyCancellation) -> Reentry {
+        let budget = PolicyPollBudget::new(
+            NonZeroU32::new(4_096).expect("fixed synchronous budget is nonzero"),
+        )
+        .expect("fixed synchronous budget satisfies the policy hard ceiling");
+        let mut task = self;
+        loop {
+            match task.poll(budget, cancellation) {
+                NativeTaskPoll::Pending(pending) => task = pending,
+                NativeTaskPoll::Ready(reentry) => return reentry,
             }
         }
+    }
+
+    fn policy_failure(self, failure: EngineErrorCode) -> NativeTaskPoll<Self> {
+        NativeTaskPoll::Ready(Reentry::PolicyFailed(NativePolicyFailure {
+            worker: self.worker,
+            worker_epoch: self.worker_epoch,
+            signal: self.signal,
+            failure,
+            permit: self.permit,
+        }))
     }
 }
 
 impl fmt::Debug for NativePolicyTask {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match &self.kind {
-            NativePolicyTaskKind::Evaluate { .. } => "Evaluate",
-            NativePolicyTaskKind::Plan { .. } => "Plan",
+            NativePolicyTaskKind::EvaluateInput { .. } | NativePolicyTaskKind::Evaluate(_) => {
+                "Evaluate"
+            }
+            NativePolicyTaskKind::PlanInput { .. } | NativePolicyTaskKind::Plan(_) => "Plan",
+            NativePolicyTaskKind::Terminal => "Terminal",
         };
         formatter
             .debug_struct("NativePolicyTask")
@@ -606,14 +671,20 @@ impl fmt::Debug for NativePolicyTask {
 pub(crate) struct PolicyTaskTracker {
     limit: AtomicUsize,
     used: AtomicUsize,
+    byte_limit: AtomicU64,
+    bytes_used: AtomicU64,
+    external: AtomicUsize,
     worker_epoch: AtomicU64,
 }
 
 impl PolicyTaskTracker {
-    pub(crate) const fn new(limit: usize, worker_epoch: WorkerEpoch) -> Self {
+    pub(crate) const fn new(limit: usize, byte_limit: u64, worker_epoch: WorkerEpoch) -> Self {
         Self {
             limit: AtomicUsize::new(limit),
             used: AtomicUsize::new(0),
+            byte_limit: AtomicU64::new(byte_limit),
+            bytes_used: AtomicU64::new(0),
+            external: AtomicUsize::new(0),
             worker_epoch: AtomicU64::new(worker_epoch.value()),
         }
     }
@@ -621,11 +692,32 @@ impl PolicyTaskTracker {
     pub(crate) fn try_acquire(
         self: &Arc<Self>,
         signal: TerminalSignal,
+        bytes: u64,
     ) -> Option<NativePolicyPermit> {
+        let mut byte_current = self.bytes_used.load(Ordering::Acquire);
+        loop {
+            let byte_next = byte_current.checked_add(bytes)?;
+            if byte_next > self.byte_limit.load(Ordering::Acquire) {
+                return None;
+            }
+            match self.bytes_used.compare_exchange_weak(
+                byte_current,
+                byte_next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => byte_current = observed,
+            }
+        }
         let mut current = self.used.load(Ordering::Acquire);
         loop {
-            let next = current.checked_add(1)?;
+            let Some(next) = current.checked_add(1) else {
+                self.bytes_used.fetch_sub(bytes, Ordering::AcqRel);
+                return None;
+            };
             if next > self.limit.load(Ordering::Acquire) {
+                self.bytes_used.fetch_sub(bytes, Ordering::AcqRel);
                 return None;
             }
             match self.used.compare_exchange_weak(
@@ -639,6 +731,8 @@ impl PolicyTaskTracker {
                         tracker: Arc::clone(self),
                         signal,
                         worker_epoch: self.worker_epoch.load(Ordering::Acquire),
+                        bytes,
+                        external: false,
                     });
                 }
                 Err(observed) => current = observed,
@@ -649,6 +743,14 @@ impl PolicyTaskTracker {
     pub(crate) fn used(&self) -> usize {
         self.used.load(Ordering::Acquire)
     }
+
+    pub(crate) fn bytes_used(&self) -> u64 {
+        self.bytes_used.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn external(&self) -> usize {
+        self.external.load(Ordering::Acquire)
+    }
 }
 
 /// Opaque move-only lifetime permit for external policy work and its result.
@@ -656,6 +758,8 @@ pub(crate) struct NativePolicyPermit {
     tracker: Arc<PolicyTaskTracker>,
     signal: TerminalSignal,
     worker_epoch: u64,
+    bytes: u64,
+    external: bool,
 }
 
 impl NativePolicyPermit {
@@ -672,6 +776,23 @@ impl NativePolicyPermit {
     pub(crate) const fn matches_worker_epoch(&self, worker_epoch: WorkerEpoch) -> bool {
         self.worker_epoch == worker_epoch.value()
     }
+
+    pub(crate) fn mark_external(&mut self) {
+        if self.external {
+            return;
+        }
+        self.tracker.external.fetch_add(1, Ordering::AcqRel);
+        self.external = true;
+    }
+
+    pub(crate) fn mark_internal(&mut self) {
+        if !self.external {
+            return;
+        }
+        let previous = self.tracker.external.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0);
+        self.external = false;
+    }
 }
 
 impl fmt::Debug for NativePolicyPermit {
@@ -680,6 +801,8 @@ impl fmt::Debug for NativePolicyPermit {
             .debug_struct("NativePolicyPermit")
             .field("signal", &self.signal)
             .field("worker_epoch", &self.worker_epoch)
+            .field("bytes", &self.bytes)
+            .field("external", &self.external)
             .field("tracker", &"[REDACTED]")
             .finish()
     }
@@ -687,6 +810,15 @@ impl fmt::Debug for NativePolicyPermit {
 
 impl Drop for NativePolicyPermit {
     fn drop(&mut self) {
+        if self.external {
+            let previous = self.tracker.external.fetch_sub(1, Ordering::AcqRel);
+            debug_assert!(previous > 0);
+        }
+        let previous_bytes = self
+            .tracker
+            .bytes_used
+            .fetch_sub(self.bytes, Ordering::AcqRel);
+        debug_assert!(previous_bytes >= self.bytes);
         let previous = self.tracker.used.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0);
     }
@@ -727,16 +859,25 @@ pub struct NativeRasterTask {
     scene: Arc<Scene>,
     plan: Arc<RenderPlan>,
     limits: FastRasterLimits,
+    policy_job_limits: PolicyJobLimits,
+    job_limits: FastRasterJobLimits,
+    job: Option<FastRasterOwnedJob>,
     cancellation: NativeRasterCancellation,
     reservation: NativeRasterReservation,
 }
 
 impl NativeRasterTask {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the move-only external task binds all immutable inputs, independent limits, cancellation, and its byte reservation"
+    )]
     pub(crate) const fn new(
         signal: TerminalSignal,
         scene: Arc<Scene>,
         plan: Arc<RenderPlan>,
         limits: FastRasterLimits,
+        policy_job_limits: PolicyJobLimits,
+        job_limits: FastRasterJobLimits,
         cancellation: NativeRasterCancellation,
         reservation: NativeRasterReservation,
     ) -> Self {
@@ -745,6 +886,9 @@ impl NativeRasterTask {
             scene,
             plan,
             limits,
+            policy_job_limits,
+            job_limits,
+            job: None,
             cancellation,
             reservation,
         }
@@ -760,81 +904,82 @@ impl NativeRasterTask {
         &self.plan
     }
 
-    /// Runs private Fast CPU work with executor-owned cooperative cancellation.
-    ///
-    /// The result remains private until the returned message is admitted back
-    /// through [`crate::NativeWorkerRegistry::enqueue_reentry`].
-    pub fn run(self, cancellation: &dyn FastRasterCancellation) -> Reentry {
-        let Self {
-            signal,
-            scene,
-            plan,
-            limits,
-            cancellation: registry_cancellation,
-            mut reservation,
-        } = self;
+    pub(crate) fn mark_external(&mut self) {
+        self.reservation.mark_external();
+    }
+
+    /// Advances at most one explicit Fast raster work budget.
+    pub fn poll(
+        mut self,
+        budget: FastRasterPollBudget,
+        cancellation: &dyn FastRasterCancellation,
+    ) -> NativeTaskPoll<Self> {
+        if self.job.is_none() {
+            let job = match FastRasterOwnedJob::new(
+                Arc::clone(&self.scene),
+                Arc::clone(&self.plan),
+                self.limits,
+                self.policy_job_limits,
+                self.job_limits,
+            ) {
+                Ok(job) => job,
+                Err(error) => return self.raster_failure(raster_failure_code(error)),
+            };
+            self.job = Some(job);
+        }
+        let registry_cancellation = self.cancellation.clone();
         let cancellation = CombinedRasterCancellation {
             registry: &registry_cancellation,
             executor: cancellation,
         };
-        let job = match FastRasterJob::new(&scene, &plan, limits, &cancellation) {
-            Ok(job) => job,
-            Err(error) => {
-                reservation.shrink_to(0);
-                return Reentry::RasterFailed(NativeRasterFailure {
-                    signal,
-                    failure: raster_failure_code(error),
-                    reservation,
-                });
-            }
+        let Some(job) = self.job.as_mut() else {
+            return self.raster_failure(EngineErrorCode::Internal);
         };
-        let mut order = Vec::new();
-        if order.try_reserve_exact(plan.tiles().len()).is_err() {
-            reservation.shrink_to(0);
-            return Reentry::RasterFailed(NativeRasterFailure {
-                signal,
-                failure: EngineErrorCode::ResourceLimit,
-                reservation,
-            });
+        if job.poll(budget, &cancellation) == FastRasterJobPoll::Pending {
+            return NativeTaskPoll::Pending(self);
         }
-        for index in 0..plan.tiles().len() {
-            let Ok(ordinal) = u32::try_from(index) else {
-                reservation.shrink_to(0);
-                return Reentry::RasterFailed(NativeRasterFailure {
-                    signal,
-                    failure: EngineErrorCode::Internal,
-                    reservation,
-                });
-            };
-            order.push(ordinal);
-        }
-        match job.render_all(&order, &cancellation) {
+        let Some(result) = job.take_result() else {
+            return self.raster_failure(EngineErrorCode::Internal);
+        };
+        match result {
             Ok(tiles) => {
                 let retained = tiles.stats().retained_bytes();
-                if !reservation.covers(retained) {
-                    reservation.shrink_to(0);
-                    return Reentry::RasterFailed(NativeRasterFailure {
-                        signal,
-                        failure: EngineErrorCode::Internal,
-                        reservation,
-                    });
+                if !self.reservation.covers(retained) {
+                    return self.raster_failure(EngineErrorCode::Internal);
                 }
-                reservation.shrink_to(retained);
-                Reentry::RasterCompleted(NativeRasterCompletion {
-                    signal,
+                self.reservation.shrink_to(retained);
+                NativeTaskPoll::Ready(Reentry::RasterCompleted(NativeRasterCompletion {
+                    signal: self.signal,
                     tiles,
-                    reservation,
-                })
+                    reservation: self.reservation,
+                }))
             }
-            Err(error) => {
-                reservation.shrink_to(0);
-                Reentry::RasterFailed(NativeRasterFailure {
-                    signal,
-                    failure: raster_failure_code(error),
-                    reservation,
-                })
+            Err(error) => self.raster_failure(raster_failure_code(error)),
+        }
+    }
+
+    /// Runs the same owned job to completion for synchronous executors.
+    pub fn run(self, cancellation: &dyn FastRasterCancellation) -> Reentry {
+        let budget = FastRasterPollBudget::new(
+            NonZeroU32::new(4_096).expect("fixed synchronous budget is nonzero"),
+        )
+        .expect("fixed synchronous raster budget satisfies its hard ceiling");
+        let mut task = self;
+        loop {
+            match task.poll(budget, cancellation) {
+                NativeTaskPoll::Pending(pending) => task = pending,
+                NativeTaskPoll::Ready(reentry) => return reentry,
             }
         }
+    }
+
+    fn raster_failure(mut self, failure: EngineErrorCode) -> NativeTaskPoll<Self> {
+        self.reservation.shrink_to(0);
+        NativeTaskPoll::Ready(Reentry::RasterFailed(NativeRasterFailure {
+            signal: self.signal,
+            failure,
+            reservation: self.reservation,
+        }))
     }
 }
 
@@ -842,6 +987,7 @@ impl NativeRasterTask {
 pub(crate) struct RasterBudget {
     limit: AtomicU64,
     used: AtomicU64,
+    external: AtomicUsize,
     worker_epoch: AtomicU64,
 }
 
@@ -850,6 +996,7 @@ impl RasterBudget {
         Self {
             limit: AtomicU64::new(limit),
             used: AtomicU64::new(0),
+            external: AtomicUsize::new(0),
             worker_epoch: AtomicU64::new(worker_epoch.value()),
         }
     }
@@ -865,6 +1012,7 @@ impl RasterBudget {
             bytes,
             signal,
             worker_epoch: self.worker_epoch.load(Ordering::Acquire),
+            external: false,
         })
     }
 
@@ -901,6 +1049,10 @@ impl RasterBudget {
     pub(crate) fn used(&self) -> u64 {
         self.used.load(Ordering::Acquire)
     }
+
+    pub(crate) fn external(&self) -> usize {
+        self.external.load(Ordering::Acquire)
+    }
 }
 
 /// Move-only charge for immutable bytes copied out of Surface ownership.
@@ -935,6 +1087,7 @@ pub(crate) struct NativeRasterReservation {
     bytes: u64,
     signal: TerminalSignal,
     worker_epoch: u64,
+    external: bool,
 }
 
 impl NativeRasterReservation {
@@ -969,6 +1122,23 @@ impl NativeRasterReservation {
     ) -> bool {
         self.worker_epoch == worker_epoch.value()
     }
+
+    pub(crate) fn mark_external(&mut self) {
+        if self.external {
+            return;
+        }
+        self.budget.external.fetch_add(1, Ordering::AcqRel);
+        self.external = true;
+    }
+
+    pub(crate) fn mark_internal(&mut self) {
+        if !self.external {
+            return;
+        }
+        let previous = self.budget.external.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0);
+        self.external = false;
+    }
 }
 
 impl fmt::Debug for NativeRasterReservation {
@@ -978,6 +1148,7 @@ impl fmt::Debug for NativeRasterReservation {
             .field("bytes", &self.bytes)
             .field("signal", &self.signal)
             .field("worker_epoch", &self.worker_epoch)
+            .field("external", &self.external)
             .field("budget", &"[REDACTED]")
             .finish()
     }
@@ -985,6 +1156,10 @@ impl fmt::Debug for NativeRasterReservation {
 
 impl Drop for NativeRasterReservation {
     fn drop(&mut self) {
+        if self.external {
+            let previous = self.budget.external.fetch_sub(1, Ordering::AcqRel);
+            debug_assert!(previous > 0);
+        }
         let previous = self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
         debug_assert!(previous >= self.bytes);
     }
@@ -1517,11 +1692,13 @@ pub struct NativeWorkerResources {
     queued_critical: usize,
     in_flight: usize,
     pending_policy_tasks: usize,
+    retained_policy_job_bytes: u64,
     pending_rasters: usize,
     retained_raster_bytes: u64,
     retained_cache_bytes: u64,
     retained_scene_bytes: u64,
     queued_publications: usize,
+    delivered_surface_leases: usize,
     queued_events: usize,
     surface: SurfaceResourceReport,
 }
@@ -1535,11 +1712,13 @@ impl NativeWorkerResources {
         queued_critical: usize,
         in_flight: usize,
         pending_policy_tasks: usize,
+        retained_policy_job_bytes: u64,
         pending_rasters: usize,
         retained_raster_bytes: u64,
         retained_cache_bytes: u64,
         retained_scene_bytes: u64,
         queued_publications: usize,
+        delivered_surface_leases: usize,
         queued_events: usize,
         surface: SurfaceResourceReport,
     ) -> Self {
@@ -1550,11 +1729,13 @@ impl NativeWorkerResources {
             queued_critical,
             in_flight,
             pending_policy_tasks,
+            retained_policy_job_bytes,
             pending_rasters,
             retained_raster_bytes,
             retained_cache_bytes,
             retained_scene_bytes,
             queued_publications,
+            delivered_surface_leases,
             queued_events,
             surface,
         }
@@ -1590,6 +1771,12 @@ impl NativeWorkerResources {
         self.pending_policy_tasks
     }
 
+    /// Returns worst-case owned bytes reserved by queued, external, or
+    /// completed pollable policy jobs.
+    pub const fn retained_policy_job_bytes(self) -> u64 {
+        self.retained_policy_job_bytes
+    }
+
     /// Returns complete raster resources awaiting terminal arbitration.
     pub const fn pending_rasters(self) -> usize {
         self.pending_rasters
@@ -1615,6 +1802,12 @@ impl NativeWorkerResources {
         self.queued_publications
     }
 
+    /// Returns Surface leases removed from the event queue but not yet
+    /// released by the Host or rolled back by a platform adapter.
+    pub const fn delivered_surface_leases(self) -> usize {
+        self.delivered_surface_leases
+    }
+
     /// Returns undelivered critical plus coalesced progress events.
     pub const fn queued_events(self) -> usize {
         self.queued_events
@@ -1633,11 +1826,13 @@ impl NativeWorkerResources {
             && self.queued_critical == 0
             && self.in_flight == 0
             && self.pending_policy_tasks == 0
+            && self.retained_policy_job_bytes == 0
             && self.pending_rasters == 0
             && self.retained_raster_bytes == 0
             && self.retained_cache_bytes == 0
             && self.retained_scene_bytes == 0
             && self.queued_publications == 0
+            && self.delivered_surface_leases == 0
             && self.queued_events == 0
             && self.surface.active_sessions() == 0
             && self.surface.has_zero_surface_resources()

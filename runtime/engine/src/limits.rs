@@ -1,7 +1,7 @@
 use pdf_rs_cache::TileCacheLimits;
-use pdf_rs_policy::PolicyLimits;
+use pdf_rs_policy::{PolicyJobLimits, PolicyLimits};
 use pdf_rs_protocol::{ProtocolLimits, WorkerId};
-use pdf_rs_raster::fast::FastRasterLimits;
+use pdf_rs_raster::fast::{FastRasterJobLimits, FastRasterLimits};
 use pdf_rs_scheduler::SchedulerLimits;
 use pdf_rs_surface::{SurfaceLimits, WorkerEpoch};
 
@@ -10,6 +10,7 @@ use crate::error::invalid_config;
 
 const HARD_MAX_SCENES_PER_OPEN: usize = 1_000_000;
 const HARD_MAX_INTEGRATION_QUEUE_CAPACITY: usize = 1_000_000;
+const HARD_MAX_RETAINED_POLICY_JOB_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const HARD_MAX_RETAINED_RASTER_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const HARD_MAX_RETAINED_CACHE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const HARD_MAX_RETAINED_SCENE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
@@ -29,6 +30,9 @@ pub struct NativeWorkerLimitConfig {
     pub request_history_capacity: usize,
     /// Maximum pending complete raster resources awaiting terminal arbitration.
     pub pending_resource_capacity: usize,
+    /// Maximum aggregate owned policy-job bytes across queued, external, and
+    /// completed capability or planning tasks.
+    pub retained_policy_job_byte_capacity: u64,
     /// Maximum aggregate Fast working plus retained bytes across external tasks
     /// and actor queues.
     pub retained_raster_byte_capacity: u64,
@@ -48,8 +52,12 @@ pub struct NativeWorkerLimitConfig {
     pub scheduler: SchedulerLimits,
     /// Capability and RenderPlan limits.
     pub policy: PolicyLimits,
+    /// Owned capability and RenderPlan job allocation ceilings.
+    pub policy_job: PolicyJobLimits,
     /// Fast CPU raster limits.
     pub raster: FastRasterLimits,
+    /// Owned resumable Fast CPU raster job limits.
+    pub raster_job: FastRasterJobLimits,
     /// Per-session product tile-cache limits.
     pub cache: TileCacheLimits,
     /// Worker/session Surface lifecycle limits.
@@ -65,6 +73,7 @@ impl Default for NativeWorkerLimitConfig {
             progress_event_capacity: 128,
             request_history_capacity: 4_096,
             pending_resource_capacity: 32,
+            retained_policy_job_byte_capacity: 1024 * 1024 * 1024,
             retained_raster_byte_capacity: 1024 * 1024 * 1024,
             retained_cache_byte_capacity: 1024 * 1024 * 1024,
             retained_scene_byte_capacity: 1024 * 1024 * 1024,
@@ -74,7 +83,9 @@ impl Default for NativeWorkerLimitConfig {
             scheduler: SchedulerLimits::new(128, 1, 32, 128, 32, 16, 4_096, 1, 4, 4)
                 .expect("crate-owned scheduler defaults are valid"),
             policy: PolicyLimits::default(),
+            policy_job: PolicyJobLimits::default(),
             raster: FastRasterLimits::default(),
+            raster_job: FastRasterJobLimits::default(),
             cache: TileCacheLimits::default(),
             surface: SurfaceLimits::default(),
         }
@@ -102,6 +113,7 @@ impl NativeWorkerConfig {
             .raster
             .max_retained_bytes()
             .checked_add(limits.raster.max_intermediate_bytes())
+            .and_then(|bytes| bytes.checked_add(limits.policy_job.max_retained_bytes()))
         else {
             return Err(invalid_config());
         };
@@ -123,6 +135,9 @@ impl NativeWorkerConfig {
             || limits.request_history_capacity > HARD_MAX_INTEGRATION_QUEUE_CAPACITY
             || limits.pending_resource_capacity == 0
             || limits.pending_resource_capacity > HARD_MAX_INTEGRATION_QUEUE_CAPACITY
+            || limits.retained_policy_job_byte_capacity == 0
+            || limits.retained_policy_job_byte_capacity > HARD_MAX_RETAINED_POLICY_JOB_BYTES
+            || limits.retained_policy_job_byte_capacity < limits.policy_job.max_retained_bytes()
             || limits.retained_raster_byte_capacity == 0
             || limits.retained_raster_byte_capacity > HARD_MAX_RETAINED_RASTER_BYTES
             || limits.retained_raster_byte_capacity < raster_task_byte_reservation
@@ -180,6 +195,7 @@ impl NativeWorkerConfig {
             .raster
             .max_retained_bytes()
             .checked_add(self.limits.raster.max_intermediate_bytes())
+            .and_then(|bytes| bytes.checked_add(self.limits.policy_job.max_retained_bytes()))
             .expect("validated Native Worker raster limits have a bounded sum")
     }
 }

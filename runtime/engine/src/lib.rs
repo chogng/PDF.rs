@@ -27,7 +27,7 @@ pub use limits::{NativeWorkerConfig, NativeWorkerLimitConfig};
 pub use model::{
     ActorProgress, ImportedSurfaceBytes, NativeCapabilityCompletion, NativePlanCompletion,
     NativePolicyFailure, NativePolicyTask, NativeRasterCompletion, NativeRasterFailure,
-    NativeRasterTask, NativeWorkerEvent, NativeWorkerPhase, NativeWorkerResources, OpenCompletion,
-    Reentry, ReentryAdmissionError, SessionPhase, SurfacePublication,
+    NativeRasterTask, NativeTaskPoll, NativeWorkerEvent, NativeWorkerPhase, NativeWorkerResources,
+    OpenCompletion, Reentry, ReentryAdmissionError, SessionPhase, SurfacePublication,
 };
 pub use registry::NativeWorkerRegistry;

@@ -8,6 +8,7 @@ mod error;
 mod kernels;
 mod limits;
 mod model;
+mod owned;
 mod render;
 mod stroke;
 
@@ -19,5 +20,9 @@ pub use limits::{FastRasterLimitConfig, FastRasterLimits};
 pub use model::{
     FastRasterAlgorithm, FastRasterCancellation, FastRasterIdentity, FastRasterStats, FastTile,
     FastTileBins, FastTileSet, NeverCancelled,
+};
+pub use owned::{
+    FastRasterJobLimitConfig, FastRasterJobLimits, FastRasterJobPoll, FastRasterOwnedJob,
+    FastRasterPollBudget,
 };
 pub use render::FastRasterJob;

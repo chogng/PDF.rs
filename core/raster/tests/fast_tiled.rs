@@ -1,17 +1,21 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
 use pdf_rs_policy::{
     AntialiasMode, CapabilityEvaluator, CapabilityProfile, DeviceRect, OptionalContentIdentity,
-    PolicyCancellation, PolicyLimits, RenderConfig, RenderConfigInput, RenderPlan,
+    PolicyCancellation, PolicyJobLimits, PolicyLimits, RenderConfig, RenderConfigInput, RenderPlan,
     RenderPlanOutcome, RenderPlanRequest, RendererEpoch, ZoomRatio, create_render_plan,
 };
 use pdf_rs_raster::fast::{
-    FastRasterCancellation, FastRasterErrorCode, FastRasterJob, FastRasterLimitConfig,
-    FastRasterLimitKind, FastRasterLimits, NeverCancelled,
+    FastRasterCancellation, FastRasterErrorCode, FastRasterJob, FastRasterJobLimitConfig,
+    FastRasterJobLimits, FastRasterJobPoll, FastRasterLimitConfig, FastRasterLimitKind,
+    FastRasterLimits, FastRasterOwnedJob, FastRasterPollBudget, FastTile, NeverCancelled,
 };
 use pdf_rs_raster::reference::{
     ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
@@ -28,6 +32,258 @@ use pdf_rs_syntax::ObjectRef;
 
 const PAGE_WIDTH: u32 = 16;
 const PAGE_HEIGHT: u32 = 16;
+
+#[test]
+fn owned_one_unit_polls_match_synchronous_pixels_and_identity() {
+    let scene = layered_scene();
+    let render_plan = plan(
+        &scene,
+        config(PAGE_WIDTH, PAGE_HEIGHT, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+    );
+    let synchronous = FastRasterJob::new(
+        &scene,
+        &render_plan,
+        FastRasterLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap()
+    .render_all(&[0], &NeverCancelled)
+    .unwrap();
+    let mut owned = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    let one = FastRasterPollBudget::new(NonZeroU32::new(1).unwrap()).unwrap();
+    let mut polls = 0;
+    while owned.poll(one, &NeverCancelled) == FastRasterJobPoll::Pending {
+        polls += 1;
+        assert!(polls < 20_000);
+    }
+    let incremental = owned.take_result().unwrap().unwrap();
+    assert!(polls > 1);
+    assert_eq!(compose(&incremental), compose(&synchronous));
+    assert_eq!(incremental.plan_hash(), synchronous.plan_hash());
+    assert_eq!(
+        incremental.tiles()[0].identity(),
+        synchronous.tiles()[0].identity()
+    );
+}
+
+#[test]
+fn atomic_tile_fuel_is_distinct_and_terminal() {
+    let scene = layered_scene();
+    let render_plan = plan(
+        &scene,
+        config(PAGE_WIDTH, PAGE_HEIGHT, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+    );
+    let mut owned = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::validate(FastRasterJobLimitConfig {
+            max_atomic_tile_fuel: 1,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let one = FastRasterPollBudget::new(NonZeroU32::new(1).unwrap()).unwrap();
+    for _ in 0..20_000 {
+        if owned.poll(one, &NeverCancelled) == FastRasterJobPoll::Ready {
+            break;
+        }
+    }
+    let error = owned.take_result().unwrap().unwrap_err();
+    assert_eq!(
+        error.limit().map(|limit| limit.kind()),
+        Some(FastRasterLimitKind::AtomicTileFuel)
+    );
+}
+
+#[test]
+fn large_poll_budget_still_renders_at_most_one_tile() {
+    let scene = layered_scene();
+    let render_plan = plan(&scene, config(8, 8, 1), PAGE_WIDTH, PAGE_HEIGHT);
+    let mut owned = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    let maximum = FastRasterPollBudget::new(NonZeroU32::new(4_096).unwrap()).unwrap();
+    let mut previous = 0;
+    loop {
+        let poll = owned.poll(maximum, &NeverCancelled);
+        let current = owned.completed_tiles();
+        assert!(current - previous <= 1);
+        previous = current;
+        if poll == FastRasterJobPoll::Ready {
+            break;
+        }
+    }
+    assert_eq!(previous, 4);
+}
+
+#[test]
+fn atomic_tile_fuel_has_exact_and_one_less_boundaries() {
+    let scene = layered_scene();
+    let render_plan = plan(
+        &scene,
+        config(PAGE_WIDTH, PAGE_HEIGHT, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+    );
+    let maximum = FastRasterPollBudget::new(NonZeroU32::new(4_096).unwrap()).unwrap();
+    let mut probe = FastRasterOwnedJob::new(
+        Arc::new(scene.clone()),
+        Arc::new(render_plan.clone()),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    while probe.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
+    let observed = probe.max_atomic_tile_fuel_observed();
+    assert!(observed > 1);
+    probe.take_result().unwrap().unwrap();
+
+    let mut exact = FastRasterOwnedJob::new(
+        Arc::new(scene.clone()),
+        Arc::new(render_plan.clone()),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::validate(FastRasterJobLimitConfig {
+            max_atomic_tile_fuel: observed,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    while exact.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
+    exact.take_result().unwrap().unwrap();
+
+    let mut one_less = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::validate(FastRasterJobLimitConfig {
+            max_atomic_tile_fuel: observed - 1,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    while one_less.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
+    let error = one_less.take_result().unwrap().unwrap_err();
+    assert_eq!(
+        error.limit().map(|limit| limit.kind()),
+        Some(FastRasterLimitKind::AtomicTileFuel)
+    );
+}
+
+#[test]
+fn owned_retained_capacity_has_exact_and_one_less_boundaries() {
+    let scene = layered_scene();
+    let render_plan = plan(
+        &scene,
+        config(PAGE_WIDTH, PAGE_HEIGHT, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+    );
+    let bin_bytes = FastRasterJob::new(
+        &scene,
+        &render_plan,
+        FastRasterLimits::default(),
+        &NeverCancelled,
+    )
+    .unwrap()
+    .bins()
+    .retained_bytes();
+    let mut tiles = Vec::<FastTile>::new();
+    tiles.try_reserve_exact(render_plan.tiles().len()).unwrap();
+    let metadata_bytes = u64::try_from(tiles.capacity()).unwrap()
+        * u64::try_from(core::mem::size_of::<FastTile>()).unwrap();
+    let pixel_bytes = u64::from(PAGE_WIDTH) * u64::from(PAGE_HEIGHT) * 4;
+    let exact_boundary = bin_bytes + metadata_bytes + pixel_bytes;
+    let maximum = FastRasterPollBudget::new(NonZeroU32::new(4_096).unwrap()).unwrap();
+
+    let mut exact = FastRasterOwnedJob::new(
+        Arc::new(scene.clone()),
+        Arc::new(render_plan.clone()),
+        limits_with(FastRasterLimitKind::RetainedBytes, exact_boundary),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    while exact.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
+    let tiles = exact.take_result().unwrap().unwrap();
+    assert_eq!(tiles.stats().retained_bytes(), exact_boundary);
+
+    let mut one_less = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        limits_with(FastRasterLimitKind::RetainedBytes, exact_boundary - 1),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    while one_less.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
+    let error = one_less.take_result().unwrap().unwrap_err();
+    let evidence = error.limit().unwrap();
+    assert_eq!(evidence.kind(), FastRasterLimitKind::RetainedBytes);
+    assert_eq!(evidence.limit(), exact_boundary - 1);
+    assert_eq!(evidence.observed(), exact_boundary);
+}
+
+#[test]
+fn owned_cancellation_discards_completed_private_tiles() {
+    let scene = layered_scene();
+    let render_plan = plan(&scene, config(8, 8, 1), PAGE_WIDTH, PAGE_HEIGHT);
+    let mut owned = FastRasterOwnedJob::new(
+        Arc::new(scene),
+        Arc::new(render_plan),
+        FastRasterLimits::default(),
+        PolicyJobLimits::default(),
+        FastRasterJobLimits::default(),
+    )
+    .unwrap();
+    let maximum = FastRasterPollBudget::new(NonZeroU32::new(4_096).unwrap()).unwrap();
+
+    assert_eq!(
+        owned.poll(maximum, &NeverCancelled),
+        FastRasterJobPoll::Pending
+    );
+    assert_eq!(owned.completed_tiles(), 1);
+
+    let cancelled = CancelAfter::new(0);
+    assert_eq!(owned.poll(maximum, &cancelled), FastRasterJobPoll::Ready);
+    assert_eq!(cancelled.calls(), 1);
+    assert_eq!(owned.completed_tiles(), 0);
+    assert_eq!(
+        owned.take_result().unwrap().unwrap_err().code(),
+        FastRasterErrorCode::Cancelled
+    );
+    assert_eq!(
+        owned.poll(maximum, &NeverCancelled),
+        FastRasterJobPoll::Ready
+    );
+}
+
+#[test]
+fn owned_binning_never_clones_graphics_command_payloads() {
+    let source = include_str!("../src/fast/owned.rs");
+    assert!(!source.contains("record.command().clone"));
+    assert!(!source.contains("record.clone()"));
+}
 
 #[test]
 fn bounds_bins_preserve_source_order_and_skip_disjoint_tiles() {
@@ -1142,6 +1398,9 @@ fn limits_with(kind: FastRasterLimitKind, value: u64) -> FastRasterLimits {
         FastRasterLimitKind::RetainedBytes => config.max_retained_bytes = value,
         FastRasterLimitKind::IntermediateBytes => config.max_intermediate_bytes = value,
         FastRasterLimitKind::Fuel => config.max_fuel = value,
+        FastRasterLimitKind::AtomicTileFuel => {
+            panic!("atomic tile fuel belongs to FastRasterJobLimits")
+        }
         FastRasterLimitKind::CancellationInterval => config.max_cancellation_interval = value,
     }
     FastRasterLimits::validate(config).unwrap()

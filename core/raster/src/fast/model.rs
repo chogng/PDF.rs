@@ -132,6 +132,10 @@ impl FastTileBins {
     pub const fn retained_bytes(&self) -> u64 {
         self.retained_bytes
     }
+
+    pub(crate) fn into_inner_bins(self) -> Vec<Vec<u32>> {
+        self.bins
+    }
 }
 
 /// Deterministic accounting for one complete Fast job.
