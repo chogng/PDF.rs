@@ -247,6 +247,8 @@ progress = [
   "The UI-neutral viewer now exposes an explicit Fast CPU qualification path while retaining Reference CPU as its default and binding the producing renderer to every surface.",
   "The Electron bridge accepts only the exact default-off m4-r0-basic-page-local-v1 cohort, proves rollback to Reference in a new process, and preserves Unsupported semantics in both modes.",
   "The full Electron open, readable-page, navigation, zoom, resize, close, and shutdown smoke now runs through Fast CPU and visibly reports Fast CPU on each surface.",
+  "A frozen deterministic post-parse holdout now covers 1,000 eligible pages across fill, clip, image, and outline-glyph families with zero exclusions, fallbacks, partial publications, or channel differences against Reference CPU; its cohort, pixels, and Fast fuel are hash- or value-bound for replay.",
+  "The holdout exposed and now guards a Fast nearest-image vertical row-orientation defect with a distinct 2-by-2 top/bottom regression instead of weakening the cohort or comparison tolerance.",
 ]
 acceptance = [
   "Registered O0/O1/O3 cases, tile metamorphics, Fast-versus-Reference geometry and pixel diffs, lifecycle faults, and fixed-seed fuzz replay pass with no open critical or major finding.",

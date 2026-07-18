@@ -165,6 +165,7 @@ name = "pdf-rs-fast-raster"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
+ "pdf-rs-digest",
  "pdf-rs-policy",
  "pdf-rs-raster",
  "pdf-rs-scene",

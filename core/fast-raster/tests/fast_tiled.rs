@@ -420,11 +420,16 @@ fn clip_masks_and_nearest_image_sampling_use_independent_scalar_kernels() {
     let image = ImageResource::new(
         GraphicsResourceSource::new(ObjectRef::new(60, 0).unwrap(), 19, 0),
         2,
-        1,
+        2,
         ImageColorSpace::DeviceRgb,
         8,
         false,
-        vec![255, 0, 0, 0, 255, 0],
+        vec![
+            255, 0, 0, // decoded top-left: red
+            0, 255, 0, // decoded top-right: green
+            0, 0, 255, // decoded bottom-left: blue
+            0, 0, 0, // decoded bottom-right: black
+        ],
     )
     .unwrap();
     image_builder
@@ -457,8 +462,10 @@ fn clip_masks_and_nearest_image_sampling_use_independent_scalar_kernels() {
         .render_all(&[0, 1, 2, 3], &NeverCancelled)
         .unwrap(),
     );
-    assert_eq!(pixel(&image_pixels, 2, 8), [255, 0, 0, 255]);
-    assert_eq!(pixel(&image_pixels, 13, 8), [0, 255, 0, 255]);
+    assert_eq!(pixel(&image_pixels, 2, 2), [255, 0, 0, 255]);
+    assert_eq!(pixel(&image_pixels, 13, 2), [0, 255, 0, 255]);
+    assert_eq!(pixel(&image_pixels, 2, 13), [0, 0, 255, 255]);
+    assert_eq!(pixel(&image_pixels, 13, 13), [0, 0, 0, 255]);
 }
 
 #[test]

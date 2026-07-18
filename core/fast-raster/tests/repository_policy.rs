@@ -42,6 +42,7 @@ fn fast_raster_has_only_native_policy_and_scene_product_dependencies() {
         dependency_lines(&manifest, "[dev-dependencies]"),
         [
             r#"pdf-rs-bytes = { path = "../bytes" }"#,
+            r#"pdf-rs-digest = { path = "../../tools/digest" }"#,
             r#"pdf-rs-raster = { path = "../raster" }"#,
             r#"pdf-rs-syntax = { path = "../syntax" }"#,
         ]

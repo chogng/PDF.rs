@@ -1145,14 +1145,17 @@ fn image_coordinates(
         .checked_mul(i128::from(image.width()))
         .ok_or_else(numeric)?
         / denominator;
-    let y = v
+    let bottom_row = v
         .checked_mul(i128::from(image.height()))
         .ok_or_else(numeric)?
         / denominator;
-    Ok(Some((
-        u32::try_from(x).map_err(|_| numeric())?,
-        u32::try_from(y).map_err(|_| numeric())?,
-    )))
+    let bottom_row = u32::try_from(bottom_row).map_err(|_| numeric())?;
+    let y = image
+        .height()
+        .checked_sub(1)
+        .and_then(|last| last.checked_sub(bottom_row))
+        .ok_or_else(numeric)?;
+    Ok(Some((u32::try_from(x).map_err(|_| numeric())?, y)))
 }
 
 fn image_color(image: &ImageResource, x: u32, y: u32) -> Result<(u32, u32, u32), FastRasterError> {

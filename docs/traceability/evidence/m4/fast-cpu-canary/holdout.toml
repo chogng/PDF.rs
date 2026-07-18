@@ -1,0 +1,48 @@
+schema = 1
+evidence_id = "m4.fast-cpu-canary.holdout.v1"
+evidence_kind = "post-parse-scene-holdout"
+status = "passed"
+completed_at = 2026-07-18
+capability_profile = "m3.reference-raster-v1.v1"
+renderer = "fast-scalar-tiled-v1"
+cohort = "m4-r0-basic-page-local-v1"
+cohort_schema = "m4.fast-cpu.canary-holdout.v1"
+cohort_sha256 = "cef88fcfcaa0d31cc74d9958e3185a9216cc7b638a3240ca7e3813a01b26ae42"
+pixel_sha256 = "f15710d0d7c0ef3d92c52b65a520576506a406a94789df04201d8e19ab363b9c"
+
+[denominators]
+eligible_pages = 1000
+excluded_pages = 0
+fill_pages = 250
+clip_pages = 250
+image_pages = 250
+glyph_pages = 250
+output_width = 16
+output_height = 16
+published_tiles = 4000
+deterministic_fast_fuel = 23741984
+
+[outcomes]
+completed_pages = 1000
+panic = 0
+hang = 0
+partial_pixels = 0
+unexpected_unsupported = 0
+external_engine_fallback = 0
+critical_findings = 0
+major_findings = 0
+maximum_channel_delta = 0
+changed_channels = 0
+
+[replay]
+command = "cargo test --locked --package pdf-rs-fast-raster --test m4_canary"
+test = "fixed_post_parse_holdout_qualifies_one_thousand_fast_pages"
+reference = "pdf-rs-raster Reference CPU"
+product = "pdf-rs-fast-raster Fast CPU"
+tile_order = [0, 1, 2, 3]
+
+[scope]
+source_boundary = "Deterministically generated immutable GraphicsScene values after parsing and interpretation."
+pixel_boundary = "Integer-aligned 16-by-16 RGBA8 output compared exactly, channel by channel, against the reviewed Reference CPU."
+families = ["fill", "clip", "image", "outline glyph"]
+limitations = "This evidence is not a broad PDF parser corpus, release-r0 document corpus, PDFium comparison, color-management qualification, or performance baseline. It qualifies only the explicitly generated post-parse Scene cohort."
