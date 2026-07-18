@@ -59,7 +59,7 @@ impl Default for FontLimitConfig {
         Self {
             max_input_bytes: 16 * 1024 * 1024,
             max_tables: 64,
-            max_glyphs: 16_384,
+            max_glyphs: u16::MAX as u32,
             max_cmap_segments: 4_096,
             max_glyph_data_bytes: 16 * 1024 * 1024,
             max_glyph_bytes: 2 * 1024 * 1024,

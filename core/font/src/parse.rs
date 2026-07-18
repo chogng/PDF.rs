@@ -86,7 +86,7 @@ struct Tables {
     loca: Table,
     glyf: Table,
     hmtx: Table,
-    cmap: Table,
+    cmap: Option<Table>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -450,7 +450,7 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
             loca: loca.ok_or_else(|| self.error(FontErrorCode::MissingRequiredTable, None))?,
             glyf: glyf.ok_or_else(|| self.error(FontErrorCode::MissingRequiredTable, None))?,
             hmtx: hmtx.ok_or_else(|| self.error(FontErrorCode::MissingRequiredTable, None))?,
-            cmap: cmap.ok_or_else(|| self.error(FontErrorCode::MissingRequiredTable, None))?,
+            cmap,
         })
     }
 
@@ -527,12 +527,21 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
             return Err(self.error(FontErrorCode::InvalidHmtx, None));
         }
 
-        let cmap = self.parse_cmap(tables.cmap, glyph_count)?;
         let winansi_glyphs = match self.profile {
             FontProfile::SimpleTrueTypeWinAnsiAsciiV1 => {
+                let cmap = tables
+                    .cmap
+                    .ok_or_else(|| self.error(FontErrorCode::MissingRequiredTable, None))?;
+                let cmap = self.parse_cmap(cmap, glyph_count)?;
                 self.map_winansi_ascii(&cmap, glyph_count)?
             }
-            FontProfile::SimpleTrueTypeWinAnsiV1 => self.map_winansi(&cmap, glyph_count)?,
+            FontProfile::SimpleTrueTypeWinAnsiV1 => {
+                let cmap = tables
+                    .cmap
+                    .ok_or_else(|| self.error(FontErrorCode::MissingRequiredTable, None))?;
+                let cmap = self.parse_cmap(cmap, glyph_count)?;
+                self.map_winansi(&cmap, glyph_count)?
+            }
             FontProfile::CidFontType2IdentityV1 => [GlyphId::new(0); 224],
             FontProfile::SimpleType1CStandardV1 => {
                 return Err(ParseStop::Unsupported(FontUnsupported::new(

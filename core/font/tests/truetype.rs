@@ -115,6 +115,56 @@ fn complete_winansi_profile_admits_extended_codes_without_changing_legacy_ascii(
 }
 
 #[test]
+fn identity_cid_profile_does_not_require_an_unused_cmap_table() {
+    let mut bytes = foundational_font();
+    let table_count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+    let cmap_record = (0..table_count)
+        .map(|index| 12 + index * 16)
+        .find(|record| bytes[*record..*record + 4] == *b"cmap")
+        .expect("fixture contains cmap");
+    bytes[cmap_record..cmap_record + 4].copy_from_slice(b"name");
+
+    let cid = ready_with_profile(
+        &bytes,
+        FontProfile::CidFontType2IdentityV1,
+        FontLimits::default(),
+    );
+    assert_eq!(cid.glyph_count(), 4);
+    assert_eq!(cid.stats().cmap_segments(), 0);
+    assert!(cid.glyph_outline(GlyphId::new(1)).is_some());
+
+    match parse_truetype(
+        &bytes,
+        FontProfile::SimpleTrueTypeWinAnsiV1,
+        FontLimits::default(),
+        &NeverCancelled,
+    )
+    .into_outcome()
+    {
+        FontParseOutcome::Failed(error) => {
+            assert_eq!(error.code(), FontErrorCode::MissingRequiredTable)
+        }
+        outcome => panic!("simple WinAnsi profile must still require cmap, got {outcome:?}"),
+    }
+}
+
+#[test]
+fn default_profile_admits_large_bounded_cid_font_subsets() {
+    const GLYPH_COUNT: usize = 50_377;
+    let bytes = build_font((0..GLYPH_COUNT).map(|_| Vec::new()).collect());
+    let font = ready_with_profile(
+        &bytes,
+        FontProfile::CidFontType2IdentityV1,
+        FontLimits::default(),
+    );
+
+    assert_eq!(font.glyph_count(), GLYPH_COUNT as u16);
+    assert_eq!(font.stats().glyphs(), GLYPH_COUNT as u64);
+    assert_eq!(font.stats().path_segments(), 0);
+    assert!(font.stats().retained_bytes() < FontLimits::default().max_retained_bytes());
+}
+
+#[test]
 fn compound_use_my_metrics_is_last_wins_and_inherits_nested_metrics() {
     let mut selected_first = compound_glyph(&[(1, 0, 0), (2, 0, 0)]);
     set_u16(&mut selected_first, 10, 0x0001 | 0x0002 | 0x0020 | 0x0200);
