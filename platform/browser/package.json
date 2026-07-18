@@ -16,10 +16,14 @@
     "test:build": "npm run clean && tsc --project tsconfig.test.json",
     "test:unit": "npm run test:build && node --test .test-dist/test/*.test.js",
     "worker:test": "cargo test --locked --manifest-path ../../Cargo.toml --package pdf-rs-browser-worker",
+    "abi:check": "node scripts/generate-native-worker-abi.mjs --check",
+    "abi:generate": "node scripts/generate-native-worker-abi.mjs",
     "wasm:check": "cargo check --locked --manifest-path ../../Cargo.toml --package pdf-rs-browser-worker --target wasm32-unknown-unknown",
-    "wasm:build": "cargo build --locked --manifest-path ../../Cargo.toml --package pdf-rs-browser-worker --bin pdf-rs-browser-worker --target wasm32-unknown-unknown",
-    "test": "npm run protocol:check && npm run typecheck && npm run test:unit && npm run worker:test",
-    "check": "npm run toolchain:check && npm test && npm run wasm:build"
+    "wasm:build": "npm run abi:check && tsc --project tsconfig.test.json && node scripts/build-native-worker.mjs",
+    "wasm:verify": "node scripts/verify-native-worker.mjs",
+    "wasm:fixture": "node scripts/test-native-worker-fixture.mjs",
+    "test": "npm run protocol:check && npm run abi:check && npm run typecheck && npm run test:unit && npm run worker:test",
+    "check": "npm run toolchain:check && npm test && npm run wasm:build && npm run wasm:verify && npm run wasm:fixture"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

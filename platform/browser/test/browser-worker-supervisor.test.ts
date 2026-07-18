@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AlphaMode,
   CapabilityScopeKind,
   CapabilityProfileId,
   CollectionCompleteness,
   DataPriority,
   EndpointCapability,
   EndpointRole,
+  EngineErrorCode,
+  ErrorCategory,
+  ErrorRecoverability,
+  ErrorSeverity,
   GenerationCompletionStatus,
   MAX_MESSAGE_BYTES,
   MAX_TRANSFER_SLOTS,
@@ -17,10 +22,12 @@ import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   PageRotation,
+  PixelFormat,
   QualityPolicy,
   SCHEMA_HASH,
   SupportStatus,
   SurfaceCoordinateSpace,
+  SurfaceReclaimReason,
   encodeCapabilityReportedEventPayload,
   decodeCommandPayload,
   encodeCorrelationPayload,
@@ -32,6 +39,8 @@ import {
   encodeNeedDataEventPayload,
   encodeReadyEventPayload,
   encodeSessionClosedEventPayload,
+  encodeSurfaceReadyEventPayload,
+  encodeSurfaceReclaimedEventPayload,
   encodeWorkerStoppedEventPayload,
   type Correlation,
   type EnvelopeHeader,
@@ -197,6 +206,10 @@ const eventRecord = (event: Event): Uint8Array => {
       return unwrap(
         encodeGenerationCompletedEventPayload(event.payload),
       );
+    case "SurfaceReady":
+      return unwrap(encodeSurfaceReadyEventPayload(event.payload));
+    case "SurfaceReclaimed":
+      return unwrap(encodeSurfaceReclaimedEventPayload(event.payload));
     case "SessionClosed":
       return unwrap(encodeSessionClosedEventPayload(event.payload));
     case "WorkerStopped":
@@ -210,6 +223,7 @@ const eventFrame = (
   event: Event,
   correlation: Correlation,
   sequence: bigint,
+  resources: readonly unknown[] = [],
 ): unknown[] => {
   const descriptor = MESSAGE_DESCRIPTORS.find(
     (candidate) =>
@@ -250,7 +264,7 @@ const eventFrame = (
   new Uint8Array(control, BROWSER_CONTROL_HEADER_BYTES).set(
     encoded.bytes,
   );
-  return [control];
+  return [control, ...resources];
 };
 
 const engineHello = (
@@ -558,11 +572,78 @@ const generationPlanned = (generation: bigint): Event => ({
   },
 });
 
-const generationCompleted = (): Event => ({
+const generationCompleted = (
+  status = GenerationCompletionStatus.Completed,
+): Event => ({
   type: "GenerationCompleted",
   payload: {
-    status: GenerationCompletionStatus.Completed,
+    status,
     produced_regions: 0,
+    ...(status === GenerationCompletionStatus.Failed
+      ? {
+        error: {
+          code: EngineErrorCode.Internal,
+          category: ErrorCategory.Internal,
+          severity: ErrorSeverity.Fatal,
+          recoverability: ErrorRecoverability.RestartWorker,
+          diagnostic_id: 1n,
+        },
+      }
+      : {}),
+  },
+});
+
+const surfaceReady = (generation: bigint): Event => ({
+  type: "SurfaceReady",
+  payload: {
+    metadata: {
+      id: 90n,
+      lease_token: 91n,
+      owner: {
+        worker: 1n,
+        session: 20n,
+      },
+      generation,
+      region: {
+        page_index: 0,
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 2,
+        coordinate_space:
+          SurfaceCoordinateSpace.DevicePixelsTopLeft,
+      },
+      width: 2,
+      height: 2,
+      stride: 8,
+      format: PixelFormat.Rgba8,
+      alpha: AlphaMode.Straight,
+      byte_offset: 0n,
+      byte_length: 16n,
+      render_config: new Uint8Array(32).fill(1),
+      renderer_epoch: 1,
+      plan_id: 1n,
+      plan_hash: new Uint8Array(32).fill(2),
+      scene_hash: new Uint8Array(32).fill(3),
+      decision_hash: new Uint8Array(32).fill(4),
+      backend: NativeBackend.FastCpu,
+    },
+    transport: {
+      kind: "BrowserArrayBuffer",
+      slot: 0,
+      buffer_length: 16n,
+    },
+  },
+});
+
+const surfaceReclaimed = (
+  reason = SurfaceReclaimReason.MemoryPressure,
+): Event => ({
+  type: "SurfaceReclaimed",
+  payload: {
+    surface: 90n,
+    lease_token: 91n,
+    reason,
   },
 });
 
@@ -577,6 +658,28 @@ const assertSupervisorError = (
       && error.code === code
       && error.message === code,
   );
+};
+
+const replacedGenerationFixture = () => {
+  const result = fixture();
+  result.supervisor.start();
+  const port = result.ports[0];
+  assert.ok(port !== undefined);
+  handshake(result.supervisor, port);
+  result.supervisor.takeEvents();
+  openSession(result.supervisor, port);
+  result.supervisor.takeEvents();
+  result.supervisor.submit(
+    viewportCommand(1n),
+    { session: 20n, generation: 1n },
+  );
+  assert.equal(result.supervisor.drainOutboundTurn(), 1);
+  result.supervisor.submit(
+    viewportCommand(2n),
+    { session: 20n, generation: 2n },
+  );
+  assert.equal(result.supervisor.drainOutboundTurn(), 1);
+  return { ...result, port };
 };
 
 test("handshake and Worker callbacks advance only through explicit turns", () => {
@@ -804,6 +907,488 @@ test("generation completion is terminal for every later publication", () => {
   );
   assert.equal(supervisor.processInboundTurn(), 0);
   assert.equal(supervisor.state, "Failed");
+});
+
+test("Surface queued before replacement is rechecked and released at dequeue", () => {
+  const { supervisor, ports } = fixture();
+  supervisor.start();
+  const port = ports[0];
+  assert.ok(port !== undefined);
+  handshake(supervisor, port);
+  supervisor.takeEvents();
+  openSession(supervisor, port);
+  supervisor.takeEvents();
+
+  supervisor.submit(
+    viewportCommand(1n),
+    { session: 20n, generation: 1n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      surfaceReady(1n),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+      [new ArrayBuffer(16)],
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 1);
+  assert.equal(supervisor.queueDepths.criticalEvents, 1);
+
+  supervisor.submit(
+    viewportCommand(2n),
+    { session: 20n, generation: 2n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  assert.deepEqual(supervisor.takeEvents(), []);
+  assert.equal(supervisor.queueDepths.criticalEvents, 0);
+  assert.equal(supervisor.queueDepths.criticalCommands, 1);
+
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  const release = decodedCommand(port.sent.at(-1));
+  assert.equal(release.command.type, "ReleaseSurface");
+  if (release.command.type === "ReleaseSurface") {
+    assert.equal(release.command.payload.surface, 90n);
+    assert.equal(release.command.payload.lease_token, 91n);
+  }
+  assert.deepEqual(release.correlation, {
+    worker: 1n,
+    session: 20n,
+  });
+});
+
+test("queued Surface remains deliverable after its generation completes", () => {
+  const { supervisor, ports } = fixture();
+  supervisor.start();
+  const port = ports[0];
+  assert.ok(port !== undefined);
+  handshake(supervisor, port);
+  supervisor.takeEvents();
+  openSession(supervisor, port);
+  supervisor.takeEvents();
+
+  supervisor.submit(
+    viewportCommand(1n),
+    { session: 20n, generation: 1n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      surfaceReady(1n),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+      [new ArrayBuffer(16)],
+    ),
+  );
+  port.emit(
+    eventFrame(
+      generationCompleted(),
+      { worker: 1n, session: 20n, generation: 1n },
+      6n,
+    ),
+  );
+
+  assert.equal(supervisor.processInboundTurn(), 2);
+  assert.deepEqual(
+    supervisor.takeEvents().map((event) =>
+      event.type === "ProtocolEvent"
+        ? event.value.envelope.event.type
+        : event.type,
+    ),
+    ["SurfaceReady", "GenerationCompleted"],
+  );
+  assert.equal(supervisor.queueDepths.criticalCommands, 0);
+});
+
+test("queued Surface is released after its generation is cancelled or fails", () => {
+  for (
+    const status of [
+      GenerationCompletionStatus.Cancelled,
+      GenerationCompletionStatus.Failed,
+    ]
+  ) {
+    const { supervisor, ports } = fixture();
+    supervisor.start();
+    const port = ports[0];
+    assert.ok(port !== undefined);
+    handshake(supervisor, port);
+    supervisor.takeEvents();
+    openSession(supervisor, port);
+    supervisor.takeEvents();
+
+    supervisor.submit(
+      viewportCommand(1n),
+      { session: 20n, generation: 1n },
+    );
+    assert.equal(supervisor.drainOutboundTurn(), 1);
+    port.emit(
+      eventFrame(
+        surfaceReady(1n),
+        { worker: 1n, session: 20n, generation: 1n },
+        5n,
+        [new ArrayBuffer(16)],
+      ),
+    );
+    port.emit(
+      eventFrame(
+        generationCompleted(status),
+        { worker: 1n, session: 20n, generation: 1n },
+        6n,
+      ),
+    );
+
+    assert.equal(supervisor.processInboundTurn(), 2);
+    assert.deepEqual(
+      supervisor.takeEvents().map((event) =>
+        event.type === "ProtocolEvent"
+          ? event.value.envelope.event.type
+          : event.type,
+      ),
+      ["GenerationCompleted"],
+    );
+    assert.equal(supervisor.queueDepths.criticalCommands, 1);
+    assert.equal(supervisor.drainOutboundTurn(), 1);
+    assert.equal(
+      decodedCommand(port.sent.at(-1)).command.type,
+      "ReleaseSurface",
+    );
+  }
+});
+
+test("queued Surface is dropped after an active-generation reclaim", () => {
+  const { supervisor, ports } = fixture();
+  supervisor.start();
+  const port = ports[0];
+  assert.ok(port !== undefined);
+  handshake(supervisor, port);
+  supervisor.takeEvents();
+  openSession(supervisor, port);
+  supervisor.takeEvents();
+  supervisor.submit(
+    viewportCommand(1n),
+    { session: 20n, generation: 1n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      surfaceReady(1n),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+      [new ArrayBuffer(16)],
+    ),
+  );
+  port.emit(
+    eventFrame(
+      surfaceReclaimed(),
+      { worker: 1n, session: 20n },
+      6n,
+    ),
+  );
+
+  assert.equal(supervisor.processInboundTurn(), 2);
+  assert.deepEqual(
+    supervisor.takeEvents().map((event) =>
+      event.type === "ProtocolEvent"
+        ? event.value.envelope.event.type
+        : event.type,
+    ),
+    ["SurfaceReclaimed"],
+  );
+  assert.equal(supervisor.queueDepths.criticalCommands, 0);
+  assert.equal(supervisor.state, "Ready");
+});
+
+test("reclaimed queued Surface stays dropped after WorkerStopped", () => {
+  const { supervisor, ports } = fixture();
+  supervisor.start();
+  const port = ports[0];
+  assert.ok(port !== undefined);
+  handshake(supervisor, port);
+  supervisor.takeEvents();
+  openSession(supervisor, port);
+  supervisor.takeEvents();
+  supervisor.submit(
+    viewportCommand(1n),
+    { session: 20n, generation: 1n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      surfaceReady(1n),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+      [new ArrayBuffer(16)],
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 1);
+
+  supervisor.submit(
+    { type: "Shutdown", payload: { deadline_ms: 25 } },
+    {},
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      surfaceReclaimed(SurfaceReclaimReason.SessionClosed),
+      { worker: 1n, session: 20n },
+      6n,
+    ),
+  );
+  port.emit(
+    eventFrame(
+      { type: "WorkerStopped", payload: { worker: 1n } },
+      { worker: 1n },
+      7n,
+    ),
+  );
+
+  assert.equal(supervisor.processInboundTurn(), 2);
+  assert.equal(supervisor.state, "Stopped");
+  assert.deepEqual(
+    supervisor.takeEvents().map((event) =>
+      event.type === "ProtocolEvent"
+        ? event.value.envelope.event.type
+        : event.type,
+    ),
+    ["SurfaceReclaimed", "WorkerStopped"],
+  );
+  assert.equal(supervisor.state, "Stopped");
+  assert.equal(supervisor.queueDepths.criticalCommands, 0);
+});
+
+test("accepts exactly one Superseded terminal from the prior generation", () => {
+  const { supervisor, port } = replacedGenerationFixture();
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 1);
+  assert.equal(supervisor.state, "Ready");
+  const event = supervisor.takeEvents()[0];
+  assert.equal(event?.type, "ProtocolEvent");
+  if (event?.type === "ProtocolEvent") {
+    assert.equal(
+      event.value.envelope.event.type,
+      "GenerationCompleted",
+    );
+  }
+
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      6n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 0);
+  assert.equal(supervisor.state, "Failed");
+});
+
+test("accepts multiple displaced generation terminals out of order", () => {
+  const { supervisor, port } = replacedGenerationFixture();
+  supervisor.submit(
+    viewportCommand(3n),
+    { session: 20n, generation: 3n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 2n },
+      5n,
+    ),
+  );
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      6n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 2);
+  assert.equal(supervisor.state, "Ready");
+  assert.deepEqual(
+    supervisor.takeEvents().map((event) =>
+      event.type === "ProtocolEvent"
+        ? event.value.envelope.correlation.generation
+        : undefined,
+    ),
+    [2n, 1n],
+  );
+});
+
+test("drains displaced terminals before closing the session", () => {
+  const { supervisor, port } = replacedGenerationFixture();
+  supervisor.submit(
+    { type: "CloseSession", payload: {} },
+    { session: 20n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+    ),
+  );
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 2n },
+      6n,
+    ),
+  );
+  port.emit(
+    eventFrame(
+      { type: "SessionClosed", payload: { session: 20n } },
+      { worker: 1n, session: 20n },
+      7n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 3);
+  assert.equal(supervisor.state, "Ready");
+
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      8n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 0);
+  assert.equal(supervisor.state, "Failed");
+});
+
+test("drains displaced terminals before WorkerStopped on shutdown", () => {
+  const { supervisor, port } = replacedGenerationFixture();
+  supervisor.submit(
+    { type: "Shutdown", payload: { deadline_ms: 25 } },
+    {},
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  assert.equal(supervisor.state, "Draining");
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+    ),
+  );
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 2n },
+      6n,
+    ),
+  );
+  port.emit(
+    eventFrame(
+      { type: "WorkerStopped", payload: { worker: 1n } },
+      { worker: 1n },
+      7n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 3);
+  assert.equal(supervisor.state, "Stopped");
+  assert.equal(supervisor.hasLiveWorker, false);
+});
+
+test("backpressures viewport replacement before the terminal ledger fills", () => {
+  const { supervisor, ports } = fixture(
+    defaultLimits({ maxCriticalEvents: 2 }),
+  );
+  supervisor.start();
+  const port = ports[0];
+  assert.ok(port !== undefined);
+  handshake(supervisor, port);
+  supervisor.takeEvents();
+  openSession(supervisor, port);
+  supervisor.takeEvents();
+  supervisor.submit(
+    viewportCommand(1n),
+    { session: 20n, generation: 1n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  supervisor.submit(
+    viewportCommand(2n),
+    { session: 20n, generation: 2n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+  supervisor.submit(
+    viewportCommand(3n),
+    { session: 20n, generation: 3n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+
+  const sentBeforeBackpressure = port.sent.length;
+  assertSupervisorError(
+    () =>
+      supervisor.submit(
+        viewportCommand(4n),
+        { session: 20n, generation: 4n },
+      ),
+    "QueueFull",
+  );
+  assert.equal(supervisor.queueDepths.viewportCommands, 0);
+  assert.equal(supervisor.drainOutboundTurn(), 0);
+  assert.equal(port.sent.length, sentBeforeBackpressure);
+
+  port.emit(
+    eventFrame(
+      generationCompleted(GenerationCompletionStatus.Superseded),
+      { worker: 1n, session: 20n, generation: 1n },
+      5n,
+    ),
+  );
+  assert.equal(supervisor.processInboundTurn(), 1);
+  supervisor.takeEvents();
+  supervisor.submit(
+    viewportCommand(4n),
+    { session: 20n, generation: 4n },
+  );
+  assert.equal(supervisor.drainOutboundTurn(), 1);
+});
+
+test("rejects every non-terminal publication from a prior generation", () => {
+  const cases = [
+    {
+      name: "CapabilityReported",
+      event: capabilityReported(),
+      resources: [],
+    },
+    {
+      name: "GenerationPlanned",
+      event: generationPlanned(1n),
+      resources: [],
+    },
+    {
+      name: "SurfaceReady",
+      event: surfaceReady(1n),
+      resources: [new ArrayBuffer(16)],
+    },
+    {
+      name: "non-Superseded GenerationCompleted",
+      event: generationCompleted(),
+      resources: [],
+    },
+  ] as const;
+
+  for (const stale of cases) {
+    const { supervisor, port } = replacedGenerationFixture();
+    port.emit(
+      eventFrame(
+        stale.event,
+        { worker: 1n, session: 20n, generation: 1n },
+        5n,
+        stale.resources,
+      ),
+    );
+    assert.equal(supervisor.processInboundTurn(), 0, stale.name);
+    assert.equal(supervisor.state, "Failed", stale.name);
+  }
 });
 
 test("replayable close on a closed session preserves the send sequencer", () => {

@@ -3,8 +3,10 @@
 M5-01 establishes a reproducible browser-host package around the generated
 Engine protocol. M5-02 adds the single-Worker host supervisor, negotiated event
 boundary, bounded command/event queues, explicit processing turns, virtual
-clock, fault containment, and epoch replacement. These slices do not yet claim
-a deployable viewer or a Native Wasm engine integration.
+clock, fault containment, and epoch replacement. M5-04 adds the immutable
+Range-source bridge and sender-side transfer ledger; M5-05 adds the
+host-mediated Surface bridge. The remaining viewer and three-browser release
+gates are deliberately outside this package baseline.
 
 ## Pinned tools
 
@@ -32,16 +34,17 @@ rustup target add --toolchain 1.93.0 wasm32-unknown-unknown
 that generated TypeScript is unchanged, type-checks the generated declarations
 and strict browser code with `noEmit`, executes protocol and runtime-vector
 tests with Node's built-in test runner, tests the Rust worker crate on the native
-host, and performs the Wasm target check.
+host, builds the fixed Native Wasm Worker ABI, and verifies its one-engine,
+one-generated-glue manifest.
 
 `npm run wasm:check` is also available separately for a fast target check.
-`npm run wasm:build` links `target/wasm32-unknown-unknown/debug/pdf-rs-browser-worker.wasm`.
-The package retains an `rlib` for the native product release closure and adds a
-minimal Wasm binary link target. This M5-01 artifact binds the generated
-protocol identity but deliberately exposes no raw Wasm ABI or memory pointer; it
-is build evidence, not yet a message-dispatching Worker. A later Worker
-integration milestone must choose and review the binding strategy before
-exposing engine operations.
+`npm run wasm:build` links `target/wasm32-unknown-unknown/release/pdf-rs-browser-worker.wasm`,
+hash-binds it, and emits exactly one generated loader entry plus a manifest.
+The generated entry has no build-tree imports: application code injects the
+package's exported `BrowserNativeWorkerLoader` into its artifact-bound factory.
+The Wasm ABI exposes same-instance memory operations only to that glue. Raw
+pointers and `WebAssembly.Memory` never enter a protocol frame or cross a
+Worker realm; every Worker message still uses the generated boundary.
 
 ## Boundary
 
@@ -117,23 +120,21 @@ restart. Graceful-shutdown time begins only after its command is successfully
 sent.
 
 This receiver-side API cannot determine whether an `ArrayBuffer` was transferred
-or cloned: structured-clone delivery exposes no transfer-list provenance.
-M5-04 must provide a sender ledger that binds each ticket/range/slot to the
-exact buffer identity and provenance, then verify detachment or loss of sender
-ownership. If receiver validation fails after a real transfer, the sender is
-already detached; the receiver discards the rejected resource rather than
-claiming that ownership was rolled back.
+or cloned: structured-clone delivery exposes no transfer-list provenance. The
+M5-04 source bridge therefore keeps a sender ledger that binds each
+ticket/range/slot to the exact buffer identity and provenance, then verifies
+detachment or loss of sender ownership. If receiver validation fails after a
+real transfer, the sender is already detached; the receiver discards the
+rejected resource rather than claiming that ownership was rolled back.
 
 M5-02 decodes Surface event control data and validates the negotiated resource
-slot count, but deliberately leaves each out-of-band value opaque. JavaScript
-`ImageBitmap` or SharedArrayBuffer adoption, DOM presentation, atomic
-publication, and the complete lease ledger are not implemented in this slice.
-The Rust worker crate contains pointer-free manifest primitives that validate
-declared capabilities, extents, isolation facts, and fence observations
-supplied by a future adapter. M5-05 must bind those facts to the decoded
-`SurfaceReady` event, perform the actual browser-object and atomic checks, and
-keep stale resources on the release or reclaim path. OffscreenCanvas remains a
-future Worker-private staging option and is never a wire Surface.
+slot count; M5-05 binds decoded `SurfaceReady` metadata to actual
+`ImageBitmap`, `ArrayBuffer`, or negotiated fenced `SharedArrayBuffer` objects,
+performs the browser-object and atomic checks, and keeps stale resources on the
+release or reclaim path. The Rust worker crate supplies pointer-free manifest
+primitives for declared capabilities, extents, isolation facts, and fence
+observations. OffscreenCanvas is an optional Worker-private staging optimization
+and is never a DOM-bound wire Surface.
 
 The Rust adapter receives only pointer-free control and resource metadata.
 Neither side allows a raw Wasm pointer or `WebAssembly.Memory` to cross a Worker

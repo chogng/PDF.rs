@@ -10,6 +10,21 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod native_adapter;
+mod wasm_mailbox;
+
+pub use native_adapter::{
+    BrowserNativeWorkerEvent, NativeBrowserWorker, NativeBrowserWorkerError,
+    NativeBrowserWorkerPhase,
+};
+pub use wasm_mailbox::{NativeWorkerMailbox, NativeWorkerMailboxError};
+#[cfg(target_arch = "wasm32")]
+pub use wasm_mailbox::{
+    wasm_dispatch, wasm_memory_epoch, wasm_output_length, wasm_output_pointer, wasm_poll,
+    wasm_prepare_input, wasm_prepare_transfer, wasm_shutdown, wasm_transfer_count,
+    wasm_transfer_length, wasm_transfer_pointer,
+};
+
 use pdf_rs_protocol::{
     ENDPOINT_CAPABILITY_SHARED_ARRAY_BUFFER, ENDPOINT_CAPABILITY_TRANSFERABLE_ARRAY_BUFFER,
     ENDPOINT_CAPABILITY_TRANSFERABLE_IMAGE_BITMAP, ENVELOPE_HEADER_BYTES, MAX_MESSAGE_BYTES,

@@ -11,6 +11,7 @@ import type {
 import {
   EndpointRole,
   EnvelopeSequenceTracker,
+  GenerationCompletionStatus,
   MAX_MESSAGE_BYTES,
   MAX_TRANSFER_SLOTS,
   MESSAGE_DESCRIPTORS,
@@ -224,12 +225,15 @@ interface RequestState {
 
 interface SurfaceState {
   readonly session: bigint;
+  readonly generation: bigint;
+  readonly leaseToken: bigint;
   state: "Alive" | "Reclaimed";
 }
 
 interface GenerationState {
   readonly generation: bigint;
   state: "Active" | "Terminal";
+  terminalStatus: GenerationCompletionStatus | undefined;
 }
 
 const unwrapBytes = (
@@ -494,6 +498,13 @@ export class BrowserWorkerSupervisor {
     new Map<bigint, "Opening" | "Ready" | "Closing" | "Closed">();
   readonly #requests = new Map<bigint, RequestState>();
   readonly #generations = new Map<bigint, GenerationState>();
+  /**
+   * Successfully sent generations displaced before their terminal arrives.
+   * Each per-session set is capped by the critical-event capacity, and the
+   * session admission bound caps the number of sets.
+   */
+  readonly #displacedGenerationTerminals =
+    new Map<bigint, Set<bigint>>();
   readonly #surfaces = new Map<bigint, SurfaceState>();
 
   constructor(configuration: BrowserWorkerSupervisorConfiguration) {
@@ -704,9 +715,86 @@ export class BrowserWorkerSupervisor {
       if (event === undefined) {
         break;
       }
+      if (this.#releaseIfSurfaceBecameStale(event)) {
+        continue;
+      }
       events.push(event);
     }
     return events;
+  }
+
+  #releaseIfSurfaceBecameStale(
+    event: BrowserSupervisorEvent,
+  ): boolean {
+    if (
+      event.type !== "ProtocolEvent"
+      || event.value.envelope.event.type !== "SurfaceReady"
+    ) {
+      return false;
+    }
+    const { correlation } = event.value.envelope;
+    const session = correlation.session;
+    const generation = correlation.generation;
+    const generationState = session === undefined
+      ? undefined
+      : this.#generations.get(session);
+    const metadata = event.value.envelope.event.payload.metadata;
+    const surface = this.#surfaces.get(metadata.id);
+    const exactSurface = surface !== undefined
+      && surface.session === session
+      && surface.generation === generation
+      && surface.leaseToken === metadata.lease_token;
+    if (!exactSurface || surface.state === "Reclaimed") {
+      if (surface !== undefined && surface.state === "Alive") {
+        this.#enterFailed("ProtocolViolation");
+      }
+      return true;
+    }
+    if (
+      session !== undefined
+      && generation !== undefined
+      && generationState?.generation === generation
+      && (
+        generationState.state === "Active"
+        || (
+          generationState.state === "Terminal"
+          && generationState.terminalStatus
+            === GenerationCompletionStatus.Completed
+        )
+      )
+      && this.#sessions.get(session) === "Ready"
+      && this.#state === "Ready"
+    ) {
+      return false;
+    }
+    if (session === undefined) {
+      this.#enterFailed("ProtocolViolation");
+      return true;
+    }
+    if (this.#state !== "Ready" && this.#state !== "Draining") {
+      return true;
+    }
+    try {
+      this.#admitAndQueue(
+        Object.freeze({
+          type: "ReleaseSurface",
+          payload: Object.freeze({
+            surface: metadata.id,
+            lease_token: metadata.lease_token,
+          }),
+        }),
+        Object.freeze({
+          worker: this.#worker,
+          session,
+        }),
+        [],
+      );
+    } catch {
+      // Terminating the epoch is the only safe fallback when the reserved
+      // lifecycle path cannot accept the release.
+      this.#enterFailed("ProtocolViolation");
+    }
+    return true;
   }
 
   #startEpoch(): void {
@@ -818,6 +906,7 @@ export class BrowserWorkerSupervisor {
     this.#sessions.clear();
     this.#requests.clear();
     this.#generations.clear();
+    this.#displacedGenerationTerminals.clear();
     this.#surfaces.clear();
   }
 
@@ -950,6 +1039,16 @@ export class BrowserWorkerSupervisor {
         !this.#viewportCommands.has(viewportSession)
         && this.#viewportCommands.size
           >= this.#limits.maxViewportCommands
+      ) {
+        throw new BrowserWorkerSupervisorError("QueueFull");
+      }
+      if (
+        !this.#viewportCommands.has(viewportSession)
+        && this.#generations.get(viewportSession)?.state === "Active"
+        && (
+          this.#displacedGenerationTerminals.get(viewportSession)?.size
+            ?? 0
+        ) >= this.#limits.maxCriticalEvents
       ) {
         throw new BrowserWorkerSupervisorError("QueueFull");
       }
@@ -1107,9 +1206,17 @@ export class BrowserWorkerSupervisor {
         if (session === undefined || generation === undefined) {
           throw new BrowserWorkerSupervisorError("InvalidCommand");
         }
+        const current = this.#generations.get(session);
+        if (current?.state === "Active") {
+          this.#recordDisplacedGeneration(
+            session,
+            current.generation,
+          );
+        }
         this.#generations.set(session, {
           generation,
           state: "Active",
+          terminalStatus: undefined,
         });
         break;
       }
@@ -1273,24 +1380,55 @@ export class BrowserWorkerSupervisor {
       case "GenerationPlanned":
       case "GenerationCompleted":
         if (
-          this.#state !== "Ready"
-          || session === undefined
+          session === undefined
           || generation === undefined
-          || this.#sessions.get(session) !== "Ready"
         ) {
           return "InvalidLifecycle";
         }
         {
+          const sessionState = this.#sessions.get(session);
           const generationState = this.#generations.get(session);
-          return (
+          const isCurrentActive = (
             generationState?.generation === generation
             && generationState.state === "Active"
+          );
+          if (
+            this.#state === "Ready"
+            && sessionState === "Ready"
+            && isCurrentActive
             && (
               event.type !== "SurfaceReady"
               || (
                 !this.#surfaces.has(event.payload.metadata.id)
                 && this.#surfaces.size
                   < this.#limits.admission.maxSurfaces
+              )
+            )
+          ) {
+            return undefined;
+          }
+          return (
+            event.type === "GenerationCompleted"
+            && event.payload.status
+              === GenerationCompletionStatus.Superseded
+            && (
+              isCurrentActive
+              || this.#isDisplacedGeneration(session, generation)
+            )
+            && (
+              (
+                this.#state === "Ready"
+                && (
+                  sessionState === "Ready"
+                  || sessionState === "Closing"
+                )
+              )
+              || (
+                this.#state === "Draining"
+                && (
+                  sessionState === "Ready"
+                  || sessionState === "Closing"
+                )
               )
             )
           )
@@ -1336,7 +1474,10 @@ export class BrowserWorkerSupervisor {
           return "InvalidLifecycle";
         }
         const surface = this.#surfaces.get(event.payload.surface);
-        return surface !== undefined && surface.session === session
+        return surface !== undefined
+          && surface.session === session
+          && surface.leaseToken === event.payload.lease_token
+          && surface.state === "Alive"
           ? undefined
           : "InvalidLifecycle";
       }
@@ -1423,6 +1564,8 @@ export class BrowserWorkerSupervisor {
         );
         this.#surfaces.set(event.payload.metadata.id, {
           session,
+          generation: event.payload.metadata.generation,
+          leaseToken: event.payload.metadata.lease_token,
           state: "Alive",
         });
         break;
@@ -1435,14 +1578,21 @@ export class BrowserWorkerSupervisor {
         }
         const state = this.#generations.get(session);
         if (
-          state === undefined
-          || state.generation !== generation
-          || state.state !== "Active"
+          state?.generation === generation
+          && state.state === "Active"
         ) {
-          throw new BrowserWorkerSupervisorError("InvalidCommand");
+          state.state = "Terminal";
+          state.terminalStatus = event.payload.status;
+          break;
         }
-        state.state = "Terminal";
-        break;
+        if (
+          event.payload.status
+            === GenerationCompletionStatus.Superseded
+          && this.#consumeDisplacedGeneration(session, generation)
+        ) {
+          break;
+        }
+        throw new BrowserWorkerSupervisorError("InvalidCommand");
       }
       case "RequestCancelled":
       case "RequestFailed":
@@ -1456,6 +1606,8 @@ export class BrowserWorkerSupervisor {
         }
         admission.setSessionState(session, "Closed");
         this.#sessions.set(session, "Closed");
+        this.#generations.delete(session);
+        this.#displacedGenerationTerminals.delete(session);
         break;
       }
       case "WorkerStopped":
@@ -1464,10 +1616,15 @@ export class BrowserWorkerSupervisor {
         this.#lifecycleDeadline = undefined;
         this.#terminatePort();
         this.#clearPendingWork();
+        this.#generations.clear();
+        this.#displacedGenerationTerminals.clear();
         break;
       case "SurfaceReclaimed":
       case "SurfaceReleaseAcknowledged":
-        this.#reclaimSurface(event.payload.surface);
+        this.#reclaimSurface(
+          event.payload.surface,
+          event.payload.lease_token,
+        );
         break;
       case "EngineHello":
       case "WorkerFault":
@@ -1531,10 +1688,56 @@ export class BrowserWorkerSupervisor {
     request.state = "Terminal";
   }
 
-  #reclaimSurface(surfaceId: bigint): void {
+  #recordDisplacedGeneration(
+    session: bigint,
+    generation: bigint,
+  ): void {
+    let generations = this.#displacedGenerationTerminals.get(session);
+    if (generations?.has(generation) === true) {
+      return;
+    }
+    if (
+      (generations?.size ?? 0) >= this.#limits.maxCriticalEvents
+    ) {
+      throw new BrowserWorkerSupervisorError("InvalidCommand");
+    }
+    if (generations === undefined) {
+      generations = new Set<bigint>();
+      this.#displacedGenerationTerminals.set(session, generations);
+    }
+    generations.add(generation);
+  }
+
+  #isDisplacedGeneration(
+    session: bigint,
+    generation: bigint,
+  ): boolean {
+    return this.#displacedGenerationTerminals.get(session)?.has(generation)
+      === true;
+  }
+
+  #consumeDisplacedGeneration(
+    session: bigint,
+    generation: bigint,
+  ): boolean {
+    const generations = this.#displacedGenerationTerminals.get(session);
+    if (generations?.delete(generation) !== true) {
+      return false;
+    }
+    if (generations.size === 0) {
+      this.#displacedGenerationTerminals.delete(session);
+    }
+    return true;
+  }
+
+  #reclaimSurface(surfaceId: bigint, leaseToken: bigint): void {
     const surface = this.#surfaces.get(surfaceId);
     const admission = this.#admission;
-    if (surface === undefined || admission === undefined) {
+    if (
+      surface === undefined
+      || surface.leaseToken !== leaseToken
+      || admission === undefined
+    ) {
       throw new BrowserWorkerSupervisorError("InvalidCommand");
     }
     admission.setSurfaceState(
@@ -1656,6 +1859,8 @@ export class BrowserWorkerSupervisor {
     this.#lifecycleDeadline = undefined;
     this.#pendingCallbackFault = undefined;
     this.#clearPendingWork();
+    this.#generations.clear();
+    this.#displacedGenerationTerminals.clear();
     this.#criticalEvents.length = 0;
     this.#progressEvents.clear();
     this.#criticalEvents.push(
