@@ -2,7 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 use pdf_rs_document::{
-    DocumentError, DocumentErrorCode, FontResourceUnsupported, ImageXObjectUnsupported,
+    DocumentError, DocumentErrorCode, FontResourceUnsupported, FormXObjectUnsupported,
+    ImageXObjectUnsupported,
 };
 
 use crate::ContentOperatorSource;
@@ -665,6 +666,8 @@ pub enum ContentUnsupportedKind {
     ImageProfileRequired,
     /// The selected Page XObject or Image XObject representation is outside the registered subset.
     ImageXObject,
+    /// The selected Form XObject representation is outside the recursive registered subset.
+    FormXObject,
     /// A registered text operator requires an explicit proof-bound Content font profile.
     FontProfileRequired,
     /// The selected Page Font or embedded program is outside the registered subset.
@@ -682,6 +685,7 @@ pub struct ContentUnsupported {
     source: ContentOperatorSource,
     document_error: Option<DocumentError>,
     image_xobject: Option<ImageXObjectUnsupported>,
+    form_xobject: Option<FormXObjectUnsupported>,
     font_resource: Option<FontResourceUnsupported>,
 }
 
@@ -692,6 +696,7 @@ impl ContentUnsupported {
             source,
             document_error: None,
             image_xobject: None,
+            form_xobject: None,
             font_resource: None,
         }
     }
@@ -714,6 +719,7 @@ impl ContentUnsupported {
             source,
             document_error: Some(error),
             image_xobject: None,
+            form_xobject: None,
             font_resource: None,
         })
     }
@@ -727,6 +733,21 @@ impl ContentUnsupported {
             source,
             document_error: None,
             image_xobject: Some(unsupported),
+            form_xobject: None,
+            font_resource: None,
+        }
+    }
+
+    pub(crate) const fn from_form(
+        unsupported: FormXObjectUnsupported,
+        source: ContentOperatorSource,
+    ) -> Self {
+        Self {
+            kind: ContentUnsupportedKind::FormXObject,
+            source,
+            document_error: None,
+            image_xobject: None,
+            form_xobject: Some(unsupported),
             font_resource: None,
         }
     }
@@ -740,6 +761,7 @@ impl ContentUnsupported {
             source,
             document_error: None,
             image_xobject: None,
+            form_xobject: None,
             font_resource: Some(unsupported),
         }
     }
@@ -764,6 +786,11 @@ impl ContentUnsupported {
         self.image_xobject
     }
 
+    /// Returns the preserved lower Form XObject capability reason.
+    pub const fn form_xobject(self) -> Option<FormXObjectUnsupported> {
+        self.form_xobject
+    }
+
     /// Returns the preserved lower embedded-font capability reason.
     pub const fn font_resource(self) -> Option<FontResourceUnsupported> {
         self.font_resource
@@ -785,6 +812,7 @@ impl ContentUnsupported {
             ContentUnsupportedKind::ExtGStateResource => "RPE-CONTENT-UNSUPPORTED-0015",
             ContentUnsupportedKind::ImageProfileRequired => "RPE-CONTENT-UNSUPPORTED-0008",
             ContentUnsupportedKind::ImageXObject => "RPE-CONTENT-UNSUPPORTED-0009",
+            ContentUnsupportedKind::FormXObject => "RPE-CONTENT-UNSUPPORTED-0016",
             ContentUnsupportedKind::FontProfileRequired => "RPE-CONTENT-UNSUPPORTED-0010",
             ContentUnsupportedKind::FontResource => "RPE-CONTENT-UNSUPPORTED-0011",
             ContentUnsupportedKind::TextEncoding => "RPE-CONTENT-UNSUPPORTED-0012",
@@ -808,6 +836,10 @@ impl fmt::Debug for ContentUnsupported {
                 &self
                     .image_xobject
                     .map(ImageXObjectUnsupported::diagnostic_id),
+            )
+            .field(
+                "form_diagnostic_id",
+                &self.form_xobject.map(FormXObjectUnsupported::diagnostic_id),
             )
             .field(
                 "font_diagnostic_id",

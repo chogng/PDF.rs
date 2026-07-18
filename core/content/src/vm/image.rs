@@ -1,17 +1,23 @@
 use std::mem::size_of;
+use std::sync::Arc;
 
 use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_document::{
-    AcquireImageXObjectJob, DocumentCancellation, ImageXObjectColorSpace, ImageXObjectPoll,
-    ImageXObjectUnsupported, PageXObjectReference,
+    AcquireFormXObjectJob, AcquireImageXObjectJob, AcquiredFormXObject, DocumentCancellation,
+    FormXObjectPoll, ImageXObjectColorSpace, ImageXObjectPoll, ImageXObjectUnsupportedKind,
+    PageXObjectReference,
 };
-use pdf_rs_scene::{GraphicsResourceSource, ImageColorSpace, ImageResource};
+use pdf_rs_scene::{
+    GraphicsResourceSource, ImageColorSpace, ImageResource, Matrix, PageGeometry, SceneBinding,
+};
 use pdf_rs_syntax::ObjectRef;
 
-use super::ContentImageProfile;
+use super::{
+    ContentFormPoll, ContentFormProfile, ContentImageProfile, InterpretFormJob, InterpretedForm,
+};
 use crate::{
     ContentImageLimit, ContentImageLimitKind, ContentImageStats, ContentOperatorSource,
-    ContentVmError, ContentVmErrorCode, ContentVmFailure,
+    ContentUnsupported, ContentVmError, ContentVmErrorCode, ContentVmFailure,
 };
 
 const CACHE_CANCELLATION_INTERVAL: u64 = 256;
@@ -37,18 +43,35 @@ struct PlannedImageUse {
     source: ContentOperatorSource,
     proof: PageXObjectReference,
     image_index: u32,
+    transform: Matrix,
+    form: Option<Arc<InterpretedForm>>,
+}
+
+enum PlannedXObject {
+    Image(ImageResource),
+    Form(Arc<AcquiredFormXObject>),
 }
 
 struct PlannedImage {
     key: ImageCacheKey,
     proof: PageXObjectReference,
     source: ContentOperatorSource,
-    resource: Option<ImageResource>,
+    resource: Option<PlannedXObject>,
 }
 
 struct ActiveImage {
     image_index: usize,
     job: AcquireImageXObjectJob,
+}
+
+struct ActiveForm {
+    image_index: usize,
+    job: AcquireFormXObjectJob,
+}
+
+struct ActiveFormInterpretation {
+    use_index: usize,
+    jobs: Vec<InterpretFormJob>,
 }
 
 pub(super) enum ImagePlanningPoll {
@@ -58,22 +81,35 @@ pub(super) enum ImagePlanningPoll {
         missing: SmallRanges,
         checkpoint: ResumeCheckpoint,
     },
-    Unsupported {
-        unsupported: ImageXObjectUnsupported,
-        source: ContentOperatorSource,
-    },
+    Unsupported(ContentUnsupported),
     Failed(ContentVmFailure),
+}
+
+pub(super) enum ResolvedXObject {
+    Image {
+        proof: PageXObjectReference,
+        image: ImageResource,
+    },
+    Form {
+        proof: PageXObjectReference,
+        form: Arc<InterpretedForm>,
+    },
 }
 
 pub(super) struct ImageRuntime {
     profile: ContentImageProfile,
+    form_profile: Option<ContentFormProfile>,
     uses: Vec<PlannedImageUse>,
     images: Vec<PlannedImage>,
     expected_uses: usize,
     acquisition_cursor: usize,
+    form_use_cursor: usize,
     execution_cursor: usize,
+    executed_image_uses: u64,
     external_plan_retained: u64,
     active: Option<ActiveImage>,
+    active_form: Option<ActiveForm>,
+    active_form_interpretation: Option<ActiveFormInterpretation>,
     plan_complete: bool,
     stats: ContentImageStats,
 }
@@ -82,13 +118,18 @@ impl ImageRuntime {
     pub(super) fn new(profile: ContentImageProfile) -> Self {
         Self {
             profile,
+            form_profile: None,
             uses: Vec::new(),
             images: Vec::new(),
             expected_uses: 0,
             acquisition_cursor: 0,
+            form_use_cursor: 0,
             execution_cursor: 0,
+            executed_image_uses: 0,
             external_plan_retained: 0,
             active: None,
+            active_form: None,
+            active_form_interpretation: None,
             plan_complete: false,
             stats: ContentImageStats::default(),
         }
@@ -103,7 +144,30 @@ impl ImageRuntime {
     }
 
     pub(super) fn acquisitions_complete(&self) -> bool {
-        self.plan_complete && self.active.is_none() && self.acquisition_cursor == self.images.len()
+        self.plan_complete
+            && self.active.is_none()
+            && self.active_form.is_none()
+            && self.active_form_interpretation.is_none()
+            && self.acquisition_cursor == self.images.len()
+            && self.form_use_cursor == self.uses.len()
+    }
+
+    pub(super) fn enable_forms(
+        &mut self,
+        profile: ContentFormProfile,
+    ) -> Result<(), ContentVmError> {
+        if self.plan_complete
+            || !self.uses.is_empty()
+            || !self.images.is_empty()
+            || self.active.is_some()
+            || self.active_form.is_some()
+            || self.active_form_interpretation.is_some()
+            || self.form_profile.is_some()
+        {
+            return Err(ContentVmError::new(ContentVmErrorCode::InternalState, None));
+        }
+        self.form_profile = Some(profile);
+        Ok(())
     }
 
     pub(super) fn record_scan(&mut self, bytes: u64) -> Result<(), ContentVmError> {
@@ -139,6 +203,8 @@ impl ImageRuntime {
             || !self.uses.is_empty()
             || !self.images.is_empty()
             || self.active.is_some()
+            || self.active_form.is_some()
+            || self.active_form_interpretation.is_some()
         {
             return Err(ContentVmError::new(
                 ContentVmErrorCode::InternalState,
@@ -224,6 +290,7 @@ impl ImageRuntime {
     pub(super) fn register_proof(
         &mut self,
         proof: PageXObjectReference,
+        transform: Matrix,
         source: ContentOperatorSource,
         byte_source: &dyn ByteSource,
         cancellation: &dyn DocumentCancellation,
@@ -274,13 +341,20 @@ impl ImageRuntime {
             source,
             proof,
             image_index,
+            transform,
+            form: None,
         });
         self.record_plan_retained(Some(source))
             .map_err(ContentVmFailure::Vm)
     }
 
     pub(super) fn finish_plan(&mut self) -> Result<(), ContentVmError> {
-        if self.plan_complete || self.uses.len() != self.expected_uses || self.active.is_some() {
+        if self.plan_complete
+            || self.uses.len() != self.expected_uses
+            || self.active.is_some()
+            || self.active_form.is_some()
+            || self.active_form_interpretation.is_some()
+        {
             return Err(ContentVmError::new(ContentVmErrorCode::InternalState, None));
         }
         self.preflight_plan_retained(None)?;
@@ -291,10 +365,15 @@ impl ImageRuntime {
 
     pub(super) fn poll_acquisitions(
         &mut self,
+        binding: SceneBinding,
+        geometry: PageGeometry,
         byte_source: &dyn ByteSource,
         cancellation: &dyn DocumentCancellation,
     ) -> ImagePlanningPoll {
-        if !self.plan_complete || self.acquisition_cursor > self.images.len() {
+        if !self.plan_complete
+            || self.acquisition_cursor > self.images.len()
+            || self.form_use_cursor > self.uses.len()
+        {
             return ImagePlanningPoll::Failed(ContentVmFailure::Vm(ContentVmError::new(
                 ContentVmErrorCode::InternalState,
                 None,
@@ -313,10 +392,14 @@ impl ImageRuntime {
                 .active
                 .as_ref()
                 .is_some_and(|active| active.image_index != self.acquisition_cursor)
+                || self
+                    .active_form
+                    .as_ref()
+                    .is_some_and(|active| active.image_index != self.acquisition_cursor)
             {
                 return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
             }
-            if self.active.is_none() {
+            if self.active.is_none() && self.active_form.is_none() {
                 let proof = self.images[self.acquisition_cursor].proof;
                 let job = match self.profile.authority().acquire_image_xobject(
                     proof,
@@ -333,26 +416,99 @@ impl ImageRuntime {
                     job,
                 });
             }
-            if let Err(error) = self.profile.content_limits().preflight(
-                ContentImageLimitKind::AcquisitionPolls,
-                self.stats.acquisition_polls(),
-                1,
-                Some(source),
-            ) {
+            if self.active.is_some() {
+                if let Err(error) = self.admit_acquisition_poll(source) {
+                    return ImagePlanningPoll::Failed(ContentVmFailure::Vm(error));
+                }
+                let Some(active) = self.active.as_mut() else {
+                    return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
+                };
+                let outcome = active.job.poll(byte_source, cancellation);
+                if let Err(failure) = runtime_guard(snapshot, byte_source, cancellation, source) {
+                    return ImagePlanningPoll::Failed(failure);
+                }
+                match outcome {
+                    ImageXObjectPoll::Pending {
+                        ticket,
+                        missing,
+                        checkpoint,
+                    } => {
+                        return ImagePlanningPoll::Pending {
+                            ticket,
+                            missing,
+                            checkpoint,
+                        };
+                    }
+                    ImageXObjectPoll::Unsupported(unsupported)
+                        if unsupported.kind() == ImageXObjectUnsupportedKind::NonImageXObject
+                            && self.form_profile.is_some() =>
+                    {
+                        self.active.take();
+                        let profile = self
+                            .form_profile
+                            .as_ref()
+                            .expect("Form profile was just checked");
+                        let proof = self.images[self.acquisition_cursor].proof;
+                        let job = match profile
+                            .authority
+                            .acquire_form_xobject(proof, profile.context)
+                        {
+                            Ok(job) => job,
+                            Err(error) => {
+                                return ImagePlanningPoll::Failed(ContentVmFailure::Document(
+                                    error,
+                                ));
+                            }
+                        };
+                        self.active_form = Some(ActiveForm {
+                            image_index: self.acquisition_cursor,
+                            job,
+                        });
+                        continue;
+                    }
+                    ImageXObjectPoll::Unsupported(unsupported) => {
+                        self.active.take();
+                        return ImagePlanningPoll::Unsupported(ContentUnsupported::from_image(
+                            unsupported,
+                            source,
+                        ));
+                    }
+                    ImageXObjectPoll::Failed(error) => {
+                        self.active.take();
+                        return ImagePlanningPoll::Failed(ContentVmFailure::Document(error));
+                    }
+                    ImageXObjectPoll::Ready(acquired) => {
+                        self.active.take();
+                        if ImageCacheKey::from_proof(acquired.proof())
+                            != self.images[self.acquisition_cursor].key
+                        {
+                            return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(
+                                source,
+                            )));
+                        }
+                        if let Err(error) = self.install(self.acquisition_cursor, &acquired, source)
+                        {
+                            return ImagePlanningPoll::Failed(error);
+                        }
+                        self.acquisition_cursor += 1;
+                        continue;
+                    }
+                }
+            }
+            if let Err(error) = self.admit_acquisition_poll(source) {
                 return ImagePlanningPoll::Failed(ContentVmFailure::Vm(error));
             }
-            if self.stats.record_acquisition_poll().is_none() {
-                return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
-            }
-            let Some(active) = self.active.as_mut() else {
-                return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
-            };
-            let outcome = active.job.poll(byte_source, cancellation);
+            let outcome = self
+                .active_form
+                .as_mut()
+                .expect("non-Image classification installs one active Form")
+                .job
+                .poll(byte_source, cancellation);
             if let Err(failure) = runtime_guard(snapshot, byte_source, cancellation, source) {
                 return ImagePlanningPoll::Failed(failure);
             }
             match outcome {
-                ImageXObjectPoll::Pending {
+                FormXObjectPoll::Pending {
                     ticket,
                     missing,
                     checkpoint,
@@ -363,28 +519,144 @@ impl ImageRuntime {
                         checkpoint,
                     };
                 }
-                ImageXObjectPoll::Unsupported(unsupported) => {
-                    self.active.take();
-                    return ImagePlanningPoll::Unsupported {
+                FormXObjectPoll::Unsupported(unsupported) => {
+                    self.active_form.take();
+                    return ImagePlanningPoll::Unsupported(ContentUnsupported::from_form(
                         unsupported,
                         source,
-                    };
+                    ));
                 }
-                ImageXObjectPoll::Failed(error) => {
-                    self.active.take();
+                FormXObjectPoll::Failed(error) => {
+                    self.active_form.take();
                     return ImagePlanningPoll::Failed(ContentVmFailure::Document(error));
                 }
-                ImageXObjectPoll::Ready(acquired) => {
-                    self.active.take();
+                FormXObjectPoll::Ready(acquired) => {
+                    self.active_form.take();
                     if ImageCacheKey::from_proof(acquired.proof())
                         != self.images[self.acquisition_cursor].key
                     {
                         return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
                     }
-                    if let Err(error) = self.install(self.acquisition_cursor, &acquired, source) {
-                        return ImagePlanningPoll::Failed(error);
-                    }
+                    self.images[self.acquisition_cursor].resource =
+                        Some(PlannedXObject::Form(acquired));
                     self.acquisition_cursor += 1;
+                }
+            }
+        }
+
+        while self.form_use_cursor < self.uses.len() {
+            let source = self.uses[self.form_use_cursor].source;
+            let snapshot = self.uses[self.form_use_cursor].proof.snapshot();
+            if let Err(failure) = runtime_guard(snapshot, byte_source, cancellation, source) {
+                return ImagePlanningPoll::Failed(failure);
+            }
+            let image_index = match usize::try_from(self.uses[self.form_use_cursor].image_index) {
+                Ok(value) => value,
+                Err(_) => return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source))),
+            };
+            let Some(resource) = self
+                .images
+                .get(image_index)
+                .and_then(|image| image.resource.as_ref())
+            else {
+                return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
+            };
+            let PlannedXObject::Form(acquired) = resource else {
+                self.form_use_cursor += 1;
+                continue;
+            };
+            if self.uses[self.form_use_cursor].form.is_some() {
+                return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
+            }
+            if self
+                .active_form_interpretation
+                .as_ref()
+                .is_some_and(|active| active.use_index != self.form_use_cursor)
+            {
+                return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
+            }
+            if self.active_form_interpretation.is_none() {
+                let Some(profile) = self.form_profile.as_ref() else {
+                    return ImagePlanningPoll::Failed(ContentVmFailure::Vm(internal(source)));
+                };
+                let mut job = match InterpretFormJob::new_graphics_v2_with_images_and_fonts(
+                    Arc::clone(acquired),
+                    binding,
+                    geometry,
+                    self.uses[self.form_use_cursor].transform,
+                    profile.scan_limits,
+                    profile.vm_limits,
+                    profile.graphics_limits,
+                    profile.property_limits,
+                    profile.image_profile.clone(),
+                    profile.font_profile.clone(),
+                    profile.scene_limits,
+                ) {
+                    Ok(job) => job,
+                    Err(error) => {
+                        return ImagePlanningPoll::Failed(ContentVmFailure::Scene(error));
+                    }
+                };
+                if let Some(child) = profile.child() {
+                    job = match job.with_forms(child) {
+                        Ok(job) => job,
+                        Err(error) => {
+                            return ImagePlanningPoll::Failed(ContentVmFailure::Vm(error));
+                        }
+                    };
+                }
+                let mut jobs = Vec::new();
+                if jobs.try_reserve_exact(1).is_err() {
+                    return ImagePlanningPoll::Failed(ContentVmFailure::Vm(
+                        ContentVmError::image_resource(
+                            ContentImageLimit::new(
+                                ContentImageLimitKind::CacheAllocation,
+                                self.profile.content_limits().max_cache_retained_bytes(),
+                                0,
+                                u64::try_from(size_of::<InterpretFormJob>()).unwrap_or(u64::MAX),
+                            ),
+                            Some(source),
+                        ),
+                    ));
+                }
+                jobs.push(job);
+                self.active_form_interpretation = Some(ActiveFormInterpretation {
+                    use_index: self.form_use_cursor,
+                    jobs,
+                });
+            }
+            let outcome = self
+                .active_form_interpretation
+                .as_mut()
+                .expect("Form interpretation was just installed")
+                .jobs
+                .first_mut()
+                .expect("active Form interpretation retains one job")
+                .poll(byte_source, cancellation);
+            match outcome {
+                ContentFormPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => {
+                    return ImagePlanningPoll::Pending {
+                        ticket,
+                        missing,
+                        checkpoint,
+                    };
+                }
+                ContentFormPoll::Unsupported(unsupported) => {
+                    self.active_form_interpretation.take();
+                    return ImagePlanningPoll::Unsupported(unsupported);
+                }
+                ContentFormPoll::Failed(failure) => {
+                    self.active_form_interpretation.take();
+                    return ImagePlanningPoll::Failed(failure);
+                }
+                ContentFormPoll::Ready(form) => {
+                    self.active_form_interpretation.take();
+                    self.uses[self.form_use_cursor].form = Some(form);
+                    self.form_use_cursor += 1;
                 }
             }
         }
@@ -394,6 +666,7 @@ impl ImageRuntime {
     pub(super) fn begin_execution(&mut self) -> Result<(), ContentVmError> {
         if !self.acquisitions_complete()
             || self.execution_cursor != 0
+            || self.executed_image_uses != 0
             || self.stats.execution_passes() != 0
         {
             return Err(ContentVmError::new(ContentVmErrorCode::InternalState, None));
@@ -406,7 +679,7 @@ impl ImageRuntime {
     pub(super) fn resolve_planned(
         &self,
         source: ContentOperatorSource,
-    ) -> Result<(PageXObjectReference, ImageResource), ContentVmError> {
+    ) -> Result<ResolvedXObject, ContentVmError> {
         let usage = self
             .uses
             .get(self.execution_cursor)
@@ -414,14 +687,26 @@ impl ImageRuntime {
         if usage.source != source {
             return Err(internal(source));
         }
-        let image = self
+        let resource = self
             .images
             .get(usize::try_from(usage.image_index).map_err(|_| internal(source))?)
             .and_then(|image| image.resource.as_ref())
-            .ok_or_else(|| internal(source))?
-            .clone();
+            .ok_or_else(|| internal(source))?;
         let proof = usage.proof;
-        Ok((proof, image))
+        match resource {
+            PlannedXObject::Image(image) => Ok(ResolvedXObject::Image {
+                proof,
+                image: image.clone(),
+            }),
+            PlannedXObject::Form(_) => Ok(ResolvedXObject::Form {
+                proof,
+                form: usage
+                    .form
+                    .as_ref()
+                    .map(Arc::clone)
+                    .ok_or_else(|| internal(source))?,
+            }),
+        }
     }
 
     pub(super) fn record_executed_use(
@@ -435,12 +720,23 @@ impl ImageRuntime {
         {
             return Err(internal(source));
         }
+        let usage = &self.uses[self.execution_cursor];
+        let resource = self
+            .images
+            .get(usize::try_from(usage.image_index).map_err(|_| internal(source))?)
+            .and_then(|image| image.resource.as_ref())
+            .ok_or_else(|| internal(source))?;
+        if matches!(resource, PlannedXObject::Image(_)) {
+            self.executed_image_uses = self
+                .executed_image_uses
+                .checked_add(1)
+                .ok_or_else(|| internal(source))?;
+        }
         self.execution_cursor = self
             .execution_cursor
             .checked_add(1)
             .ok_or_else(|| internal(source))?;
-        let image_uses = u64::try_from(self.execution_cursor).map_err(|_| internal(source))?;
-        self.stats.set_image_uses(image_uses);
+        self.stats.set_image_uses(self.executed_image_uses);
         Ok(())
     }
 
@@ -449,6 +745,13 @@ impl ImageRuntime {
             return Err(ContentVmError::new(ContentVmErrorCode::InternalState, None));
         }
         Ok(())
+    }
+
+    pub(super) fn form_use_count(&self) -> usize {
+        self.uses
+            .iter()
+            .filter(|usage| usage.form.is_some())
+            .count()
     }
 
     fn push_unique_image(
@@ -473,6 +776,21 @@ impl ImageRuntime {
             resource: None,
         });
         Ok(index)
+    }
+
+    fn admit_acquisition_poll(
+        &mut self,
+        source: ContentOperatorSource,
+    ) -> Result<(), ContentVmError> {
+        self.profile.content_limits().preflight(
+            ContentImageLimitKind::AcquisitionPolls,
+            self.stats.acquisition_polls(),
+            1,
+            Some(source),
+        )?;
+        self.stats
+            .record_acquisition_poll()
+            .ok_or_else(|| internal(source))
     }
 
     fn reserve_image_slot(&mut self, source: ContentOperatorSource) -> Result<(), ContentVmError> {
@@ -577,7 +895,11 @@ impl ImageRuntime {
             .images
             .get_mut(image_index)
             .ok_or_else(|| vm_failure(source))?;
-        if entry.resource.replace(resource).is_some() {
+        if entry
+            .resource
+            .replace(PlannedXObject::Image(resource))
+            .is_some()
+        {
             return Err(vm_failure(source));
         }
         let retained = cache_retained_bytes(&self.images).ok_or_else(|| vm_failure(source))?;

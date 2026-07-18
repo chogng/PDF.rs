@@ -12,11 +12,12 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_content::{
     ContentFontLimitConfig, ContentFontLimitKind, ContentFontLimits, ContentFontProfile,
-    ContentFontStats, ContentFormPoll, ContentGraphicsLimitConfig, ContentGraphicsLimitKind,
-    ContentGraphicsLimits, ContentImageLimitConfig, ContentImageLimitKind, ContentImageLimits,
-    ContentImageProfile, ContentLimits, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
-    ContentVmFailure, ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll,
-    InterpretFormJob, InterpretPageJob,
+    ContentFontStats, ContentFormPoll, ContentFormProfile, ContentGraphicsLimitConfig,
+    ContentGraphicsLimitKind, ContentGraphicsLimits, ContentImageLimitConfig,
+    ContentImageLimitKind, ContentImageLimits, ContentImageProfile, ContentLimits,
+    ContentUnsupportedKind, ContentVmError, ContentVmErrorCode, ContentVmFailure,
+    ContentVmLimitConfig, ContentVmLimitKind, ContentVmLimits, ContentVmPoll, InterpretFormJob,
+    InterpretPageJob,
 };
 use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
@@ -4523,5 +4524,145 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
     assert_eq!(
         interpreted.acquired_form().resources().defining_object(),
         proof.target()
+    );
+}
+
+#[test]
+fn page_do_recursively_classifies_forms_and_imports_their_scenes() {
+    let outer = form_object(
+        5,
+        b"/BBox [0 0 20 20] /Matrix [1 0 0 1 5 6] \
+          /Resources << /XObject << /Nested 6 0 R >> >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB >>",
+        b"q 1 0 0 1 7 8 cm /Nested Do Q",
+    );
+    let nested = form_object(
+        6,
+        b"/BBox [0 0 10 10] /Matrix [3 0 0 2 1 2] /Resources << >>",
+        b"0 0 10 10 re 0 0 1 rg f",
+    );
+    let input = acquire_with_objects(
+        b"2 0 0 2 3 4 cm /Fm0 Do",
+        b"<< /XObject << /Fm0 5 0 R >> >>",
+        &[(5, outer), (6, nested)],
+        0xf6,
+    );
+    let VmInput {
+        acquired,
+        authority,
+        store,
+    } = input;
+    let image_profile = ContentImageProfile::new(
+        authority.clone(),
+        PageXObjectLookupLimits::default(),
+        ImageXObjectJobContext::new(
+            JobId::new(36_001),
+            ResumeCheckpoint::new(36_002),
+            ResumeCheckpoint::new(36_003),
+            ResumeCheckpoint::new(36_004),
+            RequestPriority::VisiblePage,
+        ),
+        ImageXObjectLimits::default(),
+        ContentImageLimits::default(),
+    );
+    let font_profile = ContentFontProfile::new(
+        authority.clone(),
+        PageFontLookupLimits::default(),
+        font_context(36_101),
+        FontResourceLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let form_profile = ContentFormProfile::new(
+        authority,
+        FormXObjectJobContext::new(
+            JobId::new(36_201),
+            ResumeCheckpoint::new(36_202),
+            ResumeCheckpoint::new(36_203),
+            ResumeCheckpoint::new(36_204),
+            RequestPriority::VisiblePage,
+        ),
+        4,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile.clone(),
+        font_profile.clone(),
+        GraphicsSceneLimits::default(),
+    )
+    .expect("compatible bounded Form profile");
+    let mut job = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
+        acquired,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile,
+        font_profile,
+        GraphicsSceneLimits::default(),
+    )
+    .with_forms(form_profile)
+    .expect("image-capable Page job accepts Form recursion");
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        ContentVmPoll::Failed(ContentVmFailure::Scene(error)) => panic!(
+            "nested Form Scene failed at {:?} with {:?}",
+            error.command_index(),
+            error.code()
+        ),
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => panic!(
+            "nested Form VM failed at {:?} with {:?}",
+            error.source().map(|source| source.page_operator_ordinal()),
+            error.code()
+        ),
+        outcome => panic!("nested Forms must publish through Page Do: {outcome:?}"),
+    };
+
+    assert!(page.image_uses().is_empty());
+    assert_eq!(page.form_uses().len(), 1);
+    assert_eq!(page.form_uses()[0].form().form_uses().len(), 1);
+    assert_eq!(
+        page.form_uses()[0].form().form_uses()[0].xobject().target(),
+        pdf_rs_syntax::ObjectRef::new(6, 0).unwrap()
+    );
+    let graphics = page.scene().graphics().expect("graphics-v2 Page");
+    assert_eq!(
+        graphics
+            .commands()
+            .iter()
+            .filter(|record| matches!(record.command(), GraphicsCommand::Clip { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        graphics
+            .commands()
+            .iter()
+            .any(|record| matches!(record.command(), GraphicsCommand::BeginIsolatedGroup { .. }))
+    );
+    let fill_path = graphics
+        .commands()
+        .iter()
+        .find_map(|record| match record.command() {
+            GraphicsCommand::Fill { path, .. } => Some(*path),
+            _ => None,
+        })
+        .expect("nested Form fill");
+    let GraphicsResource::Path(path) = graphics
+        .resources()
+        .iter()
+        .find(|entry| entry.id() == fill_path)
+        .expect("nested Form path resource")
+        .resource()
+    else {
+        panic!("nested fill resource must be a path");
+    };
+    let first = match path.segments().first() {
+        Some(PathSegment::MoveTo(point)) => *point,
+        other => panic!("nested rectangle starts with MoveTo, got {other:?}"),
+    };
+    assert_eq!(
+        [first.x().scaled(), first.y().scaled()],
+        [29_000_000_000, 36_000_000_000]
     );
 }

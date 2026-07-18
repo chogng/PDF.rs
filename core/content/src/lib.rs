@@ -50,7 +50,7 @@ pub use scanner::{
     scan_content_streams,
 };
 pub use vm::{ContentFontProfile, ContentImageProfile, ContentVmPoll, InterpretPageJob};
-pub use vm::{ContentFormPoll, InterpretFormJob};
+pub use vm::{ContentFormPoll, ContentFormProfile, InterpretFormJob};
 pub use vm_error::{
     ContentFontLimit, ContentFontLimitKind, ContentGraphicsLimit, ContentGraphicsLimitKind,
     ContentImageLimit, ContentImageLimitKind, ContentUnsupported, ContentUnsupportedKind,
@@ -60,5 +60,5 @@ pub use vm_error::{
 pub use vm_limits::{ContentVmLimitConfig, ContentVmLimits};
 pub use vm_model::{
     ContentFontStats, ContentImageStats, ContentVmPhase, ContentVmStats, InterpretedForm,
-    InterpretedPage, ResolvedFontUse, ResolvedImageUse, ResolvedPropertyUse,
+    InterpretedPage, ResolvedFontUse, ResolvedFormUse, ResolvedImageUse, ResolvedPropertyUse,
 };

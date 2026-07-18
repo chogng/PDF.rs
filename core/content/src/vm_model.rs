@@ -83,6 +83,54 @@ impl ResolvedImageUse {
     }
 }
 
+/// Exact Page-XObject proof retained for one executed Form `Do`.
+#[derive(Clone, Debug)]
+pub struct ResolvedFormUse {
+    source: ContentOperatorSource,
+    xobject: PageXObjectReference,
+    form: Arc<InterpretedForm>,
+}
+
+impl ResolvedFormUse {
+    pub(crate) fn new(
+        source: ContentOperatorSource,
+        xobject: PageXObjectReference,
+        form: Arc<InterpretedForm>,
+    ) -> Self {
+        Self {
+            source,
+            xobject,
+            form,
+        }
+    }
+
+    /// Returns exact decoded operator-token provenance and page-global ordinal.
+    pub const fn source(&self) -> ContentOperatorSource {
+        self.source
+    }
+
+    /// Returns the resource-name lookup proof that selected the Form.
+    pub const fn xobject(&self) -> PageXObjectReference {
+        self.xobject
+    }
+
+    /// Borrows the complete interpreted child Form retained by this execution proof.
+    pub const fn form(&self) -> &Arc<InterpretedForm> {
+        &self.form
+    }
+}
+
+impl PartialEq for ResolvedFormUse {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && self.xobject == other.xobject
+            && self.form.acquired.reference() == other.form.acquired.reference()
+            && self.form.scene == other.form.scene
+    }
+}
+
+impl Eq for ResolvedFormUse {}
+
 /// Exact Page-Font proof and Scene source identity retained for one executed `Tf` selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResolvedFontUse {
@@ -853,6 +901,7 @@ pub struct InterpretedPage {
     scene: Arc<Scene>,
     property_uses: Vec<ResolvedPropertyUse>,
     image_uses: Vec<ResolvedImageUse>,
+    form_uses: Vec<ResolvedFormUse>,
     font_uses: Vec<ResolvedFontUse>,
     final_ctm: Matrix,
     scan_stats: ContentScanStats,
@@ -874,6 +923,7 @@ impl InterpretedPage {
         scene: Scene,
         property_uses: Vec<ResolvedPropertyUse>,
         image_uses: Vec<ResolvedImageUse>,
+        form_uses: Vec<ResolvedFormUse>,
         font_uses: Vec<ResolvedFontUse>,
         final_ctm: Matrix,
         scan_stats: ContentScanStats,
@@ -889,6 +939,7 @@ impl InterpretedPage {
             scene: Arc::new(scene),
             property_uses,
             image_uses,
+            form_uses,
             font_uses,
             final_ctm,
             scan_stats,
@@ -929,6 +980,11 @@ impl InterpretedPage {
     /// Returns executed Image XObject proofs in exact execution order.
     pub fn image_uses(&self) -> &[ResolvedImageUse] {
         &self.image_uses
+    }
+
+    /// Returns executed Form XObject proofs in exact execution order.
+    pub fn form_uses(&self) -> &[ResolvedFormUse] {
+        &self.form_uses
     }
 
     /// Returns executed Page Font selection proofs in exact execution order.
@@ -986,6 +1042,7 @@ impl fmt::Debug for InterpretedPage {
             .field("scene_resource_count", &self.scene.resources().len())
             .field("property_use_count", &self.property_uses.len())
             .field("image_use_count", &self.image_uses.len())
+            .field("form_use_count", &self.form_uses.len())
             .field("font_use_count", &self.font_uses.len())
             .field("scan_stats", &self.scan_stats)
             .field("vm_stats", &self.vm_stats)
@@ -1010,6 +1067,7 @@ pub struct InterpretedForm {
     scene: Arc<Scene>,
     property_uses: Vec<ResolvedPropertyUse>,
     image_uses: Vec<ResolvedImageUse>,
+    form_uses: Vec<ResolvedFormUse>,
     font_uses: Vec<ResolvedFontUse>,
     final_ctm: Matrix,
     scan_stats: ContentScanStats,
@@ -1031,6 +1089,7 @@ impl InterpretedForm {
         scene: Scene,
         property_uses: Vec<ResolvedPropertyUse>,
         image_uses: Vec<ResolvedImageUse>,
+        form_uses: Vec<ResolvedFormUse>,
         font_uses: Vec<ResolvedFontUse>,
         final_ctm: Matrix,
         scan_stats: ContentScanStats,
@@ -1046,6 +1105,7 @@ impl InterpretedForm {
             scene: Arc::new(scene),
             property_uses,
             image_uses,
+            form_uses,
             font_uses,
             final_ctm,
             scan_stats,
@@ -1081,6 +1141,11 @@ impl InterpretedForm {
     /// Returns executed Image XObject proofs in execution order.
     pub fn image_uses(&self) -> &[ResolvedImageUse] {
         &self.image_uses
+    }
+
+    /// Returns executed nested Form XObject proofs in exact execution order.
+    pub fn form_uses(&self) -> &[ResolvedFormUse] {
+        &self.form_uses
     }
 
     /// Returns executed Font selection proofs in execution order.
@@ -1143,6 +1208,7 @@ impl fmt::Debug for InterpretedForm {
             )
             .field("property_use_count", &self.property_uses.len())
             .field("image_use_count", &self.image_uses.len())
+            .field("form_use_count", &self.form_uses.len())
             .field("font_use_count", &self.font_uses.len())
             .field("scan_stats", &self.scan_stats)
             .field("vm_stats", &self.vm_stats)

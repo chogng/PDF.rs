@@ -5,10 +5,10 @@ use std::sync::Arc;
 use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_document::{
     AcquiredFormXObject, AcquiredPageContent, DocumentCancellation, FontResourceJobContext,
-    FontResourceLimits, ImageXObjectJobContext, ImageXObjectLimits, PageFontLookupLimits,
-    PageFontLookupOutcome, PageFontLookupStats, PagePropertyLookupLimits, PagePropertyLookupStats,
-    PageResourceScope, PageXObjectLookupLimits, PageXObjectLookupOutcome, PageXObjectLookupStats,
-    SharedAttestedRevisionIndex,
+    FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext, ImageXObjectLimits,
+    PageFontLookupLimits, PageFontLookupOutcome, PageFontLookupStats, PagePropertyLookupLimits,
+    PagePropertyLookupStats, PageResourceScope, PageXObjectLookupLimits, PageXObjectLookupOutcome,
+    PageXObjectLookupStats, SharedAttestedRevisionIndex,
 };
 use pdf_rs_font::{GlyphId, OutlineSegment};
 use pdf_rs_scene::{
@@ -28,8 +28,8 @@ use crate::{
     ContentUnsupported, ContentUnsupportedKind, ContentVmError, ContentVmErrorCode,
     ContentVmFailure, ContentVmLimit, ContentVmLimitKind, ContentVmLimits, ContentVmPhase,
     ContentVmStats, DecodedContentStream, InterpretedForm, InterpretedPage, LocatedOperand,
-    OperatorContext, OperatorKind, OperatorOperandShape, ResolvedFontUse, ResolvedImageUse,
-    ResolvedPropertyUse,
+    OperatorContext, OperatorKind, OperatorOperandShape, ResolvedFontUse, ResolvedFormUse,
+    ResolvedImageUse, ResolvedPropertyUse,
 };
 
 mod font;
@@ -38,9 +38,10 @@ mod image;
 
 use font::{FontPlanningPoll, FontRuntime};
 use graphics::{DashRetentionAdmission, GraphicsExecutionError, GraphicsVm, VmRetention};
-use image::{ImagePlanningPoll, ImageRuntime};
+use image::{ImagePlanningPoll, ImageRuntime, ResolvedXObject};
 
 const DASH_CANCELLATION_INTERVAL: usize = 256;
+const MAX_FORM_RECURSION_DEPTH: u16 = 64;
 
 /// One replayable sealed Page-interpretation outcome.
 #[derive(Clone)]
@@ -164,6 +165,84 @@ pub struct ContentFontProfile {
     context: FontResourceJobContext,
     acquisition_limits: FontResourceLimits,
     content_limits: ContentFontLimits,
+}
+
+/// Proof authority, child profiles, and bounded recursion context for Form XObject execution.
+#[derive(Clone, Debug)]
+pub struct ContentFormProfile {
+    authority: SharedAttestedRevisionIndex,
+    context: FormXObjectJobContext,
+    remaining_depth: u16,
+    scan_limits: ContentLimits,
+    vm_limits: ContentVmLimits,
+    graphics_limits: ContentGraphicsLimits,
+    property_limits: PagePropertyLookupLimits,
+    image_profile: ContentImageProfile,
+    font_profile: ContentFontProfile,
+    scene_limits: GraphicsSceneLimits,
+}
+
+impl ContentFormProfile {
+    /// Creates one explicit recursively bounded Form execution profile.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Form recursion keeps each proof authority and independently validated child limit explicit"
+    )]
+    pub fn new(
+        authority: SharedAttestedRevisionIndex,
+        context: FormXObjectJobContext,
+        max_depth: u16,
+        scan_limits: ContentLimits,
+        vm_limits: ContentVmLimits,
+        graphics_limits: ContentGraphicsLimits,
+        property_limits: PagePropertyLookupLimits,
+        image_profile: ContentImageProfile,
+        font_profile: ContentFontProfile,
+        scene_limits: GraphicsSceneLimits,
+    ) -> Result<Self, ContentVmError> {
+        let expected = authority.as_attested();
+        let image = image_profile.authority().as_attested();
+        let font = font_profile.authority().as_attested();
+        if max_depth == 0
+            || max_depth > MAX_FORM_RECURSION_DEPTH
+            || expected.snapshot() != image.snapshot()
+            || expected.snapshot() != font.snapshot()
+            || expected.revision_id() != image.revision_id()
+            || expected.revision_id() != font.revision_id()
+            || expected.startxref() != image.startxref()
+            || expected.startxref() != font.startxref()
+        {
+            return Err(ContentVmError::new(ContentVmErrorCode::InvalidLimits, None));
+        }
+        Ok(Self {
+            authority,
+            context,
+            remaining_depth: max_depth,
+            scan_limits,
+            vm_limits,
+            graphics_limits,
+            property_limits,
+            image_profile,
+            font_profile,
+            scene_limits,
+        })
+    }
+
+    fn child(&self) -> Option<Self> {
+        let remaining_depth = self.remaining_depth.checked_sub(1)?;
+        (remaining_depth != 0).then(|| Self {
+            authority: self.authority.clone(),
+            context: self.context,
+            remaining_depth,
+            scan_limits: self.scan_limits,
+            vm_limits: self.vm_limits,
+            graphics_limits: self.graphics_limits,
+            property_limits: self.property_limits,
+            image_profile: self.image_profile.clone(),
+            font_profile: self.font_profile.clone(),
+            scene_limits: self.scene_limits,
+        })
+    }
 }
 
 impl ContentFontProfile {
@@ -547,6 +626,16 @@ impl InterpretPageJob {
         job
     }
 
+    /// Enables bounded Form XObject classification and recursive execution for `Do`.
+    pub fn with_forms(mut self, profile: ContentFormProfile) -> Result<Self, ContentVmError> {
+        let runtime = self
+            .image_runtime
+            .as_mut()
+            .ok_or_else(|| ContentVmError::new(ContentVmErrorCode::InvalidLimits, None))?;
+        runtime.enable_forms(profile)?;
+        Ok(self)
+    }
+
     /// Returns the pending or terminal phase.
     pub const fn phase(&self) -> ContentVmPhase {
         match self.state {
@@ -661,6 +750,7 @@ impl InterpretPageJob {
                     execution.scene,
                     execution.property_uses,
                     execution.image_uses,
+                    execution.form_uses,
                     execution.font_uses,
                     execution.final_ctm,
                     self.scan_stats,
@@ -805,6 +895,16 @@ impl InterpretFormJob {
         self
     }
 
+    /// Enables recursively bounded nested Form XObjects within this Form scope.
+    pub fn with_forms(mut self, profile: ContentFormProfile) -> Result<Self, ContentVmError> {
+        let runtime = self
+            .image_runtime
+            .as_mut()
+            .ok_or_else(|| ContentVmError::new(ContentVmErrorCode::InternalState, None))?;
+        runtime.enable_forms(profile)?;
+        Ok(self)
+    }
+
     /// Returns the pending or terminal Form phase.
     pub const fn phase(&self) -> ContentVmPhase {
         match self.state {
@@ -889,6 +989,7 @@ impl InterpretFormJob {
                     execution.scene,
                     execution.property_uses,
                     execution.image_uses,
+                    execution.form_uses,
                     execution.font_uses,
                     execution.final_ctm,
                     self.scan_stats,
@@ -964,6 +1065,7 @@ struct Execution {
     scene: Scene,
     property_uses: Vec<ResolvedPropertyUse>,
     image_uses: Vec<ResolvedImageUse>,
+    form_uses: Vec<ResolvedFormUse>,
     font_uses: Vec<ResolvedFontUse>,
     retained_use_capacity_bytes: u64,
     final_ctm: Matrix,
@@ -1074,6 +1176,7 @@ struct FormEnvelope {
 struct PlannedImageInvocation {
     source: ContentOperatorSource,
     name: Vec<u8>,
+    transform: Matrix,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1647,26 +1750,23 @@ fn run_interpretation(
     if let Some(runtime) = image_runtime.as_deref_mut()
         && !runtime.acquisitions_complete()
     {
-        let terminal = match runtime.poll_acquisitions(source, cancellation) {
-            ImagePlanningPoll::Ready => None,
-            ImagePlanningPoll::Pending {
-                ticket,
-                missing,
-                checkpoint,
-            } => Some(RunTerminal::Pending {
-                ticket,
-                missing,
-                checkpoint,
-            }),
-            ImagePlanningPoll::Unsupported {
-                unsupported,
-                source,
-            } => Some(RunTerminal::Unsupported(ContentUnsupported::from_image(
-                unsupported,
-                source,
-            ))),
-            ImagePlanningPoll::Failed(failure) => Some(RunTerminal::Failed(failure)),
-        };
+        let terminal =
+            match runtime.poll_acquisitions(plan.binding, plan.geometry, source, cancellation) {
+                ImagePlanningPoll::Ready => None,
+                ImagePlanningPoll::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                } => Some(RunTerminal::Pending {
+                    ticket,
+                    missing,
+                    checkpoint,
+                }),
+                ImagePlanningPoll::Unsupported(unsupported) => {
+                    Some(RunTerminal::Unsupported(unsupported))
+                }
+                ImagePlanningPoll::Failed(failure) => Some(RunTerminal::Failed(failure)),
+            };
         if let Some(terminal) = terminal {
             return report(
                 terminal,
@@ -1884,7 +1984,7 @@ fn plan_image_resources(
             runtime_guard(snapshot, byte_source, cancellation, Some(source))
                 .map_err(RunTerminal::Failed)?;
             runtime
-                .register_proof(proof, source, byte_source, cancellation)
+                .register_proof(proof, image.transform, source, byte_source, cancellation)
                 .map_err(RunTerminal::Failed)?;
         }
         runtime.finish_plan().map_err(|error| {
@@ -2660,6 +2760,9 @@ fn append_form_prologue(
     else {
         return Ok(None);
     };
+    vm_limits
+        .preflight(ContentVmLimitKind::GraphicsStateDepth, 0, 1, Some(source))
+        .map_err(ContentVmFailure::Vm)?;
     let command_source = command_source(source).map_err(ContentVmFailure::Scene)?;
     let matrix = input.initial_ctm();
     let bbox = form.bbox();
@@ -2781,7 +2884,7 @@ fn append_form_prologue(
             ExecutionAction::BeginGroup {
                 alpha: SceneUnit::ONE,
                 blend_mode: pdf_rs_scene::BlendMode::Normal,
-                bounds,
+                bounds: SceneBounds::Page,
                 source: command_source,
             },
             program_bytes,
@@ -2829,7 +2932,7 @@ fn append_form_epilogue(
         push_execution_action(
             actions,
             ExecutionAction::EndGroup {
-                bounds: envelope.bounds,
+                bounds: SceneBounds::Page,
                 source: envelope.command_source,
             },
             program_bytes,
@@ -3266,6 +3369,19 @@ fn build_execution_plan(
                             );
                         }
                     };
+                    let graphics_depth =
+                        match graphics_depth.checked_add(u64::from(form_envelope.is_some())) {
+                            Some(value) => value,
+                            None => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    vm_error(ContentVmErrorCode::InternalState, operator_source),
+                                );
+                            }
+                        };
                     if let Err(error) = vm_limits.preflight(
                         ContentVmLimitKind::GraphicsStateDepth,
                         graphics_depth,
@@ -3427,6 +3543,19 @@ fn build_execution_plan(
                             );
                         }
                     };
+                    let graphics_depth =
+                        match graphics_depth.checked_add(u32::from(form_envelope.is_some())) {
+                            Some(value) => value,
+                            None => {
+                                return prioritize_vm(
+                                    snapshot,
+                                    byte_source,
+                                    cancellation,
+                                    operator_source,
+                                    vm_error(ContentVmErrorCode::InternalState, operator_source),
+                                );
+                            }
+                        };
                     accounting.max_graphics_depth =
                         accounting.max_graphics_depth.max(graphics_depth);
                 }
@@ -4235,6 +4364,7 @@ fn build_execution_plan(
                     planned_images.push(PlannedImageInvocation {
                         source: operator_source,
                         name: planned_name,
+                        transform,
                     });
                     actions.push(ExecutionAction::DrawImage {
                         source: operator_source,
@@ -5334,12 +5464,29 @@ fn materialize_execution_plan(
         ),
     };
     let mut image_uses = plan.image_uses;
+    let expected_form_uses = image_runtime
+        .as_deref()
+        .map_or(0, ImageRuntime::form_use_count);
+    let mut form_uses = Vec::new();
+    if let Err(error) = reserve_exact_slots_observed(
+        &mut form_uses,
+        expected_form_uses,
+        live_plan_retained.saturating_add(capacity_bytes(&image_uses).unwrap_or(u64::MAX)),
+        vm_limits,
+        None,
+        materialization_peak,
+    ) {
+        return prioritize_vm_without_source(snapshot, byte_source, cancellation, error);
+    }
     let expected_font_uses = plan.font_use_count;
     let mut font_uses = Vec::new();
+    let pre_font_retained = live_plan_retained
+        .saturating_add(capacity_bytes(&image_uses).unwrap_or(u64::MAX))
+        .saturating_add(capacity_bytes(&form_uses).unwrap_or(u64::MAX));
     if let Err(error) = reserve_exact_slots_observed(
         &mut font_uses,
         expected_font_uses,
-        live_plan_retained,
+        pre_font_retained,
         vm_limits,
         None,
         materialization_peak,
@@ -5358,7 +5505,7 @@ fn materialize_execution_plan(
         }
     };
     let text_consumed =
-        live_plan_retained.saturating_add(capacity_bytes(&font_uses).unwrap_or(u64::MAX));
+        pre_font_retained.saturating_add(capacity_bytes(&font_uses).unwrap_or(u64::MAX));
     let mut text = match TextExecutor::new(
         text_stack_slots,
         vm_limits,
@@ -5490,22 +5637,46 @@ fn materialize_execution_plan(
                         vm_error(ContentVmErrorCode::InternalState, source),
                     );
                 };
-                let (proof, image) = match runtime.resolve_planned(source) {
+                let xobject = match runtime.resolve_planned(source) {
                     Ok(value) => value,
                     Err(error) => {
                         return prioritize_vm(snapshot, byte_source, cancellation, source, error);
                     }
                 };
-                let resource_source = image.source();
-                let result = scene
-                    .graphics_mut()
-                    .expect("image plans require the graphics-v2 Scene")
-                    .draw_image(image, transform, alpha, blend_mode, bounds, command_source);
-                if result.is_ok() {
-                    image_uses.push(ResolvedImageUse::new(source, proof, resource_source));
-                    if let Err(error) = runtime.record_executed_use(source) {
-                        return prioritize_vm(snapshot, byte_source, cancellation, source, error);
+                let result = match xobject {
+                    ResolvedXObject::Image { proof, image } => {
+                        let resource_source = image.source();
+                        let result = scene
+                            .graphics_mut()
+                            .expect("XObject plans require the graphics-v2 Scene")
+                            .draw_image(
+                                image,
+                                transform,
+                                alpha,
+                                blend_mode,
+                                bounds,
+                                command_source,
+                            );
+                        if result.is_ok() {
+                            image_uses.push(ResolvedImageUse::new(source, proof, resource_source));
+                        }
+                        result
                     }
+                    ResolvedXObject::Form { proof, form } => {
+                        let result = scene
+                            .graphics_mut()
+                            .expect("XObject plans require the graphics-v2 Scene")
+                            .append_scene(form.scene());
+                        if result.is_ok() {
+                            form_uses.push(ResolvedFormUse::new(source, proof, form));
+                        }
+                        result
+                    }
+                };
+                if result.is_ok()
+                    && let Err(error) = runtime.record_executed_use(source)
+                {
+                    return prioritize_vm(snapshot, byte_source, cancellation, source, error);
                 }
                 result
             }
@@ -5583,12 +5754,14 @@ fn materialize_execution_plan(
     let retained_use_capacity_bytes = capacity_bytes(&plan.property_uses)
         .ok()
         .and_then(|value| value.checked_add(capacity_bytes(&image_uses).ok()?))
+        .and_then(|value| value.checked_add(capacity_bytes(&form_uses).ok()?))
         .and_then(|value| value.checked_add(capacity_bytes(&font_uses).ok()?))
         .unwrap_or(u64::MAX);
     RunTerminal::Ready(Execution {
         scene,
         property_uses: plan.property_uses,
         image_uses,
+        form_uses,
         font_uses,
         retained_use_capacity_bytes,
         final_ctm: plan.final_ctm,
