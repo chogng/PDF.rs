@@ -33,6 +33,7 @@ enum WorkerCommand {
     Render {
         request: u64,
         document_id: u64,
+        generation: Option<u64>,
         page: u32,
         width: u32,
         cancellation: Arc<AtomicBool>,
@@ -56,6 +57,7 @@ enum Response {
     Surface {
         request: u64,
         document_id: u64,
+        generation: Option<u64>,
         surface: NativePageSurface,
     },
     Cancelled {
@@ -166,10 +168,20 @@ fn run_stdio() -> io::Result<()> {
                     request,
                 )?;
             }
-            "RENDER" => {
+            "RENDER" | "RENDER_V2" => {
                 let Some(document_id) = parse_u64(fields.next()) else {
                     send_error(&response_sender, request, "invalid-command")?;
                     continue;
+                };
+                let generation = if method == "RENDER_V2" {
+                    let Some(generation) = parse_u64(fields.next()).filter(|value| *value > 0)
+                    else {
+                        send_error(&response_sender, request, "invalid-command")?;
+                        continue;
+                    };
+                    Some(generation)
+                } else {
+                    None
                 };
                 let Some(page) = parse_u32(fields.next()) else {
                     send_error(&response_sender, request, "invalid-command")?;
@@ -196,6 +208,7 @@ fn run_stdio() -> io::Result<()> {
                 let command = WorkerCommand::Render {
                     request,
                     document_id,
+                    generation,
                     page,
                     width,
                     cancellation,
@@ -322,6 +335,7 @@ fn run_worker(
             WorkerCommand::Render {
                 request,
                 document_id,
+                generation,
                 page,
                 width,
                 cancellation,
@@ -362,6 +376,7 @@ fn run_worker(
                         Ok(surface) => Response::Surface {
                             request,
                             document_id,
+                            generation,
                             surface,
                         },
                         Err(error) => Response::Error {
@@ -416,18 +431,32 @@ fn write_responses(responses: Receiver<Response>) -> io::Result<()> {
             Response::Surface {
                 request,
                 document_id,
+                generation,
                 surface,
             } => {
-                writeln!(
-                    output,
-                    "SURFACE {request} {document_id} {} {} {} {} {} {}",
-                    surface.page_index(),
-                    surface.renderer().identifier(),
-                    surface.width(),
-                    surface.height(),
-                    surface.stride(),
-                    surface.pixels().len()
-                )?;
+                if let Some(generation) = generation {
+                    writeln!(
+                        output,
+                        "SURFACE_V2 {request} {document_id} {generation} {} {} {} {} {} {}",
+                        surface.page_index(),
+                        surface.renderer().identifier(),
+                        surface.width(),
+                        surface.height(),
+                        surface.stride(),
+                        surface.pixels().len()
+                    )?;
+                } else {
+                    writeln!(
+                        output,
+                        "SURFACE {request} {document_id} {} {} {} {} {} {}",
+                        surface.page_index(),
+                        surface.renderer().identifier(),
+                        surface.width(),
+                        surface.height(),
+                        surface.stride(),
+                        surface.pixels().len()
+                    )?;
+                }
                 output.write_all(surface.pixels())?;
                 output.write_all(b"\n")?;
             }

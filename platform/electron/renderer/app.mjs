@@ -48,6 +48,7 @@ const render = async () => {
   const width = Math.max(160, Math.round(available * zoom));
   const result = await window.pdfRs.renderPage({
     documentId: activeDocument.documentId,
+    generation: requestGeneration,
     page,
     width,
   });
@@ -61,7 +62,9 @@ const render = async () => {
   canvas.width = result.width;
   canvas.height = result.height;
   const context = canvas.getContext("2d", { alpha: false });
-  const pixels = new Uint8ClampedArray(result.pixels);
+  const pixels = result.pixels instanceof Uint8ClampedArray
+    ? result.pixels
+    : new Uint8ClampedArray(result.pixels);
   context.putImageData(new ImageData(pixels, result.width, result.height), 0, 0);
   pageShell.hidden = false;
   empty.hidden = true;
@@ -140,6 +143,7 @@ const failureLabel = (code) => {
     "invalid-input": "The render request was rejected.",
     render: "PDF.rs could not produce this page.",
     "bridge-closed": "The Rust rendering process stopped.",
+    "stale-generation": "A superseded render result was discarded.",
   };
   return labels[code] ?? `Viewer error: ${code}`;
 };

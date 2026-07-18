@@ -35,6 +35,7 @@ test("persistent bridge opens and renders a readable two-page PDF", async () => 
       assert.equal(surface.width, 306);
       assert.equal(surface.height, 396);
       assert.equal(surface.stride, 1_224);
+      assert.ok(surface.pixels instanceof Uint8ClampedArray);
       assert.equal(surface.pixels.byteLength, 306 * 396 * 4);
       assert.equal(
         Array.from(surface.pixels).some(
@@ -56,6 +57,7 @@ test("bridge cancels active Rust rendering without losing the document", async (
     const controller = new AbortController();
     const started = Date.now();
     const rendering = bridge.render(opened.documentId, 0, 480, {
+      generation: 7,
       signal: controller.signal,
     });
     controller.abort();
@@ -68,7 +70,10 @@ test("bridge cancels active Rust rendering without losing the document", async (
       "cooperative cancellation must not wait for a complete Reference render",
     );
 
-    const surface = await bridge.render(opened.documentId, 1, 128);
+    const surface = await bridge.render(opened.documentId, 1, 128, {
+      generation: 8,
+    });
+    assert.equal(surface.generation, 8);
     assert.equal(surface.page, 1);
     assert.equal(surface.width, 128);
     await bridge.close(opened.documentId);

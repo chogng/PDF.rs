@@ -285,6 +285,8 @@ ipcMain.handle("pdf-rs:render", async (event, request) => {
   if (
     !currentDocument
     || request?.documentId !== currentDocument.documentId
+    || !Number.isSafeInteger(request?.generation)
+    || request.generation <= 0
     || !Number.isSafeInteger(request?.page)
     || request.page < 0
     || !Number.isSafeInteger(request?.width)
@@ -299,8 +301,14 @@ ipcMain.handle("pdf-rs:render", async (event, request) => {
       request.documentId,
       request.page,
       request.width,
-      { signal: controller.signal },
+      {
+        generation: request.generation,
+        signal: controller.signal,
+      },
     );
+    if (surface.generation !== request.generation) {
+      return { ok: false, code: "stale-generation" };
+    }
     if (smokeScreenshot) {
       console.log(
         `PDF_RS_ELECTRON_RENDERED ${surface.page} ${surface.width} ${surface.height}`,

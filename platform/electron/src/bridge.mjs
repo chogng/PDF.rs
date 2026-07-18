@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const MAX_SURFACE_BYTES = 256 * 1024 * 1024;
+const MAX_RESPONSE_LINE_BYTES = 16 * 1024;
 export const FAST_CPU_CANARY_COHORT = "m4-r0-basic-page-local-v1";
 
 export class PdfRsBridgeError extends Error {
@@ -63,9 +64,13 @@ export class PdfRsBridge {
   }
 
   async render(documentId, page, width, options = {}) {
+    const generation = options.generation;
+    const versioned = generation !== undefined;
     return this.#request(
-      `RENDER {id} ${integer(documentId)} ${integer(page)} ${integer(width)}`,
-      "SURFACE",
+      versioned
+        ? `RENDER_V2 {id} ${integer(documentId)} ${positiveInteger(generation)} ${integer(page)} ${integer(width)}`
+        : `RENDER {id} ${integer(documentId)} ${integer(page)} ${integer(width)}`,
+      versioned ? "SURFACE_V2" : "SURFACE",
       options.signal,
     );
   }
@@ -138,43 +143,79 @@ export class PdfRsBridge {
     if (this.#closed) {
       return;
     }
-    this.#buffer = Buffer.concat([this.#buffer, chunk]);
     try {
-      while (this.#buffer.length > 0) {
+      while (chunk.length > 0) {
         if (this.#surface) {
-          if (this.#buffer.length < this.#surface.length + 1) {
+          const remaining = this.#surface.length - this.#surface.received;
+          if (remaining > 0) {
+            const accepted = Math.min(remaining, chunk.length);
+            chunk.copy(
+              this.#surface.pixels,
+              this.#surface.received,
+              0,
+              accepted,
+            );
+            this.#surface.received += accepted;
+            chunk = chunk.subarray(accepted);
+            if (this.#surface.received < this.#surface.length) {
+              return;
+            }
+          }
+          if (chunk.length === 0) {
             return;
           }
-          const pixels = this.#buffer.subarray(0, this.#surface.length);
-          if (this.#buffer[this.#surface.length] !== 0x0a) {
+          if (chunk[0] !== 0x0a) {
             throw new PdfRsBridgeError("invalid-surface-frame");
           }
-          this.#buffer = this.#buffer.subarray(this.#surface.length + 1);
           const surface = this.#surface;
           this.#surface = undefined;
-          this.#resolve(surface.request, "SURFACE", {
+          chunk = chunk.subarray(1);
+          this.#resolve(surface.request, surface.responseType, {
             documentId: surface.documentId,
+            generation: surface.generation,
             page: surface.page,
             renderer: surface.renderer,
             width: surface.width,
             height: surface.height,
             stride: surface.stride,
-            pixels: Uint8Array.from(pixels),
+            pixels: new Uint8ClampedArray(
+              surface.pixels.buffer,
+              surface.pixels.byteOffset,
+              surface.pixels.byteLength,
+            ),
           });
           continue;
         }
-        const newline = this.#buffer.indexOf(0x0a);
+        const newline = chunk.indexOf(0x0a);
         if (newline === -1) {
+          this.#appendResponseLine(chunk);
           return;
         }
-        const line = this.#buffer.subarray(0, newline).toString("ascii");
-        this.#buffer = this.#buffer.subarray(newline + 1);
-        this.#acceptLine(line);
+        let line = chunk.subarray(0, newline);
+        chunk = chunk.subarray(newline + 1);
+        if (this.#buffer.length > 0) {
+          if (this.#buffer.length + line.length > MAX_RESPONSE_LINE_BYTES) {
+            throw new PdfRsBridgeError("invalid-response");
+          }
+          line = Buffer.concat([this.#buffer, line]);
+          this.#buffer = Buffer.alloc(0);
+        }
+        const text = line.toString("ascii");
+        this.#acceptLine(text);
       }
     } catch (error) {
       this.#failAll(error instanceof PdfRsBridgeError ? error.code : "invalid-frame");
       this.terminate();
     }
+  }
+
+  #appendResponseLine(chunk) {
+    if (this.#buffer.length + chunk.length > MAX_RESPONSE_LINE_BYTES) {
+      throw new PdfRsBridgeError("invalid-response");
+    }
+    this.#buffer = this.#buffer.length === 0
+      ? chunk
+      : Buffer.concat([this.#buffer, chunk]);
   }
 
   #acceptLine(line) {
@@ -213,27 +254,37 @@ export class PdfRsBridge {
       this.#resolve(request, type, undefined);
       return;
     }
-    if (type === "SURFACE" && fields.length === 9) {
-      const length = parsedInteger(fields[8]);
+    if (
+      (type === "SURFACE" && fields.length === 9)
+      || (type === "SURFACE_V2" && fields.length === 10)
+    ) {
+      const versioned = type === "SURFACE_V2";
+      const offset = versioned ? 1 : 0;
+      const length = parsedInteger(fields[8 + offset]);
       if (!length || length > MAX_SURFACE_BYTES) {
         throw new PdfRsBridgeError("invalid-surface-length");
       }
-      const renderer = fields[4];
+      const renderer = fields[4 + offset];
       if (renderer !== "reference-cpu-v1" && renderer !== "fast-cpu-v1") {
         throw new PdfRsBridgeError("invalid-renderer");
       }
       this.#surface = {
         request,
+        responseType: type,
         documentId: parsedInteger(fields[2]),
-        page: parsedInteger(fields[3], true),
+        generation: versioned ? parsedInteger(fields[3]) : undefined,
+        page: parsedInteger(fields[3 + offset], true),
         renderer,
-        width: parsedInteger(fields[5]),
-        height: parsedInteger(fields[6]),
-        stride: parsedInteger(fields[7]),
+        width: parsedInteger(fields[5 + offset]),
+        height: parsedInteger(fields[6 + offset]),
+        stride: parsedInteger(fields[7 + offset]),
         length,
+        received: 0,
+        pixels: Buffer.allocUnsafe(length),
       };
       if (
         !this.#surface.documentId
+        || (versioned && !this.#surface.generation)
         || this.#surface.page === undefined
         || !this.#surface.width
         || !this.#surface.height
@@ -272,6 +323,8 @@ export class PdfRsBridge {
       return;
     }
     this.#closed = true;
+    this.#buffer = Buffer.alloc(0);
+    this.#surface = undefined;
     for (const pending of this.#pending.values()) {
       pending.signal?.removeEventListener("abort", pending.abort);
       pending.reject(new PdfRsBridgeError(code));
@@ -282,6 +335,13 @@ export class PdfRsBridge {
 
 function integer(value) {
   if (!Number.isSafeInteger(value) || value < 0) {
+    throw new PdfRsBridgeError("invalid-input");
+  }
+  return String(value);
+}
+
+function positiveInteger(value) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new PdfRsBridgeError("invalid-input");
   }
   return String(value);

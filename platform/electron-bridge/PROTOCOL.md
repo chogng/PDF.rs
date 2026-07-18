@@ -7,6 +7,7 @@ Requests are ASCII lines:
 
 - `OPEN <request-id> <UTF-8-path-as-lowercase-hex>`
 - `RENDER <request-id> <document-id> <zero-based-page> <width>`
+- `RENDER_V2 <request-id> <document-id> <generation> <zero-based-page> <width>`
 - `CANCEL <request-id> <target-render-request-id>`
 - `CLOSE <request-id> <document-id>`
 - `SHUTDOWN <request-id>`
@@ -15,6 +16,7 @@ Responses are ASCII lines except for a `SURFACE` payload:
 
 - `OPENED <request-id> <document-id> <page-count>`
 - `SURFACE <request-id> <document-id> <page> <renderer> <width> <height> <stride> <length>\n<RGBA bytes>\n`
+- `SURFACE_V2 <request-id> <document-id> <generation> <page> <renderer> <width> <height> <stride> <length>\n<RGBA bytes>\n`
 - `CANCELLED <request-id> <target-render-request-id>`
 - `CLOSED <request-id> <document-id>`
 - `BYE <request-id>`
@@ -30,6 +32,10 @@ available while Rust is interpreting or rasterizing a page. `CANCEL` atomically
 marks the target request stale; the target terminates with `ERROR <target>
 cancelled`, and no Surface is published after cancellation wins the terminal
 race.
+
+`RENDER_V2` adds a nonzero UI generation that is returned unchanged in
+`SURFACE_V2`. The original `RENDER` exchange remains supported for local tools;
+Electron uses V2 so it can reject a stale Surface at every adapter boundary.
 
 The bridge starts in Reference CPU mode. The versioned M4 CANARY cohort
 `m4-r0-basic-page-local-v1` selects Fast CPU only when Electron main passes it
