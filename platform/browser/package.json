@@ -22,8 +22,11 @@
     "wasm:build": "npm run abi:check && tsc --project tsconfig.test.json && node scripts/build-native-worker.mjs",
     "wasm:verify": "node scripts/verify-native-worker.mjs",
     "wasm:fixture": "node scripts/test-native-worker-fixture.mjs",
+    "purity:test": "node --test test/browser-product-purity.test.mjs",
+    "purity:check": "node scripts/check-browser-product-purity.mjs",
+    "purity:closure": "node scripts/prove-browser-product-closure.mjs",
     "test": "npm run protocol:check && npm run abi:check && npm run typecheck && npm run test:unit && npm run worker:test",
-    "check": "npm run toolchain:check && npm test && npm run wasm:build && npm run wasm:verify && npm run wasm:fixture"
+    "check": "npm run toolchain:check && npm test && npm run wasm:build && npm run wasm:verify && npm run wasm:fixture && npm run purity:test && npm run purity:check && npm run purity:closure"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

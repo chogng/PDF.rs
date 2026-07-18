@@ -1,0 +1,222 @@
+{
+  "budgets": {
+    "max_bundle_files": 3,
+    "max_cargo_packages": 16,
+    "max_module_edges": 64,
+    "max_module_files": 16,
+    "max_native_artifact_bytes": 67256320,
+    "max_network_requests_per_open": 4142,
+    "max_precache_entries": 3,
+    "max_shipped_third_party_leaves": 0,
+    "max_worker_count": 1
+  },
+  "build_dependencies": [
+    {
+      "dependency_range": "24.13.3",
+      "direct": true,
+      "integrity": "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==",
+      "license": "MIT",
+      "max_installed_bytes": 8388608,
+      "name": "@types/node",
+      "ownership": "browser build-time Node declarations only; never shipped",
+      "replacement": "replace with the declarations bundled by a future pinned Node toolchain",
+      "required_by": [
+        "@pdf-rs/browser"
+      ],
+      "source": "https://registry.npmjs.org/@types/node/-/node-24.13.3.tgz",
+      "version": "24.13.3"
+    },
+    {
+      "dependency_range": "5.9.3",
+      "direct": true,
+      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+      "license": "Apache-2.0",
+      "max_installed_bytes": 25165824,
+      "name": "typescript",
+      "ownership": "browser build-time type checker and emitter only; never shipped",
+      "replacement": "replace with the next repository-pinned TypeScript after generated-protocol replay",
+      "required_by": [
+        "@pdf-rs/browser"
+      ],
+      "source": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+      "version": "5.9.3"
+    },
+    {
+      "dependency_range": "~7.18.0",
+      "direct": false,
+      "integrity": "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==",
+      "license": "MIT",
+      "max_installed_bytes": 2097152,
+      "name": "undici-types",
+      "ownership": "transitive browser build-time Node fetch declarations only; never shipped",
+      "replacement": "remove with @types/node or replace through its exact locked dependency",
+      "required_by": [
+        "@types/node"
+      ],
+      "source": "https://registry.npmjs.org/undici-types/-/undici-types-7.18.2.tgz",
+      "version": "7.18.2"
+    }
+  ],
+  "cargo_graph": {
+    "packages": [
+      "pdf-rs-browser-worker",
+      "pdf-rs-bytes",
+      "pdf-rs-cache",
+      "pdf-rs-document",
+      "pdf-rs-engine",
+      "pdf-rs-filters",
+      "pdf-rs-font",
+      "pdf-rs-object",
+      "pdf-rs-policy",
+      "pdf-rs-protocol",
+      "pdf-rs-raster",
+      "pdf-rs-scene",
+      "pdf-rs-scheduler",
+      "pdf-rs-surface",
+      "pdf-rs-syntax",
+      "pdf-rs-xref"
+    ],
+    "root": "pdf-rs-browser-worker"
+  },
+  "csp": {
+    "base-uri": [
+      "'none'"
+    ],
+    "connect-src": [
+      "'self'",
+      "selected-source:"
+    ],
+    "default-src": [
+      "'none'"
+    ],
+    "object-src": [
+      "'none'"
+    ],
+    "script-src": [
+      "'self'",
+      "'wasm-unsafe-eval'"
+    ],
+    "worker-src": [
+      "'self'"
+    ]
+  },
+  "module_graph": {
+    "entrypoints": [
+      "src/browser-native-worker-loader.ts",
+      "src/browser-reader-client.ts",
+      "src/browser-viewer.ts",
+      "src/browser-worker-supervisor.ts"
+    ],
+    "files": [
+      "generated/engine-protocol.ts",
+      "src/browser-command-admission.ts",
+      "src/browser-command-boundary.ts",
+      "src/browser-event-boundary.ts",
+      "src/browser-handshake.ts",
+      "src/browser-native-worker-loader.ts",
+      "src/browser-reader-client.ts",
+      "src/browser-source-bridge.ts",
+      "src/browser-surface-bridge.ts",
+      "src/browser-viewer.ts",
+      "src/browser-worker-supervisor.ts",
+      "src/native-worker-abi.generated.ts"
+    ],
+    "sha256": "c0971356675eba1f18fe68a48f73490095c0553ab72357ca2ec56d387fef5353"
+  },
+  "network_manifest": [
+    {
+      "id": "native-wasm",
+      "kind": "integrity-bound-product-resource",
+      "location": "./native/engine.wasm",
+      "max_bytes": 16521161,
+      "max_requests_per_open": 17,
+      "ownership": "PDF.rs Native engine"
+    },
+    {
+      "id": "native-worker-entry",
+      "kind": "integrity-bound-product-resource",
+      "location": "./native/engine-worker.generated.js",
+      "max_bytes": 10880,
+      "max_requests_per_open": 17,
+      "ownership": "PDF.rs browser host"
+    },
+    {
+      "id": "selected-source",
+      "kind": "host-selected-immutable-pdf-source",
+      "location": "selected-source:",
+      "max_bytes": 536870912,
+      "max_requests_per_open": 4096,
+      "ownership": "PDF.rs source bridge"
+    },
+    {
+      "id": "viewer-module-graph",
+      "kind": "same-origin-static-product-modules",
+      "location": "module-graph:",
+      "max_bytes": 4194304,
+      "max_requests_per_open": 12,
+      "ownership": "PDF.rs browser viewer"
+    }
+  ],
+  "product": "PDF.rs Native Browser",
+  "resources": [
+    {
+      "byte_length": 1495,
+      "executable": false,
+      "hash_binding": "canonical-sha256",
+      "kind": "native-artifact-manifest",
+      "max_bytes": 16384,
+      "ownership": "PDF.rs browser release",
+      "path": "dist/native/engine-manifest.json",
+      "sha256": "ea031780667a960ebe0c9b320619ba08d57d8e5d17d5367c8e403ed7895f8c9e"
+    },
+    {
+      "byte_length": 640,
+      "executable": true,
+      "hash_binding": "engine-manifest.json#/glue/sha256",
+      "kind": "worker-module",
+      "max_bytes": 65536,
+      "ownership": "PDF.rs browser host",
+      "path": "dist/native/engine-worker.generated.js",
+      "sha256": "77555454437453e2aa8fb7fb3791c4a4f7ed85df217f91168b674e8b1810d5ae"
+    },
+    {
+      "byte_length": 971833,
+      "executable": true,
+      "hash_binding": "engine-manifest.json#/engine/sha256",
+      "kind": "native-wasm-engine",
+      "max_bytes": 67108864,
+      "ownership": "PDF.rs Native engine",
+      "path": "dist/native/engine.wasm",
+      "sha256": "ac506c7ba8e88fb54a98d1bcf4bc25714182511f9e433724006f8bc0d0fc43c6"
+    }
+  ],
+  "schema": 1,
+  "service_worker": {
+    "precache": [
+      "./native/engine-manifest.json",
+      "./native/engine-worker.generated.js",
+      "./native/engine.wasm"
+    ],
+    "registration_sites": []
+  },
+  "shipped_third_party_leaves": [],
+  "wasm_policy": {
+    "allowed_exports": "generated-native-worker-abi",
+    "allowed_imports": [],
+    "dynamic_external_engines": false,
+    "max_memory_pages": 1024,
+    "payloads": [
+      "dist/native/engine.wasm"
+    ]
+  },
+  "worker_graph": {
+    "entrypoints": [
+      "dist/native/engine-worker.generated.js"
+    ],
+    "max_workers": 1,
+    "wasm_payloads": [
+      "dist/native/engine.wasm"
+    ],
+    "worker_constructor_sites": []
+  }
+}

@@ -46,6 +46,62 @@ The Wasm ABI exposes same-instance memory operations only to that glue. Raw
 pointers and `WebAssembly.Memory` never enter a protocol frame or cross a
 Worker realm; every Worker message still uses the generated boundary.
 
+## Product resource closure
+
+`product/browser-product-policy.json` is the canonical, sorted browser product
+registry. It binds the exact TypeScript module graph, three Native output
+resources, generated Wasm ABI, single-Worker graph, closed CSP, service-Worker
+precache, bounded network classes, and build-only npm leaves. Every registered
+leaf records source, integrity, license, semantic ownership, an installed-byte
+budget, and a replacement plan. The shipped third-party browser leaf set is
+empty: the npm leaves are build-only, while the Wasm target's Cargo graph
+contains only repository-owned PDF.rs crates.
+
+`npm run purity:check` hashes the canonical policy, dependency lock, complete
+module graph, CSP/precache/network/Worker registries, and artifact manifest. A
+bounded TypeScript lexical inventory decodes Unicode identifiers and separates
+comments, strings, templates, and regular-expression literals before rejecting
+ambient or aliased network, Worker, service-worker, and dynamic-execution
+primitives. Bounded static-string propagation covers constant fragments and
+template interpolation, while every computed member access and direct Reflect
+member is held to the exact reviewed per-module inventory; computed capability
+invocation is forbidden. The four currently reviewed `fetch` call shapes are
+also exact. The check rejects comment-separated external module specifiers,
+constant-built external URLs, dynamic imports, source maps, additional
+executables or Wasm payloads, nonzero Wasm imports, ABI/export drift, and any
+resource outside `engine-manifest.json`,
+`engine-worker.generated.js`, and `engine.wasm`. Source files that define
+rejection tests are not treated as shipped resources; only the exact registered
+module and artifact closure is scanned. The module graph and every Native
+artifact are pinned by exact SHA-256 and byte length.
+
+`npm run purity:closure` copies at most 4,096 repository files and 128 MiB into
+a fresh temporary repository, excluding every target directory, `node_modules`,
+the separate `tools/baseline` graph, and the real repository's neighboring
+checkout. It creates a private empty `CARGO_HOME`, strips inherited Cargo and
+Rust compiler wrappers and registry overrides, asserts that no sibling
+`pdfium` directory exists, performs the Native Wasm build with Cargo network
+access forced offline, then re-runs the same product-purity check inside that
+isolated closure using a freshly generated browser-only workspace lock. The
+command never moves, renames, or reads the real `../pdfium` checkout.
+
+The network trace validator requires a canonical product base URL, an exact
+Host-selected immutable source identity, and the exact viewer-module URLs
+derived from the pinned module graph. It classifies requests by URL rather than
+trusting a trace-supplied resource label, binds every trace record to its
+registered identity, requires exact Native artifact byte lengths and hashes,
+and rejects arbitrary same-origin suffixes, fragments, cross-origin,
+missing-resource, zero-byte, identity, and length substitutions. Viewer
+requests cover each of the twelve registered ESM projections exactly once;
+Worker and Wasm byte and request budgets cover the initial artifact epoch plus
+sixteen bounded restarts.
+
+This is currently the static purity and trace-validation foundation, not the
+M5-08 runtime proof: the product graph still has no production Dedicated Worker
+constructor/entry adapter, no production viewer bundle, and no real browser
+trace. M5-09 must register those final resources and feed observed
+Chromium/Firefox/WebKit requests into the validator before M5-08 can complete.
+
 ## Boundary
 
 Control traffic is one canonical binary frame: the generated 20-byte

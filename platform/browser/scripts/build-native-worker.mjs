@@ -10,6 +10,7 @@ import {
   sha256,
   validateNativeWorkerModule,
 } from "./native-worker-contract.mjs";
+import { canonicalJson } from "./browser-product-purity.mjs";
 
 const browserRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -125,5 +126,5 @@ await writeFile(engineUrl, engine);
 await writeFile(glueUrl, glueBytes);
 await writeFile(
   manifestUrl,
-  `${JSON.stringify(manifest, null, 2)}\n`,
+  canonicalJson(manifest),
 );

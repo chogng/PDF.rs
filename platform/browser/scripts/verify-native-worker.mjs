@@ -8,6 +8,7 @@ import {
   sha256,
   validateNativeWorkerModule,
 } from "./native-worker-contract.mjs";
+import { canonicalJson } from "./browser-product-purity.mjs";
 
 const outputDirectory = new URL("../dist/native/", import.meta.url);
 const entries = (await readdir(outputDirectory)).sort();
@@ -26,6 +27,9 @@ const manifestText = await readFile(
   "utf8",
 );
 const manifest = JSON.parse(manifestText);
+if (manifestText !== canonicalJson(manifest)) {
+  throw new Error("Native Worker artifact manifest is not canonical JSON");
+}
 const generatedProtocol = await readFile(
   new URL("../generated/engine-protocol.ts", import.meta.url),
   "utf8",
@@ -99,8 +103,8 @@ const contract = await validateNativeWorkerModule(engine);
 if (
   engine.byteLength !== manifest.engine.byte_length
   || sha256(engine) !== manifest.engine.sha256
-  || JSON.stringify(contract.memory)
-    !== JSON.stringify(manifest.engine.memory)
+  || canonicalJson(contract.memory)
+    !== canonicalJson(manifest.engine.memory)
   || glue.byteLength !== manifest.glue.byte_length
   || sha256(glue) !== manifest.glue.sha256
 ) {
