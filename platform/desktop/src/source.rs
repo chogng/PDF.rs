@@ -71,7 +71,10 @@ pub struct SourceSegment {
 }
 
 impl SourceSegment {
-    /// Borrows bytes only for the Host IPC sender; children never receive a path or file descriptor.
+    /// Borrows bytes for a fresh unlinked segment capability.
+    ///
+    /// The child receives only that exact read-only shared segment, never the
+    /// Host source path or its original file descriptor.
     pub fn bytes(&self) -> &[u8] {
         &self.snapshot[self.start..self.end]
     }

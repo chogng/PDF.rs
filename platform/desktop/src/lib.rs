@@ -1,8 +1,9 @@
 //! Authenticated, bounded desktop host-to-worker transport.
 //!
-//! The host owns source bytes and capability backing. The child process receives
-//! only authenticated, length-bounded canonical frames and opaque capability
-//! descriptors. No module here parses PDF data or performs rendering.
+//! The host owns source bytes and grants only exact immutable range segments.
+//! The child process receives authenticated, length-bounded canonical frames,
+//! drives the Native engine through bounded turns, and publishes immutable
+//! Surfaces through epoch-bound read-only shared-memory capabilities.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -11,6 +12,7 @@ mod auth;
 mod capability;
 mod error;
 mod limits;
+mod native_adapter;
 mod process;
 mod source;
 #[cfg(unix)]

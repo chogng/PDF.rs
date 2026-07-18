@@ -1,11 +1,14 @@
 # Desktop transport provenance
 
-M4-09 owns the host-to-child Native worker boundary only. It reuses the
-canonical generated protocol frame validator and never parses PDF bytes,
-renders, opens local paths, or imports an external PDF engine.
+M4-09 owns the host-to-child Native worker boundary. It reuses the canonical
+generated protocol validator and the repository's Native engine, syntax,
+Scene, policy, and raster crates. The current vertical fixture validates the
+PDF header and builds a self-authored nonblank Scene; it does not claim general
+PDF document parsing and imports no external PDF engine.
 
-The host owns immutable source snapshots and all opaque capability backing.
-The child receives only read-only shared-memory descriptors through Unix
+The host owns immutable source snapshots. The child never receives a source
+path or original source file descriptor; it receives only exact ticket-bound
+read-only range segments through Unix
 `SCM_RIGHTS`, authenticated by a launch-private inherited `socketpair`, sender
 PID, launch token, direction, and epoch. POSIX shared memory is created RW,
 written, independently reopened RDONLY, and unlinked before transfer. Sandboxed
@@ -16,6 +19,11 @@ independent-RDONLY-reopen invariant with a private temporary file.
 APIs replace raw libc calls and ensure rejected or extra descriptors close
 immediately. The hard per-record descriptor cap is 64, intentionally below
 platform ancillary-message limits.
+
+The worker publishes each Native Surface through a fresh unlinked read-only
+shared object. Logical and allocator-capacity checks cover the simultaneous
+pixel import, destination buffer, and shared-memory staging extent. Delivery
+failure reclaims the exact undelivered Surface lease before the process faults.
 
 On macOS, `SOCK_CLOEXEC` is unavailable. The desktop worker spawn path
 serializes its socketpair-to-exec interval, marks both original endpoints

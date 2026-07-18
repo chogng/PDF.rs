@@ -112,8 +112,14 @@ dependencies = [
 name = "pdf-rs-desktop"
 version = "0.1.0"
 dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-engine",
+ "pdf-rs-policy",
  "pdf-rs-protocol",
+ "pdf-rs-raster",
+ "pdf-rs-scene",
  "pdf-rs-surface",
+ "pdf-rs-syntax",
  "rustix",
 ]
 

@@ -6,14 +6,38 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use pdf_rs_protocol::{SequenceTracker, WorkerId};
+use pdf_rs_protocol::{
+    Command as ProtocolCommand, CommandEnvelope, DesktopFrameDecoder, ENVELOPE_HEADER_BYTES,
+    EndpointCapabilities, EndpointRole, Event, EventEnvelope, HandshakeFrameDecoder,
+    KNOWN_ENDPOINT_CAPABILITIES, MAX_MESSAGE_BYTES, MAX_TRANSFER_SLOTS, PROTOCOL_MAJOR,
+    PROTOCOL_MINOR, PayloadCodecLimits, ProtocolHello, ProtocolLimits, ProtocolValidator,
+    SequenceTracker, SurfaceTransport, WorkerId, encode_cancel_acknowledged_event_payload,
+    encode_capability_reported_event_payload, encode_close_session_acknowledged_event_payload,
+    encode_correlation_payload, encode_data_failed_event_payload,
+    encode_document_ready_event_payload, encode_engine_hello_event_payload,
+    encode_generation_completed_event_payload, encode_generation_planned_event_payload,
+    encode_need_data_event_payload, encode_page_metrics_event_payload,
+    encode_protocol_fault_event_payload, encode_ready_event_payload,
+    encode_request_cancelled_event_payload, encode_request_failed_event_payload,
+    encode_session_closed_event_payload, encode_shutdown_acknowledged_event_payload,
+    encode_surface_ready_event_payload, encode_surface_reclaimed_event_payload,
+    encode_surface_release_acknowledged_event_payload, encode_worker_fault_event_payload,
+    encode_worker_stopped_event_payload,
+};
 use pdf_rs_surface::WorkerEpoch;
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
 use crate::{
-    DesktopDirection, DesktopIpcError, DesktopIpcErrorCode, DesktopIpcLimits, DesktopLaunchAuth,
-    DesktopLaunchId, DesktopRecordBinding, DesktopWireRecord, error::error, receive_capability_fds,
-    send_capability_fds, validate_read_only_fd,
+    CapabilityClass, CapabilityRights, DesktopCapability, DesktopDirection, DesktopIpcError,
+    DesktopIpcErrorCode, DesktopIpcLimits, DesktopLaunchAuth, DesktopLaunchId,
+    DesktopRecordBinding, DesktopWireRecord, ReadOnlySharedRegion,
+    error::error,
+    native_adapter::{
+        DesktopNativeEvent, DesktopNativePoll, DesktopNativeWorker, NativeDesktopPhase,
+    },
+    receive_capability_fds, send_capability_fds,
+    unix::{read_read_only_fd, try_receive_capability_fds, wait_receive_capability_fds},
+    validate_read_only_fd,
 };
 
 // Serializes this crate's socketpair-to-exec interval on platforms without
@@ -97,6 +121,78 @@ impl PendingDesktopRecord<'_> {
         result?;
         self.validated = true;
         Ok(())
+    }
+
+    /// Decodes and transactionally commits one generated handshake event.
+    pub fn decode_handshake_event(&mut self) -> Result<EventEnvelope, DesktopIpcError> {
+        let pending = {
+            let record = self
+                .record
+                .as_ref()
+                .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
+            HandshakeFrameDecoder::new(ProtocolLimits::default())
+                .prepare(
+                    record.frame(),
+                    self.fds.as_ref().map_or(0, Vec::len),
+                    &self.host.canonical_received,
+                )
+                .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?
+        };
+        let envelope = pending
+            .decode_event()
+            .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+        validate_received_event(
+            &envelope,
+            self.record
+                .as_ref()
+                .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?
+                .capabilities(),
+            self.host.worker,
+            self.host.epoch,
+        )?;
+        validate_received_handshake_event(&envelope)?;
+        pending
+            .commit(&mut self.host.canonical_received)
+            .map_err(|_| error(DesktopIpcErrorCode::Sequence))?;
+        self.validated = true;
+        Ok(envelope)
+    }
+
+    /// Decodes and transactionally commits one negotiated generated event.
+    pub fn decode_event(
+        &mut self,
+        decoder: DesktopFrameDecoder,
+    ) -> Result<EventEnvelope, DesktopIpcError> {
+        let pending = {
+            let record = self
+                .record
+                .as_ref()
+                .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
+            decoder
+                .prepare(
+                    record.frame(),
+                    self.fds.as_ref().map_or(0, Vec::len),
+                    &self.host.canonical_received,
+                )
+                .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?
+        };
+        let envelope = pending
+            .decode_event()
+            .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+        validate_received_event(
+            &envelope,
+            self.record
+                .as_ref()
+                .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?
+                .capabilities(),
+            self.host.worker,
+            self.host.epoch,
+        )?;
+        pending
+            .commit(&mut self.host.canonical_received)
+            .map_err(|_| error(DesktopIpcErrorCode::Sequence))?;
+        self.validated = true;
+        Ok(envelope)
     }
 
     /// Commits the outer transport sequence and consumes the immutable payload.
@@ -372,7 +468,7 @@ impl Drop for DesktopHostProcess {
     }
 }
 
-/// Runs the minimal isolated child loop for the test fixture process.
+/// Runs the isolated authenticated child transport and bounded Native actor loop.
 pub fn run_child_stdio(limits: DesktopIpcLimits) -> Result<(), DesktopIpcError> {
     let run = catch_unwind(AssertUnwindSafe(|| {
         // `StdinLock` may prefetch stream bytes while reading bootstrap data.
@@ -420,39 +516,580 @@ pub fn run_child_stdio(limits: DesktopIpcLimits) -> Result<(), DesktopIpcError> 
         if host_pid == 0 {
             return Err(error(DesktopIpcErrorCode::Authentication));
         }
-        let mut incoming = None;
-        let mut canonical = SequenceTracker::new();
-        loop {
-            let fds = match receive_capability_fds(&input, limits) {
-                Ok(fds) => fds,
-                Err(failure) if failure.code() == DesktopIpcErrorCode::Disconnected => {
-                    return Ok(());
-                }
-                Err(failure) => return Err(failure),
-            };
-            let record = DesktopWireRecord::read_authenticated_from(
-                &mut input,
-                limits,
-                &auth,
-                host_pid,
-                DesktopDirection::HostToWorker,
-                epoch,
-                &mut incoming,
-            )?;
-            if record.capabilities().len() != fds.len() {
-                return Err(error(DesktopIpcErrorCode::Capability));
-            }
-            for (descriptor, fd) in record.capabilities().iter().zip(&fds) {
-                validate_read_only_fd(fd, descriptor.byte_length())?;
-            }
-            crate::validate_host_hello_command(record.frame(), fds.len(), worker, &mut canonical)?;
-            record.commit_outer_sequence(&mut incoming)?;
-            // Foundation worker performs no dispatch. It validates a generated
-            // handshake and deliberately emits no echo or arbitrary payload.
-        }
+        run_authenticated_child(input, limits, auth, host_pid, epoch, worker)
     }));
     match run {
         Ok(result) => result,
         Err(_) => Err(error(DesktopIpcErrorCode::ChildPanic)),
+    }
+}
+
+fn run_authenticated_child(
+    mut socket: UnixStream,
+    limits: DesktopIpcLimits,
+    auth: DesktopLaunchAuth,
+    host_pid: u32,
+    epoch: WorkerEpoch,
+    worker: WorkerId,
+) -> Result<(), DesktopIpcError> {
+    let mut incoming = None;
+    let mut outgoing = None;
+    let mut canonical_incoming = SequenceTracker::new();
+    let mut canonical_outgoing = SequenceTracker::new();
+    let mut native = DesktopNativeWorker::new(worker, epoch, limits)?;
+    let mut next_outgoing_sequence = 1_u64;
+    let mut next_capability = 1_u64;
+    loop {
+        if let Some(fds) = try_receive_capability_fds(&socket, limits)? {
+            receive_and_dispatch_command(
+                &mut socket,
+                fds,
+                limits,
+                &auth,
+                host_pid,
+                epoch,
+                worker,
+                &mut incoming,
+                &mut canonical_incoming,
+                &mut native,
+            )?;
+        }
+        match native.poll()? {
+            DesktopNativePoll::Event(event) => {
+                send_native_event(
+                    &mut socket,
+                    &auth,
+                    epoch,
+                    worker,
+                    event,
+                    limits,
+                    &mut next_outgoing_sequence,
+                    &mut next_capability,
+                    &mut outgoing,
+                    &mut canonical_outgoing,
+                    native.handshake(),
+                )?;
+                if native.phase() == NativeDesktopPhase::Stopped {
+                    return Ok(());
+                }
+            }
+            DesktopNativePoll::Progressed => {}
+            DesktopNativePoll::Idle => {
+                let fds = match wait_receive_capability_fds(&socket, limits) {
+                    Ok(Some(fds)) => fds,
+                    Ok(None) => continue,
+                    Err(failure) if failure.code() == DesktopIpcErrorCode::Disconnected => {
+                        return Ok(());
+                    }
+                    Err(failure) => return Err(failure),
+                };
+                receive_and_dispatch_command(
+                    &mut socket,
+                    fds,
+                    limits,
+                    &auth,
+                    host_pid,
+                    epoch,
+                    worker,
+                    &mut incoming,
+                    &mut canonical_incoming,
+                    &mut native,
+                )?;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn receive_and_dispatch_command(
+    socket: &mut UnixStream,
+    fds: Vec<OwnedFd>,
+    limits: DesktopIpcLimits,
+    auth: &DesktopLaunchAuth,
+    host_pid: u32,
+    epoch: WorkerEpoch,
+    worker: WorkerId,
+    outer_sequence: &mut Option<u64>,
+    canonical_sequence: &mut SequenceTracker,
+    native: &mut DesktopNativeWorker,
+) -> Result<(), DesktopIpcError> {
+    let record = DesktopWireRecord::read_authenticated_from(
+        socket,
+        limits,
+        auth,
+        host_pid,
+        DesktopDirection::HostToWorker,
+        epoch,
+        outer_sequence,
+    )?;
+    if record.capabilities().len() != fds.len() {
+        return Err(error(DesktopIpcErrorCode::Capability));
+    }
+    for (descriptor, fd) in record.capabilities().iter().zip(&fds) {
+        validate_read_only_fd(fd, descriptor.byte_length())?;
+    }
+    let pending = match native.phase() {
+        NativeDesktopPhase::Starting | NativeDesktopPhase::AwaitingAccept => {
+            HandshakeFrameDecoder::new(ProtocolLimits::default()).prepare(
+                record.frame(),
+                fds.len(),
+                canonical_sequence,
+            )
+        }
+        NativeDesktopPhase::Ready => {
+            let handshake = native
+                .handshake()
+                .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
+            DesktopFrameDecoder::for_handshake(handshake).prepare(
+                record.frame(),
+                fds.len(),
+                canonical_sequence,
+            )
+        }
+        NativeDesktopPhase::Stopped => return Err(error(DesktopIpcErrorCode::Lifecycle)),
+    }
+    .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    let command = pending
+        .decode_command()
+        .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    validate_child_command_capabilities(&command, record.capabilities(), worker, epoch)?;
+
+    let mut transfers = Vec::new();
+    transfers
+        .try_reserve_exact(fds.len())
+        .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?;
+    for (descriptor, fd) in record.capabilities().iter().zip(&fds) {
+        transfers.push(read_read_only_fd(fd, descriptor.byte_length(), limits)?);
+    }
+
+    // All outer credentials, canonical values, transfer bindings, FD rights,
+    // extents, and bounded copies are proven before either direction-local
+    // sequence commits or actor state changes.
+    pending
+        .commit(canonical_sequence)
+        .map_err(|_| error(DesktopIpcErrorCode::Sequence))?;
+    record.commit_outer_sequence(outer_sequence)?;
+    native.handle_command(command, &transfers)
+}
+
+fn validate_child_command_capabilities(
+    envelope: &CommandEnvelope,
+    capabilities: &[DesktopCapability],
+    worker: WorkerId,
+    epoch: WorkerEpoch,
+) -> Result<(), DesktopIpcError> {
+    ProtocolValidator::new(ProtocolLimits::default())
+        .validate_command_payload_correlation(envelope, worker, envelope.correlation.session)
+        .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    match &envelope.command {
+        ProtocolCommand::ProvideData(command) => {
+            let session = envelope
+                .correlation
+                .session
+                .ok_or_else(|| error(DesktopIpcErrorCode::InvalidFrame))?;
+            if capabilities.len() != command.segments.len() {
+                return Err(error(DesktopIpcErrorCode::Capability));
+            }
+            for (index, (segment, capability)) in
+                command.segments.iter().zip(capabilities).enumerate()
+            {
+                if usize::from(segment.slot) != index
+                    || capability.class() != CapabilityClass::SourceSegment
+                    || capability.rights() != CapabilityRights::ReadOnly
+                    || capability.owner() != session
+                    || capability.worker_epoch() != epoch
+                    || capability.byte_length() != segment.byte_length
+                    || segment.byte_length != segment.range.len
+                {
+                    return Err(error(DesktopIpcErrorCode::Capability));
+                }
+            }
+        }
+        _ if !capabilities.is_empty() => return Err(error(DesktopIpcErrorCode::Capability)),
+        _ => {}
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_native_event(
+    socket: &mut UnixStream,
+    auth: &DesktopLaunchAuth,
+    epoch: WorkerEpoch,
+    worker: WorkerId,
+    event: DesktopNativeEvent,
+    limits: DesktopIpcLimits,
+    next_sequence: &mut u64,
+    next_capability: &mut u64,
+    last_outer_sequence: &mut Option<u64>,
+    canonical_sequence: &mut SequenceTracker,
+    handshake: Option<pdf_rs_protocol::CompatibleHandshake>,
+) -> Result<(), DesktopIpcError> {
+    let sequence = *next_sequence;
+    let frame = encode_event_frame(sequence, &event.correlation, &event.event)?;
+    let mut capabilities = Vec::new();
+    let mut fds = Vec::new();
+    match (
+        event.shared_region,
+        event.shared_memory_budget,
+        &event.event,
+    ) {
+        (Some(bytes), Some(shared_memory_budget), Event::SurfaceReady(surface)) => {
+            let session = event
+                .correlation
+                .session
+                .ok_or_else(|| error(DesktopIpcErrorCode::Capability))?;
+            let SurfaceTransport::SharedMemory {
+                slot,
+                region_length,
+            } = surface.transport
+            else {
+                return Err(error(DesktopIpcErrorCode::Capability));
+            };
+            if slot != 0
+                || region_length
+                    != u64::try_from(bytes.len())
+                        .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?
+                || surface.metadata.owner.worker != worker
+                || surface.metadata.owner.session != session
+                || u64::try_from(bytes.len())
+                    .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?
+                    > shared_memory_budget
+            {
+                return Err(error(DesktopIpcErrorCode::Capability));
+            }
+            let region = ReadOnlySharedRegion::from_bytes(&bytes, limits)?;
+            let capability = DesktopCapability::new(
+                *next_capability,
+                CapabilityClass::SurfaceRegion,
+                CapabilityRights::ReadOnly,
+                session,
+                epoch,
+                region.byte_length(),
+            )?;
+            capabilities.push(capability);
+            fds.push(region.into_fd());
+        }
+        (None, None, Event::SurfaceReady(_))
+        | (Some(_), None, _)
+        | (None, Some(_), _)
+        | (Some(_), Some(_), _) => {
+            return Err(error(DesktopIpcErrorCode::Capability));
+        }
+        (None, None, _) => {}
+    }
+    validate_outgoing_event(
+        &frame,
+        &capabilities,
+        worker,
+        epoch,
+        canonical_sequence,
+        handshake,
+    )?;
+    let record = DesktopWireRecord::new(
+        auth,
+        DesktopRecordBinding {
+            direction: DesktopDirection::WorkerToHost,
+            sender_pid: std::process::id(),
+            worker_epoch: epoch,
+            sequence,
+        },
+        frame,
+        capabilities,
+        limits,
+    )?;
+    send_capability_fds(&*socket, &fds, limits)?;
+    record.write_to(socket, limits)?;
+    record.commit_outer_sequence(last_outer_sequence)?;
+    *next_sequence = sequence
+        .checked_add(1)
+        .ok_or_else(|| error(DesktopIpcErrorCode::ResourceLimit))?;
+    if !fds.is_empty() {
+        *next_capability = next_capability
+            .checked_add(1)
+            .ok_or_else(|| error(DesktopIpcErrorCode::ResourceLimit))?;
+    }
+    Ok(())
+}
+
+fn validate_outgoing_event(
+    frame: &[u8],
+    capabilities: &[DesktopCapability],
+    worker: WorkerId,
+    epoch: WorkerEpoch,
+    sequence: &mut SequenceTracker,
+    handshake: Option<pdf_rs_protocol::CompatibleHandshake>,
+) -> Result<(), DesktopIpcError> {
+    let message_type = u16::from_le_bytes(
+        frame
+            .get(4..6)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| error(DesktopIpcErrorCode::InvalidFrame))?,
+    );
+    let pending = if matches!(
+        message_type,
+        pdf_rs_protocol::MESSAGE_ID_ENGINE_HELLO | pdf_rs_protocol::MESSAGE_ID_READY
+    ) {
+        HandshakeFrameDecoder::new(ProtocolLimits::default()).prepare(
+            frame,
+            capabilities.len(),
+            sequence,
+        )
+    } else {
+        DesktopFrameDecoder::for_handshake(
+            handshake.ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?,
+        )
+        .prepare(frame, capabilities.len(), sequence)
+    }
+    .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    let envelope = pending
+        .decode_event()
+        .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    validate_received_event(&envelope, capabilities, worker, epoch)?;
+    if matches!(
+        message_type,
+        pdf_rs_protocol::MESSAGE_ID_ENGINE_HELLO | pdf_rs_protocol::MESSAGE_ID_READY
+    ) {
+        validate_received_handshake_event(&envelope)?;
+    }
+    pending
+        .commit(sequence)
+        .map(|_| ())
+        .map_err(|_| error(DesktopIpcErrorCode::Sequence))
+}
+
+fn validate_received_event(
+    envelope: &EventEnvelope,
+    capabilities: &[DesktopCapability],
+    worker: WorkerId,
+    epoch: WorkerEpoch,
+) -> Result<(), DesktopIpcError> {
+    ProtocolValidator::new(ProtocolLimits::default())
+        .validate_event_payload_correlation(envelope, worker, envelope.correlation.session)
+        .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    match &envelope.event {
+        Event::SurfaceReady(surface) => {
+            let descriptor = capabilities
+                .first()
+                .filter(|_| capabilities.len() == 1)
+                .ok_or_else(|| error(DesktopIpcErrorCode::Capability))?;
+            let session = envelope
+                .correlation
+                .session
+                .ok_or_else(|| error(DesktopIpcErrorCode::Capability))?;
+            let SurfaceTransport::SharedMemory {
+                slot,
+                region_length,
+            } = surface.transport
+            else {
+                return Err(error(DesktopIpcErrorCode::Capability));
+            };
+            let range_end = surface
+                .metadata
+                .byte_offset
+                .checked_add(surface.metadata.byte_length)
+                .ok_or_else(|| error(DesktopIpcErrorCode::ResourceLimit))?;
+            let layout_bytes = u64::from(surface.metadata.stride)
+                .checked_mul(u64::from(surface.metadata.height))
+                .ok_or_else(|| error(DesktopIpcErrorCode::ResourceLimit))?;
+            if slot != 0
+                || descriptor.class() != CapabilityClass::SurfaceRegion
+                || descriptor.rights() != CapabilityRights::ReadOnly
+                || descriptor.owner() != session
+                || descriptor.worker_epoch() != epoch
+                || descriptor.byte_length() != region_length
+                || surface.metadata.owner.worker != worker
+                || surface.metadata.owner.session != session
+                || surface.metadata.byte_length != layout_bytes
+                || range_end > region_length
+            {
+                return Err(error(DesktopIpcErrorCode::Capability));
+            }
+        }
+        _ if !capabilities.is_empty() => return Err(error(DesktopIpcErrorCode::Capability)),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_received_handshake_event(envelope: &EventEnvelope) -> Result<(), DesktopIpcError> {
+    match &envelope.event {
+        Event::EngineHello(engine_hello) => {
+            let host = ProtocolHello {
+                major: PROTOCOL_MAJOR,
+                minor: PROTOCOL_MINOR,
+                schema_hash: pdf_rs_protocol::SCHEMA_HASH,
+                endpoint_role: EndpointRole::Host,
+                capabilities: EndpointCapabilities {
+                    supported: KNOWN_ENDPOINT_CAPABILITIES,
+                    mandatory: 0,
+                },
+                max_message_bytes: MAX_MESSAGE_BYTES,
+                max_transfer_slots: MAX_TRANSFER_SLOTS,
+            };
+            ProtocolValidator::new(ProtocolLimits::default())
+                .validate_handshake(&host, &engine_hello.hello)
+                .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+        }
+        Event::Ready(ready)
+            if ready.worker == envelope.correlation.worker
+                && ready.schema_hash == pdf_rs_protocol::SCHEMA_HASH
+                && ready.negotiated_minor == PROTOCOL_MINOR => {}
+        Event::ProtocolFault(_) => {}
+        _ => return Err(error(DesktopIpcErrorCode::InvalidFrame)),
+    }
+    Ok(())
+}
+
+fn encode_event_frame(
+    sequence: u64,
+    correlation: &pdf_rs_protocol::Correlation,
+    event: &Event,
+) -> Result<Vec<u8>, DesktopIpcError> {
+    let limits = PayloadCodecLimits::protocol_default();
+    let mut payload = encode_correlation_payload(correlation, limits)
+        .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    let event_payload = match event {
+        Event::Ready(value) => encode_ready_event_payload(value, limits),
+        Event::NeedData(value) => encode_need_data_event_payload(value, limits),
+        Event::DocumentReady(value) => encode_document_ready_event_payload(value, limits),
+        Event::CapabilityReported(value) => encode_capability_reported_event_payload(value, limits),
+        Event::SurfaceReady(value) => encode_surface_ready_event_payload(value, limits),
+        Event::RequestCancelled(value) => encode_request_cancelled_event_payload(value, limits),
+        Event::RequestFailed(value) => encode_request_failed_event_payload(value, limits),
+        Event::SessionClosed(value) => encode_session_closed_event_payload(value, limits),
+        Event::WorkerStopped(value) => encode_worker_stopped_event_payload(value, limits),
+        Event::WorkerFault(value) => encode_worker_fault_event_payload(value, limits),
+        Event::ProtocolFault(value) => encode_protocol_fault_event_payload(value, limits),
+        Event::SurfaceReclaimed(value) => encode_surface_reclaimed_event_payload(value, limits),
+        Event::EngineHello(value) => encode_engine_hello_event_payload(value, limits),
+        Event::DataFailed(value) => encode_data_failed_event_payload(value, limits),
+        Event::PageMetrics(value) => encode_page_metrics_event_payload(value, limits),
+        Event::GenerationPlanned(value) => encode_generation_planned_event_payload(value, limits),
+        Event::GenerationCompleted(value) => {
+            encode_generation_completed_event_payload(value, limits)
+        }
+        Event::CancelAcknowledged(value) => encode_cancel_acknowledged_event_payload(value, limits),
+        Event::SurfaceReleaseAcknowledged(value) => {
+            encode_surface_release_acknowledged_event_payload(value, limits)
+        }
+        Event::CloseSessionAcknowledged(value) => {
+            encode_close_session_acknowledged_event_payload(value, limits)
+        }
+        Event::ShutdownAcknowledged(value) => {
+            encode_shutdown_acknowledged_event_payload(value, limits)
+        }
+    }
+    .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
+    payload
+        .try_reserve_exact(event_payload.len())
+        .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?;
+    payload.extend_from_slice(&event_payload);
+    let message_type = event_message_type(event);
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?;
+    let total = ENVELOPE_HEADER_BYTES
+        .checked_add(payload.len())
+        .ok_or_else(|| error(DesktopIpcErrorCode::ResourceLimit))?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(total)
+        .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?;
+    frame.extend_from_slice(&PROTOCOL_MAJOR.to_le_bytes());
+    frame.extend_from_slice(&PROTOCOL_MINOR.to_le_bytes());
+    frame.extend_from_slice(&message_type.to_le_bytes());
+    frame.extend_from_slice(&0_u16.to_le_bytes());
+    frame.extend_from_slice(&payload_len.to_le_bytes());
+    frame.extend_from_slice(&sequence.to_le_bytes());
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
+fn event_message_type(event: &Event) -> u16 {
+    match event {
+        Event::Ready(_) => pdf_rs_protocol::MESSAGE_ID_READY,
+        Event::NeedData(_) => pdf_rs_protocol::MESSAGE_ID_NEED_DATA,
+        Event::DocumentReady(_) => pdf_rs_protocol::MESSAGE_ID_DOCUMENT_READY,
+        Event::CapabilityReported(_) => pdf_rs_protocol::MESSAGE_ID_CAPABILITY_REPORTED,
+        Event::SurfaceReady(_) => pdf_rs_protocol::MESSAGE_ID_SURFACE_READY,
+        Event::RequestCancelled(_) => pdf_rs_protocol::MESSAGE_ID_REQUEST_CANCELLED,
+        Event::RequestFailed(_) => pdf_rs_protocol::MESSAGE_ID_REQUEST_FAILED,
+        Event::SessionClosed(_) => pdf_rs_protocol::MESSAGE_ID_SESSION_CLOSED,
+        Event::WorkerStopped(_) => pdf_rs_protocol::MESSAGE_ID_WORKER_STOPPED,
+        Event::WorkerFault(_) => pdf_rs_protocol::MESSAGE_ID_WORKER_FAULT,
+        Event::ProtocolFault(_) => pdf_rs_protocol::MESSAGE_ID_PROTOCOL_FAULT,
+        Event::SurfaceReclaimed(_) => pdf_rs_protocol::MESSAGE_ID_SURFACE_RECLAIMED,
+        Event::EngineHello(_) => pdf_rs_protocol::MESSAGE_ID_ENGINE_HELLO,
+        Event::DataFailed(_) => pdf_rs_protocol::MESSAGE_ID_DATA_FAILED,
+        Event::PageMetrics(_) => pdf_rs_protocol::MESSAGE_ID_PAGE_METRICS,
+        Event::GenerationPlanned(_) => pdf_rs_protocol::MESSAGE_ID_GENERATION_PLANNED,
+        Event::GenerationCompleted(_) => pdf_rs_protocol::MESSAGE_ID_GENERATION_COMPLETED,
+        Event::CancelAcknowledged(_) => pdf_rs_protocol::MESSAGE_ID_CANCEL_ACKNOWLEDGED,
+        Event::SurfaceReleaseAcknowledged(_) => {
+            pdf_rs_protocol::MESSAGE_ID_SURFACE_RELEASE_ACKNOWLEDGED
+        }
+        Event::CloseSessionAcknowledged(_) => {
+            pdf_rs_protocol::MESSAGE_ID_CLOSE_SESSION_ACKNOWLEDGED
+        }
+        Event::ShutdownAcknowledged(_) => pdf_rs_protocol::MESSAGE_ID_SHUTDOWN_ACKNOWLEDGED,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_authenticated_child;
+    use crate::{
+        DesktopIpcErrorCode, DesktopIpcLimitConfig, DesktopIpcLimits, DesktopLaunchAuth,
+        send_capability_fds,
+    };
+    use pdf_rs_protocol::WorkerId;
+    use pdf_rs_surface::WorkerEpoch;
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    #[test]
+    fn partial_authenticated_record_stall_exits_at_record_timeout() {
+        let limits =
+            DesktopIpcLimits::new(DesktopIpcLimitConfig::default()).expect("desktop limits");
+        let auth = DesktopLaunchAuth::new().expect("launch auth");
+        let child_auth = DesktopLaunchAuth::from_bootstrap(auth.launch(), *auth.token())
+            .expect("child launch auth");
+        let (host_fd, child_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .expect("socketpair");
+        let mut host = UnixStream::from(host_fd);
+        let child = UnixStream::from(child_fd);
+        child
+            .set_read_timeout(Some(Duration::from_millis(25)))
+            .expect("record timeout");
+        child
+            .set_write_timeout(Some(Duration::from_millis(25)))
+            .expect("write timeout");
+        let epoch = WorkerEpoch::new(1).expect("epoch");
+        let handle = std::thread::spawn(move || {
+            run_authenticated_child(
+                child,
+                limits,
+                child_auth,
+                std::process::id(),
+                epoch,
+                WorkerId::new(1),
+            )
+        });
+
+        send_capability_fds(&host, &[], limits).expect("empty capability marker");
+        host.write_all(&100_u32.to_le_bytes())
+            .expect("declared record length");
+        let failure = handle
+            .join()
+            .expect("child thread joined")
+            .expect_err("partial record must fail closed");
+        assert_eq!(failure.code(), DesktopIpcErrorCode::Disconnected);
     }
 }

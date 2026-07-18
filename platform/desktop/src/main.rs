@@ -1,4 +1,4 @@
-//! Isolated fixture-only desktop worker entrypoint.
+//! Isolated authenticated desktop Native worker entrypoint.
 
 use pdf_rs_desktop::{DesktopIpcLimitConfig, DesktopIpcLimits, run_child_stdio};
 

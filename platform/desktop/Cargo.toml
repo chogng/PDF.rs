@@ -13,8 +13,14 @@ bench = false
 doc = false
 
 [dependencies]
+pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-engine = { path = "../../runtime/engine" }
+pdf-rs-policy = { path = "../../runtime/policy" }
 pdf-rs-protocol = { path = "../../runtime/protocol" }
+pdf-rs-raster = { path = "../../core/raster" }
+pdf-rs-scene = { path = "../../core/scene" }
 pdf-rs-surface = { path = "../../runtime/surface" }
+pdf-rs-syntax = { path = "../../core/syntax" }
 # Narrow Unix/macOS system boundary for socketpair, SCM_RIGHTS,
 # read-only shared-memory descriptors, and owned-FD cleanup. No raw libc calls.
 rustix = { version = "1.1.4", default-features = false, features = ["std", "fs", "net", "process", "shm"] }

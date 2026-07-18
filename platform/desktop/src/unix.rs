@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::fd::{AsFd, OwnedFd};
 use rustix::fs::{Mode, SeekFrom, ftruncate, seek};
-use rustix::io::{IoSlice, IoSliceMut, pwrite};
+use rustix::io::Errno;
+use rustix::io::{IoSlice, IoSliceMut, pread, pwrite};
 use rustix::net::{
     RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
     SendAncillaryMessage, SendFlags, recvmsg, sendmsg,
@@ -246,12 +247,43 @@ pub fn receive_capability_fds(
     socket: impl AsFd,
     limits: DesktopIpcLimits,
 ) -> Result<Vec<OwnedFd>, DesktopIpcError> {
+    receive_capability_fds_with_flags(socket, limits, RecvFlags::empty())?
+        .ok_or_else(|| error(DesktopIpcErrorCode::Disconnected))
+}
+
+/// Attempts one descriptor marker without blocking between bounded Native actor turns.
+pub(crate) fn try_receive_capability_fds(
+    socket: impl AsFd,
+    limits: DesktopIpcLimits,
+) -> Result<Option<Vec<OwnedFd>>, DesktopIpcError> {
+    receive_capability_fds_with_flags(socket, limits, RecvFlags::DONTWAIT)
+}
+
+/// Waits up to the socket's configured record timeout for one descriptor marker.
+pub(crate) fn wait_receive_capability_fds(
+    socket: impl AsFd,
+    limits: DesktopIpcLimits,
+) -> Result<Option<Vec<OwnedFd>>, DesktopIpcError> {
+    receive_capability_fds_with_flags(socket, limits, RecvFlags::empty())
+}
+
+fn receive_capability_fds_with_flags(
+    socket: impl AsFd,
+    limits: DesktopIpcLimits,
+    flags: RecvFlags,
+) -> Result<Option<Vec<OwnedFd>>, DesktopIpcError> {
     let mut marker = [0_u8; 1];
     let mut iov = [IoSliceMut::new(&mut marker)];
     let mut space = ancillary_space(limits.max_capabilities())?;
     let mut control = RecvAncillaryBuffer::new(&mut space);
-    let message = recvmsg(socket, &mut iov, &mut control, RecvFlags::empty())
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+    let message = match recvmsg(socket, &mut iov, &mut control, flags) {
+        Ok(message) => message,
+        Err(Errno::AGAIN) => return Ok(None),
+        Err(_) => return Err(error(DesktopIpcErrorCode::Disconnected)),
+    };
+    if message.bytes == 0 {
+        return Err(error(DesktopIpcErrorCode::Disconnected));
+    }
     if message.bytes != 1
         || message
             .flags
@@ -278,7 +310,7 @@ pub fn receive_capability_fds(
             _ => return Err(error(DesktopIpcErrorCode::Capability)),
         }
     }
-    Ok(fds)
+    Ok(Some(fds))
 }
 
 fn ancillary_space(count: usize) -> Result<Vec<MaybeUninit<u8>>, DesktopIpcError> {
@@ -306,4 +338,42 @@ pub fn validate_read_only_fd(fd: impl AsFd, byte_length: u64) -> Result<(), Desk
         return Err(error(DesktopIpcErrorCode::Capability));
     }
     Ok(())
+}
+
+/// Copies one already-validated immutable descriptor through bounded positional reads.
+pub(crate) fn read_read_only_fd(
+    fd: impl AsFd,
+    byte_length: u64,
+    limits: DesktopIpcLimits,
+) -> Result<Vec<u8>, DesktopIpcError> {
+    validate_read_only_fd(&fd, byte_length)?;
+    let length =
+        usize::try_from(byte_length).map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?;
+    if length == 0 || length > limits.max_capability_bytes() {
+        return Err(error(DesktopIpcErrorCode::ResourceLimit));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?;
+    if bytes.capacity() > limits.max_capability_bytes() {
+        return Err(error(DesktopIpcErrorCode::ResourceLimit));
+    }
+    bytes.resize(length, 0);
+    let mut offset = 0_usize;
+    while offset < length {
+        let read = pread(
+            &fd,
+            &mut bytes[offset..],
+            u64::try_from(offset).map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?,
+        )
+        .map_err(|_| error(DesktopIpcErrorCode::Capability))?;
+        if read == 0 {
+            return Err(error(DesktopIpcErrorCode::Capability));
+        }
+        offset = offset
+            .checked_add(read)
+            .ok_or_else(|| error(DesktopIpcErrorCode::ResourceLimit))?;
+    }
+    Ok(bytes)
 }
