@@ -1,0 +1,70 @@
+schema = 1
+evidence_id = "m4.fast-cpu-canary.product-purity.v1"
+evidence_kind = "fresh-native-product-closure"
+status = "passed"
+completed_at = 2026-07-18
+external_engine_fallback = false
+
+[manifest_preflight]
+command = "cargo run --quiet --locked --package pdf-rs-quality -- check-product-purity ."
+scanned_cargo_manifests = 25
+allowlisted_product_packages = 24
+forbidden_manifest_tokens = 0
+product_manifest_set_sha256 = "2e0c372f2548c229d49521ac2e6388398dd4159cf89e66ad9921337030d003f1"
+cargo_lock_sha256 = "4797aa621888f8d4dbf93bec28df7f0b7a17f868adf16468fe395d56f008ccf6"
+
+[release_closure]
+profile = "release"
+default_features = false
+fresh_external_target = true
+product_packages = 24
+product_binaries = 1
+desktop_feature_fingerprints = 2
+desktop_fingerprint_directories = 2
+desktop_worker_sha256 = "15da5131e1c847cf3a6ad86cf5d8b54f84304dcf7f2355768cb1d4cd9f4fe718"
+registered_third_party_packages = 4
+depfiles = 24
+artifact_files = 282
+fingerprint_directories = 24
+build_script_artifacts = 32
+native_artifacts = 0
+unknown_artifacts = 0
+viewer_library_present = true
+electron_bridge_library_present = true
+electron_bridge_binary_packaged = false
+
+[release_closure.replay]
+prepare = "cargo run --quiet --locked --package pdf-rs-quality -- prepare-product-build-proof . TARGET PROOF_ID"
+libraries = "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=TARGET cargo build --locked --release --no-default-features --lib with all 23 product library packages selected by scripts/ci.sh"
+desktop_worker = "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=TARGET cargo build --locked --release --no-default-features --package pdf-rs-desktop --bin pdf-rs-desktop-worker"
+verify = "cargo run --quiet --locked --package pdf-rs-quality -- check-product-build-closure . TARGET PROOF_ID"
+temporary_target_registered_as_evidence = false
+
+[quality]
+purity_source = "tools/quality/src/purity.rs"
+purity_source_sha256 = "1b2034a8eb9f10cd912856bdd0c0c28a34799f6d8d220abfc4e43204c484d1b8"
+ci_source = "scripts/ci.sh"
+ci_source_sha256 = "834b34938b5bdfaa39a2c49e44980b0187cb8782f6416b345ac24abd7cb03a63"
+mutation_test_command = "cargo test --locked --package pdf-rs-quality --bin pdf-rs-quality purity::tests"
+mutation_tests_passed = 25
+mutation_tests_failed = 0
+
+[bridge]
+manifest_sha256 = "c7b82a766dbf1c8fb093e846039908620a8bdfacf2fa958c28b8bd74ba1c24c3"
+library_sha256 = "1bf1aaacaac2f5f2f16e4eeafc4a10155994cb44e843a3d063424aacdf13cab8"
+executable_entry_sha256 = "45414b09c1a0b33d7a52ed03aeb022a775bcca07d82bb39a76bba5bb260116f8"
+local_binary_test = "cargo test --locked --package pdf-rs-electron-bridge --all-targets"
+electron_integration_test = "cd platform/electron && npm test"
+electron_tests_passed = 3
+rollback_rehearsal_passed = true
+unsupported_semantics_unchanged = true
+
+[protocol]
+schema_hash_record_sha256 = "4ed385163d65906b3cb92c52af3f96e92633e5a72087fa4361a61d70b7773af8"
+canonical_schema_sha256 = "466af0a81170c4e30677ce9fbff91d8a89fd62c9885b025519747bf29f4e8569"
+full_schema_sha256 = "8bcfb8eb41fe9260c292ec1adb5452fe632a42469ec6c461562aba26dd0d8a01"
+wire_hash = "8bcfb8eb41fe9260c292ec1adb5452fe"
+
+[scope]
+product_boundary = "All Rust product manifests under core, runtime, and platform plus the workspace manifest; non-product tools and Electron npm development dependencies remain outside the release Rust closure."
+limitations = "The fresh closure proves Native Rust dependency and artifact purity. Its only required product executable is the previously registered desktop worker; the local-development Electron bridge is represented by its release library artifact and separately tested local binary. This is not Electron app packaging, signing, notarization, App Sandbox enforcement, or release-distribution evidence."

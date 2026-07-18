@@ -165,7 +165,6 @@ name = "pdf-rs-fast-raster"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
- "pdf-rs-digest",
  "pdf-rs-policy",
  "pdf-rs-raster",
  "pdf-rs-scene",
@@ -238,10 +237,12 @@ dependencies = [
  "pdf-rs-corpus",
  "pdf-rs-digest",
  "pdf-rs-document",
+ "pdf-rs-fast-raster",
  "pdf-rs-filters",
  "pdf-rs-font",
  "pdf-rs-generate",
  "pdf-rs-object",
+ "pdf-rs-policy",
  "pdf-rs-raster",
  "pdf-rs-scene",
  "pdf-rs-session",

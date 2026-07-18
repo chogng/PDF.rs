@@ -104,7 +104,7 @@ const THIRD_PARTY_PRODUCT_PACKAGES: &[ThirdPartyProductPackage; 7] = &[
     },
 ];
 
-const PRODUCT_PACKAGE_COUNT: usize = 22;
+const PRODUCT_PACKAGE_COUNT: usize = 24;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -172,6 +172,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         crate_name: "pdf_rs_desktop",
     },
     ProductPackage {
+        manifest: "platform/electron-bridge/Cargo.toml",
+        package_name: "pdf-rs-electron-bridge",
+        crate_name: "pdf_rs_electron_bridge",
+    },
+    ProductPackage {
         manifest: "platform/macos-spawn/Cargo.toml",
         package_name: "pdf-rs-macos-spawn",
         crate_name: "pdf_rs_macos_spawn",
@@ -215,6 +220,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "runtime/tile-cache/Cargo.toml",
         package_name: "pdf-rs-tile-cache",
         crate_name: "pdf_rs_tile_cache",
+    },
+    ProductPackage {
+        manifest: "runtime/viewer/Cargo.toml",
+        package_name: "pdf-rs-viewer",
+        crate_name: "pdf_rs_viewer",
     },
 ];
 
@@ -1815,9 +1825,9 @@ fn expected_desktop_fingerprint_dependencies(
     let mut dependencies = BTreeSet::from([
         "pdf_rs_bytes".to_owned(),
         "pdf_rs_engine".to_owned(),
+        "pdf_rs_fast_raster".to_owned(),
         "pdf_rs_policy".to_owned(),
         "pdf_rs_protocol".to_owned(),
-        "pdf_rs_raster".to_owned(),
         "pdf_rs_scene".to_owned(),
         "pdf_rs_surface".to_owned(),
         "pdf_rs_syntax".to_owned(),
@@ -2660,6 +2670,11 @@ mod tests {
             crate_name: "pdf_rs_desktop",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "platform/electron-bridge/Cargo.toml",
+            package_name: "pdf-rs-electron-bridge",
+            crate_name: "pdf_rs_electron_bridge",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "platform/macos-spawn/Cargo.toml",
             package_name: "pdf-rs-macos-spawn",
             crate_name: "pdf_rs_macos_spawn",
@@ -2683,6 +2698,11 @@ mod tests {
             manifest: "runtime/tile-cache/Cargo.toml",
             package_name: "pdf-rs-tile-cache",
             crate_name: "pdf_rs_tile_cache",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "runtime/viewer/Cargo.toml",
+            package_name: "pdf-rs-viewer",
+            crate_name: "pdf_rs_viewer",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "runtime/scheduler/Cargo.toml",

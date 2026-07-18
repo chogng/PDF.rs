@@ -11,6 +11,5 @@ pdf-rs-scene = { path = "../scene" }
 
 [dev-dependencies]
 pdf-rs-bytes = { path = "../bytes" }
-pdf-rs-digest = { path = "../../tools/digest" }
 pdf-rs-raster = { path = "../raster" }
 pdf-rs-syntax = { path = "../syntax" }

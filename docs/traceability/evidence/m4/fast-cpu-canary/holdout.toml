@@ -35,7 +35,7 @@ maximum_channel_delta = 0
 changed_channels = 0
 
 [replay]
-command = "cargo test --locked --package pdf-rs-fast-raster --test m4_canary"
+command = "cargo test --locked --package pdf-rs-quality --test m4_fast_canary_holdout"
 test = "fixed_post_parse_holdout_qualifies_one_thousand_fast_pages"
 reference = "pdf-rs-raster Reference CPU"
 product = "pdf-rs-fast-raster Fast CPU"

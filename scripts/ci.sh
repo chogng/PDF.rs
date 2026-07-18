@@ -153,6 +153,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-raster \
     --package pdf-rs-scene \
     --package pdf-rs-browser-worker \
+    --package pdf-rs-electron-bridge \
     --package pdf-rs-macos-spawn \
     --package pdf-rs-cache \
     --package pdf-rs-engine \
@@ -161,7 +162,8 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-scheduler \
     --package pdf-rs-session \
     --package pdf-rs-surface \
-    --package pdf-rs-tile-cache
+    --package pdf-rs-tile-cache \
+    --package pdf-rs-viewer
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --locked \
     --release \

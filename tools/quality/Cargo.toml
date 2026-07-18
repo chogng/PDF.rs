@@ -17,9 +17,11 @@ pdf-rs-cache = { path = "../../runtime/cache" }
 pdf-rs-content = { path = "../../core/content" }
 pdf-rs-corpus = { path = "../corpus" }
 pdf-rs-document = { path = "../../core/document" }
+pdf-rs-fast-raster = { path = "../../core/fast-raster" }
 pdf-rs-filters = { path = "../../core/filters" }
 pdf-rs-font = { path = "../../core/font" }
 pdf-rs-object = { path = "../../core/object" }
+pdf-rs-policy = { path = "../../runtime/policy" }
 pdf-rs-raster = { path = "../../core/raster" }
 pdf-rs-scene = { path = "../../core/scene" }
 pdf-rs-session = { path = "../../runtime/session" }

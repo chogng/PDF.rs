@@ -1,3 +1,5 @@
+//! Fixed post-parse Fast CPU holdout owned by the non-product quality package.
+
 use std::sync::Arc;
 
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
