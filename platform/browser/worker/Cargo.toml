@@ -18,9 +18,9 @@ doc = false
 [dependencies]
 pdf-rs-bytes = { path = "../../../core/bytes" }
 pdf-rs-engine = { path = "../../../runtime/engine" }
+pdf-rs-fast-raster = { path = "../../../core/fast-raster" }
 pdf-rs-policy = { path = "../../../runtime/policy" }
 pdf-rs-protocol = { path = "../../../runtime/protocol" }
-pdf-rs-raster = { path = "../../../core/raster" }
 pdf-rs-scene = { path = "../../../core/scene" }
 pdf-rs-surface = { path = "../../../runtime/surface" }
 pdf-rs-syntax = { path = "../../../core/syntax" }

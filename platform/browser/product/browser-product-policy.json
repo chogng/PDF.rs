@@ -1,7 +1,7 @@
 {
   "budgets": {
     "max_bundle_files": 5,
-    "max_cargo_packages": 16,
+    "max_cargo_packages": 11,
     "max_module_edges": 64,
     "max_module_files": 16,
     "max_native_artifact_bytes": 67321856,
@@ -61,20 +61,15 @@
     "packages": [
       "pdf-rs-browser-worker",
       "pdf-rs-bytes",
-      "pdf-rs-cache",
-      "pdf-rs-document",
       "pdf-rs-engine",
-      "pdf-rs-filters",
-      "pdf-rs-font",
-      "pdf-rs-object",
+      "pdf-rs-fast-raster",
       "pdf-rs-policy",
       "pdf-rs-protocol",
-      "pdf-rs-raster",
       "pdf-rs-scene",
       "pdf-rs-scheduler",
       "pdf-rs-surface",
       "pdf-rs-syntax",
-      "pdf-rs-xref"
+      "pdf-rs-tile-cache"
     ],
     "root": "pdf-rs-browser-worker"
   },

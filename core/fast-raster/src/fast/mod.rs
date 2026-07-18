@@ -1,4 +1,4 @@
-//! Independent bounded scalar Fast CPU tile rendering.
+//! Independent, bounded scalar Fast CPU tile rendering.
 //!
 //! The Fast path does not invoke the differential renderer and never obtains, slices, or
 //! republishes its whole-page buffer. Its command binning, page mapping, coverage, sampling,

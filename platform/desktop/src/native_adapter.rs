@@ -7,6 +7,7 @@ use pdf_rs_engine::{
     ActorProgress, NativePolicyTask, NativeRasterTask, NativeTaskPoll, NativeWorkerConfig,
     NativeWorkerEvent, NativeWorkerLimitConfig, NativeWorkerRegistry, OpenCompletion, Reentry,
 };
+use pdf_rs_fast_raster::fast::{FastRasterPollBudget, NeverCancelled};
 use pdf_rs_policy::{NeverCancelled as NeverCancelledPolicy, PolicyPollBudget};
 use pdf_rs_protocol::{
     CapabilityProfileId, Command, CommandEnvelope, Correlation, DataPriority, DataTicket,
@@ -18,7 +19,6 @@ use pdf_rs_protocol::{
     ReadyEvent, RequestId, SCHEMA_HASH, SessionId, SourceDescriptor, SurfaceReadyEvent,
     SurfaceTransport, WorkerId,
 };
-use pdf_rs_raster::fast::{FastRasterPollBudget, NeverCancelled};
 use pdf_rs_scene::{
     BlendMode, CapabilityContext, CapabilityStatus, CommandSource, DeviceColor, FillRule,
     GraphicsCapability, GraphicsSceneBuilder, GraphicsSceneLimits, Matrix, PageGeometry,

@@ -1,3 +1,5 @@
+//! Structured failures for the bounded Fast CPU renderer.
+
 use core::fmt;
 
 /// Stable Fast CPU failure category.

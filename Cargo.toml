@@ -12,6 +12,7 @@ members = [
     "runtime/scheduler",
     "runtime/session",
     "runtime/surface",
+    "runtime/tile-cache",
     "tools/*",
 ]
 

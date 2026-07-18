@@ -58,9 +58,9 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-engine",
+ "pdf-rs-fast-raster",
  "pdf-rs-policy",
  "pdf-rs-protocol",
- "pdf-rs-raster",
  "pdf-rs-scene",
  "pdf-rs-surface",
  "pdf-rs-syntax",
@@ -77,8 +77,6 @@ dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-document",
  "pdf-rs-object",
- "pdf-rs-policy",
- "pdf-rs-scene",
  "pdf-rs-syntax",
  "pdf-rs-xref",
 ]
@@ -114,10 +112,10 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
  "pdf-rs-engine",
+ "pdf-rs-fast-raster",
  "pdf-rs-macos-spawn",
  "pdf-rs-policy",
  "pdf-rs-protocol",
- "pdf-rs-raster",
  "pdf-rs-scene",
  "pdf-rs-surface",
  "pdf-rs-syntax",
@@ -145,13 +143,24 @@ name = "pdf-rs-engine"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
- "pdf-rs-cache",
+ "pdf-rs-fast-raster",
  "pdf-rs-policy",
  "pdf-rs-protocol",
- "pdf-rs-raster",
  "pdf-rs-scene",
  "pdf-rs-scheduler",
  "pdf-rs-surface",
+ "pdf-rs-syntax",
+ "pdf-rs-tile-cache",
+]
+
+[[package]]
+name = "pdf-rs-fast-raster"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-policy",
+ "pdf-rs-raster",
+ "pdf-rs-scene",
  "pdf-rs-syntax",
 ]
 
@@ -237,7 +246,6 @@ name = "pdf-rs-raster"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
- "pdf-rs-policy",
  "pdf-rs-scene",
  "pdf-rs-syntax",
 ]
@@ -279,6 +287,16 @@ name = "pdf-rs-syntax"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-bytes",
+]
+
+[[package]]
+name = "pdf-rs-tile-cache"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-bytes",
+ "pdf-rs-policy",
+ "pdf-rs-scene",
+ "pdf-rs-syntax",
 ]
 
 [[package]]

@@ -6,13 +6,13 @@ use pdf_rs_engine::{
     ActorProgress, NativeTaskPoll, NativeWorkerConfig, NativeWorkerEvent, NativeWorkerLimitConfig,
     NativeWorkerPhase, Reentry, SessionPhase,
 };
+use pdf_rs_fast_raster::fast::{
+    FastRasterLimitConfig, FastRasterLimits, FastRasterPollBudget, NeverCancelled,
+};
 use pdf_rs_policy::{NeverCancelled as NeverCancelledPolicy, PolicyPollBudget};
 use pdf_rs_protocol::{
     CancelCommand, CloseSessionCommand, FailDataCommand, GetPageMetricsCommand, OpenCommand,
     ReleaseSurfaceCommand, RequestId, SessionId, ShutdownCommand, SourceFailureCode, WorkerId,
-};
-use pdf_rs_raster::fast::{
-    FastRasterLimitConfig, FastRasterLimits, FastRasterPollBudget, NeverCancelled,
 };
 use pdf_rs_surface::WorkerEpoch;
 

@@ -1,9 +1,9 @@
-use pdf_rs_cache::TileCacheLimits;
+use pdf_rs_fast_raster::fast::{FastRasterJobLimits, FastRasterLimits};
 use pdf_rs_policy::{PolicyJobLimits, PolicyLimits};
 use pdf_rs_protocol::{ProtocolLimits, WorkerId};
-use pdf_rs_raster::fast::{FastRasterJobLimits, FastRasterLimits};
 use pdf_rs_scheduler::SchedulerLimits;
 use pdf_rs_surface::{SurfaceLimits, WorkerEpoch};
+use pdf_rs_tile_cache::TileCacheLimits;
 
 use crate::EngineIntegrationError;
 use crate::error::invalid_config;

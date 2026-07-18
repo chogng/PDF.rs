@@ -1,12 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
-use pdf_rs_cache::{
-    NativeTile, NeverCancelledTileCache, TileAdmission, TileCache, TileCacheAddress,
-    TileCacheBinding, TileCacheCancellation, TileCacheErrorCode, TileCacheLimitConfig,
-    TileCacheLimitKind, TileCacheLimits, TileCacheLookup, TileCacheMissReason, TileCacheOwnerId,
-    TileCacheSessionId, TileOutcomeKind, TileRejectReason, TileRenderOutcome, TileRetentionClass,
-};
 use pdf_rs_policy::{
     AntialiasMode, CapabilityEvaluator, CapabilityProfile, DeviceRect, NativeBackend,
     OptionalContentIdentity, PolicyCancellation, PolicyLimits, QualityPolicy, RenderConfig,
@@ -18,6 +12,12 @@ use pdf_rs_scene::{
     GraphicsSceneLimits, PageGeometry, PageRotation, SceneBinding, SceneRect, SceneScalar,
 };
 use pdf_rs_syntax::ObjectRef;
+use pdf_rs_tile_cache::{
+    NativeTile, NeverCancelledTileCache, TileAdmission, TileCache, TileCacheAddress,
+    TileCacheBinding, TileCacheCancellation, TileCacheErrorCode, TileCacheLimitConfig,
+    TileCacheLimitKind, TileCacheLimits, TileCacheLookup, TileCacheMissReason, TileCacheOwnerId,
+    TileCacheSessionId, TileOutcomeKind, TileRejectReason, TileRenderOutcome, TileRetentionClass,
+};
 
 const OWNER: TileCacheOwnerId = TileCacheOwnerId::new(0x0a11_ce01);
 const SESSION: TileCacheSessionId = TileCacheSessionId::new(0x5e55_10a1);
@@ -255,7 +255,7 @@ fn admit(
     address: &TileCacheAddress,
     tile: NativeTile,
     retention: TileRetentionClass,
-) -> pdf_rs_cache::TileAdmitted {
+) -> pdf_rs_tile_cache::TileAdmitted {
     match cache
         .try_admit(
             address,

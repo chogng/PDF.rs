@@ -1,3 +1,5 @@
+//! Incremental owned-job adapter for Fast CPU rendering.
+
 use core::mem::size_of;
 use std::{num::NonZeroU32, sync::Arc};
 

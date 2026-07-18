@@ -7,15 +7,15 @@ use std::{
 };
 
 use pdf_rs_bytes::{SourceIdentity, SourceRevision, SourceStableId};
+use pdf_rs_fast_raster::fast::{
+    FastRasterCancellation, FastRasterErrorCode, FastRasterJob, FastRasterJobLimitConfig,
+    FastRasterJobLimits, FastRasterJobPoll, FastRasterLimitConfig, FastRasterLimitKind,
+    FastRasterLimits, FastRasterOwnedJob, FastRasterPollBudget, FastTile, NeverCancelled,
+};
 use pdf_rs_policy::{
     AntialiasMode, CapabilityEvaluator, CapabilityProfile, DeviceRect, OptionalContentIdentity,
     PolicyCancellation, PolicyJobLimits, PolicyLimits, RenderConfig, RenderConfigInput, RenderPlan,
     RenderPlanOutcome, RenderPlanRequest, RendererEpoch, ZoomRatio, create_render_plan,
-};
-use pdf_rs_raster::fast::{
-    FastRasterCancellation, FastRasterErrorCode, FastRasterJob, FastRasterJobLimitConfig,
-    FastRasterJobLimits, FastRasterJobPoll, FastRasterLimitConfig, FastRasterLimitKind,
-    FastRasterLimits, FastRasterOwnedJob, FastRasterPollBudget, FastTile, NeverCancelled,
 };
 use pdf_rs_raster::reference::{
     ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
@@ -1318,7 +1318,7 @@ fn plan(scene: &Scene, config: RenderConfig, width: u32, height: u32) -> RenderP
     }
 }
 
-fn compose(set: &pdf_rs_raster::fast::FastTileSet) -> Vec<u8> {
+fn compose(set: &pdf_rs_fast_raster::fast::FastTileSet) -> Vec<u8> {
     let mut page = vec![0_u8; usize::try_from(PAGE_WIDTH * PAGE_HEIGHT * 4).unwrap()];
     for tile in set.tiles() {
         let rect = tile.identity().content_key().tile();

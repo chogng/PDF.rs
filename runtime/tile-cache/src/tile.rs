@@ -1,3 +1,5 @@
+//! Complete immutable Native tile ownership and deterministic eviction.
+
 use std::error::Error;
 use std::fmt;
 use std::mem;

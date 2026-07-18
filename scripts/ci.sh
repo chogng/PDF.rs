@@ -149,6 +149,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-object \
     --package pdf-rs-document \
     --package pdf-rs-font \
+    --package pdf-rs-fast-raster \
     --package pdf-rs-raster \
     --package pdf-rs-scene \
     --package pdf-rs-browser-worker \
@@ -159,7 +160,8 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --package pdf-rs-protocol \
     --package pdf-rs-scheduler \
     --package pdf-rs-session \
-    --package pdf-rs-surface
+    --package pdf-rs-surface \
+    --package pdf-rs-tile-cache
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$product_target" cargo build \
     --locked \
     --release \

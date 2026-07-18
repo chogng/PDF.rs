@@ -17,7 +17,6 @@ mod binding;
 mod error;
 mod limits;
 mod store;
-mod tile;
 
 pub use binding::{ReadyStoreBinding, ReadyStoreEpoch, ReadyStoreKey, ReadyStoreSessionId};
 pub use error::{
@@ -28,13 +27,4 @@ pub use limits::{ReadyStoreLimitConfig, ReadyStoreLimits};
 pub use store::{
     ReadyAdmission, ReadyAdmitted, ReadyLookup, ReadyMissReason, ReadyRejectReason, ReadyRejected,
     ReadyStore, ReadyStoreStats,
-};
-pub use tile::{
-    NativeTile, NeverCancelledTileCache, TileAdmission, TileAdmitted, TileCache, TileCacheAddress,
-    TileCacheAdmissionError, TileCacheBinding, TileCacheCancellation, TileCacheCloseReport,
-    TileCacheError, TileCacheErrorCategory, TileCacheErrorCode, TileCacheLimit,
-    TileCacheLimitConfig, TileCacheLimitKind, TileCacheLimits, TileCacheLookup,
-    TileCacheMissReason, TileCacheOwnerId, TileCacheRecoverability, TileCacheScope,
-    TileCacheSessionId, TileCacheStats, TileOutcomeKind, TileRejectReason, TileRejected,
-    TileRenderOutcome, TileRetentionClass,
 };

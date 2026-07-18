@@ -1,11 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use pdf_rs_cache::{
-    NativeTile, NeverCancelledTileCache, TileAdmission, TileCache, TileCacheAddress,
-    TileCacheBinding, TileCacheLookup, TileCacheOwnerId, TileCacheSessionId, TileRenderOutcome,
-    TileRetentionClass,
-};
+use pdf_rs_fast_raster::fast::FastTileSet;
 use pdf_rs_policy::{
     CapabilityDecision, CapabilityProfile, CapabilityStatus, DeviceRect, NativeBackend,
     OptionalContentIdentity, QualityPolicy, RenderConfig, RenderConfigInput, RenderPlan,
@@ -26,7 +22,6 @@ use pdf_rs_protocol::{
     SourceFailureCode, SurfaceMetadata, SurfaceReadyEvent, SurfaceReclaimReason,
     SurfaceReclaimedEvent, SurfaceReleaseAcknowledgedEvent, WorkerId, WorkerStoppedEvent,
 };
-use pdf_rs_raster::fast::FastTileSet;
 use pdf_rs_scene::{PageRotation, Scene};
 use pdf_rs_scheduler::{
     CriticalDispatch, Distance, Generation, Priority, ReplaceKey, ResourceId, SchedulerDispatch,
@@ -36,6 +31,11 @@ use pdf_rs_scheduler::{
 use pdf_rs_surface::{
     SurfaceAccess, SurfaceAllocation, SurfaceConsumerContext, SurfaceOwner, SurfacePlanIdentity,
     SurfaceTransfer, WorkerEpoch,
+};
+use pdf_rs_tile_cache::{
+    NativeTile, NeverCancelledTileCache, TileAdmission, TileCache, TileCacheAddress,
+    TileCacheBinding, TileCacheLookup, TileCacheOwnerId, TileCacheSessionId, TileRenderOutcome,
+    TileRetentionClass,
 };
 
 use crate::error::{

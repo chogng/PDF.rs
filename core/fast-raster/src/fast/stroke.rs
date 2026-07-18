@@ -1,3 +1,5 @@
+//! Deterministic scalar stroke construction.
+
 use core::mem::size_of;
 
 use pdf_rs_scene::{

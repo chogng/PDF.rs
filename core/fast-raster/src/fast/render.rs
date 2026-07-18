@@ -1,3 +1,5 @@
+//! Scene validation, command binning, and atomic tile publication.
+
 use core::mem::size_of;
 
 use pdf_rs_policy::{

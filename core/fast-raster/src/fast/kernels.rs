@@ -1,3 +1,5 @@
+//! Scalar coverage, sampling, and compositing kernels.
+
 use core::mem::size_of;
 
 use pdf_rs_policy::{DeviceRect, RenderPlan};

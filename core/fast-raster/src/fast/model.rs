@@ -1,3 +1,5 @@
+//! Public identities, values, and cancellation contracts.
+
 use core::fmt;
 
 use pdf_rs_policy::{PlannedTileIdentity, RenderConfigHash, RenderPlanHash};

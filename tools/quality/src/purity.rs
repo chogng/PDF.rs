@@ -104,7 +104,7 @@ const THIRD_PARTY_PRODUCT_PACKAGES: &[ThirdPartyProductPackage; 7] = &[
     },
 ];
 
-const PRODUCT_PACKAGE_COUNT: usize = 20;
+const PRODUCT_PACKAGE_COUNT: usize = 22;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
         manifest: "core/bytes/Cargo.toml",
@@ -125,6 +125,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "core/filters/Cargo.toml",
         package_name: "pdf-rs-filters",
         crate_name: "pdf_rs_filters",
+    },
+    ProductPackage {
+        manifest: "core/fast-raster/Cargo.toml",
+        package_name: "pdf-rs-fast-raster",
+        crate_name: "pdf_rs_fast_raster",
     },
     ProductPackage {
         manifest: "core/font/Cargo.toml",
@@ -205,6 +210,11 @@ const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
         manifest: "runtime/surface/Cargo.toml",
         package_name: "pdf-rs-surface",
         crate_name: "pdf_rs_surface",
+    },
+    ProductPackage {
+        manifest: "runtime/tile-cache/Cargo.toml",
+        package_name: "pdf-rs-tile-cache",
+        crate_name: "pdf_rs_tile_cache",
     },
 ];
 
@@ -2625,6 +2635,11 @@ mod tests {
             crate_name: "pdf_rs_content",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "core/fast-raster/Cargo.toml",
+            package_name: "pdf-rs-fast-raster",
+            crate_name: "pdf_rs_fast_raster",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "core/raster/Cargo.toml",
             package_name: "pdf-rs-raster",
             crate_name: "pdf_rs_raster",
@@ -2663,6 +2678,11 @@ mod tests {
             manifest: "runtime/protocol/Cargo.toml",
             package_name: "pdf-rs-protocol",
             crate_name: "pdf_rs_protocol",
+        }));
+        assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
+            manifest: "runtime/tile-cache/Cargo.toml",
+            package_name: "pdf-rs-tile-cache",
+            crate_name: "pdf_rs_tile_cache",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
             manifest: "runtime/scheduler/Cargo.toml",

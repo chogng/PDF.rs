@@ -1,13 +1,15 @@
 [package]
-name = "pdf-rs-raster"
+name = "pdf-rs-fast-raster"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
+pdf-rs-policy = { path = "../../runtime/policy" }
 pdf-rs-scene = { path = "../scene" }
 
 [dev-dependencies]
 pdf-rs-bytes = { path = "../bytes" }
+pdf-rs-raster = { path = "../raster" }
 pdf-rs-syntax = { path = "../syntax" }

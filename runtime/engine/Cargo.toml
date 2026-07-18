@@ -7,13 +7,13 @@ publish = false
 
 [dependencies]
 pdf-rs-bytes = { path = "../../core/bytes" }
-pdf-rs-cache = { path = "../cache" }
+pdf-rs-fast-raster = { path = "../../core/fast-raster" }
 pdf-rs-policy = { path = "../policy" }
 pdf-rs-protocol = { path = "../protocol" }
-pdf-rs-raster = { path = "../../core/raster" }
 pdf-rs-scene = { path = "../../core/scene" }
 pdf-rs-scheduler = { path = "../scheduler" }
 pdf-rs-surface = { path = "../surface" }
+pdf-rs-tile-cache = { path = "../tile-cache" }
 
 [dev-dependencies]
 pdf-rs-syntax = { path = "../../core/syntax" }

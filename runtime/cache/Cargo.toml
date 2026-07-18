@@ -9,9 +9,7 @@ publish = false
 pdf-rs-bytes = { path = "../../core/bytes" }
 pdf-rs-document = { path = "../../core/document" }
 pdf-rs-object = { path = "../../core/object" }
-pdf-rs-policy = { path = "../policy" }
 pdf-rs-syntax = { path = "../../core/syntax" }
 
 [dev-dependencies]
-pdf-rs-scene = { path = "../../core/scene" }
 pdf-rs-xref = { path = "../../core/xref" }

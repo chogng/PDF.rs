@@ -1,3 +1,5 @@
+//! Independent resource limits for Fast CPU rendering.
+
 use crate::fast::{FastRasterError, FastRasterErrorCode, FastRasterLimitKind};
 
 const HARD_MAX_PIXELS: u64 = 1 << 32;

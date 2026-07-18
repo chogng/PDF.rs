@@ -7,7 +7,10 @@ use std::{
     },
 };
 
-use pdf_rs_cache::TileCacheCancellation;
+use pdf_rs_fast_raster::fast::{
+    FastRasterCancellation, FastRasterError, FastRasterErrorCategory, FastRasterJobLimits,
+    FastRasterJobPoll, FastRasterLimits, FastRasterOwnedJob, FastRasterPollBudget, FastTileSet,
+};
 use pdf_rs_policy::{
     CapabilityDecision, CapabilityEvaluationJob, CapabilityEvaluator, CapabilityProfile,
     PolicyCancellation, PolicyErrorCode, PolicyJobLimits, PolicyJobPoll, PolicyLimits,
@@ -21,14 +24,11 @@ use pdf_rs_protocol::{
     SessionClosedEvent, SessionId, ShutdownAcknowledgedEvent, SurfaceReadyEvent,
     SurfaceReclaimedEvent, SurfaceReleaseAcknowledgedEvent, WorkerId, WorkerStoppedEvent,
 };
-use pdf_rs_raster::fast::{
-    FastRasterCancellation, FastRasterError, FastRasterErrorCategory, FastRasterJobLimits,
-    FastRasterJobPoll, FastRasterLimits, FastRasterOwnedJob, FastRasterPollBudget, FastTileSet,
-};
 use pdf_rs_scene::Scene;
 use pdf_rs_scheduler::TerminalSignal;
 use pdf_rs_surface::SurfacePlanIdentity;
 use pdf_rs_surface::{SurfaceResourceReport, SurfaceTransfer, WorkerEpoch};
+use pdf_rs_tile_cache::TileCacheCancellation;
 
 use crate::{EngineIntegrationError, NativeWorkerConfig};
 

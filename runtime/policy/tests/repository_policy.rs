@@ -7,6 +7,7 @@ fn product_policy_has_no_reference_renderer_tools_or_external_engine_dependency(
     let manifest = fs::read_to_string(root.join("runtime/policy/Cargo.toml")).unwrap();
     assert!(manifest.contains("pdf-rs-bytes"));
     assert!(manifest.contains("pdf-rs-scene"));
+    assert!(!manifest.contains("pdf-rs-fast-raster"));
     assert!(!manifest.contains("pdf-rs-raster"));
     assert!(!manifest.contains("../../tools"));
 

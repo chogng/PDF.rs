@@ -1,0 +1,14 @@
+[package]
+name = "pdf-rs-tile-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-policy = { path = "../policy" }
+
+[dev-dependencies]
+pdf-rs-scene = { path = "../../core/scene" }
+pdf-rs-syntax = { path = "../../core/syntax" }
