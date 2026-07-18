@@ -498,7 +498,7 @@ fn offset_of(bytes: &[u8], needle: &[u8]) -> u64 {
 fn lower_font_limit(program: &[u8], limits: FontLimits) -> FontLimit {
     match parse_truetype(
         program,
-        FontProfile::SimpleTrueTypeWinAnsiAsciiV1,
+        FontProfile::SimpleTrueTypeWinAnsiV1,
         limits,
         &FontNeverCancelled,
     )
@@ -685,6 +685,37 @@ fn direct_lookup_and_identity_acquisition_preserve_pdf_metrics_proof_and_replay(
         other => panic!("terminal Ready must replay without runtime work: {other:?}"),
     };
     assert!(Arc::ptr_eq(&ready, &replay));
+}
+
+#[test]
+fn complete_winansi_acquisition_retains_extended_pdf_widths_and_glyph_mapping() {
+    let program = font_support::foundational_font();
+    let font = format!(
+        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding \
+         /FirstChar 32 /LastChar 255 /Widths [{}] /FontDescriptor 5 0 R >>",
+        widths(32, 255, 777)
+    );
+    let fixture = custom_font_fixture(
+        font.as_bytes(),
+        Some(b"<< /Type /FontDescriptor /FontFile2 6 0 R >>"),
+        Some(stream_body(
+            6,
+            format!("/Length1 {}", program.len()).as_bytes(),
+            &program,
+        )),
+        0xe4,
+    );
+    let prepared = prepare(&fixture, 18_351);
+    let ready = acquire_ready(&prepared, FontResourceLimits::default(), 18_361);
+
+    assert_eq!(ready.font().profile(), FontProfile::SimpleTrueTypeWinAnsiV1);
+    assert_eq!(ready.pdf_width_for_winansi(0x80), Some(600));
+    assert_eq!(ready.pdf_width_for_winansi(0xff), Some(600));
+    assert_eq!(
+        ready.font().glyph_id_for_winansi(0x80),
+        Some(pdf_rs_font::GlyphId::new(0))
+    );
+    assert_eq!(ready.stats().widths(), 224);
 }
 
 #[test]

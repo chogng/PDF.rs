@@ -320,7 +320,7 @@ pub struct AcquiredFontResource {
     program_object: AttestedObject,
     first_char: u8,
     last_char: u8,
-    ascii_widths: [u32; 95],
+    winansi_widths: [u32; 224],
     decoded_program: DecodedStream,
     font: TrueTypeFont,
     limits: FontResourceLimits,
@@ -356,13 +356,16 @@ impl AcquiredFontResource {
     pub const fn last_char(&self) -> u8 {
         self.last_char
     }
-    /// Returns the PDF Widths advance for one printable WinAnsi ASCII byte.
+    /// Returns the PDF Widths advance for one represented WinAnsi byte.
     ///
     /// This intentionally does not consult the TrueType `hmtx` table: PDF text advancement is
     /// governed by the simple Font dictionary's Widths array.
     pub fn pdf_width_for_winansi(&self, byte: u8) -> Option<u32> {
+        if byte < self.first_char || byte > self.last_char {
+            return None;
+        }
         let index = byte.checked_sub(0x20)?;
-        self.ascii_widths.get(usize::from(index)).copied()
+        self.winansi_widths.get(usize::from(index)).copied()
     }
     /// Borrows the sealed decoded FontFile2 stream proof and bytes.
     pub const fn decoded_program(&self) -> &DecodedStream {
@@ -468,7 +471,7 @@ enum DescriptorPlan {
 struct PdfFontMetadata {
     first_char: u8,
     last_char: u8,
-    ascii_widths: [u32; 95],
+    winansi_widths: [u32; 224],
     descriptor: DescriptorPlan,
 }
 
@@ -1080,7 +1083,7 @@ impl AcquireFontResourceJob {
         if u64::try_from(widths.values().len()).ok() != Some(expected_widths) {
             return Err(invalid_font(reference, widths_value.span().start()));
         }
-        let mut ascii_widths = [0_u32; 95];
+        let mut winansi_widths = [0_u32; 224];
         for (index, width) in widths.values().iter().enumerate() {
             self.charge_width(reference, width.span().start())?;
             if self
@@ -1108,8 +1111,8 @@ impl AcquireFontResourceJob {
             let code = usize::from(first_char)
                 .checked_add(index)
                 .ok_or_else(|| self.internal_error(Some(width.span().start())))?;
-            if (0x20..=0x7e).contains(&code) {
-                ascii_widths[code - 0x20] = numeric;
+            if (0x20..=0xff).contains(&code) {
+                winansi_widths[code - 0x20] = numeric;
             }
         }
 
@@ -1150,7 +1153,7 @@ impl AcquireFontResourceJob {
         Ok(Ok(PdfFontMetadata {
             first_char,
             last_char,
-            ascii_widths,
+            winansi_widths,
             descriptor,
         }))
     }
@@ -1866,7 +1869,7 @@ impl AcquireFontResourceJob {
 
         let report = parse_truetype(
             decoded.bytes(),
-            FontProfile::SimpleTrueTypeWinAnsiAsciiV1,
+            FontProfile::SimpleTrueTypeWinAnsiV1,
             self.limits.font_limits(),
             &FontCancellationAdapter(cancellation),
         );
@@ -1946,7 +1949,7 @@ impl AcquireFontResourceJob {
             program_object,
             first_char: metadata.first_char,
             last_char: metadata.last_char,
-            ascii_widths: metadata.ascii_widths,
+            winansi_widths: metadata.winansi_widths,
             decoded_program: decoded,
             font,
             limits: self.limits,
