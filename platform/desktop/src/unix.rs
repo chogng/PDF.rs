@@ -235,7 +235,13 @@ pub fn send_capability_fds(
         &mut control,
         SendFlags::empty(),
     )
-    .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+    .map_err(|failure| {
+        if failure == Errno::AGAIN {
+            error(DesktopIpcErrorCode::TransportTimeout)
+        } else {
+            error(DesktopIpcErrorCode::Disconnected)
+        }
+    })?;
     if sent != 1 {
         return Err(error(DesktopIpcErrorCode::Disconnected));
     }
@@ -248,7 +254,7 @@ pub fn receive_capability_fds(
     limits: DesktopIpcLimits,
 ) -> Result<Vec<OwnedFd>, DesktopIpcError> {
     receive_capability_fds_with_flags(socket, limits, RecvFlags::empty())?
-        .ok_or_else(|| error(DesktopIpcErrorCode::Disconnected))
+        .ok_or_else(|| error(DesktopIpcErrorCode::TransportTimeout))
 }
 
 /// Attempts one descriptor marker without blocking between bounded Native actor turns.

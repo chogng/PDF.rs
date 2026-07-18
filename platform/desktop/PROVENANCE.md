@@ -25,6 +25,20 @@ shared object. Logical and allocator-capacity checks cover the simultaneous
 pixel import, destination buffer, and shared-memory staging extent. Delivery
 failure reclaims the exact undelivered Surface lease before the process faults.
 
+The Host supervisor maps unexpected EOF, nonzero exit, contained panic, and
+transport watchdog expiry to stable content-free `WorkerFault` diagnostics.
+Each failure first waits or terminates the old process and retires its
+capability and Range owners, then performs at most one replacement spawn with a
+strictly newer Worker identity and epoch. A lineage defaults to two
+replacements and has a hard cap of eight; graceful shutdown suppresses restart,
+and stale old-epoch records and descriptors are rejected before the new socket
+is touched.
+
+Restart requires an explicit successful `try_wait` or `wait` reap result. A
+reap, kill, or wait failure retains the old child handle and Host resource
+ownership, enters `RestartFailed`, and neither increments the restart attempt
+count nor starts a replacement.
+
 On macOS, `SOCK_CLOEXEC` is unavailable. The desktop worker spawn path
 serializes its socketpair-to-exec interval, marks both original endpoints
 close-on-exec, and lets `Stdio` install only the child endpoint as fd 0/1.

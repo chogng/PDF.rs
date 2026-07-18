@@ -9,7 +9,7 @@ use pdf_rs_surface::WorkerEpoch;
 
 use crate::{
     DesktopCapability, DesktopIpcError, DesktopIpcErrorCode, DesktopIpcLimits, DesktopLaunchAuth,
-    error::error,
+    error::{error, io_error},
 };
 
 const MAGIC: [u8; 4] = *b"PD09";
@@ -143,54 +143,52 @@ impl DesktopWireRecord {
                     .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?
                     .to_le_bytes(),
             )
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&MAGIC)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&[VERSION, self.direction as u8])
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&0_u16.to_le_bytes())
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&self.launch.value().to_le_bytes())
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&self.sender_pid.to_le_bytes())
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&self.worker_epoch.value().to_le_bytes())
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&self.sequence.to_le_bytes())
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&self.token)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(
                 &u32::try_from(self.frame.len())
                     .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?
                     .to_le_bytes(),
             )
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(
                 &u16::try_from(self.capabilities.len())
                     .map_err(|_| error(DesktopIpcErrorCode::ResourceLimit))?
                     .to_le_bytes(),
             )
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         writer
             .write_all(&self.frame)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         for capability in &self.capabilities {
             write_capability(writer, *capability)?;
         }
-        writer
-            .flush()
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))
+        writer.flush().map_err(|failure| io_error(&failure))
     }
 
     /// Reads and authenticates the fixed header before allocating any payload.
@@ -210,7 +208,7 @@ impl DesktopWireRecord {
         let mut prefix = [0_u8; 4];
         reader
             .read_exact(&mut prefix)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         let length = usize::try_from(u32::from_le_bytes(prefix))
             .map_err(|_| error(DesktopIpcErrorCode::InvalidFrame))?;
         if length < FIXED_HEADER_BYTES || length > limits.max_record_bytes() {
@@ -219,7 +217,7 @@ impl DesktopWireRecord {
         let mut header = [0_u8; FIXED_HEADER_BYTES];
         reader
             .read_exact(&mut header)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         let (record, frame_length, capability_count) = decode_header(&header, limits)?;
         record.authenticate(auth, expected_sender_pid, direction, epoch, last_sequence)?;
         validate_record_length(length, frame_length, capability_count)?;
@@ -365,19 +363,19 @@ fn write_capability(
 ) -> Result<(), DesktopIpcError> {
     writer
         .write_all(&capability.id().to_le_bytes())
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+        .map_err(|failure| io_error(&failure))?;
     writer
         .write_all(&[capability.class() as u8, capability.rights() as u8, 0, 0])
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+        .map_err(|failure| io_error(&failure))?;
     writer
         .write_all(&capability.owner().value().to_le_bytes())
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+        .map_err(|failure| io_error(&failure))?;
     writer
         .write_all(&capability.worker_epoch().value().to_le_bytes())
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+        .map_err(|failure| io_error(&failure))?;
     writer
         .write_all(&capability.byte_length().to_le_bytes())
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))
+        .map_err(|failure| io_error(&failure))
 }
 
 fn finish_read(
@@ -394,7 +392,7 @@ fn finish_read(
     frame.resize(frame_length, 0);
     reader
         .read_exact(&mut frame)
-        .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+        .map_err(|failure| io_error(&failure))?;
     let mut capabilities = Vec::new();
     capabilities
         .try_reserve_exact(capability_count)
@@ -403,7 +401,7 @@ fn finish_read(
         let mut bytes = [0_u8; CAPABILITY_BYTES];
         reader
             .read_exact(&mut bytes)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         let capability = read_capability(&bytes)?;
         if capabilities
             .iter()

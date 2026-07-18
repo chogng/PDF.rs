@@ -15,6 +15,7 @@ mod limits;
 mod native_adapter;
 mod process;
 mod source;
+mod supervisor;
 #[cfg(unix)]
 mod unix;
 mod wire;
@@ -25,8 +26,15 @@ pub use capability::{
 };
 pub use error::{DesktopIpcError, DesktopIpcErrorCode};
 pub use limits::{DesktopIpcLimitConfig, DesktopIpcLimits};
-pub use process::{DesktopEpochManager, DesktopHostProcess, PendingDesktopRecord, run_child_stdio};
+pub use process::{
+    DESKTOP_CHILD_PANIC_EXIT_CODE, DesktopEpochManager, DesktopHostProcess, PendingDesktopRecord,
+    run_child_stdio,
+};
 pub use source::{HostRangeBridge, HostSourceSnapshot, SourceSegment};
+pub use supervisor::{
+    DesktopChildSupervisor, DesktopEpochCleanup, DesktopSupervisionError, DesktopSupervisorConfig,
+    DesktopSupervisorState, DesktopWorkerFault, DesktopWorkerFaultKind,
+};
 #[cfg(unix)]
 pub use unix::{
     ReadOnlySharedRegion, receive_capability_fds, send_capability_fds, validate_read_only_fd,

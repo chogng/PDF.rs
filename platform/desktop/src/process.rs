@@ -1,10 +1,10 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pdf_rs_protocol::{
     Command as ProtocolCommand, CommandEnvelope, DesktopFrameDecoder, ENVELOPE_HEADER_BYTES,
@@ -31,7 +31,7 @@ use crate::{
     CapabilityClass, CapabilityRights, DesktopCapability, DesktopDirection, DesktopIpcError,
     DesktopIpcErrorCode, DesktopIpcLimits, DesktopLaunchAuth, DesktopLaunchId,
     DesktopRecordBinding, DesktopWireRecord, ReadOnlySharedRegion,
-    error::error,
+    error::{error, io_error},
     native_adapter::{
         DesktopNativeEvent, DesktopNativePoll, DesktopNativeWorker, NativeDesktopPhase,
     },
@@ -43,6 +43,77 @@ use crate::{
 // Serializes this crate's socketpair-to-exec interval on platforms without
 // SOCK_CLOEXEC, so another desktop worker cannot inherit a sibling endpoint.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+const DEFAULT_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(2);
+const EXIT_OBSERVATION_GRACE: Duration = Duration::from_millis(100);
+
+/// Reserved child exit code used when the process panic boundary contains an unwind.
+pub const DESKTOP_CHILD_PANIC_EXIT_CODE: i32 = 71;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DesktopChildTerminationFailure {
+    Reap,
+    Kill,
+    Wait,
+}
+
+trait ChildLifecycle {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>>;
+    fn kill(&mut self) -> io::Result<()>;
+    fn wait(&mut self) -> io::Result<ExitStatus>;
+}
+
+impl ChildLifecycle for Child {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        Child::kill(self)
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Child::wait(self)
+    }
+}
+
+fn terminate_child(
+    child: &mut impl ChildLifecycle,
+    observation_grace: Duration,
+) -> Result<ExitStatus, DesktopChildTerminationFailure> {
+    let deadline = Instant::now() + observation_grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(None) => break,
+            Err(_) => return Err(DesktopChildTerminationFailure::Reap),
+        }
+    }
+    child
+        .kill()
+        .map_err(|_| DesktopChildTerminationFailure::Kill)?;
+    child
+        .wait()
+        .map_err(|_| DesktopChildTerminationFailure::Wait)
+}
+
+fn terminate_child_slot<T: ChildLifecycle>(
+    slot: &mut Option<T>,
+    observation_grace: Duration,
+) -> Result<ExitStatus, DesktopChildTerminationFailure> {
+    let Some(mut child) = slot.take() else {
+        return Err(DesktopChildTerminationFailure::Reap);
+    };
+    match terminate_child(&mut child, observation_grace) {
+        Ok(status) => Ok(status),
+        Err(failure) => {
+            *slot = Some(child);
+            Err(failure)
+        }
+    }
+}
 
 /// One Host-owned child process epoch. Restart drops every old transport resource.
 pub struct DesktopHostProcess {
@@ -55,6 +126,10 @@ pub struct DesktopHostProcess {
     last_sent: Option<u64>,
     last_received: Option<u64>,
     canonical_received: SequenceTracker,
+    last_exit_status: Option<ExitStatus>,
+    last_termination_failure: Option<DesktopChildTerminationFailure>,
+    #[cfg(test)]
+    forced_termination_failure: Option<DesktopChildTerminationFailure>,
 }
 
 /// Host-owned monotonic worker epoch allocator.
@@ -73,10 +148,19 @@ impl DesktopEpochManager {
     }
     /// Spawns a new isolated worker with an epoch never reused by this manager.
     pub fn spawn(&mut self, program: &str) -> Result<DesktopHostProcess, DesktopIpcError> {
+        self.spawn_with_timeout(program, DEFAULT_TRANSPORT_TIMEOUT)
+    }
+
+    pub(crate) fn spawn_with_timeout(
+        &mut self,
+        program: &str,
+        transport_timeout: Duration,
+    ) -> Result<DesktopHostProcess, DesktopIpcError> {
         let epoch = WorkerEpoch::new(self.next_epoch)
             .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
         let worker = WorkerId::new(self.next_worker);
-        let process = DesktopHostProcess::spawn_for_epoch(program, epoch, worker)?;
+        let process =
+            DesktopHostProcess::spawn_for_epoch(program, epoch, worker, transport_timeout)?;
         self.next_epoch = self
             .next_epoch
             .checked_add(1)
@@ -255,7 +339,11 @@ impl DesktopHostProcess {
         program: &str,
         epoch: WorkerEpoch,
         worker: WorkerId,
+        transport_timeout: Duration,
     ) -> Result<Self, DesktopIpcError> {
+        if transport_timeout.is_zero() {
+            return Err(error(DesktopIpcErrorCode::InvalidConfiguration));
+        }
         let _spawn_guard = SPAWN_LOCK
             .lock()
             .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
@@ -287,30 +375,28 @@ impl DesktopHostProcess {
             .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
         let mut socket = UnixStream::from(host_fd);
         socket
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(transport_timeout))
             .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
         socket
-            .set_write_timeout(Some(Duration::from_secs(2)))
+            .set_write_timeout(Some(transport_timeout))
             .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
         let bootstrap = (|| {
             socket
                 .write_all(&auth.launch().value().to_le_bytes())
-                .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+                .map_err(|failure| io_error(&failure))?;
             socket
                 .write_all(auth.token())
-                .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+                .map_err(|failure| io_error(&failure))?;
             socket
                 .write_all(&host_pid.to_le_bytes())
-                .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+                .map_err(|failure| io_error(&failure))?;
             socket
                 .write_all(&epoch.value().to_le_bytes())
-                .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+                .map_err(|failure| io_error(&failure))?;
             socket
                 .write_all(&worker.value().to_le_bytes())
-                .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
-            socket
-                .flush()
-                .map_err(|_| error(DesktopIpcErrorCode::Disconnected))
+                .map_err(|failure| io_error(&failure))?;
+            socket.flush().map_err(|failure| io_error(&failure))
         })();
         if let Err(failure) = bootstrap {
             drop(socket);
@@ -342,6 +428,10 @@ impl DesktopHostProcess {
             last_sent: None,
             last_received: None,
             canonical_received: SequenceTracker::new(),
+            last_exit_status: None,
+            last_termination_failure: None,
+            #[cfg(test)]
+            forced_termination_failure: None,
         })
     }
 
@@ -446,15 +536,95 @@ impl DesktopHostProcess {
             .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))
     }
 
-    /// Terminates the child and invalidates every remaining old-epoch transport path.
-    pub fn shutdown(&mut self) {
-        self.socket.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+    /// Returns the operating-system process identifier for watchdog integration.
+    pub fn process_id(&self) -> Result<u32, DesktopIpcError> {
+        self.child_pid()
+    }
+
+    pub(crate) fn set_transport_timeout(
+        &mut self,
+        transport_timeout: Duration,
+    ) -> Result<(), DesktopIpcError> {
+        if transport_timeout.is_zero() {
+            return Err(error(DesktopIpcErrorCode::InvalidConfiguration));
         }
+        let socket = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| error(DesktopIpcErrorCode::Lifecycle))?;
+        socket
+            .set_read_timeout(Some(transport_timeout))
+            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))?;
+        socket
+            .set_write_timeout(Some(transport_timeout))
+            .map_err(|_| error(DesktopIpcErrorCode::Lifecycle))
+    }
+
+    pub(crate) fn terminate_for_restart(
+        &mut self,
+    ) -> Result<ExitStatus, DesktopChildTerminationFailure> {
+        self.socket.take();
         self.last_sent = None;
         self.last_received = None;
+
+        #[cfg(test)]
+        if let Some(failure) = self.forced_termination_failure {
+            self.last_termination_failure = Some(failure);
+            return Err(failure);
+        }
+
+        if let Some(status) = self.last_exit_status {
+            self.last_termination_failure = None;
+            return Ok(status);
+        }
+        match terminate_child_slot(&mut self.child, EXIT_OBSERVATION_GRACE) {
+            Ok(status) => {
+                self.last_exit_status = Some(status);
+                self.last_termination_failure = None;
+                Ok(status)
+            }
+            Err(failure) => {
+                let preserved = if self.child.is_none() {
+                    self.last_termination_failure.unwrap_or(failure)
+                } else {
+                    failure
+                };
+                self.last_termination_failure = Some(preserved);
+                Err(preserved)
+            }
+        }
+    }
+
+    /// Attempts to terminate and reap the child, preserving its handle on failure.
+    pub fn shutdown(&mut self) {
+        let _ = self.terminate_for_restart();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stub_with_termination_failure(
+        epoch: WorkerEpoch,
+        worker: WorkerId,
+        failure: DesktopChildTerminationFailure,
+    ) -> Result<Self, DesktopIpcError> {
+        Ok(Self {
+            child: None,
+            socket: None,
+            auth: DesktopLaunchAuth::new()?,
+            epoch,
+            worker,
+            host_pid: std::process::id(),
+            last_sent: None,
+            last_received: None,
+            canonical_received: SequenceTracker::new(),
+            last_exit_status: None,
+            last_termination_failure: None,
+            forced_termination_failure: Some(failure),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_for_test(&mut self) {
+        self.poison();
     }
 
     fn poison(&mut self) {
@@ -493,19 +663,19 @@ pub fn run_child_stdio(limits: DesktopIpcLimits) -> Result<(), DesktopIpcError> 
         let mut worker = [0_u8; 8];
         input
             .read_exact(&mut launch)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         input
             .read_exact(&mut token)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         input
             .read_exact(&mut host_pid)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         input
             .read_exact(&mut epoch)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         input
             .read_exact(&mut worker)
-            .map_err(|_| error(DesktopIpcErrorCode::Disconnected))?;
+            .map_err(|failure| io_error(&failure))?;
         let launch = DesktopLaunchId::from_bootstrap(u64::from_le_bytes(launch))
             .ok_or_else(|| error(DesktopIpcErrorCode::Authentication))?;
         let auth = DesktopLaunchAuth::from_bootstrap(launch, token)?;
@@ -1037,7 +1207,10 @@ fn event_message_type(event: &Event) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::run_authenticated_child;
+    use super::{
+        ChildLifecycle, DesktopChildTerminationFailure, run_authenticated_child,
+        terminate_child_slot,
+    };
     use crate::{
         DesktopIpcErrorCode, DesktopIpcLimitConfig, DesktopIpcLimits, DesktopLaunchAuth,
         send_capability_fds,
@@ -1045,9 +1218,67 @@ mod tests {
     use pdf_rs_protocol::WorkerId;
     use pdf_rs_surface::WorkerEpoch;
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::os::unix::net::UnixStream;
+    use std::process::ExitStatus;
     use std::time::Duration;
+
+    struct InjectedChildLifecycle {
+        failure: DesktopChildTerminationFailure,
+        try_wait_calls: usize,
+        kill_calls: usize,
+        wait_calls: usize,
+    }
+
+    impl ChildLifecycle for InjectedChildLifecycle {
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            self.try_wait_calls += 1;
+            if self.failure == DesktopChildTerminationFailure::Reap {
+                Err(io::Error::other("injected reap failure"))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn kill(&mut self) -> io::Result<()> {
+            self.kill_calls += 1;
+            if self.failure == DesktopChildTerminationFailure::Kill {
+                Err(io::Error::other("injected kill failure"))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.wait_calls += 1;
+            Err(io::Error::other("injected wait failure"))
+        }
+    }
+
+    #[test]
+    fn termination_reports_reap_kill_and_wait_failures_without_skipping_stages() {
+        for (failure, expected_calls) in [
+            (DesktopChildTerminationFailure::Reap, (1, 0, 0)),
+            (DesktopChildTerminationFailure::Kill, (1, 1, 0)),
+            (DesktopChildTerminationFailure::Wait, (1, 1, 1)),
+        ] {
+            let mut child = Some(InjectedChildLifecycle {
+                failure,
+                try_wait_calls: 0,
+                kill_calls: 0,
+                wait_calls: 0,
+            });
+            assert_eq!(
+                terminate_child_slot(&mut child, Duration::ZERO),
+                Err(failure)
+            );
+            let child = child.expect("failed termination retains child ownership");
+            assert_eq!(
+                (child.try_wait_calls, child.kill_calls, child.wait_calls),
+                expected_calls
+            );
+        }
+    }
 
     #[test]
     fn partial_authenticated_record_stall_exits_at_record_timeout() {
@@ -1090,6 +1321,6 @@ mod tests {
             .join()
             .expect("child thread joined")
             .expect_err("partial record must fail closed");
-        assert_eq!(failure.code(), DesktopIpcErrorCode::Disconnected);
+        assert_eq!(failure.code(), DesktopIpcErrorCode::TransportTimeout);
     }
 }

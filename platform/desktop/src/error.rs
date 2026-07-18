@@ -18,6 +18,8 @@ pub enum DesktopIpcErrorCode {
     Source,
     /// Pipe I/O disconnected or failed.
     Disconnected,
+    /// A bounded desktop transport read or write deadline elapsed.
+    TransportTimeout,
     /// Child lifecycle, shutdown, or restart state is invalid.
     Lifecycle,
     /// A child panic was contained at the process boundary.
@@ -53,4 +55,13 @@ impl Error for DesktopIpcError {}
 
 pub(crate) const fn error(code: DesktopIpcErrorCode) -> DesktopIpcError {
     DesktopIpcError::new(code)
+}
+
+pub(crate) fn io_error(failure: &std::io::Error) -> DesktopIpcError {
+    match failure.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            error(DesktopIpcErrorCode::TransportTimeout)
+        }
+        _ => error(DesktopIpcErrorCode::Disconnected),
+    }
 }
