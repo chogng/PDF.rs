@@ -2,6 +2,7 @@ use crate::{DocumentError, DocumentErrorCode};
 
 const HARD_MAX_LOOKUPS: u64 = 65_536;
 const HARD_MAX_ENTRY_VISITS: u64 = 1_048_576;
+const HARD_MAX_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Unvalidated deterministic limits for Page `/XObject` lookup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10,13 +11,16 @@ pub struct PageXObjectLookupLimitConfig {
     pub max_lookups: u64,
     /// Maximum outer resource and inner XObject dictionary entries visited.
     pub max_entry_visits: u64,
+    /// Maximum allocator-reported bytes retained by the resolver's lookup index.
+    pub max_index_bytes: u64,
 }
 
 impl Default for PageXObjectLookupLimitConfig {
     fn default() -> Self {
         Self {
-            max_lookups: 256,
+            max_lookups: 1_024,
             max_entry_visits: 16_384,
+            max_index_bytes: 1024 * 1024,
         }
     }
 }
@@ -26,6 +30,7 @@ impl Default for PageXObjectLookupLimitConfig {
 pub struct PageXObjectLookupLimits {
     max_lookups: u64,
     max_entry_visits: u64,
+    max_index_bytes: u64,
 }
 
 impl PageXObjectLookupLimits {
@@ -35,6 +40,8 @@ impl PageXObjectLookupLimits {
             || config.max_lookups > HARD_MAX_LOOKUPS
             || config.max_entry_visits == 0
             || config.max_entry_visits > HARD_MAX_ENTRY_VISITS
+            || config.max_index_bytes == 0
+            || config.max_index_bytes > HARD_MAX_INDEX_BYTES
         {
             return Err(DocumentError::for_code(
                 DocumentErrorCode::InvalidLimits,
@@ -45,6 +52,7 @@ impl PageXObjectLookupLimits {
         Ok(Self {
             max_lookups: config.max_lookups,
             max_entry_visits: config.max_entry_visits,
+            max_index_bytes: config.max_index_bytes,
         })
     }
 
@@ -56,6 +64,11 @@ impl PageXObjectLookupLimits {
     /// Returns the cumulative outer and inner dictionary-entry visit ceiling.
     pub const fn max_entry_visits(self) -> u64 {
         self.max_entry_visits
+    }
+
+    /// Returns the resolver hash-index retained-byte ceiling.
+    pub const fn max_index_bytes(self) -> u64 {
+        self.max_index_bytes
     }
 }
 
@@ -71,6 +84,7 @@ impl Default for PageXObjectLookupLimits {
 pub struct PageXObjectLookupStats {
     pub(crate) lookups: u64,
     pub(crate) entry_visits: u64,
+    pub(crate) index_bytes: u64,
 }
 
 impl PageXObjectLookupStats {
@@ -83,6 +97,11 @@ impl PageXObjectLookupStats {
     pub const fn entry_visits(self) -> u64 {
         self.entry_visits
     }
+
+    /// Returns allocator-reported bytes retained by the lookup index.
+    pub const fn index_bytes(self) -> u64 {
+        self.index_bytes
+    }
 }
 
 #[cfg(test)]
@@ -93,16 +112,19 @@ mod tests {
     #[test]
     fn defaults_and_independent_minimums_are_valid() {
         let defaults = PageXObjectLookupLimits::default();
-        assert_eq!(defaults.max_lookups(), 256);
+        assert_eq!(defaults.max_lookups(), 1_024);
         assert_eq!(defaults.max_entry_visits(), 16_384);
+        assert_eq!(defaults.max_index_bytes(), 1024 * 1024);
 
         let minimum = PageXObjectLookupLimits::validate(PageXObjectLookupLimitConfig {
             max_lookups: 1,
             max_entry_visits: 1,
+            max_index_bytes: 1,
         })
         .expect("positive independent lookup budgets validate");
         assert_eq!(minimum.max_lookups(), 1);
         assert_eq!(minimum.max_entry_visits(), 1);
+        assert_eq!(minimum.max_index_bytes(), 1);
     }
 
     #[test]
@@ -122,6 +144,10 @@ mod tests {
             },
             PageXObjectLookupLimitConfig {
                 max_entry_visits: HARD_MAX_ENTRY_VISITS + 1,
+                ..PageXObjectLookupLimitConfig::default()
+            },
+            PageXObjectLookupLimitConfig {
+                max_index_bytes: HARD_MAX_INDEX_BYTES + 1,
                 ..PageXObjectLookupLimitConfig::default()
             },
         ] {

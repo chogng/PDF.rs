@@ -155,6 +155,8 @@ pub enum DocumentLimitKind {
     PageXObjectLookups,
     /// Outer resource and inner XObject dictionary entries visited during XObject lookup.
     PageXObjectEntryVisits,
+    /// Allocator-reported bytes retained by one Page XObject resolver hash index.
+    PageXObjectIndexBytes,
     /// Page resource names resolved through one borrowed Font resolver.
     PageFontLookups,
     /// Outer resource and inner Font dictionary entries visited during Font lookup.

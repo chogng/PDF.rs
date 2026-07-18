@@ -1285,6 +1285,7 @@ fn page_xobject_lookup_limits(contract: &CaseContract) -> PageXObjectLookupLimit
     PageXObjectLookupLimits::validate(PageXObjectLookupLimitConfig {
         max_lookups: contract.max_scene_commands,
         max_entry_visits: resource_lookup_entry_visits(contract),
+        ..PageXObjectLookupLimitConfig::default()
     })
     .expect("manifest-owned Page XObject lookup limits validate")
 }

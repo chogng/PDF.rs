@@ -504,7 +504,8 @@ fn direct_lookup_and_identity_acquisition_preserve_proof_and_replay_ready() {
         offset_of(&fixture.bytes, b"/Im0 4 0 R") + 5
     );
     assert_eq!(resolver.stats().lookups(), 1);
-    assert_eq!(resolver.stats().entry_visits(), 2);
+    assert_eq!(resolver.stats().entry_visits(), 3);
+    assert!(resolver.stats().index_bytes() > 0);
 
     let mut job = prepared
         .authority
@@ -962,6 +963,7 @@ fn lookup_and_acquisition_limits_fail_at_the_registered_boundary() {
         PageXObjectLookupLimits::validate(PageXObjectLookupLimitConfig {
             max_lookups: 1,
             max_entry_visits: 1,
+            ..PageXObjectLookupLimitConfig::default()
         })
         .unwrap(),
     );
@@ -1085,6 +1087,69 @@ fn lookup_and_acquisition_limits_fail_at_the_registered_boundary() {
 }
 
 #[test]
+fn large_xobject_dictionary_is_indexed_once_for_many_distinct_lookups() {
+    const XOBJECTS: usize = 747;
+    let mut resources = b"<< /XObject << ".to_vec();
+    for index in (0..XOBJECTS).rev() {
+        resources.extend_from_slice(format!("/Fm{index} 4 0 R ").as_bytes());
+    }
+    resources.extend_from_slice(b">> >>");
+    let fixture = resource_fixture(
+        &resources,
+        vec![(
+            4,
+            stream_body(4, b"/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""),
+        )],
+        5,
+        0xb7,
+    );
+    let prepared = prepare(&fixture, 17_101);
+    let mut resolver = prepared
+        .page
+        .resources()
+        .xobject_resolver(PageXObjectLookupLimits::default());
+    for index in 0..XOBJECTS {
+        let name = format!("Fm{index}");
+        match resolver
+            .lookup_image_xobject(
+                name.as_bytes(),
+                &PanicSource(fixture.snapshot),
+                &DocumentNeverCancelled,
+            )
+            .expect("indexed XObject lookup")
+        {
+            PageXObjectLookupOutcome::Ready(proof) => assert_eq!(proof.target(), object_ref(4)),
+            PageXObjectLookupOutcome::Unsupported(value) => {
+                panic!("indirect XObject reference must be ready: {value:?}")
+            }
+        }
+    }
+    assert_eq!(resolver.stats().lookups(), XOBJECTS as u64);
+    assert!(resolver.stats().entry_visits() < 10_000);
+    assert!(resolver.stats().index_bytes() > 0);
+
+    let mut low = prepared.page.resources().xobject_resolver(
+        PageXObjectLookupLimits::validate(PageXObjectLookupLimitConfig {
+            max_index_bytes: 1,
+            ..PageXObjectLookupLimitConfig::default()
+        })
+        .unwrap(),
+    );
+    let error = low
+        .lookup_image_xobject(
+            b"Fm0",
+            &PanicSource(fixture.snapshot),
+            &DocumentNeverCancelled,
+        )
+        .expect_err("one byte cannot retain the lookup index");
+    assert_eq!(error.code(), DocumentErrorCode::ResourceLimit);
+    assert_eq!(
+        error.limit().expect("index-byte limit evidence").kind(),
+        DocumentLimitKind::PageXObjectIndexBytes
+    );
+}
+
+#[test]
 fn lower_decoder_fuel_reports_effective_limit_and_retention_adds_image_prefix() {
     let fixture = image_fixture(
         b"/Type /XObject /Subtype /Image /Width 2 /Height 3 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode",
@@ -1162,6 +1227,7 @@ fn xobject_entry_limit_rechecks_source_and_cancellation_precedence() {
     let limits = PageXObjectLookupLimits::validate(PageXObjectLookupLimitConfig {
         max_lookups: 1,
         max_entry_visits: 1,
+        ..PageXObjectLookupLimitConfig::default()
     })
     .expect("one-entry lookup limit");
     let mut resolver = prepared.page.resources().xobject_resolver(limits);

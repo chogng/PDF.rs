@@ -126,7 +126,9 @@ impl PageResourceScope {
             stats: PageXObjectLookupStats {
                 lookups: 0,
                 entry_visits: 0,
+                index_bytes: 0,
             },
+            index: None,
         }
     }
 
@@ -1433,11 +1435,32 @@ pub enum PageXObjectLookupOutcome {
     Unsupported(ImageXObjectUnsupported),
 }
 
+#[derive(Clone, Copy)]
+struct XObjectIndexSlot {
+    hash: u64,
+    entry_index: usize,
+    duplicate_offset: Option<u64>,
+}
+
+enum XObjectLookupIndex<'scope> {
+    Direct {
+        xobject_key_offset: u64,
+        xobject_value_offset: u64,
+        dictionary: &'scope PdfDictionary,
+        slots: Vec<Option<XObjectIndexSlot>>,
+    },
+    Indirect {
+        reference: ObjectRef,
+        offset: u64,
+    },
+}
+
 /// Borrowed no-I/O resolver for one exact inherited Page resource dictionary.
 pub struct PageXObjectResolver<'scope> {
     scope: &'scope PageResourceScope,
     limits: PageXObjectLookupLimits,
     stats: PageXObjectLookupStats,
+    index: Option<XObjectLookupIndex<'scope>>,
 }
 
 impl PageXObjectResolver<'_> {
@@ -1488,132 +1511,52 @@ impl PageXObjectResolver<'_> {
                 scope_offset,
             ));
         }
-        let dictionary = scope.dictionary().map_err(|fallback| {
-            prioritize_runtime_error(
-                snapshot,
-                source,
-                cancellation,
-                fallback,
-                owner_reference,
-                scope_offset,
-            )
-        })?;
-
-        let mut xobject_key_offset = None;
-        let mut xobject_value = None;
-        let mut duplicate_xobject_offset = None;
-        for entry in dictionary.entries() {
-            let key_offset = entry.key().span().start();
-            probe_xobject_scan(
+        if self.index.is_none() {
+            self.index = Some(build_xobject_index(
+                scope,
+                limits,
                 stats,
-                snapshot,
                 source,
                 cancellation,
-                owner_reference,
-                key_offset,
-            )?;
-            if let Err(fallback) =
-                charge_xobject_entry_visit(stats, limits, owner_reference, key_offset)
-            {
-                return Err(prioritize_runtime_error(
-                    snapshot,
-                    source,
-                    cancellation,
-                    fallback,
-                    owner_reference,
-                    key_offset,
-                ));
-            }
-            if entry.key().value().bytes() != b"XObject" {
-                continue;
-            }
-            if xobject_value.is_some() {
-                duplicate_xobject_offset.get_or_insert(key_offset);
-            } else {
-                xobject_key_offset = Some(key_offset);
-                xobject_value = Some(entry.value());
-            }
+            )?);
         }
-        runtime_guard(
-            snapshot,
-            source,
-            cancellation,
-            owner_reference,
-            scope_offset,
-        )?;
-        if let Some(offset) = duplicate_xobject_offset {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::DuplicateStructuralKey,
-                Some(owner_reference),
-                Some(offset),
-            ));
-        }
-        let Some(xobject_value) = xobject_value else {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::InvalidPageXObjectResource,
-                Some(owner_reference),
-                Some(scope_offset),
-            ));
+        let Some(index) = self.index.as_ref() else {
+            return Err(internal_error(owner_reference, Some(scope_offset)));
         };
-        let xobject_value_offset = xobject_value.span().start();
-        let Some(xobject_key_offset) = xobject_key_offset else {
-            return Err(internal_error(owner_reference, Some(xobject_value_offset)));
-        };
-        let xobjects = match xobject_value.value() {
-            SyntaxObject::Dictionary(dictionary) => dictionary,
-            SyntaxObject::Reference(reference) => {
+        let (xobject_key_offset, xobject_value_offset, xobjects, slots) = match index {
+            XObjectLookupIndex::Direct {
+                xobject_key_offset,
+                xobject_value_offset,
+                dictionary,
+                slots,
+            } => (
+                *xobject_key_offset,
+                *xobject_value_offset,
+                *dictionary,
+                slots,
+            ),
+            XObjectLookupIndex::Indirect { reference, offset } => {
                 return Ok(PageXObjectLookupOutcome::Unsupported(
                     ImageXObjectUnsupported::new(
                         ImageXObjectUnsupportedKind::IndirectXObjectDictionary,
                         *reference,
-                        xobject_value_offset,
+                        *offset,
                     ),
                 ));
             }
-            _ => {
-                return Err(DocumentError::for_code(
-                    DocumentErrorCode::InvalidPageXObjectResource,
-                    Some(owner_reference),
-                    Some(xobject_value_offset),
-                ));
-            }
         };
-
-        let mut entry_key_offset = None;
-        let mut entry_value = None;
-        let mut duplicate_entry_offset = None;
-        for entry in xobjects.entries() {
-            let key_offset = entry.key().span().start();
-            probe_xobject_scan(
-                stats,
-                snapshot,
-                source,
-                cancellation,
-                owner_reference,
-                key_offset,
-            )?;
-            if let Err(fallback) =
-                charge_xobject_entry_visit(stats, limits, owner_reference, key_offset)
-            {
-                return Err(prioritize_runtime_error(
-                    snapshot,
-                    source,
-                    cancellation,
-                    fallback,
-                    owner_reference,
-                    key_offset,
-                ));
-            }
-            if entry.key().value().bytes() != name {
-                continue;
-            }
-            if entry_value.is_some() {
-                duplicate_entry_offset.get_or_insert(key_offset);
-            } else {
-                entry_key_offset = Some(key_offset);
-                entry_value = Some(entry.value());
-            }
-        }
+        let indexed = find_xobject_entry(
+            xobjects,
+            slots,
+            name,
+            limits,
+            stats,
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            xobject_value_offset,
+        )?;
         runtime_guard(
             snapshot,
             source,
@@ -1621,24 +1564,27 @@ impl PageXObjectResolver<'_> {
             owner_reference,
             xobject_value_offset,
         )?;
-        if let Some(offset) = duplicate_entry_offset {
-            return Err(DocumentError::for_code(
-                DocumentErrorCode::DuplicateStructuralKey,
-                Some(owner_reference),
-                Some(offset),
-            ));
-        }
-        let Some(entry_value) = entry_value else {
+        let Some(indexed) = indexed else {
             return Err(DocumentError::for_code(
                 DocumentErrorCode::InvalidPageXObjectResource,
                 Some(owner_reference),
                 Some(xobject_value_offset),
             ));
         };
+        if let Some(offset) = indexed.duplicate_offset {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::DuplicateStructuralKey,
+                Some(owner_reference),
+                Some(offset),
+            ));
+        }
+        let entry = xobjects
+            .entries()
+            .get(indexed.entry_index)
+            .ok_or_else(|| internal_error(owner_reference, Some(xobject_value_offset)))?;
+        let entry_key_offset = entry.key().span().start();
+        let entry_value = entry.value();
         let entry_value_offset = entry_value.span().start();
-        let Some(entry_key_offset) = entry_key_offset else {
-            return Err(internal_error(owner_reference, Some(entry_value_offset)));
-        };
         let target = match entry_value.value() {
             SyntaxObject::Reference(reference) => *reference,
             SyntaxObject::Dictionary(_) => {
@@ -1680,6 +1626,331 @@ impl PageXObjectResolver<'_> {
             entry_value_offset,
         }))
     }
+}
+
+fn build_xobject_index<'scope>(
+    scope: &'scope PageResourceScope,
+    limits: PageXObjectLookupLimits,
+    stats: &mut PageXObjectLookupStats,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+) -> Result<XObjectLookupIndex<'scope>, DocumentError> {
+    let owner = scope.dictionary_owner();
+    let snapshot = owner.snapshot();
+    let owner_reference = owner.reference();
+    let scope_offset = scope.defining_value_offset;
+    let dictionary = scope.dictionary().map_err(|fallback| {
+        prioritize_runtime_error(
+            snapshot,
+            source,
+            cancellation,
+            fallback,
+            owner_reference,
+            scope_offset,
+        )
+    })?;
+    let mut xobject_key_offset = None;
+    let mut xobject_value = None;
+    let mut duplicate_xobject_offset = None;
+    for entry in dictionary.entries() {
+        let key_offset = entry.key().span().start();
+        probe_xobject_scan(
+            stats,
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            key_offset,
+        )?;
+        charge_xobject_entry_visit(stats, limits, owner_reference, key_offset).map_err(
+            |fallback| {
+                prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                )
+            },
+        )?;
+        if entry.key().value().bytes() != b"XObject" {
+            continue;
+        }
+        if xobject_value.is_some() {
+            duplicate_xobject_offset.get_or_insert(key_offset);
+        } else {
+            xobject_key_offset = Some(key_offset);
+            xobject_value = Some(entry.value());
+        }
+    }
+    runtime_guard(
+        snapshot,
+        source,
+        cancellation,
+        owner_reference,
+        scope_offset,
+    )?;
+    if let Some(offset) = duplicate_xobject_offset {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::DuplicateStructuralKey,
+            Some(owner_reference),
+            Some(offset),
+        ));
+    }
+    let Some(xobject_value) = xobject_value else {
+        return Err(DocumentError::for_code(
+            DocumentErrorCode::InvalidPageXObjectResource,
+            Some(owner_reference),
+            Some(scope_offset),
+        ));
+    };
+    let xobject_value_offset = xobject_value.span().start();
+    let Some(xobject_key_offset) = xobject_key_offset else {
+        return Err(internal_error(owner_reference, Some(xobject_value_offset)));
+    };
+    let xobjects = match xobject_value.value() {
+        SyntaxObject::Dictionary(dictionary) => dictionary,
+        SyntaxObject::Reference(reference) => {
+            return Ok(XObjectLookupIndex::Indirect {
+                reference: *reference,
+                offset: xobject_value_offset,
+            });
+        }
+        _ => {
+            return Err(DocumentError::for_code(
+                DocumentErrorCode::InvalidPageXObjectResource,
+                Some(owner_reference),
+                Some(xobject_value_offset),
+            ));
+        }
+    };
+    let entry_count = xobjects.entries().len();
+    let slot_count = if entry_count == 0 {
+        0
+    } else {
+        entry_count
+            .checked_mul(2)
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or_else(|| internal_error(owner_reference, Some(xobject_value_offset)))?
+    };
+    let nominal_bytes = u64::try_from(slot_count)
+        .ok()
+        .and_then(|slots| {
+            u64::try_from(mem::size_of::<Option<XObjectIndexSlot>>())
+                .ok()
+                .and_then(|width| slots.checked_mul(width))
+        })
+        .ok_or_else(|| internal_error(owner_reference, Some(xobject_value_offset)))?;
+    preflight_xobject_index_bytes(
+        stats,
+        limits,
+        nominal_bytes,
+        owner_reference,
+        xobject_value_offset,
+    )?;
+    let mut slots = Vec::new();
+    slots.try_reserve_exact(slot_count).map_err(|_| {
+        DocumentError::page_property_resource(
+            DocumentLimitKind::PageXObjectIndexBytes,
+            limits.max_index_bytes(),
+            stats.index_bytes,
+            nominal_bytes,
+            owner_reference,
+            Some(xobject_value_offset),
+        )
+    })?;
+    slots.resize(slot_count, None);
+    let actual_bytes = u64::try_from(slots.capacity())
+        .ok()
+        .and_then(|capacity| {
+            u64::try_from(mem::size_of::<Option<XObjectIndexSlot>>())
+                .ok()
+                .and_then(|width| capacity.checked_mul(width))
+        })
+        .ok_or_else(|| internal_error(owner_reference, Some(xobject_value_offset)))?;
+    preflight_xobject_index_bytes(
+        stats,
+        limits,
+        actual_bytes,
+        owner_reference,
+        xobject_value_offset,
+    )?;
+    stats.index_bytes = actual_bytes;
+
+    for (entry_index, entry) in xobjects.entries().iter().enumerate() {
+        let key_offset = entry.key().span().start();
+        probe_xobject_scan(
+            stats,
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            key_offset,
+        )?;
+        charge_xobject_entry_visit(stats, limits, owner_reference, key_offset).map_err(
+            |fallback| {
+                prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                )
+            },
+        )?;
+        let hash = xobject_name_hash(entry.key().value().bytes());
+        let mut slot_index = xobject_hash_slot(hash, slots.len())
+            .ok_or_else(|| internal_error(owner_reference, Some(key_offset)))?;
+        loop {
+            let Some(existing) = slots[slot_index] else {
+                slots[slot_index] = Some(XObjectIndexSlot {
+                    hash,
+                    entry_index,
+                    duplicate_offset: None,
+                });
+                break;
+            };
+            charge_xobject_entry_visit(stats, limits, owner_reference, key_offset).map_err(
+                |fallback| {
+                    prioritize_runtime_error(
+                        snapshot,
+                        source,
+                        cancellation,
+                        fallback,
+                        owner_reference,
+                        key_offset,
+                    )
+                },
+            )?;
+            let existing_entry = xobjects
+                .entries()
+                .get(existing.entry_index)
+                .ok_or_else(|| internal_error(owner_reference, Some(key_offset)))?;
+            if existing.hash == hash
+                && existing_entry.key().value().bytes() == entry.key().value().bytes()
+            {
+                if existing.duplicate_offset.is_none() {
+                    slots[slot_index] = Some(XObjectIndexSlot {
+                        duplicate_offset: Some(key_offset),
+                        ..existing
+                    });
+                }
+                break;
+            }
+            slot_index = slot_index
+                .checked_add(1)
+                .map(|index| index % slots.len())
+                .ok_or_else(|| internal_error(owner_reference, Some(key_offset)))?;
+        }
+    }
+    runtime_guard(
+        snapshot,
+        source,
+        cancellation,
+        owner_reference,
+        xobject_value_offset,
+    )?;
+    Ok(XObjectLookupIndex::Direct {
+        xobject_key_offset,
+        xobject_value_offset,
+        dictionary: xobjects,
+        slots,
+    })
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "indexed lookup keeps proof owner, runtime precedence, and exact work accounting explicit"
+)]
+fn find_xobject_entry(
+    xobjects: &PdfDictionary,
+    slots: &[Option<XObjectIndexSlot>],
+    name: &[u8],
+    limits: PageXObjectLookupLimits,
+    stats: &mut PageXObjectLookupStats,
+    snapshot: SourceSnapshot,
+    source: &dyn ByteSource,
+    cancellation: &dyn DocumentCancellation,
+    owner_reference: ObjectRef,
+    offset: u64,
+) -> Result<Option<XObjectIndexSlot>, DocumentError> {
+    if slots.is_empty() {
+        return Ok(None);
+    }
+    let hash = xobject_name_hash(name);
+    let mut slot_index = xobject_hash_slot(hash, slots.len())
+        .ok_or_else(|| internal_error(owner_reference, Some(offset)))?;
+    for _ in 0..slots.len() {
+        let Some(indexed) = slots[slot_index] else {
+            return Ok(None);
+        };
+        let entry = xobjects
+            .entries()
+            .get(indexed.entry_index)
+            .ok_or_else(|| internal_error(owner_reference, Some(offset)))?;
+        let key_offset = entry.key().span().start();
+        probe_xobject_scan(
+            stats,
+            snapshot,
+            source,
+            cancellation,
+            owner_reference,
+            key_offset,
+        )?;
+        charge_xobject_entry_visit(stats, limits, owner_reference, key_offset).map_err(
+            |fallback| {
+                prioritize_runtime_error(
+                    snapshot,
+                    source,
+                    cancellation,
+                    fallback,
+                    owner_reference,
+                    key_offset,
+                )
+            },
+        )?;
+        if indexed.hash == hash && entry.key().value().bytes() == name {
+            return Ok(Some(indexed));
+        }
+        slot_index = slot_index
+            .checked_add(1)
+            .map(|index| index % slots.len())
+            .ok_or_else(|| internal_error(owner_reference, Some(offset)))?;
+    }
+    Ok(None)
+}
+
+fn preflight_xobject_index_bytes(
+    stats: &PageXObjectLookupStats,
+    limits: PageXObjectLookupLimits,
+    attempted: u64,
+    reference: ObjectRef,
+    offset: u64,
+) -> Result<(), DocumentError> {
+    if attempted > limits.max_index_bytes() {
+        return Err(DocumentError::page_property_resource(
+            DocumentLimitKind::PageXObjectIndexBytes,
+            limits.max_index_bytes(),
+            stats.index_bytes,
+            attempted,
+            reference,
+            Some(offset),
+        ));
+    }
+    Ok(())
+}
+
+fn xobject_name_hash(name: &[u8]) -> u64 {
+    name.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn xobject_hash_slot(hash: u64, slot_count: usize) -> Option<usize> {
+    let slot_count = u64::try_from(slot_count).ok()?;
+    usize::try_from(hash.checked_rem(slot_count)?).ok()
 }
 
 impl fmt::Debug for PageXObjectResolver<'_> {
