@@ -7,7 +7,9 @@ use pdf_rs_scene::{
     SceneScalar,
 };
 
-use crate::fast::kernels::{Coverage, FIXED_ONE, KernelWork, PageMap, Point, WorkRect, coverage};
+use crate::fast::kernels::{
+    Coverage, FIXED_ONE, KernelWork, PageMap, Point, WorkRect, coverage_bounded_by_device_bounds,
+};
 use crate::fast::{FastRasterError, FastRasterErrorCode};
 
 const SCENE_SCALE: i128 = 1_000_000_000;
@@ -157,6 +159,54 @@ impl StrokeOutline {
         }
         Ok(false)
     }
+
+    fn device_bounds(
+        &self,
+        outline_to_device: Affine,
+        work: &mut dyn KernelWork,
+    ) -> Result<Option<[i64; 4]>, FastRasterError> {
+        let mut bounds = None;
+        for primitive in &self.primitives {
+            work.step()?;
+            match primitive {
+                StrokePrimitive::Polygon(points) => {
+                    for point in points {
+                        work.step()?;
+                        extend_bounds(&mut bounds, outline_to_device.apply(*point)?)?;
+                    }
+                }
+                StrokePrimitive::Circle { center, radius }
+                | StrokePrimitive::RoundSector { center, radius, .. } => {
+                    let center = outline_to_device.apply(*center)?;
+                    let extent_x = transformed_radius_extent(
+                        *radius,
+                        outline_to_device.a,
+                        outline_to_device.c,
+                    )?;
+                    let extent_y = transformed_radius_extent(
+                        *radius,
+                        outline_to_device.b,
+                        outline_to_device.d,
+                    )?;
+                    extend_bounds(
+                        &mut bounds,
+                        Point {
+                            x: center.x.checked_sub(extent_x).ok_or_else(numeric)?,
+                            y: center.y.checked_sub(extent_y).ok_or_else(numeric)?,
+                        },
+                    )?;
+                    extend_bounds(
+                        &mut bounds,
+                        Point {
+                            x: center.x.checked_add(extent_x).ok_or_else(numeric)?,
+                            y: center.y.checked_add(extent_y).ok_or_else(numeric)?,
+                        },
+                    )?;
+                }
+            }
+        }
+        Ok(bounds)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -208,25 +258,54 @@ pub(crate) fn stroke_coverage(
     )?;
     drop(flattened);
 
-    let (half_width, device_to_outline) = if style.width() == SceneScalar::ZERO {
+    let (half_width, device_to_outline, outline_to_device) = if style.width() == SceneScalar::ZERO {
         for run in &mut runs {
             for point in &mut run.points {
                 *point = stroke_to_device.apply(*point)?;
                 work.step()?;
             }
         }
-        (FIXED_ONE / 2, Affine::IDENTITY)
+        (FIXED_ONE / 2, Affine::IDENTITY, Affine::IDENTITY)
     } else {
         (
             round_to_i64(i128::from(scalar_to_fixed(style.width())?), 2)?,
             stroke_to_device.inverse()?,
+            stroke_to_device,
         )
     };
     let outline = build_outline(runs, runs_bytes, style, half_width, base_intermediate, work)?;
     let coverage_base = add(base_intermediate, outline.retained_bytes)?;
-    coverage(rect, coverage_base, work, |device, work| {
+    let bounds = outline.device_bounds(outline_to_device, work)?;
+    coverage_bounded_by_device_bounds(rect, bounds, coverage_base, work, |device, work| {
         outline.contains(device_to_outline.apply(device)?, work)
     })
+}
+
+fn extend_bounds(bounds: &mut Option<[i64; 4]>, point: Point) -> Result<(), FastRasterError> {
+    match bounds {
+        Some([minimum_x, minimum_y, maximum_x, maximum_y]) => {
+            *minimum_x = (*minimum_x).min(point.x);
+            *minimum_y = (*minimum_y).min(point.y);
+            *maximum_x = (*maximum_x).max(point.x);
+            *maximum_y = (*maximum_y).max(point.y);
+        }
+        None => *bounds = Some([point.x, point.y, point.x, point.y]),
+    }
+    Ok(())
+}
+
+fn transformed_radius_extent(radius: i64, first: i64, second: i64) -> Result<i64, FastRasterError> {
+    let radius = i128::from(radius).abs();
+    let factor = i128::from(first)
+        .abs()
+        .checked_add(i128::from(second).abs())
+        .ok_or_else(numeric)?;
+    let numerator = radius.checked_mul(factor).ok_or_else(numeric)?;
+    let extent = numerator
+        .checked_add(i128::from(FIXED_ONE) - 1)
+        .and_then(|value| value.checked_div(i128::from(FIXED_ONE)))
+        .ok_or_else(numeric)?;
+    i64::try_from(extent).map_err(|_| numeric())
 }
 
 #[allow(clippy::too_many_arguments)]

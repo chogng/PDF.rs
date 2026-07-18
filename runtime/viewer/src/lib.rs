@@ -1175,8 +1175,11 @@ fn render_fast_page(
                 };
                 NativeViewerError::new(code)
             })?;
-    let config = RenderConfig::validate(RenderConfigInput::fast_cpu_full())
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
+    let config = RenderConfig::validate(RenderConfigInput {
+        curve_flatness_denominator: 16,
+        ..RenderConfigInput::fast_cpu_full()
+    })
+    .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Render))?;
     let request = RenderPlanRequest::new(
         1,
         DeviceRect::new(0, 0, width, height)

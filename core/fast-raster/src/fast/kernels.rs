@@ -264,6 +264,63 @@ impl FlatPath {
             row_end,
         }))
     }
+
+    fn axis_aligned_rectangle(
+        &self,
+        work: &mut dyn KernelWork,
+    ) -> Result<Option<[i64; 4]>, FastRasterError> {
+        let [subpath] = self.subpaths.as_slice() else {
+            return Ok(None);
+        };
+        work.step()?;
+        if !subpath.closed || subpath.points.len() != 4 {
+            return Ok(None);
+        }
+        let mut minimum_x = i64::MAX;
+        let mut minimum_y = i64::MAX;
+        let mut maximum_x = i64::MIN;
+        let mut maximum_y = i64::MIN;
+        for point in &subpath.points {
+            work.step()?;
+            minimum_x = minimum_x.min(point.x);
+            minimum_y = minimum_y.min(point.y);
+            maximum_x = maximum_x.max(point.x);
+            maximum_y = maximum_y.max(point.y);
+        }
+        if minimum_x == maximum_x || minimum_y == maximum_y {
+            return Ok(None);
+        }
+        let corners = [
+            Point {
+                x: minimum_x,
+                y: minimum_y,
+            },
+            Point {
+                x: minimum_x,
+                y: maximum_y,
+            },
+            Point {
+                x: maximum_x,
+                y: minimum_y,
+            },
+            Point {
+                x: maximum_x,
+                y: maximum_y,
+            },
+        ];
+        if !subpath.points.iter().all(|point| corners.contains(point)) {
+            return Ok(None);
+        }
+        for index in 0..subpath.points.len() {
+            work.step()?;
+            let start = subpath.points[index];
+            let end = subpath.points[(index + 1) % subpath.points.len()];
+            if (start.x == end.x) == (start.y == end.y) {
+                return Ok(None);
+            }
+        }
+        Ok(Some([minimum_x, minimum_y, maximum_x, maximum_y]))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -810,43 +867,18 @@ pub(crate) fn fill_coverage_bounded(
     work: &mut dyn KernelWork,
 ) -> Result<(Coverage, Option<CoverageWindow>), FastRasterError> {
     let window = path.coverage_window(rect, work)?;
+    let rectangle = path.axis_aligned_rectangle(work)?;
     let operation = bounded_coverage(rect, window, base_intermediate, work, |point, work| {
-        point_in_path(path, point, rule, work)
+        if let Some([minimum_x, minimum_y, maximum_x, maximum_y]) = rectangle {
+            Ok(point.x >= minimum_x
+                && point.x < maximum_x
+                && point.y >= minimum_y
+                && point.y < maximum_y)
+        } else {
+            point_in_path(path, point, rule, work)
+        }
     })?;
     Ok((operation, window))
-}
-
-pub(crate) fn coverage(
-    rect: WorkRect,
-    base_intermediate: u64,
-    work: &mut dyn KernelWork,
-    mut contains: impl FnMut(Point, &mut dyn KernelWork) -> Result<bool, FastRasterError>,
-) -> Result<Coverage, FastRasterError> {
-    let length = usize::try_from(rect.pixels()?).map_err(|_| numeric())?;
-    let mut masks = Vec::new();
-    let retained_bytes = reserve_intermediate(&mut masks, length, base_intermediate, work)?;
-    for row in 0..rect.height {
-        for column in 0..rect.width {
-            let mut mask = 0_u16;
-            for sample_y in 0..SAMPLE_SIDE {
-                for sample_x in 0..SAMPLE_SIDE {
-                    let x = sample_coordinate(rect.x, column, sample_x)?;
-                    let y = sample_coordinate(rect.y, row, sample_y)?;
-                    if contains(Point { x, y }, work)? {
-                        let bit = u32::try_from(sample_y * SAMPLE_SIDE + sample_x)
-                            .map_err(|_| numeric())?;
-                        mask |= 1_u16.checked_shl(bit).ok_or_else(numeric)?;
-                    }
-                    work.step()?;
-                }
-            }
-            masks.push(mask);
-        }
-    }
-    Ok(Coverage {
-        masks,
-        retained_bytes,
-    })
 }
 
 fn bounded_coverage(
@@ -880,6 +912,37 @@ fn bounded_coverage(
         }
     }
     Ok(coverage)
+}
+
+pub(crate) fn coverage_bounded_by_device_bounds(
+    rect: WorkRect,
+    bounds: Option<[i64; 4]>,
+    base_intermediate: u64,
+    work: &mut dyn KernelWork,
+    contains: impl FnMut(Point, &mut dyn KernelWork) -> Result<bool, FastRasterError>,
+) -> Result<Coverage, FastRasterError> {
+    let window = match bounds {
+        None => None,
+        Some([minimum_x, minimum_y, maximum_x, maximum_y]) => {
+            let Some((column_start, column_end)) =
+                coverage_axis(minimum_x, maximum_x, rect.x, rect.width)?
+            else {
+                return Coverage::empty(rect, base_intermediate, work);
+            };
+            let Some((row_start, row_end)) =
+                coverage_axis(minimum_y, maximum_y, rect.y, rect.height)?
+            else {
+                return Coverage::empty(rect, base_intermediate, work);
+            };
+            Some(CoverageWindow {
+                column_start,
+                column_end,
+                row_start,
+                row_end,
+            })
+        }
+    };
+    bounded_coverage(rect, window, base_intermediate, work, contains)
 }
 
 fn coverage_axis(

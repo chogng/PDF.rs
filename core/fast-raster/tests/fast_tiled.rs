@@ -806,12 +806,15 @@ fn glyph_fill_stroke_semantics_render_in_both_rust_rasterizers() {
         .unwrap();
     let scene = scene_builder.finish().unwrap();
     let plan = plan(&scene, config(8, 8, 1), PAGE_WIDTH, PAGE_HEIGHT);
-    let fast = compose(
-        &FastRasterJob::new(&scene, &plan, FastRasterLimits::default(), &NeverCancelled)
-            .unwrap()
-            .render_all(&[0, 1, 2, 3], &NeverCancelled)
-            .unwrap(),
+    let rendered = FastRasterJob::new(&scene, &plan, FastRasterLimits::default(), &NeverCancelled)
+        .unwrap()
+        .render_all(&[0, 1, 2, 3], &NeverCancelled)
+        .unwrap();
+    assert!(
+        rendered.stats().fuel() < 100_000,
+        "bounded glyph stroke coverage must not test every primitive across every tile sample"
     );
+    let fast = compose(&rendered);
     assert!(
         fast.chunks_exact(4).any(|pixel| pixel == [0, 0, 255, 255]),
         "glyph interior must retain fill paint"
