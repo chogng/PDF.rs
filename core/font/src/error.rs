@@ -112,6 +112,10 @@ pub enum FontErrorCode {
     InvalidCmap,
     /// A simple or compound `glyf` description is malformed.
     InvalidGlyph,
+    /// A standalone CFF1 header, INDEX, DICT, or charset is malformed.
+    InvalidCff,
+    /// A Type 2 charstring is malformed.
+    InvalidCharString,
     /// Recursive compound-glyph references contain a cycle.
     CompoundCycle,
     /// Checked coordinate, size, or accounting arithmetic overflowed.
@@ -233,6 +237,16 @@ impl FontError {
                 FontRecoverability::CorrectInput,
                 "RPE-FONT-0013",
             ),
+            FontErrorCode::InvalidCff => (
+                FontErrorCategory::Syntax,
+                FontRecoverability::CorrectInput,
+                "RPE-FONT-0019",
+            ),
+            FontErrorCode::InvalidCharString => (
+                FontErrorCategory::Syntax,
+                FontRecoverability::CorrectInput,
+                "RPE-FONT-0020",
+            ),
             FontErrorCode::CompoundCycle => (
                 FontErrorCategory::Syntax,
                 FontRecoverability::CorrectInput,
@@ -271,6 +285,12 @@ impl FontError {
 
     pub(crate) const fn resource(limit: FontLimit) -> Self {
         let mut error = Self::for_code(FontErrorCode::ResourceLimit, None);
+        error.limit = Some(limit);
+        error
+    }
+
+    pub(crate) const fn resource_for_glyph(limit: FontLimit, glyph_id: u16) -> Self {
+        let mut error = Self::for_code(FontErrorCode::ResourceLimit, Some(glyph_id));
         error.limit = Some(limit);
         error
     }
@@ -329,6 +349,16 @@ pub enum FontUnsupportedKind {
     CompoundPointAttachment,
     /// A compound glyph requests scaling, anisotropic scaling, or a two-by-two transform.
     CompoundTransform,
+    /// A parser profile was passed to the wrong font-program parser.
+    ProfileMismatch,
+    /// A CFF CID-keyed font is outside the foundational Type1C profile.
+    CffCidFont,
+    /// A CFF ExpertEncoding or custom Encoding is outside the foundational profile.
+    CffEncoding,
+    /// A non-default CFF FontMatrix is outside the foundational profile.
+    CffFontMatrix,
+    /// A Type 2 escaped operator is outside the foundational profile.
+    CffCharStringOperator,
 }
 
 /// Typed capability outcome that contains no font-program bytes.
@@ -362,6 +392,11 @@ impl FontUnsupported {
             FontUnsupportedKind::CmapFormat => "RPE-FONT-UNSUPPORTED-0005",
             FontUnsupportedKind::CompoundPointAttachment => "RPE-FONT-UNSUPPORTED-0006",
             FontUnsupportedKind::CompoundTransform => "RPE-FONT-UNSUPPORTED-0007",
+            FontUnsupportedKind::ProfileMismatch => "RPE-FONT-UNSUPPORTED-0008",
+            FontUnsupportedKind::CffCidFont => "RPE-FONT-UNSUPPORTED-0009",
+            FontUnsupportedKind::CffEncoding => "RPE-FONT-UNSUPPORTED-0010",
+            FontUnsupportedKind::CffFontMatrix => "RPE-FONT-UNSUPPORTED-0011",
+            FontUnsupportedKind::CffCharStringOperator => "RPE-FONT-UNSUPPORTED-0012",
         }
     }
 }
