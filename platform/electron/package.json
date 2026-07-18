@@ -1,0 +1,20 @@
+{
+  "name": "@pdf-rs/electron",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "bridge:build": "cargo build --locked --manifest-path ../../Cargo.toml --package pdf-rs-electron-bridge",
+    "dev": "npm run bridge:build && electron .",
+    "test": "npm run bridge:build && node --test test/*.test.mjs",
+    "smoke": "npm run bridge:build && node scripts/smoke.mjs",
+    "check": "npm test && npm run smoke"
+  },
+  "devDependencies": {
+    "electron": "43.1.1"
+  }
+}

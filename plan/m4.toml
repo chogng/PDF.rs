@@ -219,6 +219,8 @@ progress = [
   "A UI-neutral pdf-rs-viewer Rust API now strictly opens an immutable source, builds its page index, materializes and interprets requested pages, and publishes bounded top-down RGBA8 pixels through the PDF.rs Reference renderer.",
   "A persistent length-bounded pdf-rs-electron-bridge stdio adapter now owns NativeDocument instances and exposes OPEN, RENDER, CLOSE, and SHUTDOWN without putting PDF parsing or raster work into Electron.",
   "The registered valid-mixed PDF has real proof-backed open-to-pixel tests, including non-white content evidence and page/output bound rejection.",
+  "A source-only Electron project now uses a context-isolated sandboxed renderer, a narrow preload API, and an Electron-main bridge controller to open local PDFs and present only Rust-produced RGBA8 pixels in Canvas.",
+  "The Electron smoke gate opens the registered mixed PDF, waits for first Canvas presentation, captures a non-empty application screenshot, and shuts down without packaging or signing.",
 ]
 acceptance = [
   "The selected M4 desktop OS, UI mechanism, IPC mechanism, sandbox boundary, and shared-memory format are recorded before implementation evidence is accepted.",

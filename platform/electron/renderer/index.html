@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PDF.rs</title>
+    <link rel="stylesheet" href="./styles.css?v=2">
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand" aria-label="PDF.rs Native viewer">
+        <span class="brand-mark">P</span>
+        <span>PDF.rs</span>
+        <span class="native-badge">Native engine</span>
+      </div>
+      <div class="actions">
+        <button id="open" class="primary" type="button">Open PDF</button>
+        <button id="previous" type="button" aria-label="Previous page">←</button>
+        <span id="page-label" class="page-label">No document</span>
+        <button id="next" type="button" aria-label="Next page">→</button>
+        <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+        <span id="zoom-label" class="zoom-label">100%</span>
+        <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+        <button id="close" type="button">Close</button>
+      </div>
+    </header>
+    <main id="viewport" class="viewport">
+      <section id="empty" class="empty-state">
+        <div class="empty-glyph">PDF</div>
+        <h1>Open a PDF through the Rust engine</h1>
+        <p>Electron presents pixels. PDF.rs owns document parsing, Scene construction, and raster.</p>
+        <button id="empty-open" class="primary" type="button">Choose PDF</button>
+      </section>
+      <div id="page-shell" class="page-shell" hidden>
+        <canvas id="page" aria-label="Rendered PDF page"></canvas>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <span id="document-name">Local development preview</span>
+      <span id="status" role="status">Ready</span>
+    </footer>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

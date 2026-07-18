@@ -31,8 +31,8 @@ use pdf_rs_document::{
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_raster::reference::{
-    ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig,
-    ReferenceRenderJob, ReferenceRenderPoll,
+    ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
+    ReferenceRenderPoll,
 };
 use pdf_rs_scene::{GraphicsSceneLimits, PageRotation};
 use pdf_rs_syntax::SyntaxLimits;
@@ -146,9 +146,7 @@ impl NativeDocument {
         let source_len = u64::try_from(source.len())
             .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))?;
         if source_len == 0 || source_len > MAX_SOURCE_BYTES {
-            return Err(NativeViewerError::new(
-                NativeViewerErrorCode::ResourceLimit,
-            ));
+            return Err(NativeViewerError::new(NativeViewerErrorCode::ResourceLimit));
         }
         let snapshot = source_snapshot(&source, source_len);
         let source = Arc::new(source);
@@ -442,11 +440,14 @@ impl NativeDocument {
         };
 
         let scene = interpreted.scene_arc();
-        let height = output_height(scene.geometry().crop_box(), scene.geometry().rotation(), width)?;
+        let height = output_height(
+            scene.geometry().crop_box(),
+            scene.geometry().rotation(),
+            width,
+        )?;
         let config = ReferenceRenderConfig::opaque_srgb(width, height)
             .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::InvalidInput))?;
-        let mut render =
-            ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
+        let mut render = ReferenceRenderJob::new(scene, config, ReferenceRasterLimits::default());
         let pixels = match render.poll(&NeverRasterCancelled) {
             ReferenceRenderPoll::Ready(pixels) => pixels,
             ReferenceRenderPoll::Unsupported(_) => {

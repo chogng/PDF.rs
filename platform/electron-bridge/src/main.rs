@@ -166,7 +166,8 @@ fn parse_u32(value: Option<&str>) -> Option<u32> {
 }
 
 fn decode_path(hex: &str) -> Option<String> {
-    if hex.is_empty() || hex.len() > MAX_PATH_BYTES.checked_mul(2)? || !hex.len().is_multiple_of(2) {
+    if hex.is_empty() || hex.len() > MAX_PATH_BYTES.checked_mul(2)? || !hex.len().is_multiple_of(2)
+    {
         return None;
     }
     let mut bytes = Vec::new();

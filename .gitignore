@@ -1,4 +1,5 @@
 /target/
+**/node_modules/
 .protocol-codegen.transaction
 **/*.rs.bk
 .DS_Store
