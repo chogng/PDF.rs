@@ -5,6 +5,11 @@ use pdf_rs_viewer::{NativeDocument, NativeRendererKind};
 const MIXED_PDF: &[u8] =
     include_bytes!("../../../tests/cases/raster/m3-reference/valid-mixed/input.pdf");
 const READABLE_PDF: &[u8] = include_bytes!("../../../tests/desktop/readable-preview.pdf");
+// These are coarse regression bounds for the actual Electron canvas sizes, not
+// a claim that the two independently sampled rasterizers are byte-identical.
+const ELECTRON_RENDER_WIDTHS: [u32; 2] = [384, 480];
+const ELECTRON_MAXIMUM_CHANNEL_DELTA: u8 = 96;
+const ELECTRON_CHANGED_CHANNEL_DIVISOR: usize = 16;
 
 #[test]
 fn strict_pdf_rs_pipeline_renders_real_mixed_page_content() {
@@ -117,4 +122,56 @@ fn readable_page_renders_through_explicit_fast_cpu_qualification_path() {
         changed_channels <= 12_500,
         "Fast coverage changed too much of the readable page: {changed_channels} channels"
     );
+}
+
+#[test]
+fn electron_readable_pages_stay_within_bounded_fast_reference_difference() {
+    let mut document = NativeDocument::open(READABLE_PDF.to_vec()).expect("strict Native open");
+
+    for page in 0..document.page_count() {
+        for width in ELECTRON_RENDER_WIDTHS {
+            let fast = document
+                .render_page_with_renderer(page, width, NativeRendererKind::FastCpu)
+                .expect("Electron-sized page renders through Fast CPU");
+            let reference = document
+                .render_page_with_renderer(page, width, NativeRendererKind::ReferenceCpu)
+                .expect("Electron-sized page renders through Reference CPU");
+
+            assert_eq!(fast.width(), reference.width());
+            assert_eq!(fast.height(), reference.height());
+            assert_eq!(fast.stride(), reference.stride());
+            assert_eq!(fast.pixels().len(), reference.pixels().len());
+
+            let mut maximum_delta = 0_u8;
+            let mut changed_channels = 0_usize;
+            let mut total_delta = 0_u64;
+            for (index, (fast, reference)) in
+                fast.pixels().iter().zip(reference.pixels()).enumerate()
+            {
+                let delta = fast.abs_diff(*reference);
+                maximum_delta = maximum_delta.max(delta);
+                changed_channels += usize::from(delta != 0);
+                total_delta += u64::from(delta);
+                if index % 4 == 3 {
+                    assert_eq!(
+                        delta, 0,
+                        "page {page} width {width} changed an alpha channel"
+                    );
+                }
+            }
+
+            assert!(
+                maximum_delta <= ELECTRON_MAXIMUM_CHANNEL_DELTA,
+                "page {page} width {width} channel delta exceeded the bounded Electron regression envelope: {maximum_delta}"
+            );
+            assert!(
+                changed_channels <= fast.pixels().len() / ELECTRON_CHANGED_CHANNEL_DIVISOR,
+                "page {page} width {width} changed too many channels: {changed_channels}"
+            );
+            assert!(
+                total_delta <= u64::try_from(fast.pixels().len()).expect("surface length fits u64"),
+                "page {page} width {width} exceeded mean absolute channel delta 1: {total_delta}"
+            );
+        }
+    }
 }
