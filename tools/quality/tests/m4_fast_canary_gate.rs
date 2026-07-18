@@ -26,7 +26,7 @@ const ROLLBACK_TEST: &[u8] = include_bytes!("../../../platform/electron/test/bri
 const SCHEMA_RECORD: &[u8] = include_bytes!("../../../protocol/generated/schema-hash.txt");
 const READABLE_PDF: &[u8] = include_bytes!("../../../tests/desktop/readable-preview.pdf");
 
-const PROMOTION_SHA256: &str = "924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022";
+const PROMOTION_SHA256: &str = "589a198f59292c215fbb5842b7fd6a4c70d90f2b94986fadcee388791199e6af";
 
 #[test]
 fn registered_fast_canary_candidate_binds_qualification_and_stays_default_off() {

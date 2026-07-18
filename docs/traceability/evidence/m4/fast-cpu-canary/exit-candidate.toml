@@ -4,8 +4,8 @@ id = "evidence.m4.fast-cpu-canary.exit-candidate"
 milestone = "M4"
 state = "AUTOMATED_CLOSURE"
 created_at = 2026-07-18
-candidate_base_commit = "72bbd3b9383147c97f50060347a47aca2bde105c"
-candidate_base_tree = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4"
+candidate_base_commit = "994df25721732239087f91a35e519b7c041bbbac"
+candidate_base_tree = "4fb06daac7e9191acd158c9a108f07aa34dd844a"
 candidate_resolution = "git-tree-at-candidate-base-commit-not-working-tree"
 selected_target = "m4-electron-local-preview-v1"
 selected_target_status = "complete"
@@ -18,20 +18,23 @@ milestone_approved = false
 external_engine_fallback = false
 
 content_references = [
-  "docs/traceability/canary-profiles.toml#sha256:6abfb2fbb369f403763ea760631500d0b4a07c44e283797a88d06575fa67400b",
-  "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022",
-  "docs/traceability/evidence/m4/fast-cpu-canary/review-request.toml#sha256:16372f73ac813ae22042fbc54d21a9ae6470c3fd9345c59dbdd0d99f1c4ef5f1",
+  "docs/traceability/canary-profiles.toml#sha256:b5fd69ab39bc1b9f13e32e49ca1d998f36d918cebb7b3e4653322c6747fe42c4",
+  "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:589a198f59292c215fbb5842b7fd6a4c70d90f2b94986fadcee388791199e6af",
+  "docs/traceability/evidence/m4/fast-cpu-canary/review-request.toml#sha256:7903f8504d47d05b8752423dd551872b5ede014338fce70ecdc650b4ef8888f7",
   "docs/traceability/evidence/m4/fast-cpu-canary/holdout.toml#sha256:f42bf556c9172d2601434665d265cbc2a082b59c1d3ca35026cf9225d09dd864",
   "docs/traceability/evidence/m4/fast-cpu-canary/fuzz-replay.toml#sha256:8f8eb5ef89c331109a9323f653bdef702c1fd75bc5f4bd8ce47b483344279a38",
   "docs/traceability/evidence/m4/fast-cpu-canary/performance.toml#sha256:6e851d27bc353af9b713772c6e63d061f7c59a0b7abd1ff0e3407552cce2068e",
   "docs/traceability/evidence/m4/fast-cpu-canary/product-purity.toml#sha256:1155d79d12b94756e85320918cb268ee894b7e34a2dbedffdb9d73a5e4c061a4",
-  "tools/quality/tests/m4_fast_canary_gate.rs#sha256:050964581fa89576d5f75d770f7f4f642577130b2989535efa568218d983bdd1",
-  "tools/quality/tests/m4_review_request.rs#sha256:df81d8f6d423fe6a848017aed1ebb2c0c8e238d9677cd5d93e928dab81887dc8",
+  "tools/quality/tests/m4_fast_canary_gate.rs#sha256:05483be801a9441e39263de516a8163ada2cf95b5236b1b83941f5921da0f288",
+  "tools/quality/tests/m4_review_request.rs#sha256:4d85b7ec8901a054d3b287641294ca72457500759c5cdd0a04bcdf3bb91dbf15",
   "tools/quality/tests/m4_fast_canary_holdout.rs#sha256:00a04a57ae4032be46e3b8f24d73928d911105fe668e482ffaac3710ebff58d9",
   "tools/quality/tests/m4_fast_raster_fuzz.rs#sha256:c1ffbb640812f05b965ca1084ab4fc1bd52510e948d0c895cf529a0a3ad7aeae",
   "tools/generate/src/readable_preview.rs#sha256:f1fbfd0c43ad6f7f52ed28678e72519b5f37f05df348212343db4498ab49e021",
   "runtime/viewer/tests/native_preview.rs#sha256:e71b91984e906a01a9f0106a54f8a6db0c52c0145f8cc6ae79b7c3787151c5e9",
-  "plan/m4.toml#sha256:3fa22ac209630ebb91ac12e1d4f621d84fc9170eb47b21a85e1ec540166cf76d",
+  "runtime/viewer/src/lib.rs#sha256:d5ebbb4b13e02d9d7d4012fe4064eccf019a2c68ca7193e46074ef066ee525ad",
+  "runtime/viewer/tests/error_classification.rs#sha256:cd95223d78ac85947ae9de865877c98e568736f637f607c7f8c417a32f7f7d77",
+  "platform/electron/test/bridge.test.mjs#sha256:767cfb4e5414a45a84bd552037966d87a15a9ca06af4fbcd7e73ec49dc4d1ff0",
+  "plan/m4.toml#sha256:d4585d500a3b2d17fccefa9a585a55d42cf83d0bafa37ddad6a587f0234d5d04",
   "plan/r0.toml#sha256:f8a431a445728456b9c543f6e485de3616c4ad4b80561de181fec9c527459d1d",
   "plan/m3.toml#sha256:70f5e847aa5f194a56e5a6b019ff729d234b5b48b928be1fed22742934c4e31f",
   "plan/m2.toml#sha256:b0378ae2c3388626871863462362649ee291ee11142bee7686ec909f4cced55a",

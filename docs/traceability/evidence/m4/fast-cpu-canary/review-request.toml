@@ -6,13 +6,16 @@ promotion_work_item = "M4-11"
 milestone_gate_work_item = "M4-12"
 state = "PENDING"
 requested_at = 2026-07-18
-candidate_commit = "72bbd3b9383147c97f50060347a47aca2bde105c"
-candidate_tree = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4"
+candidate_commit = "994df25721732239087f91a35e519b7c041bbbac"
+candidate_tree = "4fb06daac7e9191acd158c9a108f07aa34dd844a"
 candidate_resolution = "git-tree-at-candidate-commit-not-working-tree"
-promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022"
-canary_registry = "docs/traceability/canary-profiles.toml#sha256:6abfb2fbb369f403763ea760631500d0b4a07c44e283797a88d06575fa67400b"
-candidate_gate = "tools/quality/tests/m4_fast_canary_gate.rs#sha256:050964581fa89576d5f75d770f7f4f642577130b2989535efa568218d983bdd1"
+promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:589a198f59292c215fbb5842b7fd6a4c70d90f2b94986fadcee388791199e6af"
+canary_registry = "docs/traceability/canary-profiles.toml#sha256:b5fd69ab39bc1b9f13e32e49ca1d998f36d918cebb7b3e4653322c6747fe42c4"
+candidate_gate = "tools/quality/tests/m4_fast_canary_gate.rs#sha256:05483be801a9441e39263de516a8163ada2cf95b5236b1b83941f5921da0f288"
 electron_viewer_regression = "runtime/viewer/tests/native_preview.rs#sha256:e71b91984e906a01a9f0106a54f8a6db0c52c0145f8cc6ae79b7c3787151c5e9"
+native_error_mapping = "runtime/viewer/src/lib.rs#sha256:d5ebbb4b13e02d9d7d4012fe4064eccf019a2c68ca7193e46074ef066ee525ad"
+native_error_regression = "runtime/viewer/tests/error_classification.rs#sha256:cd95223d78ac85947ae9de865877c98e568736f637f607c7f8c417a32f7f7d77"
+electron_bridge_regression = "platform/electron/test/bridge.test.mjs#sha256:767cfb4e5414a45a84bd552037966d87a15a9ca06af4fbcd7e73ec49dc4d1ff0"
 promotion_required_roles = ["graphics-color", "quality-corpus"]
 milestone_exit_required_roles = ["runtime-platform", "graphics-color", "quality-corpus"]
 completed_reviewers = []
@@ -27,6 +30,7 @@ review_surfaces = [
   "Reference-default viewer API and exact-value Fast CPU Electron cohort",
   "both readable pages at the Electron 384px and 480px canvas widths under bounded Fast-versus-Reference drift",
   "Fast-to-Reference rollback rehearsal with unchanged Unsupported semantics",
+  "Native open-time document, source, unsupported, resource-limit, and internal error classification through the Electron bridge",
   "Native-only product manifest and fresh release artifact closure",
   "candidate registry and content-addressed promotion gate",
 ]

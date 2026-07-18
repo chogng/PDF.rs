@@ -11,8 +11,8 @@ const REQUEST: &str =
     include_str!("../../../docs/traceability/evidence/m4/fast-cpu-canary/review-request.toml");
 const PLAN: &str = include_str!("../../../plan/m4.toml");
 const R0_PLAN: &str = include_str!("../../../plan/r0.toml");
-const CANDIDATE_COMMIT: &str = "72bbd3b9383147c97f50060347a47aca2bde105c";
-const CANDIDATE_TREE: &str = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4";
+const CANDIDATE_COMMIT: &str = "994df25721732239087f91a35e519b7c041bbbac";
+const CANDIDATE_TREE: &str = "4fb06daac7e9191acd158c9a108f07aa34dd844a";
 
 #[test]
 fn m4_review_request_is_hash_bound_reproducible_and_still_pending() {
@@ -79,13 +79,22 @@ fn m4_review_request_is_hash_bound_reproducible_and_still_pending() {
         request
             .string("electron_viewer_regression")
             .expect("Electron viewer regression reference"),
+        request
+            .string("native_error_mapping")
+            .expect("Native error mapping reference"),
+        request
+            .string("native_error_regression")
+            .expect("Native error regression reference"),
+        request
+            .string("electron_bridge_regression")
+            .expect("Electron bridge regression reference"),
     ]
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
     assert_eq!(
         verify_subject_entries(&root, &subjects).expect("review-request subjects"),
-        4
+        7
     );
 
     request

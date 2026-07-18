@@ -11,4 +11,4 @@ reference_profile = "m3.reference-raster-v1.v1"
 cohort = "m4-r0-basic-page-local-v1"
 enabled_by_default = false
 promotion_approved = false
-promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:924cbdd2cfdff63dc52efe9a184face764b5271dc48b7215e55dd86a15e7e022"
+promotion = "docs/traceability/evidence/m4/fast-cpu-canary/promotion.toml#sha256:589a198f59292c215fbb5842b7fd6a4c70d90f2b94986fadcee388791199e6af"

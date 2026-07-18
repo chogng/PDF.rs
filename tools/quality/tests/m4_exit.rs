@@ -27,9 +27,9 @@ const ELECTRON_TARGET: &str = include_str!("../../../platform/electron/electron-
 const ELECTRON_PACKAGE: &str = include_str!("../../../platform/electron/package.json");
 
 const EXIT_CANDIDATE_SHA256: &str =
-    "24d29ee71aaa6e89e16434f9d4a08093ebebb8ae9b9dfed55292b024f15b6513";
-const CANDIDATE_BASE_COMMIT: &str = "72bbd3b9383147c97f50060347a47aca2bde105c";
-const CANDIDATE_BASE_TREE: &str = "4ca19d3cc92670482e4a8f51617e61eb5d728cc4";
+    "0329b4968403ac449d41c104a417a6762743ec8935a7d09d2d889cbe34928186";
+const CANDIDATE_BASE_COMMIT: &str = "994df25721732239087f91a35e519b7c041bbbac";
+const CANDIDATE_BASE_TREE: &str = "4fb06daac7e9191acd158c9a108f07aa34dd844a";
 const DECISION_RECORD: &str =
     "docs/traceability/evidence/m4/fast-cpu-canary/independent-review.toml";
 
@@ -118,8 +118,8 @@ fn complete_review_record(identities: [&str; 3]) -> String {
         "schema = 1\n\
          type = \"independent-review\"\n\
          milestone = \"M4\"\n\
-         candidate_commit = \"72bbd3b9383147c97f50060347a47aca2bde105c\"\n\
-         candidate_tree = \"4ca19d3cc92670482e4a8f51617e61eb5d728cc4\"\n\
+         candidate_commit = \"994df25721732239087f91a35e519b7c041bbbac\"\n\
+         candidate_tree = \"4fb06daac7e9191acd158c9a108f07aa34dd844a\"\n\
          promotion = {:?}\n\
          exit_candidate = \"docs/traceability/evidence/m4/fast-cpu-canary/exit-candidate.toml#sha256:{EXIT_CANDIDATE_SHA256}\"\n\
          reviewed_subjects = {}\n\
@@ -209,7 +209,7 @@ fn verify_automated_closure(root: &Path) {
                 .expect("content references"),
         )
         .expect("content-addressed M4 exit inputs"),
-        25,
+        28,
         "M4 exit input topology changed"
     );
 
@@ -472,8 +472,8 @@ fn independent_review_state(repository: &Path) -> IndependentReviewState {
     let valid = review.string("type").ok() == Some("independent-review")
         && review.string("milestone").ok() == Some("M4")
         && review.string("candidate_commit").ok()
-            == Some("72bbd3b9383147c97f50060347a47aca2bde105c")
-        && review.string("candidate_tree").ok() == Some("4ca19d3cc92670482e4a8f51617e61eb5d728cc4")
+            == Some("994df25721732239087f91a35e519b7c041bbbac")
+        && review.string("candidate_tree").ok() == Some("4fb06daac7e9191acd158c9a108f07aa34dd844a")
         && review.string("promotion").ok() == request.string("promotion").ok()
         && review.string("exit_candidate").ok()
             == Some(&format!(
@@ -519,6 +519,9 @@ fn expected_review_subjects(request: &RootToml) -> Vec<String> {
         "canary_registry",
         "candidate_gate",
         "electron_viewer_regression",
+        "native_error_mapping",
+        "native_error_regression",
+        "electron_bridge_regression",
     ]
     .into_iter()
     .map(|field| {
