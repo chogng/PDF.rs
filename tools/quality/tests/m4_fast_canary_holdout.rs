@@ -174,7 +174,7 @@ fn append_clip_family(builder: &mut GraphicsSceneBuilder, seed: u32) {
     builder
         .append_clip(
             clip.clone(),
-            if seed % 2 == 0 {
+            if seed.is_multiple_of(2) {
                 FillRule::Nonzero
             } else {
                 FillRule::EvenOdd
