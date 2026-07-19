@@ -1124,6 +1124,8 @@ pub enum GraphicsCapability {
     Glyph,
     /// Isolated transparency groups.
     IsolatedGroup,
+    /// Knockout transparency groups in the registered atomic-child subset.
+    KnockoutGroup,
 }
 
 /// Declared support status of one requirement.
@@ -1283,14 +1285,16 @@ pub enum GraphicsCommand {
     },
     /// Paint positioned embedded glyph outlines.
     DrawGlyphRun(GlyphRun),
-    /// Begin one isolated transparency group.
+    /// Begin one offscreen transparency group.
     BeginIsolatedGroup {
         /// Group constant alpha.
         alpha: SceneUnit,
         /// Group blend mode.
         blend_mode: BlendMode,
+        /// Whether immediate child objects use knockout compositing.
+        knockout: bool,
     },
-    /// End the current isolated group.
+    /// End the current offscreen transparency group.
     EndIsolatedGroup,
 }
 

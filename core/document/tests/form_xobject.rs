@@ -393,6 +393,7 @@ fn identity_form_retains_geometry_payload_and_its_own_resource_scope() {
         .transparency_group()
         .expect("transparency-group metadata");
     assert!(!group.isolated());
+    assert!(!group.knockout());
     assert_eq!(
         group.color_space(),
         pdf_rs_document::FormTransparencyGroupColorSpace::DeviceRgb
@@ -452,6 +453,7 @@ fn indirect_transparency_group_preserves_proof_isolation_and_color_space_identit
         .expect("transparency-group metadata");
 
     assert!(group.isolated());
+    assert!(!group.knockout());
     assert_eq!(
         group.color_space(),
         pdf_rs_document::FormTransparencyGroupColorSpace::Indirect(ObjectRef::new(6, 0).unwrap())
@@ -465,39 +467,39 @@ fn indirect_transparency_group_preserves_proof_isolation_and_color_space_identit
 }
 
 #[test]
-fn duplicate_or_knockout_group_semantics_are_typed_unsupported() {
-    for (case, group) in [
-        (
-            0_u8,
-            b"/Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /I true >>"
-                .as_slice(),
-        ),
-        (
-            1,
-            b"/Group << /Type /Group /S /Transparency /CS /DeviceRGB /K true >>".as_slice(),
-        ),
-    ] {
-        let fixture = form_fixture(
-            &[
-                b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> ".as_slice(),
-                group,
-            ]
-            .concat(),
-            b"",
-            vec![],
-            5,
-            82 + case,
-        );
-        let prepared = prepare(&fixture, 13_701 + u64::from(case) * 100);
-        match acquire(&prepared, 13_801 + u64::from(case) * 100) {
-            FormXObjectPoll::Unsupported(unsupported) => {
-                assert_eq!(
-                    unsupported.kind(),
-                    FormXObjectUnsupportedKind::UnsupportedGroup
-                );
-            }
-            outcome => panic!("unsupported group semantics must be typed: {outcome:?}"),
+fn knockout_group_is_retained_while_duplicate_semantics_remain_typed_unsupported() {
+    let knockout_fixture = form_fixture(
+        b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB /K true >>",
+        b"q Q",
+        vec![],
+        5,
+        82,
+    );
+    let knockout_prepared = prepare(&knockout_fixture, 13_701);
+    let knockout = acquire_ready(&knockout_prepared, 13_801)
+        .transparency_group()
+        .expect("knockout transparency group");
+    assert!(!knockout.isolated());
+    assert!(knockout.knockout());
+
+    let duplicate_fixture = form_fixture(
+        b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /I true >>",
+        b"",
+        vec![],
+        5,
+        83,
+    );
+    let duplicate_prepared = prepare(&duplicate_fixture, 13_901);
+    match acquire(&duplicate_prepared, 14_001) {
+        FormXObjectPoll::Unsupported(unsupported) => {
+            assert_eq!(
+                unsupported.kind(),
+                FormXObjectUnsupportedKind::UnsupportedGroup
+            );
         }
+        outcome => panic!("duplicate group semantics must be typed: {outcome:?}"),
     }
 }
 

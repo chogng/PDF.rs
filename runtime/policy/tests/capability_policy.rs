@@ -176,10 +176,10 @@ fn first_profile_matches_the_registered_requirement_predicate_independently() {
 }
 
 #[test]
-fn m4_fast_profile_admits_registered_isolated_groups_and_image_soft_masks() {
+fn m4_fast_profile_admits_registered_transparency_groups_and_image_soft_masks() {
     let profile = CapabilityProfile::m4_fast_v1();
-    assert_eq!(profile.profile_version(), 2);
-    assert_eq!(profile.policy_version(), 2);
+    assert_eq!(profile.profile_version(), 3);
+    assert_eq!(profile.policy_version(), 3);
 
     for (capability, parameter, expected) in [
         (
@@ -189,6 +189,16 @@ fn m4_fast_profile_admits_registered_isolated_groups_and_image_soft_masks() {
         ),
         (
             GraphicsCapability::IsolatedGroup,
+            1,
+            ProductStatus::Unsupported,
+        ),
+        (
+            GraphicsCapability::KnockoutGroup,
+            0,
+            ProductStatus::Supported,
+        ),
+        (
+            GraphicsCapability::KnockoutGroup,
             1,
             ProductStatus::Unsupported,
         ),

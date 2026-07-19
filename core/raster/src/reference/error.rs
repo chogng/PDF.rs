@@ -26,6 +26,8 @@ pub enum ReferenceGraphicsCommandKind {
     DrawGlyphRun,
     /// Isolated transparency-group begin.
     BeginIsolatedGroup,
+    /// Knockout transparency-group begin.
+    BeginKnockoutGroup,
     /// Isolated transparency-group end.
     EndIsolatedGroup,
 }
@@ -41,7 +43,10 @@ impl From<&GraphicsCommand> for ReferenceGraphicsCommandKind {
             GraphicsCommand::FillStroke { .. } => Self::FillStroke,
             GraphicsCommand::DrawImage { .. } => Self::DrawImage,
             GraphicsCommand::DrawGlyphRun(_) => Self::DrawGlyphRun,
-            GraphicsCommand::BeginIsolatedGroup { .. } => Self::BeginIsolatedGroup,
+            GraphicsCommand::BeginIsolatedGroup { knockout: true, .. } => Self::BeginKnockoutGroup,
+            GraphicsCommand::BeginIsolatedGroup {
+                knockout: false, ..
+            } => Self::BeginIsolatedGroup,
             GraphicsCommand::EndIsolatedGroup => Self::EndIsolatedGroup,
         }
     }

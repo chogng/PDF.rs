@@ -18,8 +18,8 @@ use pdf_rs_policy::{
     RenderPlanOutcome, RenderPlanRequest, RendererEpoch, ZoomRatio, create_render_plan,
 };
 use pdf_rs_raster::reference::{
-    ReferenceRasterCancellation, ReferenceRasterLimits, ReferenceRenderConfig, ReferenceRenderJob,
-    ReferenceRenderPoll,
+    ReferenceGraphicsCommandKind, ReferenceRasterCancellation, ReferenceRasterLimits,
+    ReferenceRenderConfig, ReferenceRenderJob, ReferenceRenderPoll, ReferenceRenderUnsupportedKind,
 };
 use pdf_rs_scene::{
     BlendMode, CommandSource, DashPattern, DeviceColor, FillRule, GlyphOutline, GlyphPainting,
@@ -126,6 +126,131 @@ fn isolated_group_matches_reference_in_sync_and_owned_paths() {
     let maximum = FastRasterPollBudget::new(NonZeroU32::new(4_096).unwrap()).unwrap();
     while owned.poll(maximum, &NeverCancelled) == FastRasterJobPoll::Pending {}
     assert_eq!(compose(&owned.take_result().unwrap().unwrap()), fast);
+}
+
+#[test]
+fn knockout_group_replaces_prior_atomic_child_in_both_rust_rasterizers() {
+    let mut scene_builder = builder();
+    scene_builder
+        .begin_knockout_group(
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    scene_builder
+        .begin_group(
+            SceneUnit::from_u16(32_768),
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(1),
+        )
+        .unwrap();
+    append_fill(&mut scene_builder, rectangle(0, 0, 12, 16), red(), 2);
+    scene_builder
+        .end_group(SceneBounds::Page, source(3))
+        .unwrap();
+    scene_builder
+        .begin_group(
+            SceneUnit::from_u16(32_768),
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(4),
+        )
+        .unwrap();
+    append_fill(&mut scene_builder, rectangle(8, 0, 16, 16), blue(), 5);
+    scene_builder
+        .end_group(SceneBounds::Page, source(6))
+        .unwrap();
+    scene_builder
+        .end_group(SceneBounds::Page, source(7))
+        .unwrap();
+    let scene = scene_builder.finish().unwrap();
+    let render_plan = plan_with_profile(
+        &scene,
+        config(8, 8, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+        CapabilityProfile::m4_fast_v1(),
+    );
+    let fast = compose(
+        &FastRasterJob::new(
+            &scene,
+            &render_plan,
+            FastRasterLimits::default(),
+            &NeverCancelled,
+        )
+        .unwrap()
+        .render_all(&[0, 1, 2, 3], &NeverCancelled)
+        .unwrap(),
+    );
+    let reference = reference_pixels(&scene);
+    assert!(
+        fast.iter()
+            .zip(&reference)
+            .all(|(fast, reference)| fast.abs_diff(*reference) <= 1)
+    );
+
+    let overlap = usize::try_from((8 * PAGE_WIDTH + 9) * 4).unwrap();
+    assert!((127..=128).contains(&fast[overlap]));
+    assert!((127..=128).contains(&fast[overlap + 1]));
+    assert_eq!(fast[overlap + 2], 255);
+    assert_eq!(fast[overlap + 3], 255);
+}
+
+#[test]
+fn knockout_group_rejects_direct_paint_outside_an_atomic_child() {
+    let mut scene_builder = builder();
+    scene_builder
+        .begin_knockout_group(
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    append_fill(&mut scene_builder, rectangle(0, 0, 16, 16), red(), 1);
+    scene_builder
+        .end_group(SceneBounds::Page, source(2))
+        .unwrap();
+    let scene = scene_builder.finish().unwrap();
+    let render_plan = plan_with_profile(
+        &scene,
+        config(PAGE_WIDTH, PAGE_HEIGHT, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+        CapabilityProfile::m4_fast_v1(),
+    );
+    let fast = match FastRasterJob::new(
+        &scene,
+        &render_plan,
+        FastRasterLimits::default(),
+        &NeverCancelled,
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("direct knockout paint must fail Fast preflight"),
+    };
+    assert_eq!(fast.code(), FastRasterErrorCode::InvalidCommandSequence);
+
+    let mut reference = ReferenceRenderJob::new(
+        Arc::new(scene),
+        ReferenceRenderConfig::opaque_srgb(PAGE_WIDTH, PAGE_HEIGHT).unwrap(),
+        ReferenceRasterLimits::default(),
+    );
+    match reference.poll(&ReferenceNeverCancelled) {
+        ReferenceRenderPoll::Unsupported(unsupported) => {
+            assert_eq!(
+                unsupported.kind(),
+                ReferenceRenderUnsupportedKind::VisibleGraphicsCommand
+            );
+            assert_eq!(
+                unsupported.command_kind(),
+                Some(ReferenceGraphicsCommandKind::BeginKnockoutGroup)
+            );
+        }
+        outcome => panic!("direct knockout paint must fail closed: {outcome:?}"),
+    }
 }
 
 #[test]

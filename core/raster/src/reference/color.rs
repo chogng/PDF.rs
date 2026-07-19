@@ -234,6 +234,35 @@ impl PremultipliedRgbaQ16 {
         }
     }
 
+    /// Composites one proof-bound opaque-shape object into a knockout-group accumulator.
+    ///
+    /// `self.alpha` is the object's unscaled shape coverage. `opacity` scales the object color and
+    /// opacity, while prior group contributions are removed by the unscaled shape.
+    pub(crate) fn knockout_over(
+        self,
+        backdrop: Self,
+        opacity: NormalizedQ16,
+    ) -> PremultipliedRgbaQ16 {
+        let shape = self.alpha;
+        let source = self.apply_constant_alpha(opacity);
+        let composite = |source: NormalizedQ16, prior: NormalizedQ16| {
+            round_q16(
+                u64::from(source.0) * Q16_SCALE_U64
+                    + u64::from(prior.0) * u64::from(shape.complement().0),
+            )
+        };
+        let result = Self {
+            red: composite(source.red, backdrop.red),
+            green: composite(source.green, backdrop.green),
+            blue: composite(source.blue, backdrop.blue),
+            alpha: composite(source.alpha, backdrop.alpha),
+        };
+        debug_assert!(result.red.0 <= result.alpha.0);
+        debug_assert!(result.green.0 <= result.alpha.0);
+        debug_assert!(result.blue.0 <= result.alpha.0);
+        result
+    }
+
     /// Publishes straight-alpha RGBA8 with fixed two-stage rounding.
     ///
     /// Nonzero color channels are first unpremultiplied to normalized Q16, then

@@ -268,6 +268,7 @@ pub enum FormTransparencyGroupColorSpace {
 pub struct FormTransparencyGroup {
     color_space: FormTransparencyGroupColorSpace,
     isolated: bool,
+    knockout: bool,
 }
 
 impl FormTransparencyGroup {
@@ -279,6 +280,11 @@ impl FormTransparencyGroup {
     /// Reports the exact `/I` value; omission defaults to `false`.
     pub const fn isolated(self) -> bool {
         self.isolated
+    }
+
+    /// Reports the exact `/K` value; omission defaults to `false`.
+    pub const fn knockout(self) -> bool {
+        self.knockout
     }
 }
 
@@ -1408,12 +1414,13 @@ fn validate_group(value: &SyntaxObject) -> Option<FormTransparencyGroup> {
             _ => return None,
         }
     }
-    if !group_type.unwrap_or(false) || !subtype.unwrap_or(false) || knockout.unwrap_or(false) {
+    if !group_type.unwrap_or(false) || !subtype.unwrap_or(false) {
         return None;
     }
     Some(FormTransparencyGroup {
         color_space: color_space?,
         isolated: isolated.unwrap_or(false),
+        knockout: knockout.unwrap_or(false),
     })
 }
 

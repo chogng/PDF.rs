@@ -8,7 +8,8 @@ use pdf_rs_policy::{
     PolicyLimitConfig, PolicyLimits, RenderPlan,
 };
 use pdf_rs_scene::{
-    BlendMode, FillRule, GraphicsCommand, GraphicsScene, Matrix, Paint, Scene, SceneUnit,
+    BlendMode, FillRule, GlyphPainting, GraphicsCommand, GraphicsScene, Matrix, Paint, Scene,
+    SceneUnit,
 };
 
 use crate::fast::kernels::{
@@ -46,7 +47,14 @@ enum GroupFrame {
         parent: Vec<Pixel>,
         alpha: SceneUnit,
         blend_mode: BlendMode,
+        knockout: bool,
     },
+}
+
+impl GroupFrame {
+    const fn is_knockout(&self) -> bool {
+        matches!(self, Self::Offscreen { knockout: true, .. })
+    }
 }
 
 impl<'a> FastRasterJob<'a> {
@@ -474,7 +482,11 @@ impl<'a> FastRasterJob<'a> {
                         )?;
                     }
                 }
-                GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
+                GraphicsCommand::BeginIsolatedGroup {
+                    alpha,
+                    blend_mode,
+                    knockout,
+                } => {
                     if groups.len() == groups.capacity() {
                         let next_len = groups.len().checked_add(1).ok_or_else(numeric)?;
                         let logical_group_stack = logical_vector_bytes::<GroupFrame>(next_len)?;
@@ -519,6 +531,7 @@ impl<'a> FastRasterJob<'a> {
                         parent,
                         alpha: *alpha,
                         blend_mode: *blend_mode,
+                        knockout: *knockout,
                     });
                 }
                 GraphicsCommand::EndIsolatedGroup => {
@@ -527,16 +540,25 @@ impl<'a> FastRasterJob<'a> {
                         parent,
                         alpha,
                         blend_mode,
+                        ..
                     } = frame;
                     let group = std::mem::replace(&mut surface, parent);
                     if group.len() != surface.len() {
                         return Err(command_sequence());
                     }
+                    let parent_knockout = groups.last().is_some_and(GroupFrame::is_knockout);
                     for (backdrop, source) in surface.iter_mut().zip(&group) {
                         work.step()?;
-                        *backdrop = source
-                            .apply_constant_alpha(alpha)
-                            .source_over(*backdrop, blend_mode);
+                        *backdrop = if parent_knockout {
+                            if blend_mode != BlendMode::Normal {
+                                return Err(command_sequence());
+                            }
+                            source.knockout_over(*backdrop, alpha)
+                        } else {
+                            source
+                                .apply_constant_alpha(alpha)
+                                .source_over(*backdrop, blend_mode)
+                        };
                     }
                     surface_bytes = surface_bytes
                         .checked_sub(vector_bytes(&group)?)
@@ -920,6 +942,7 @@ fn build_bins(
             command_count,
         ));
     }
+    validate_atomic_knockout_groups(graphics, work)?;
     let mut counts = Vec::<usize>::new();
     let tile_count = plan.tiles().len();
     let logical_counts_bytes = logical_vector_bytes::<usize>(tile_count)?;
@@ -1039,6 +1062,89 @@ fn build_bins(
         return Err(identity());
     }
     Ok(FastTileBins::new(plan.hash(), bins, entries, retained))
+}
+
+fn validate_atomic_knockout_groups(
+    graphics: &GraphicsScene,
+    work: &mut Work<'_>,
+) -> Result<(), FastRasterError> {
+    for (begin, record) in graphics.commands().iter().enumerate() {
+        let GraphicsCommand::BeginIsolatedGroup { knockout: true, .. } = record.command() else {
+            continue;
+        };
+        let mut atomic_child = false;
+        let mut closed = false;
+        for nested in &graphics.commands()[begin.saturating_add(1)..] {
+            work.step()?;
+            match nested.command() {
+                GraphicsCommand::BeginIsolatedGroup {
+                    blend_mode,
+                    knockout,
+                    ..
+                } => {
+                    if atomic_child || *knockout || *blend_mode != BlendMode::Normal {
+                        return Err(command_sequence());
+                    }
+                    atomic_child = true;
+                }
+                GraphicsCommand::EndIsolatedGroup => {
+                    if atomic_child {
+                        atomic_child = false;
+                    } else {
+                        closed = true;
+                        break;
+                    }
+                }
+                command if command.is_visible() => {
+                    if !atomic_child || !fast_knockout_object_supported(graphics, command)? {
+                        return Err(command_sequence());
+                    }
+                }
+                GraphicsCommand::Save | GraphicsCommand::Restore | GraphicsCommand::Clip { .. } => {
+                }
+                _ => return Err(command_sequence()),
+            }
+        }
+        if !closed {
+            return Err(command_sequence());
+        }
+    }
+    Ok(())
+}
+
+fn fast_knockout_object_supported(
+    graphics: &GraphicsScene,
+    command: &GraphicsCommand,
+) -> Result<bool, FastRasterError> {
+    let opaque_normal =
+        |paint: Paint| paint.alpha() == SceneUnit::ONE && paint.blend_mode() == BlendMode::Normal;
+    Ok(match command {
+        GraphicsCommand::Fill { paint, .. } | GraphicsCommand::Stroke { paint, .. } => {
+            opaque_normal(*paint)
+        }
+        GraphicsCommand::FillStroke { fill, stroke, .. } => {
+            opaque_normal(*fill) && opaque_normal(*stroke)
+        }
+        GraphicsCommand::DrawImage {
+            image,
+            alpha,
+            blend_mode,
+            ..
+        } => {
+            *alpha == SceneUnit::ONE
+                && *blend_mode == BlendMode::Normal
+                && lookup_image(graphics, *image)?.soft_mask().is_none()
+        }
+        GraphicsCommand::DrawGlyphRun(run) => match run.painting() {
+            GlyphPainting::Fill(paint) | GlyphPainting::Stroke { paint, .. } => {
+                opaque_normal(*paint)
+            }
+            GlyphPainting::FillStroke { fill, stroke, .. } => {
+                opaque_normal(*fill) && opaque_normal(*stroke)
+            }
+        },
+        _ => false,
+    })
 }
 
 pub(super) fn command_belongs(

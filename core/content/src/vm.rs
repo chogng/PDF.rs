@@ -14,10 +14,10 @@ use pdf_rs_document::{
 use pdf_rs_font::{GlyphId, OutlineSegment};
 use pdf_rs_scene::{
     BlendMode, CommandSource, DashPattern, DashPatternBuilder, FillRule, GlyphOutline,
-    GlyphPainting, GlyphUse, GraphicsCommand, GraphicsSceneBuilder, GraphicsSceneLimits, LineStyle,
-    Matrix, PageGeometry, PageRotation as ScenePageRotation, Paint, PathResource,
-    PathResourceBuilder, PathSegment, Scene, SceneBinding, SceneBounds, SceneBuilder, SceneError,
-    SceneLimits, ScenePoint, SceneRect, SceneScalar, SceneUnit,
+    GlyphPainting, GlyphUse, GraphicsCommand, GraphicsResource, GraphicsSceneBuilder,
+    GraphicsSceneLimits, LineStyle, Matrix, PageGeometry, PageRotation as ScenePageRotation, Paint,
+    PathResource, PathResourceBuilder, PathSegment, Scene, SceneBinding, SceneBounds, SceneBuilder,
+    SceneError, SceneLimits, ScenePoint, SceneRect, SceneScalar, SceneUnit,
 };
 use pdf_rs_syntax::ObjectRef;
 
@@ -6079,6 +6079,20 @@ fn materialize_execution_plan(
                     ResolvedXObject::Form { proof, form } => {
                         let transparency_group = form.acquired_form().transparency_group();
                         if transparency_group.is_some_and(|group| {
+                            group.knockout() && !scene_is_atomic_knockout(form.scene())
+                        }) {
+                            return prioritize(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                Some(source),
+                                RunTerminal::Unsupported(ContentUnsupported::new(
+                                    ContentUnsupportedKind::FormXObject,
+                                    source,
+                                )),
+                            );
+                        }
+                        if transparency_group.is_some_and(|group| {
                             !group.isolated()
                                 && (blend_mode != BlendMode::Normal
                                     || !scene_is_normal_backdrop_independent(form.scene()))
@@ -6098,8 +6112,22 @@ fn materialize_execution_plan(
                             .graphics_mut()
                             .expect("XObject plans require the graphics-v2 Scene");
                         let result = (|| {
-                            if transparency_group.is_some() {
-                                builder.begin_group(alpha, blend_mode, bounds, command_source)?;
+                            if let Some(group) = transparency_group {
+                                if group.knockout() {
+                                    builder.begin_knockout_group(
+                                        alpha,
+                                        blend_mode,
+                                        bounds,
+                                        command_source,
+                                    )?;
+                                } else {
+                                    builder.begin_group(
+                                        alpha,
+                                        blend_mode,
+                                        bounds,
+                                        command_source,
+                                    )?;
+                                }
                             }
                             builder.append_scene(form.scene())?;
                             if transparency_group.is_some() {
@@ -6240,6 +6268,82 @@ fn scene_is_normal_backdrop_independent(scene: &Scene) -> bool {
                         .is_none_or(|(paint, _)| paint.blend_mode() == BlendMode::Normal)
             }
         })
+}
+
+fn scene_is_atomic_knockout(scene: &Scene) -> bool {
+    let Some(graphics) = scene.graphics() else {
+        return false;
+    };
+    let opaque_normal =
+        |paint: Paint| paint.alpha() == SceneUnit::ONE && paint.blend_mode() == BlendMode::Normal;
+    let mut atomic_child = false;
+    for record in graphics.commands() {
+        match record.command() {
+            GraphicsCommand::BeginIsolatedGroup {
+                blend_mode,
+                knockout,
+                ..
+            } => {
+                if atomic_child || *knockout || *blend_mode != BlendMode::Normal {
+                    return false;
+                }
+                atomic_child = true;
+            }
+            GraphicsCommand::EndIsolatedGroup => {
+                if !atomic_child {
+                    return false;
+                }
+                atomic_child = false;
+            }
+            GraphicsCommand::Fill { paint, .. } | GraphicsCommand::Stroke { paint, .. } => {
+                if !atomic_child || !opaque_normal(*paint) {
+                    return false;
+                }
+            }
+            GraphicsCommand::FillStroke { fill, stroke, .. } => {
+                if !atomic_child || !opaque_normal(*fill) || !opaque_normal(*stroke) {
+                    return false;
+                }
+            }
+            GraphicsCommand::DrawImage {
+                image,
+                alpha,
+                blend_mode,
+                ..
+            } => {
+                let Some(GraphicsResource::Image(image)) = usize::try_from(image.value())
+                    .ok()
+                    .and_then(|index| graphics.resources().get(index))
+                    .filter(|entry| entry.id() == *image)
+                    .map(|entry| entry.resource())
+                else {
+                    return false;
+                };
+                if !atomic_child
+                    || *alpha != SceneUnit::ONE
+                    || *blend_mode != BlendMode::Normal
+                    || image.soft_mask().is_some()
+                {
+                    return false;
+                }
+            }
+            GraphicsCommand::DrawGlyphRun(run) => {
+                let painting = match run.painting() {
+                    GlyphPainting::Fill(paint) | GlyphPainting::Stroke { paint, .. } => {
+                        opaque_normal(*paint)
+                    }
+                    GlyphPainting::FillStroke { fill, stroke, .. } => {
+                        opaque_normal(*fill) && opaque_normal(*stroke)
+                    }
+                };
+                if !atomic_child || !painting {
+                    return false;
+                }
+            }
+            GraphicsCommand::Save | GraphicsCommand::Restore | GraphicsCommand::Clip { .. } => {}
+        }
+    }
+    !atomic_child
 }
 
 fn action_operator_source(action: &ExecutionAction) -> ContentOperatorSource {

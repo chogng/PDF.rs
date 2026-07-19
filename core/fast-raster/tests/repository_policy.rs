@@ -158,14 +158,23 @@ fn fast_renderer_is_independent_bounded_and_atomically_published() {
         "Ok(FastTileSet::new",
         "FastTile::new(",
         "GraphicsCommand::BeginIsolatedGroup",
+        "knockout: *knockout",
     ] {
         assert!(
             render.contains(required),
             "Fast renderer must retain invariant marker {required:?}"
         );
     }
+    let dispatch_start = render
+        .find("for &command_index in command_bin")
+        .expect("Fast graphics command dispatch must be present");
+    let dispatch_end = render[dispatch_start..]
+        .find("\n        if !stack.is_empty()")
+        .map(|offset| dispatch_start + offset)
+        .expect("Fast graphics command dispatch must have a bounded end");
+    let dispatch = &render[dispatch_start..dispatch_end];
     assert!(
-        !render.contains("_ =>"),
+        !dispatch.contains("_ =>"),
         "Fast graphics command dispatch must remain exhaustive"
     );
     for required in [

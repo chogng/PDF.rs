@@ -20,8 +20,9 @@ use crate::{
 const DECISION_SCHEMA_VERSION: u16 = 1;
 const M3_REFERENCE_PROFILE_VERSION: u32 = 1;
 const M3_REFERENCE_POLICY_VERSION: u32 = 1;
-const M4_FAST_PROFILE_VERSION: u32 = 2;
-const M4_FAST_POLICY_VERSION: u32 = 2;
+const M4_FAST_GROUP_PROFILE_VERSION: u32 = 2;
+const M4_FAST_PROFILE_VERSION: u32 = 3;
+const M4_FAST_POLICY_VERSION: u32 = 3;
 
 /// Cooperative cancellation observed by product capability evaluation and render planning.
 pub trait PolicyCancellation: Send + Sync {
@@ -58,7 +59,7 @@ impl CapabilityProfile {
         }
     }
 
-    /// Returns the first Fast CPU product profile with isolated-group compositing.
+    /// Returns the current M4 Fast CPU product profile.
     pub const fn m4_fast_v1() -> Self {
         Self {
             id: CapabilityProfileId::BaselineNative,
@@ -104,10 +105,13 @@ impl CapabilityProfile {
             }
             GraphicsCapability::Glyph => parameter != 0,
             GraphicsCapability::IsolatedGroup => {
+                self.profile_version >= M4_FAST_GROUP_PROFILE_VERSION && parameter == 0
+            }
+            GraphicsCapability::KnockoutGroup => {
                 self.profile_version >= M4_FAST_PROFILE_VERSION && parameter == 0
             }
             GraphicsCapability::SoftMask => {
-                self.profile_version >= M4_FAST_PROFILE_VERSION && parameter == 0
+                self.profile_version >= M4_FAST_GROUP_PROFILE_VERSION && parameter == 0
             }
         }
     }
@@ -2329,6 +2333,7 @@ pub(crate) fn capability_code(capability: GraphicsCapability) -> u32 {
         GraphicsCapability::Image => 8,
         GraphicsCapability::Glyph => 9,
         GraphicsCapability::IsolatedGroup => 10,
+        GraphicsCapability::KnockoutGroup => 11,
     }
 }
 

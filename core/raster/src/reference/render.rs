@@ -2,9 +2,9 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use pdf_rs_scene::{
-    CapabilityContext, CapabilityRequirement, CapabilityStatus, GraphicsCapability,
+    CapabilityContext, CapabilityRequirement, CapabilityStatus, GlyphPainting, GraphicsCapability,
     GraphicsCommand, GraphicsResource, GraphicsResourceEntry, GraphicsResourceId, GraphicsScene,
-    Paint, PathResource, Scene, SceneCommandKind,
+    Paint, PathResource, Scene, SceneCommandKind, SceneUnit,
 };
 
 use super::coverage::{ClipStack, CoverageMask, FillEdges, SAMPLES_PER_PIXEL, rasterize_fill};
@@ -469,6 +469,7 @@ fn preflight_graphics(
 
     let mut saved = 0_u64;
     let mut group_depth = 0_usize;
+    let mut knockout_group_depth = None;
     for (index, record) in graphics.commands().iter().enumerate() {
         let command = record.command();
         match command {
@@ -502,9 +503,23 @@ fn preflight_graphics(
                     work.charge_raster_fuel(1)?;
                 }
             }
-            GraphicsCommand::BeginIsolatedGroup { .. } => {
-                group_depth = group_depth.checked_add(1).ok_or_else(numeric_overflow)?;
-                let (passthrough, inspected) = inspect_isolated_group(graphics, index)?;
+            GraphicsCommand::BeginIsolatedGroup { knockout, .. } => {
+                let parent_knockout = knockout_group_depth == Some(group_depth);
+                let next_depth = group_depth.checked_add(1).ok_or_else(numeric_overflow)?;
+                let (passthrough, inspected) = if *knockout {
+                    let (supported, inspected) = inspect_atomic_knockout_group(graphics, index)?;
+                    if knockout_group_depth.is_some() || !supported {
+                        return Ok(Some(ReferenceRenderUnsupported::command(
+                            u32::try_from(index).map_err(|_| numeric_overflow())?,
+                            command,
+                        )));
+                    }
+                    knockout_group_depth = Some(next_depth);
+                    (false, inspected)
+                } else {
+                    let (passthrough, inspected) = inspect_isolated_group(graphics, index)?;
+                    (passthrough && !parent_knockout, inspected)
+                };
                 work.charge_raster_fuel(inspected)?;
                 if !passthrough {
                     preflight.group_count = preflight
@@ -512,15 +527,19 @@ fn preflight_graphics(
                         .checked_add(1)
                         .ok_or_else(numeric_overflow)?;
                 }
+                group_depth = next_depth;
                 preflight.max_group_depth = preflight.max_group_depth.max(group_depth);
             }
             GraphicsCommand::EndIsolatedGroup => {
+                if knockout_group_depth == Some(group_depth) {
+                    knockout_group_depth = None;
+                }
                 group_depth = group_depth.checked_sub(1).ok_or_else(invalid_scene)?;
             }
         }
         work.charge_raster_fuel(1)?;
     }
-    if saved != 0 || group_depth != 0 {
+    if saved != 0 || group_depth != 0 || knockout_group_depth.is_some() {
         return Err(invalid_scene());
     }
     Ok(None)
@@ -531,7 +550,11 @@ fn inspect_isolated_group(
     begin: usize,
 ) -> Result<(bool, u64), ReferenceRenderError> {
     let mut inspected = 1_u64;
-    let Some(GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode }) = graphics
+    let Some(GraphicsCommand::BeginIsolatedGroup {
+        alpha,
+        blend_mode,
+        knockout: false,
+    }) = graphics
         .commands()
         .get(begin)
         .map(|record| record.command())
@@ -574,6 +597,87 @@ fn inspect_isolated_group(
     Ok((false, inspected))
 }
 
+fn inspect_atomic_knockout_group(
+    graphics: &GraphicsScene,
+    begin: usize,
+) -> Result<(bool, u64), ReferenceRenderError> {
+    let mut inspected = 1_u64;
+    let Some(GraphicsCommand::BeginIsolatedGroup { knockout: true, .. }) = graphics
+        .commands()
+        .get(begin)
+        .map(|record| record.command())
+    else {
+        return Ok((false, inspected));
+    };
+    let mut atomic_child = false;
+    for record in &graphics.commands()[begin.saturating_add(1)..] {
+        inspected = inspected.checked_add(1).ok_or_else(numeric_overflow)?;
+        match record.command() {
+            GraphicsCommand::BeginIsolatedGroup {
+                blend_mode,
+                knockout,
+                ..
+            } => {
+                if atomic_child || *knockout || *blend_mode != pdf_rs_scene::BlendMode::Normal {
+                    return Ok((false, inspected));
+                }
+                atomic_child = true;
+            }
+            GraphicsCommand::EndIsolatedGroup => {
+                if atomic_child {
+                    atomic_child = false;
+                } else {
+                    return Ok((true, inspected));
+                }
+            }
+            command if command.is_visible() => {
+                if !atomic_child || !knockout_object_command_supported(graphics, command)? {
+                    return Ok((false, inspected));
+                }
+            }
+            GraphicsCommand::Save | GraphicsCommand::Restore | GraphicsCommand::Clip { .. } => {}
+            _ => return Ok((false, inspected)),
+        }
+    }
+    Ok((false, inspected))
+}
+
+fn knockout_object_command_supported(
+    graphics: &GraphicsScene,
+    command: &GraphicsCommand,
+) -> Result<bool, ReferenceRenderError> {
+    let opaque_normal = |paint: Paint| {
+        paint.alpha() == SceneUnit::ONE && paint.blend_mode() == pdf_rs_scene::BlendMode::Normal
+    };
+    Ok(match command {
+        GraphicsCommand::Fill { paint, .. } | GraphicsCommand::Stroke { paint, .. } => {
+            opaque_normal(*paint)
+        }
+        GraphicsCommand::FillStroke { fill, stroke, .. } => {
+            opaque_normal(*fill) && opaque_normal(*stroke)
+        }
+        GraphicsCommand::DrawImage {
+            image,
+            alpha,
+            blend_mode,
+            ..
+        } => {
+            *alpha == SceneUnit::ONE
+                && *blend_mode == pdf_rs_scene::BlendMode::Normal
+                && resolve_image(graphics, *image)?.soft_mask().is_none()
+        }
+        GraphicsCommand::DrawGlyphRun(run) => match run.painting() {
+            GlyphPainting::Fill(paint) | GlyphPainting::Stroke { paint, .. } => {
+                opaque_normal(*paint)
+            }
+            GlyphPainting::FillStroke { fill, stroke, .. } => {
+                opaque_normal(*fill) && opaque_normal(*stroke)
+            }
+        },
+        _ => false,
+    })
+}
+
 fn valid_requirement_context(
     graphics: &GraphicsScene,
     requirement: &CapabilityRequirement,
@@ -611,6 +715,7 @@ fn reference_supports_requirement(requirement: &CapabilityRequirement) -> bool {
         }
         GraphicsCapability::Glyph => parameter != 0,
         GraphicsCapability::IsolatedGroup => parameter == 0,
+        GraphicsCapability::KnockoutGroup => parameter == 0,
         GraphicsCapability::SoftMask => parameter == 0,
     }
 }
@@ -724,15 +829,23 @@ fn dispatch_graphics(
             GraphicsCommand::DrawGlyphRun(run) => {
                 draw_glyphs(run, graphics, scene, clips, surface, work)?;
             }
-            GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
+            GraphicsCommand::BeginIsolatedGroup {
+                alpha,
+                blend_mode,
+                knockout,
+            } => {
                 let (passthrough, inspected) = inspect_isolated_group(graphics, index)?;
                 work.charge_raster_fuel(inspected)?;
+                let parent_knockout = groups.last().is_some_and(GroupFrame::is_knockout);
                 begin_isolated_group(
                     surface,
                     &mut groups,
-                    passthrough,
-                    (*alpha).into(),
-                    (*blend_mode).into(),
+                    passthrough && !parent_knockout && !knockout,
+                    GroupCompositing {
+                        alpha: (*alpha).into(),
+                        blend_mode: (*blend_mode).into(),
+                        knockout: *knockout,
+                    },
                     clips,
                     work,
                 )?;
@@ -756,15 +869,28 @@ enum GroupFrame {
         parent: ReferenceSurface,
         alpha: NormalizedQ16,
         blend_mode: ReferenceBlendMode,
+        knockout: bool,
     },
+}
+
+impl GroupFrame {
+    const fn is_knockout(&self) -> bool {
+        matches!(self, Self::Offscreen { knockout: true, .. })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GroupCompositing {
+    alpha: NormalizedQ16,
+    blend_mode: ReferenceBlendMode,
+    knockout: bool,
 }
 
 fn begin_isolated_group(
     surface: &mut ReferenceSurface,
     groups: &mut Vec<GroupFrame>,
     passthrough: bool,
-    alpha: NormalizedQ16,
-    blend_mode: ReferenceBlendMode,
+    compositing: GroupCompositing,
     clips: &ClipStack,
     work: &mut RenderWork<'_>,
 ) -> Result<(), ReferenceRenderError> {
@@ -800,8 +926,9 @@ fn begin_isolated_group(
     let parent = std::mem::replace(surface, group);
     groups.push(GroupFrame::Offscreen {
         parent,
-        alpha,
-        blend_mode,
+        alpha: compositing.alpha,
+        blend_mode: compositing.blend_mode,
+        knockout: compositing.knockout,
     });
     Ok(())
 }
@@ -817,6 +944,7 @@ fn end_isolated_group(
         parent,
         alpha,
         blend_mode,
+        ..
     } = frame
     else {
         return Ok(());
@@ -828,11 +956,19 @@ fn end_isolated_group(
     {
         return Err(invalid_scene());
     }
+    let parent_knockout = groups.last().is_some_and(GroupFrame::is_knockout);
     for index in 0..group.pixels().len() {
         work.charge_pixel_fuel(1)?;
-        let source = group.pixels()[index].apply_constant_alpha(alpha);
         let backdrop = surface.pixels()[index];
-        surface.pixels_mut()[index] = blend_mode.source_over(source, backdrop);
+        surface.pixels_mut()[index] = if parent_knockout {
+            if blend_mode != ReferenceBlendMode::Normal {
+                return Err(invalid_scene());
+            }
+            group.pixels()[index].knockout_over(backdrop, alpha)
+        } else {
+            let source = group.pixels()[index].apply_constant_alpha(alpha);
+            blend_mode.source_over(source, backdrop)
+        };
     }
     work.release_group_surface(group.retained_bytes(), clips)?;
     Ok(())

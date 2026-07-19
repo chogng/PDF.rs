@@ -579,6 +579,28 @@ impl GraphicsSceneBuilder {
         bounds: SceneBounds,
         source: CommandSource,
     ) -> Result<(), SceneError> {
+        self.begin_group_with_knockout(alpha, blend_mode, false, bounds, source)
+    }
+
+    /// Begins one knockout transparency group in the registered atomic-child subset.
+    pub fn begin_knockout_group(
+        &mut self,
+        alpha: SceneUnit,
+        blend_mode: BlendMode,
+        bounds: SceneBounds,
+        source: CommandSource,
+    ) -> Result<(), SceneError> {
+        self.begin_group_with_knockout(alpha, blend_mode, true, bounds, source)
+    }
+
+    fn begin_group_with_knockout(
+        &mut self,
+        alpha: SceneUnit,
+        blend_mode: BlendMode,
+        knockout: bool,
+        bounds: SceneBounds,
+        source: CommandSource,
+    ) -> Result<(), SceneError> {
         validate_nonempty_bounds(bounds)?;
         let next = self.group_depth.checked_add(1).ok_or_else(internal)?;
         if next > self.limits.max_group_depth() {
@@ -589,11 +611,22 @@ impl GraphicsSceneBuilder {
                 1,
             ));
         }
-        let mut capabilities = vec![(GraphicsCapability::IsolatedGroup, 0)];
+        let capability = if knockout {
+            GraphicsCapability::KnockoutGroup
+        } else {
+            GraphicsCapability::IsolatedGroup
+        };
+        let mut capabilities = vec![(capability, 0)];
         append_alpha_blend_capabilities(&mut capabilities, alpha, blend_mode);
         self.append_with_resources(
             Vec::new(),
-            |_, _| Ok(GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode }),
+            |_, _| {
+                Ok(GraphicsCommand::BeginIsolatedGroup {
+                    alpha,
+                    blend_mode,
+                    knockout,
+                })
+            },
             bounds,
             source,
             capabilities,
@@ -736,8 +769,16 @@ impl GraphicsSceneBuilder {
                     }
                     self.draw_painted_glyph_run(glyphs, run.painting().clone(), bounds, source)?;
                 }
-                GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
-                    self.begin_group(*alpha, *blend_mode, bounds, source)?;
+                GraphicsCommand::BeginIsolatedGroup {
+                    alpha,
+                    blend_mode,
+                    knockout,
+                } => {
+                    if *knockout {
+                        self.begin_knockout_group(*alpha, *blend_mode, bounds, source)?;
+                    } else {
+                        self.begin_group(*alpha, *blend_mode, bounds, source)?;
+                    }
                 }
                 GraphicsCommand::EndIsolatedGroup => self.end_group(bounds, source)?,
             }

@@ -127,6 +127,23 @@ impl Pixel {
         }
     }
 
+    pub(crate) fn knockout_over(self, backdrop: Self, opacity: SceneUnit) -> Self {
+        let shape = self.alpha;
+        let source = self.apply_constant_alpha(opacity);
+        let composite = |source: u32, prior: u32| {
+            round_q16(
+                u64::from(source) * u64::from(Q16_ONE)
+                    + u64::from(prior) * u64::from(Q16_ONE - shape),
+            )
+        };
+        Self {
+            red: composite(source.red, backdrop.red),
+            green: composite(source.green, backdrop.green),
+            blue: composite(source.blue, backdrop.blue),
+            alpha: composite(source.alpha, backdrop.alpha),
+        }
+    }
+
     pub(crate) fn to_rgba8(self) -> [u8; 4] {
         if self.alpha == 0 {
             return [0, 0, 0, 0];

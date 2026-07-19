@@ -5310,9 +5310,9 @@ fn indirect_rgb_group_color_space_and_outer_alpha_are_applied_at_do_boundary() {
         .commands()
         .iter()
         .find_map(|record| match record.command() {
-            GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
-                Some((*alpha, *blend_mode))
-            }
+            GraphicsCommand::BeginIsolatedGroup {
+                alpha, blend_mode, ..
+            } => Some((*alpha, *blend_mode)),
             _ => None,
         })
         .expect("the Form Do boundary must own one group");
@@ -5329,6 +5329,105 @@ fn indirect_rgb_group_color_space_and_outer_alpha_are_applied_at_do_boundary() {
         Some(SceneUnit::ONE),
         "the Form-local GS0 remains independent from the caller's alpha"
     );
+}
+
+#[test]
+fn knockout_group_requires_and_publishes_opaque_atomic_child_forms() {
+    let outer = form_object(
+        5,
+        b"/BBox [0 0 10 10] \
+          /Resources << /XObject << /Fm0 6 0 R /Fm1 7 0 R >> \
+                         /ExtGState << /Half 8 0 R >> >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /K true >>",
+        b"/Half gs /Fm0 Do /Half gs /Fm1 Do",
+    );
+    let red = form_object(
+        6,
+        b"/BBox [0 0 10 10] /Resources << >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /K false >>",
+        b"1 0 0 rg 0 0 8 10 re f",
+    );
+    let blue = form_object(
+        7,
+        b"/BBox [0 0 10 10] /Resources << >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /K false >>",
+        b"0 0 1 rg 5 0 5 10 re f",
+    );
+    let input = acquire_with_objects(
+        b"/Fm0 Do",
+        b"<< /XObject << /Fm0 5 0 R >> >>",
+        &[
+            (5, outer),
+            (6, red),
+            (7, blue),
+            (8, indirect_object(8, b"<< /ca 0.5 /CA 0.5 /BM /Normal >>")),
+        ],
+        0xf8,
+    );
+    let VmInput {
+        acquired,
+        authority,
+        store,
+    } = input;
+    let mut job = recursive_form_page_job(acquired, authority, 37_501, true, true, true);
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("proof-safe atomic knockout group must render: {outcome:?}"),
+    };
+    let outer = page.form_uses()[0].form();
+    assert!(
+        outer
+            .acquired_form()
+            .transparency_group()
+            .expect("outer transparency group")
+            .knockout()
+    );
+    let graphics = page.scene().graphics().expect("graphics-v2 Page");
+    assert!(graphics.commands().iter().any(|record| matches!(
+        record.command(),
+        GraphicsCommand::BeginIsolatedGroup { knockout: true, .. }
+    )));
+    assert_eq!(
+        graphics
+            .commands()
+            .iter()
+            .filter(|record| matches!(
+                record.command(),
+                GraphicsCommand::BeginIsolatedGroup {
+                    knockout: false,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+
+    let direct = form_object(
+        5,
+        b"/BBox [0 0 10 10] /Resources << >> \
+          /Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /K true >>",
+        b"1 0 0 rg 0 0 10 10 re f",
+    );
+    let direct_input = acquire_with_objects(
+        b"/Fm0 Do",
+        b"<< /XObject << /Fm0 5 0 R >> >>",
+        &[(5, direct)],
+        0xf9,
+    );
+    let mut direct_job = recursive_form_page_job(
+        direct_input.acquired,
+        direct_input.authority,
+        37_801,
+        true,
+        true,
+        true,
+    );
+    match direct_job.poll(&direct_input.store, &DocumentNeverCancelled) {
+        ContentVmPoll::Unsupported(unsupported) => {
+            assert_eq!(unsupported.kind(), ContentUnsupportedKind::FormXObject);
+        }
+        outcome => panic!("direct knockout paint must fail closed: {outcome:?}"),
+    }
 }
 
 #[test]

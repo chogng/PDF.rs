@@ -297,8 +297,16 @@ fn write_graphics_command(
             }
             writer.push(b"}")
         }
-        GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
-            writer.push(b"{\"kind\":\"begin-isolated-group\",\"alpha\":")?;
+        GraphicsCommand::BeginIsolatedGroup {
+            alpha,
+            blend_mode,
+            knockout,
+        } => {
+            writer.push(if *knockout {
+                b"{\"kind\":\"begin-knockout-group\",\"alpha\":"
+            } else {
+                b"{\"kind\":\"begin-isolated-group\",\"alpha\":"
+            })?;
             writer.push_u16(alpha.get())?;
             writer.push(b",\"blend_mode\":")?;
             writer.push(blend_mode_label(*blend_mode))?;
@@ -542,6 +550,7 @@ fn graphics_capability_label(capability: GraphicsCapability) -> &'static [u8] {
         GraphicsCapability::Image => b"\"image\"",
         GraphicsCapability::Glyph => b"\"glyph\"",
         GraphicsCapability::IsolatedGroup => b"\"isolated-group\"",
+        GraphicsCapability::KnockoutGroup => b"\"knockout-group\"",
     }
 }
 

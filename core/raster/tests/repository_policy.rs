@@ -139,6 +139,7 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
         "work.charge_pixel_fuel",
         "graphics_preflight.max_group_depth,",
         "begin_isolated_group(",
+        "passthrough && !parent_knockout && !knockout",
         "initialize_transparent",
         "paint_image(",
         "paint_glyph_run(",
@@ -157,8 +158,16 @@ fn reference_foundation_keeps_atomic_bounded_scene_consumption_explicit() {
             "Reference renderer must retain invariant marker {required:?}"
         );
     }
+    let dispatch_start = render
+        .find("fn dispatch_graphics(")
+        .expect("Reference graphics command dispatch must be present");
+    let dispatch_end = render[dispatch_start..]
+        .find("\nenum GroupFrame")
+        .map(|offset| dispatch_start + offset)
+        .expect("Reference graphics command dispatch must have a bounded end");
+    let dispatch = &render[dispatch_start..dispatch_end];
     assert!(
-        !render.contains("_ =>"),
+        !dispatch.contains("_ =>"),
         "Scene commands must remain exhaustively matched"
     );
     for required in [
