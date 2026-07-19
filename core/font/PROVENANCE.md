@@ -15,11 +15,13 @@ in half-font-unit project coordinates. TrueType instruction bytes are bounded an
 never executed.
 
 The Type1C profile accepts standalone CFF1 with one non-CID Top DICT, ISOAdobe or bounded custom
-charsets, the default StandardEncoding model, bounded local and global subroutines, hint masks,
-lines, and Type 2 cubic curves. CFF coordinates are retained to the nearest half font unit in the
-shared exact outline model. CID-keyed fonts, CFF2, ExpertEncoding, custom CFF Encoding, explicit
-FontMatrix, escaped Type 2 operators, and legacy `seac` composition remain typed unsupported
-capabilities.
+charsets, the default StandardEncoding model, structurally bounded custom Encoding data, bounded
+local and global subroutines, hint masks, lines, and Type 2 cubic curves. Custom Encoding entries
+are validated for framing, glyph counts, numeric ranges, and supplement SIDs but do not override
+the owning PDF simple Font's code-to-name mapping; repeated non-authoritative CFF codes therefore
+remain usable. CFF coordinates are retained to the nearest half font unit in the shared exact
+outline model. CID-keyed fonts, CFF2, ExpertEncoding, explicit FontMatrix, escaped Type 2 operators,
+and legacy `seac` composition remain typed unsupported capabilities.
 
 This crate does not resolve PDF dictionaries, decode font streams, apply PDF text state, shape text,
 rasterize glyphs, use a system-font fallback, call platform antialiasing or font services, or depend

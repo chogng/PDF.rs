@@ -613,8 +613,9 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
         let mut position = offset
             .checked_add(1)
             .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
-        let mut seen = [false; 256];
-        seen[0] = true;
+        // A PDF simple Font dictionary owns character-code to glyph-name selection. The embedded
+        // CFF Encoding is therefore framed and count-validated here, but repeated codes do not
+        // override PDF-owned mapping or invalidate otherwise usable outline data.
         let mut encoded_glyphs = 1_usize;
         match base_format {
             0 => {
@@ -626,24 +627,15 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
                 if count > glyph_count.saturating_sub(1) {
                     return Err(self.invalid_cff());
                 }
-                for code in self
-                    .bytes
-                    .get(
-                        position
-                            ..position
-                                .checked_add(count)
-                                .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?,
-                    )
-                    .ok_or_else(|| self.invalid_cff())?
-                {
-                    if seen[usize::from(*code)] {
-                        return Err(self.invalid_cff());
-                    }
-                    seen[usize::from(*code)] = true;
-                    encoded_glyphs = encoded_glyphs
-                        .checked_add(1)
-                        .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
-                }
+                let end = position
+                    .checked_add(count)
+                    .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
+                self.bytes
+                    .get(position..end)
+                    .ok_or_else(|| self.invalid_cff())?;
+                encoded_glyphs = encoded_glyphs
+                    .checked_add(count)
+                    .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
                 position = position
                     .checked_add(count)
                     .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
@@ -663,19 +655,13 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
                     position = position
                         .checked_add(2)
                         .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
-                    let last = first.checked_add(left).ok_or_else(|| self.invalid_cff())?;
+                    first.checked_add(left).ok_or_else(|| self.invalid_cff())?;
                     let range_glyphs = usize::from(left) + 1;
                     encoded_glyphs = encoded_glyphs
                         .checked_add(range_glyphs)
                         .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
                     if encoded_glyphs > glyph_count {
                         return Err(self.invalid_cff());
-                    }
-                    for code in first..=last {
-                        if seen[usize::from(code)] {
-                            return Err(self.invalid_cff());
-                        }
-                        seen[usize::from(code)] = true;
                     }
                 }
             }
@@ -691,15 +677,14 @@ impl<'a, C: FontCancellation + ?Sized> Parser<'a, C> {
                 .checked_add(1)
                 .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
             for _ in 0..supplement_count {
-                let code = *self.bytes.get(position).ok_or_else(|| self.invalid_cff())?;
+                self.bytes.get(position).ok_or_else(|| self.invalid_cff())?;
                 let sid = read_u16(self.bytes, position + 1).ok_or_else(|| self.invalid_cff())?;
                 position = position
                     .checked_add(3)
                     .ok_or_else(|| self.error(FontErrorCode::NumericOverflow, None))?;
-                if seen[usize::from(code)] || !charset.contains(&sid) {
+                if !charset.contains(&sid) {
                     return Err(self.invalid_cff());
                 }
-                seen[usize::from(code)] = true;
             }
         }
         Ok(())

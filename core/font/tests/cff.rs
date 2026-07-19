@@ -221,6 +221,9 @@ fn bounded_custom_encoding_formats_are_validated_without_overriding_pdf_name_map
         vec![0, 2, b'A', 0xe1],
         vec![1, 2, b'A', 0, 0xe1, 0],
         vec![0x80, 1, b'A', 1, 0xe1, 0, 200],
+        vec![0, 2, b'A', b'A'],
+        vec![1, 2, b'A', 0, b'A', 0],
+        vec![0x80, 1, b'A', 1, b'A', 0, 34],
     ] {
         let bytes = fixture_with_encoding(Some(&encoding));
         let outcome = parse_cff(
@@ -239,9 +242,7 @@ fn bounded_custom_encoding_formats_are_validated_without_overriding_pdf_name_map
 
     for malformed in [
         vec![0, 3, b'A', b'B'],
-        vec![0, 2, b'A', b'A'],
         vec![1, 1, 0xff, 1],
-        vec![0x80, 1, b'A', 1, b'A', 0, 34],
         vec![0x80, 1, b'A', 1, b'B', 0xff, 0xff],
     ] {
         let bytes = fixture_with_encoding(Some(&malformed));
