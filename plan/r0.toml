@@ -1,9 +1,9 @@
 schema = 1
 id = "r0-development-plan"
-version = "0.3.0"
+version = "0.4.0"
 status = "active"
-planning_basis = "RPE-ARCH-001 v0.3, sections 2.6 and 15.3"
-last_updated = 2026-07-17
+planning_basis = "RPE-ARCH-001 v0.3, sections 2.6, 7.1-7.4, and 15.3 including the 2026-07-18 Font/Text staging clarification"
+last_updated = 2026-07-18
 max_parallel_milestones = 2
 max_parallel_work_items_per_milestone = 3
 
@@ -22,6 +22,8 @@ assumptions = [
   "An owner role may not be the sole reviewer of its own milestone exit gate.",
   "M5 may start only after the protocol and surface schema are frozen, and may not exit before M4 CapabilityDecision and Native RenderPlan contracts are accepted.",
   "M6 starts only after both the M4 desktop and M5 browser vertical-slice exit gates pass.",
+  "M4 and M5 do not expand CMap, ToUnicode, Unicode semantics, text interaction protocol, or advanced text capability; M6 owns the R0 horizontal font/text closure.",
+  "RTL, vertical CIDFont, ActualText, Tagged PDF, structure-derived accessibility, and any controlled font fallback decision are Post-R0 FT1 work.",
 ]
 
 [capacity.role_fte]
@@ -202,24 +204,47 @@ deliverables = [
   "OffscreenCanvas and transferable surfaces",
   "TypeScript viewer",
 ]
-exit_gate = "Chromium, Firefox, and WebKit complete the R0 reading flow; resource and dependency scans find no external PDF engine."
+exit_gate = "Chromium, Firefox, and WebKit complete the bounded pre-M6 Native pixel reading flow; resource and dependency scans find no external PDF engine; no advanced text capability is added."
 status = "in_progress"
 started_at = 2026-07-17
 execution_plan = "plan/m5.toml"
 
 [[milestone]]
 id = "M6"
-title = "R0 release candidate"
-owner_role = "baseline-release"
-reviewer_roles = ["spec-conformance", "quality-corpus", "runtime-platform"]
+title = "R0 horizontal font/text and release candidate"
+owner_role = "font-text-a11y"
+reviewer_roles = ["spec-conformance", "quality-corpus", "runtime-platform", "baseline-release"]
 planned_fte = 5.0
 start_date = 2027-08-30
 target_date = 2027-10-29
 dependencies = ["M4", "M5"]
 max_parallel_work_items = 3
 deliverables = [
-  "Unicode, selection, copy, search, and links",
+  "bounded horizontal CMap and ToUnicode/declared-encoding semantics",
+  "r0.font.horizontal.v1 embedded font closure without shaping or system-font fallback",
+  "r0.text.horizontal-ltr.v1 TextAtom, quad, baseline, confidence, and source-order model",
+  "versioned selection, copy, normalized search, and link protocol plus desktop/browser layers",
   "release-r0-v1 candidate evidence",
   "fixed-hardware performance results",
 ]
-exit_gate = "Every R0 gate in RPE-ARCH-001 section 2.6 passes and the first-usable-version criteria in section 16.3 are satisfied."
+exit_gate = "The two R0 horizontal font/text profiles pass normative, differential, fuzz, holdout, desktop/browser, product-purity, and independent-review gates; every R0 gate in RPE-ARCH-001 section 2.6 and the first-usable-version criteria in section 16.3 are satisfied."
+status = "planned"
+execution_plan = "plan/m6.toml"
+
+[post_r0_font_text]
+id = "FT1"
+title = "Post-R0 advanced text semantics and structure"
+owner_role = "font-text-a11y"
+reviewer_roles = ["spec-conformance", "quality-corpus", "runtime-platform"]
+dependencies = ["M6"]
+max_parallel_work_items = 2
+deliverables = [
+  "RTL and bidi logical-order interaction",
+  "vertical CMap and CIDFont metrics/orientation",
+  "ActualText replacement semantics",
+  "Tagged PDF structure order and accessibility tree",
+  "separate controlled-font-fallback decision gate",
+]
+exit_gate = "Each Post-R0 text capability advances on independent O0-O3, fuzz, holdout, platform, accessibility, and product-purity evidence without widening release-r0-v1."
+status = "planned"
+execution_plan = "plan/post-r0-font-text.toml"

@@ -2,6 +2,9 @@ schema = 1
 id = "release-r0-v1"
 spec_version = "0.2"
 status = "candidate"
+# The font/text entries below are R0 target contract names, not current
+# capability-maturity claims. M6-01 must register both profiles and their
+# evidence before this candidate can become release-eligible.
 capability_profiles = [
   "r0.syntax.v1",
   "r0.graphics.basic.v1",

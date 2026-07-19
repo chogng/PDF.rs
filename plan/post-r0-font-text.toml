@@ -1,0 +1,141 @@
+schema = 1
+milestone = "FT1"
+title = "Post-R0 advanced text semantics and structure"
+status = "planned"
+depends_on = ["M6"]
+exit_gate = "RTL, vertical CIDFont, ActualText, and Tagged PDF capabilities are independently profiled and verified across semantic, geometry, interaction, accessibility, corpus, and platform gates without widening R0 or enabling uncontrolled fallback."
+max_parallel_work_items = 2
+
+principles = [
+  "Start only after M6/R0 exits; never use FT1 work to retroactively claim R0 support.",
+  "Give RTL, vertical CIDFont, ActualText, Tagged PDF, and any font fallback separate feature and CapabilityProfile identities so one successful area cannot hide another failure.",
+  "Preserve the rendering-chain invariant: existing PDF character codes, glyph choices, Tj/TJ advances, text matrices, and vertical metrics remain authoritative; shaping is not applied to already positioned PDF glyph runs.",
+  "Treat visual order, source order, logical order, structure order, and replacement text as distinct data with explicit transformations and provenance.",
+  "Keep system-font fallback fail-closed by default; FT1 contains a decision gate, not an implicit promise to enable host-dependent substitution.",
+]
+
+registered_scope = [
+  "RTL/bidi logical-order reconstruction and selection/copy/search behavior over already positioned horizontal PDF text.",
+  "Vertical Type0 CMaps and CIDFont metrics/orientation, including registered Identity-V/predefined maps and W2/DW2 behavior.",
+  "ActualText marked-content replacement semantics with source/geometry/provenance mappings.",
+  "Tagged PDF structure trees, MCID/ParentTree association, role mapping, structure order, Alt/Lang metadata, and a platform accessibility tree.",
+  "A separate controlled-font-fallback decision record and, only if approved, an independently registered deterministic fallback capability.",
+]
+
+excluded_scope = [
+  "Authoring, editing, reflow, content rewriting, and shaping new Unicode into newly generated PDF text.",
+  "OCR, translation, layout reconstruction unrelated to PDF text/structure semantics, and semantic inference from final pixels.",
+  "Uncontrolled host font substitution, external PDF engines, remote rendering, and silent fallback that changes glyph identity or metrics.",
+]
+
+[[work_item]]
+id = "FT1-01"
+title = "Advanced text profile and order-model freeze"
+lane = "font-text-governance"
+status = "planned"
+depends_on = []
+outcome = "Separate profile contracts define RTL, vertical, ActualText, Tagged PDF, accessibility, and fallback decisions plus their order/provenance model."
+acceptance = [
+  "Register separate feature, spec-map, and CapabilityProfile records for RTL, vertical CIDFont, ActualText, Tagged PDF structure, and any approved fallback capability.",
+  "Define source, visual, logical, structure, and replacement-text orders plus stable mappings among them; no single order field silently changes meaning by document type.",
+  "Freeze per-capability supported/excluded combinations, corpus strata, low-confidence policy, budgets, browser/desktop behavior, and maturity gates.",
+  "Document that shaping existing PDF-positioned glyphs is prohibited and that shaping new authored text requires a different future capability.",
+]
+
+[[work_item]]
+id = "FT1-02"
+title = "RTL and bidi semantic interaction"
+lane = "text-direction"
+status = "planned"
+depends_on = ["FT1-01"]
+outcome = "Horizontal RTL and mixed-direction text expose deterministic visual/logical mappings for selection, copy, search, and links without changing rendered glyph positions."
+acceptance = [
+  "Bidi processing consumes Unicode TextAtoms and PDF geometry after glyph rendering decisions; it does not reshape, replace, or reposition the source glyph run.",
+  "Mixed LTR/RTL, neutrals, numbers, punctuation, combining marks, ligatures, rotated baselines, and paragraph boundaries have O0/O1 expected logical and visual order.",
+  "Selection direction, caret movement, copy order, normalized search, result geometry, and link ranges retain reversible atom mappings.",
+  "Algorithm/data provenance, conformance cases, fuzz/property tests, independent review, browser/desktop E2E, and disjoint holdouts satisfy the registered profile.",
+]
+
+[[work_item]]
+id = "FT1-03"
+title = "Vertical CMap and CIDFont"
+lane = "font-vertical"
+status = "planned"
+depends_on = ["FT1-01"]
+outcome = "Registered vertical CMaps and CIDFonts render and expose semantic geometry using PDF vertical metrics and orientation rules."
+acceptance = [
+  "Support the registered Identity-V and predefined vertical CMaps, variable-length code boundaries, CIDToGIDMap behavior, W2/DW2 metrics, vertical origins, and glyph orientation.",
+  "WritingMode, baseline, quad, source order, line clustering, selection, copy, search, and link geometry represent vertical text without axis-aligned approximations.",
+  "Vertical metrics and orientation remain PDF/font-data driven; system layout APIs and shaping do not override PDF positions.",
+  "CJK vertical normative cases, generated CMap data provenance, malformed/budget/fuzz coverage, Reference/Fast differential pixels, text diff, E2E, and holdouts satisfy the vertical profile.",
+]
+
+[[work_item]]
+id = "FT1-04"
+title = "ActualText replacement semantics"
+lane = "text-replacement"
+status = "planned"
+depends_on = ["FT1-01", "FT1-02", "FT1-03"]
+outcome = "ActualText supplies bounded replacement semantics while retaining the source atoms, marked-content scope, geometry, confidence, and provenance it replaces."
+acceptance = [
+  "Parse ActualText from registered marked-content property forms with nesting, inheritance/reference, malformed-input, recursion, string, atom, and retained-byte limits.",
+  "Preserve source glyph atoms and expose a separate replacement sequence mapped to the marked-content geometry; do not overwrite rendering or erase diagnostic provenance.",
+  "Freeze selection, copy, search, accessibility, empty replacement, multi-scalar replacement, nested scope, overlapping geometry, and low-confidence policies.",
+  "O0/O1 cases, canonical Text diff, fuzz/minimization, RTL/vertical combinations, platform E2E, independent review, and holdouts satisfy the ActualText profile.",
+]
+
+[[work_item]]
+id = "FT1-05"
+title = "Tagged PDF structure and reading order"
+lane = "text-structure"
+status = "planned"
+depends_on = ["FT1-01", "FT1-04"]
+outcome = "A bounded structure model links StructTreeRoot, ParentTree, MCIDs, roles, language, alternatives, and content geometry into explainable reading order."
+acceptance = [
+  "Parse registered structure elements, kids, object references, ParentTree/StructParents, MCID associations, role maps, namespace policy, Alt, ActualText, Lang, and artifact handling with cycle/depth/node/byte limits.",
+  "Structure order is stored separately from source/visual/logical order and every accessible node links back to page atoms, annotations, or explicit diagnostics.",
+  "Missing, duplicate, cyclic, cross-page, contradictory, or partially tagged structures degrade according to the registered confidence and Unsupported policy rather than inventing trusted order.",
+  "Normative structure fixtures, malformed/fuzz coverage, canonical structure/text diff, screen-reader-oriented expected trees, independent review, and disjoint holdouts satisfy the Tagged PDF profile.",
+]
+
+[[work_item]]
+id = "FT1-06"
+title = "Advanced text platform accessibility"
+lane = "platform-accessibility"
+status = "planned"
+depends_on = ["FT1-02", "FT1-03", "FT1-04", "FT1-05"]
+outcome = "Desktop and browser expose coherent RTL/vertical interaction and a structure-derived accessibility tree with stable focus and lifecycle behavior."
+acceptance = [
+  "Visual text spans remain geometry-driven and aria-hidden where appropriate; the accessibility tree derives from structure, ActualText, Alt, Lang, roles, and logical/structure order.",
+  "Keyboard navigation, focus, selection, copy, search, links, page virtualization, zoom, rotation, remount, close, and Worker restart preserve or invalidate state by explicit identity.",
+  "Chromium, Firefox, WebKit, and desktop E2E compare expected accessible roles/names/order and interaction geometry without browser text extraction or platform PDF services.",
+  "All DOM/native nodes, indexes, listeners, mappings, and resources are bounded and return to declared baselines after replacement and close.",
+]
+
+[[work_item]]
+id = "FT1-07"
+title = "Controlled font fallback decision gate"
+lane = "font-policy"
+status = "planned"
+depends_on = ["FT1-01"]
+outcome = "An explicit architecture and product decision either preserves fail-closed behavior or defines a deterministic, independently profiled fallback capability."
+acceptance = [
+  "Compare fail-closed, bundled fixed font pack, and platform adapter options for licensing, redistribution, glyph coverage, metrics fidelity, determinism, privacy, package size, cache identity, and update policy.",
+  "The default decision remains fail-closed unless an ADR names supported document/font classes, fixed font file hashes or platform fingerprints, selection rules, metric-compatibility thresholds, shaping boundary, diagnostics, and rollback.",
+  "System font enumeration alone, best-effort family-name matching, silent glyph substitution, and network font download cannot satisfy the capability gate.",
+  "If fallback is approved, it receives its own feature/profile, O0-O3 evidence, cross-platform holdouts, pixel/text differentials, performance/memory gates, SBOM/license closure, and renderer/cache epoch.",
+]
+
+[[work_item]]
+id = "FT1-08"
+title = "Advanced text maturity gate"
+lane = "font-text-quality"
+status = "planned"
+depends_on = ["FT1-02", "FT1-03", "FT1-04", "FT1-05", "FT1-06", "FT1-07"]
+outcome = "Each Post-R0 text capability advances only on its own evidence and supported combinations, with no aggregate metric masking a failed class."
+acceptance = [
+  "RTL, vertical, ActualText, Tagged PDF, accessibility, and any fallback profile have independent denominators, O0-O3 evidence, fuzz/minimization, disjoint holdouts, differential reports, and reviewer decisions.",
+  "Combination strata cover RTL plus ActualText, vertical plus ActualText, Tagged plus partial/malformed structure, annotations/links, rotated pages, forms/XObjects where registered, and low-confidence mappings.",
+  "Browser/desktop correctness, accessibility, stability, cancellation, memory, first-result search, interaction latency, dependency purity, and deterministic replay gates pass for every promoted profile.",
+  "No FT1 evidence changes release-r0-v1 scope, status, hashes, or historic M3-M6 maturity claims.",
+]

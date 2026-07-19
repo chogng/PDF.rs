@@ -1,0 +1,185 @@
+schema = 1
+milestone = "M6"
+title = "R0 horizontal font and text release candidate"
+status = "planned"
+depends_on = ["M4", "M5"]
+exit_gate = "The registered R0 horizontal font and text profiles pass their normative, differential, fuzz, holdout, protocol, platform, and release gates without system-font or external-engine fallback."
+max_parallel_work_items = 3
+
+principles = [
+  "Treat the M3 embedded simple-font horizontal renderer as accepted bounded evidence, not as proof of Unicode semantics or the full R0 font profile.",
+  "Treat later WinAnsi, Type1C, and Identity-H/CIDFontType2 code as implementation primitives until M6 registers their feature ownership, profile scope, oracle authority, and maturity evidence.",
+  "Keep M4 and M5 limited to Fast CPU and desktop/browser pixel-reading vertical slices; do not add advanced text semantics or interaction protocol to either milestone.",
+  "Separate the drawing chain (character code to CID/glyph to outline to PDF positioning) from the semantic chain (character code through CMap/encoding/ToUnicode to Unicode and confidence).",
+  "Do not shape, reorder, normalize, or replace glyphs and advances in the rendering path for PDF text that is already positioned by the content stream.",
+  "Keep missing and non-embedded fonts fail-closed in R0; no system-font enumeration, substitution, download, or platform shaping may make an otherwise unsupported page eligible.",
+  "Generate every R0 text interaction from bounded Native semantic data and versioned protocol messages, never from OCR, final pixels, DOM text guessing, or an external PDF engine.",
+  "Exclude RTL, vertical CIDFont, ActualText replacement semantics, Tagged PDF reading order, and structure-derived accessibility from R0.",
+]
+
+registered_scope = [
+  "Bounded horizontal Type0 CMap decoding, including Identity-H and the explicitly registered embedded or generated predefined CMaps needed by release-r0-v1.",
+  "Bounded ToUnicode and declared-encoding mapping with explicit precedence, multi-scalar Unicode support, non-BMP handling, and MappingConfidence.",
+  "The complete r0.font.horizontal.v1 target: registered embedded Type 1, TrueType/OpenType glyf, CFF, and common horizontal CIDFont combinations, with CIDToGIDMap and PDF-owned metrics/positioning.",
+  "A versioned TextAtom/TextPage model containing Unicode, confidence, original code, optional CID/glyph id, quad, baseline, horizontal writing mode, font identity, optional raw MCID, and source order.",
+  "Horizontal LTR selection, copy, normalized search with result-to-geometry mapping, explicit PDF Link annotations, and a separately declared policy for any text-detected web or mail links.",
+  "Versioned Engine protocol and desktop/browser presentation for text pages, selection, search, and links with cancellation, generation, lifecycle, focus, and resource bounds.",
+  "CapabilityProfile maturity, release-r0-v1 corpus/holdout evidence, fuzz/minimization, fixed-hardware performance, and Native-only product dependency proof.",
+]
+
+excluded_scope = [
+  "RTL or bidi logical-order reconstruction, vertical CMaps and CIDFont metrics/orientation, ActualText replacement, Tagged PDF structure order, and a complete screen-reader accessibility tree.",
+  "Shaping of existing PDF text, authoring/reflow/editing, arbitrary content rewriting, OCR, semantic inference from raster pixels, and platform text rendering.",
+  "System-font fallback, uncontrolled Standard 14 substitution, font downloads, platform font database dependence, external PDF engines, and silent glyph replacement.",
+  "Retroactive widening of M3, M4, or M5 evidence, and relabelling provisional implementation profile names as milestone maturity without registered review.",
+]
+
+[[work_item]]
+id = "M6-01"
+title = "Font/text scope, profile, and traceability freeze"
+lane = "font-text-governance"
+status = "planned"
+depends_on = []
+outcome = "The two R0 font/text target profile names become registered, bounded, testable contracts, and provisional post-M3 font primitives receive honest ownership without rewriting prior milestone evidence."
+acceptance = [
+  "Register r0.font.horizontal.v1 and r0.text.horizontal-ltr.v1 in capability-profiles.toml with matching feature-map and spec-map records; both remain PLANNED until their stated maturity gates pass.",
+  "Record the exact supported and excluded font combinations, CMap families, ToUnicode behavior, Unicode confidence classes, platforms, corpus, budgets, and failure policy.",
+  "Classify the existing m4.simple-truetype-winansi.v1, m4.simple-type1c-standard.v1, and m4.cidfont-type2-identity.v1 implementation identifiers as provisional primitives rather than M4 milestone ownership or release maturity.",
+  "Confirm plan/r0.toml points M6 at this execution plan and treat the stored hash-bound M4 candidate as superseded; any future candidate must bind the new roadmap bytes after fresh replay and must not rewrite historic review evidence.",
+  "The release profile remains candidate and release-blocking while either target capability profile is absent, PLANNED, or below its required maturity.",
+]
+
+[[work_item]]
+id = "M6-02"
+title = "Bounded horizontal CMap layer"
+lane = "font-mapping"
+status = "planned"
+depends_on = ["M6-01"]
+outcome = "A project-owned bounded CMap layer converts variable-length PDF character codes to CIDs and writing mode without conflating that mapping with Unicode."
+acceptance = [
+  "Parse registered codespace ranges, cidchar/cidrange entries, usecmap inheritance, Identity-H, and named or embedded horizontal encodings with checked lengths, depth, cycle, range, entry, and memory limits.",
+  "Character-code tokenization uses CMap codespace boundaries rather than a fixed one-byte or two-byte decoder and retains original bytes/code plus mapping provenance.",
+  "Predefined CMap data is generated only from approved sources with generator, input hash, output hash, license, replacement plan, and deterministic lookup tests.",
+  "Identity-V, other vertical maps, W2/DW2, and glyph orientation are rejected as explicit Post-R0 capabilities.",
+  "O0/O1 cases cover one-to-four-byte boundaries, overlapping ranges, usecmap chains, malformed streams, exact limits, one-over-limit, cancellation, and deterministic replay; parser fuzzing and minimization are registered.",
+]
+
+[[work_item]]
+id = "M6-03"
+title = "ToUnicode and declared-encoding semantics"
+lane = "unicode-mapping"
+status = "planned"
+depends_on = ["M6-01", "M6-02"]
+outcome = "A bounded semantic mapper produces Unicode sequences and explainable confidence independently of glyph selection."
+acceptance = [
+  "Parse registered ToUnicode codespaces, bfchar, bfrange scalar and array forms, and usecmap behavior with the same checked resource discipline as CMap parsing.",
+  "Support empty, one-scalar, multi-scalar, surrogate-pair/non-BMP, combining, and ligature mappings without truncating Unicode to one code point.",
+  "Freeze precedence among exact ToUnicode, declared simple-font encoding, registered CID collection mapping, glyph-name inference if admitted, heuristic mapping, and Unknown.",
+  "Every TextAtom records MappingConfidence and source mapping; missing, malformed, contradictory, or incomplete maps never silently substitute glyph id or character code as trusted Unicode.",
+  "Normative cases, property tests, fuzz/minimization, and canonical Text diff cover malformed counts/ranges, duplicate mappings, non-BMP output, multi-scalar output, unknown mappings, exact limits, and deterministic replay.",
+]
+
+[[work_item]]
+id = "M6-04"
+title = "R0 embedded horizontal font closure"
+lane = "font-rendering"
+status = "planned"
+depends_on = ["M6-01", "M6-02"]
+outcome = "The complete registered embedded horizontal font combinations render through project-owned PDF mapping, metrics, outlines, and positioning without platform fallback or shaping."
+acceptance = [
+  "Close the registered Type 1, TrueType/OpenType glyf, CFF, and common horizontal CIDFont combinations, including simple encodings, widths, CIDToGIDMap Identity/stream forms, missing-glyph policy, and required composite glyph behavior.",
+  "Text showing preserves PDF text matrices, Tj/TJ advances, character/word spacing, horizontal scaling, rise, render mode, clipping, and source order; it never reshapes or bidi-reorders the run.",
+  "Embedded font bytes, tables, charstrings, subroutines, outlines, metrics, glyph count, recursion, work, and retained memory are independently bounded and fuzzed.",
+  "Missing/non-embedded fonts, unsupported font types, vertical writing, malformed mappings, and absent required glyphs return stable capability or input errors and publish no misleading partial text success.",
+  "Reference pixels, Fast-vs-Reference differential output, Scene/Text canonical output, holdout coverage, and no-system-font determinism pass on every registered platform.",
+]
+
+[[work_item]]
+id = "M6-05"
+title = "TextAtom and TextPage semantic geometry"
+lane = "text-model"
+status = "planned"
+depends_on = ["M6-03", "M6-04"]
+outcome = "A versioned bounded Native text page links Unicode semantics to PDF source identity and glyph geometry without inferring from final pixels."
+acceptance = [
+  "TextAtom carries Unicode sequence, MappingConfidence, original code bytes/value, optional CID and glyph id, quad, baseline, HorizontalLtr writing mode, font identity, optional raw MCID, and deterministic source order.",
+  "Quad and baseline derive from the same PDF text state, glyph metrics, page transform, and source revision as rendering; rotated and skewed text retain non-axis-aligned geometry.",
+  "Page text preserves source atoms and separately derives bounded line/word clusters, normalized search text, and source/normalized index mappings.",
+  "ActualText and structure order remain uninterpreted Post-R0 inputs; their presence is retained or reported without replacing Unicode or claiming accessible logical order.",
+  "Canonical Text diff, O0/O1 cases, geometry property tests, cancellation, exact-limit, source-change, and deterministic replay validate character, geometry, order, confidence, and provenance fields.",
+]
+
+[[work_item]]
+id = "M6-06"
+title = "Versioned text and link Engine protocol"
+lane = "runtime-protocol"
+status = "planned"
+depends_on = ["M6-05"]
+outcome = "Desktop and browser hosts request and consume bounded Native text, selection, search, and link data under the same session, revision, generation, cancellation, and lifecycle rules as surfaces."
+acceptance = [
+  "The canonical schema generates Rust, TypeScript, and desktop bindings for bounded text-page acquisition, selection updates, search requests/results, and link publication/actions.",
+  "Every message binds Worker/session/source revision/page/text generation and enforces payload, atom, range, result, quad, string, queue, and retained-byte limits before allocation or DOM mutation.",
+  "Cancellation, viewport/page replacement, source change, session close, Worker restart, late results, duplicate release, and protocol mismatch have deterministic terminal behavior.",
+  "Text and link data can be paged or chunked without splitting Unicode scalars, losing atom mappings, or allowing stale data to affect the current page.",
+  "No host message carries a system font request, platform-shaped run, OCR request, external-engine fallback, or raw unbounded PDF object graph.",
+]
+
+[[work_item]]
+id = "M6-07"
+title = "Horizontal selection and copy"
+lane = "text-interaction"
+status = "planned"
+depends_on = ["M6-05", "M6-06"]
+outcome = "Pointer and keyboard selection produce stable horizontal LTR ranges, geometry, and copy text with explicit low-confidence behavior."
+acceptance = [
+  "Point, drag, word, line, page, keyboard-extension, rotated-page, cross-line, and virtualization-remount selection use glyph quads/baselines and deterministic tie-breaking.",
+  "Copy preserves Unicode sequences and declared whitespace/line-break policy while mapping every output range back to source atoms and confidence.",
+  "Unknown or low-confidence mappings follow the registered warn, omit, replacement, or disable policy; glyph id and character code are never exposed as trusted copied Unicode.",
+  "Browser and desktop retain selection across rerasterization and page DOM recycling when source revision and text generation match, and clear it on invalidation.",
+  "Normative, model, E2E, accessibility-input, and metamorphic tests cover zoom, DPR, rotation, selection direction, clipping, overlapping quads, cancellation, and deterministic replay.",
+]
+
+[[work_item]]
+id = "M6-08"
+title = "Normalized search and R0 links"
+lane = "text-interaction"
+status = "planned"
+depends_on = ["M6-05", "M6-06"]
+outcome = "Bounded search returns geometry-addressable results, and R0 links expose safe focusable navigation metadata without executing PDF actions in the engine."
+acceptance = [
+  "Search freezes case, Unicode normalization, combining-mark, ligature, whitespace, punctuation, and optional dehyphenation policy and retains normalized-to-source atom mappings.",
+  "Search indexing and queries are bounded, cancellable, revision-scoped, deterministic, and benchmark first-result latency separately from full-document completion.",
+  "Explicit PDF Link annotations expose validated rect/quad, page destination or allowlisted URI action, source object identity, focus order, and capability diagnostics; unsupported actions remain inert.",
+  "The R0 profile explicitly declares whether URL/mail detection from text is included; if included, it has a separate detector profile, test corpus, false-positive gate, geometry mapping, and safe-scheme policy.",
+  "Desktop and browser E2E cover next/previous result, result reveal, focus/keyboard activation, internal destination, safe external URI handoff, stale revision, cancellation, malformed links, and no-script behavior.",
+]
+
+[[work_item]]
+id = "M6-09"
+title = "Desktop and browser text-layer integration"
+lane = "platform-text"
+status = "planned"
+depends_on = ["M6-06", "M6-07", "M6-08"]
+outcome = "Native text and link data drive synchronized desktop/browser interaction layers without duplicating PDF semantics in platform hosts."
+acceptance = [
+  "The browser creates viewport-synchronized text and focusable link layers from protocol data; TypeScript does not decode fonts, CMaps, ToUnicode, content streams, or reading order.",
+  "The R0 text layer supports visual selection and links but does not claim a Tagged PDF screen-reader tree or full document accessibility.",
+  "Desktop and Chromium/Firefox/WebKit E2E cover local and Range sources, scroll, zoom, rotation, DPR, page virtualization, focus retention, selection/copy, search, links, close, and Worker restart.",
+  "DOM nodes, listeners, observers, search indexes, text chunks, link nodes, ports, and Native resources return to zero or declared cache baselines after replacement and close.",
+  "CSP, network, product dependency, Wasm import, font access, and runtime traces prove that no system-font fallback, external engine, OCR, remote renderer, or undeclared font download participates.",
+]
+
+[[work_item]]
+id = "M6-10"
+title = "R0 font/text maturity and release gate"
+lane = "font-text-quality"
+status = "planned"
+depends_on = ["M6-02", "M6-03", "M6-04", "M6-05", "M6-07", "M6-08", "M6-09"]
+outcome = "The registered horizontal font/text profiles become release-eligible only after independent evidence proves correctness, stability, boundedness, product purity, and user-visible behavior."
+acceptance = [
+  "O0/O1 normative cases, O2 differential adjudications, independently reviewed O3 goldens, disjoint holdouts, fuzz/minimization, and complete baseline fingerprints satisfy the capability maturity policy.",
+  "release-r0-v1 contains at least the fixed file/page counts and holdout ratio, reports per-font/CMap/Unicode/interaction denominators, and cannot dilute a failed text class with graphics-only pages.",
+  "Critical/major, unexpected Unsupported, dangerous false-positive capability, panic/hang/crash, cancellation, memory, first-result search, selection, copy, and link gates pass on the declared desktop and three-browser matrix.",
+  "Fixed-hardware benchmarks bind build/profile/corpus/environment hashes and cover cold preview, scroll, zoom, random jump, search first result, search completion, text-page construction, and peak memory.",
+  "Independent Font/Text/A11y, spec-conformance, quality-corpus, runtime-platform, and baseline-release review closes all P0-P2 findings before the candidate can become an R0 release.",
+]

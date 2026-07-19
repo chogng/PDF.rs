@@ -16,6 +16,7 @@ principles = [
   "Present only through Host-mediated transferable ImageBitmap, ArrayBuffer, or fenced SharedArrayBuffer; OffscreenCanvas is an optional Worker-private staging optimization and is never a DOM-bound wire Surface.",
   "Carry control traffic in the canonical fixed_le_v1 binary frame and treat every frame plus out-of-band resource table as untrusted before typed allocation, Wasm-memory access, DOM mutation, or resource adoption.",
   "Release event listeners, ports, workers, observers, bitmaps, buffers, fetches, and surfaces on replacement, unmount, session close, Worker fault, and viewer shutdown.",
+  "Keep both the Native Worker and browser host on the accepted M4 graphics profile; M5 adds no CMap, ToUnicode, Unicode semantic model, text interaction protocol, or text/link/accessibility layer.",
   "Keep PDFium, PDF.js, MuPDF, browser extensions, remote rendering services, and every other external PDF engine outside the product resource graph and recovery policy.",
   "Use real Chromium, Firefox, and WebKit runs for the exit gate; capability absence is tested as an explicit negotiated path rather than hidden by browser-specific mocks.",
 ]
@@ -30,7 +31,8 @@ registered_scope = [
 ]
 
 excluded_scope = [
-  "PDF parsing, content interpretation, fonts, text extraction, raster semantics, capability policy, and cache semantics in TypeScript or the browser main thread.",
+  "PDF parsing, content interpretation, fonts, CMap, ToUnicode, Unicode semantics, text extraction, raster semantics, capability policy, and cache semantics in TypeScript or the browser main thread.",
+  "Any Native font/text capability expansion beyond the accepted M4 profile, including semantic TextAtom/TextPage production or new text/search/link protocol messages.",
   "WebGPU, GPU fallback, mandatory SharedArrayBuffer or Wasm threads, multiple concurrent PDF workers, browser extensions, and platform-specific shared-memory requirements.",
   "Selection, copy, search, links, annotations, forms, save, complete accessibility, and the complete M6 release-r0-v1 experience.",
   "Graphics or document capability expansion beyond the accepted M4 Native profile, DEFAULT or STABLE promotion, and any external PDF engine product dependency or runtime fallback.",

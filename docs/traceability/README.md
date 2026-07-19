@@ -44,3 +44,8 @@ pipelines; CI performs two debug and two release invocations and byte-compares t
 artifacts for profile-stable replay. The linked features therefore remain `PLANNED`. This closure
 does not include paths, painting, clipping, text showing, fonts, images, Forms, rendering, broader
 resources, product Session/IPC, or browser and desktop integration.
+
+The [font/text roadmap audit](font-text-roadmap-audit.md) records the current implementation and
+evidence boundary, the M4/M5 non-expansion decision, the executable M6 and Post-R0 delivery plans,
+the shaping and system-font-fallback policies, and the deferred traceability updates that must not
+rewrite the stored, superseded hash-bound M4 candidate.
