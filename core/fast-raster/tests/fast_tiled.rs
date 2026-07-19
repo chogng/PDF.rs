@@ -522,6 +522,60 @@ fn clip_masks_and_nearest_image_sampling_use_independent_scalar_kernels() {
 }
 
 #[test]
+fn image_soft_mask_modulates_sample_alpha_in_the_rust_kernel() {
+    let mut image_builder = builder();
+    let image = ImageResource::new_with_soft_mask(
+        GraphicsResourceSource::new(ObjectRef::new(61, 0).unwrap(), 19, 1),
+        2,
+        1,
+        ImageColorSpace::DeviceRgb,
+        8,
+        false,
+        vec![255, 0, 0, 0, 0, 255],
+        Some(vec![0, 255]),
+    )
+    .unwrap();
+    image_builder
+        .draw_image(
+            image,
+            Matrix::new([
+                scalar(16),
+                SceneScalar::ZERO,
+                SceneScalar::ZERO,
+                scalar(16),
+                SceneScalar::ZERO,
+                SceneScalar::ZERO,
+            ]),
+            SceneUnit::ONE,
+            BlendMode::Normal,
+            SceneBounds::Page,
+            source(0),
+        )
+        .unwrap();
+    let scene = image_builder.finish().unwrap();
+    let render_plan = plan_with_profile(
+        &scene,
+        config(8, 8, 1),
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+        CapabilityProfile::m4_fast_v1(),
+    );
+    let pixels = compose(
+        &FastRasterJob::new(
+            &scene,
+            &render_plan,
+            FastRasterLimits::default(),
+            &NeverCancelled,
+        )
+        .unwrap()
+        .render_all(&[0, 1, 2, 3], &NeverCancelled)
+        .unwrap(),
+    );
+    assert_eq!(pixel(&pixels, 2, 8), [255, 255, 255, 255]);
+    assert_eq!(pixel(&pixels, 13, 8), [0, 0, 255, 255]);
+}
+
+#[test]
 fn stroke_and_outline_glyph_are_mounted_in_the_fast_dispatch() {
     let mut stroke_builder = builder();
     let line = PathResource::new(vec![

@@ -611,7 +611,7 @@ fn reference_supports_requirement(requirement: &CapabilityRequirement) -> bool {
         }
         GraphicsCapability::Glyph => parameter != 0,
         GraphicsCapability::IsolatedGroup => parameter == 0,
-        GraphicsCapability::SoftMask => false,
+        GraphicsCapability::SoftMask => parameter == 0,
     }
 }
 

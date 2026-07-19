@@ -106,7 +106,9 @@ impl CapabilityProfile {
             GraphicsCapability::IsolatedGroup => {
                 self.profile_version >= M4_FAST_PROFILE_VERSION && parameter == 0
             }
-            GraphicsCapability::SoftMask => false,
+            GraphicsCapability::SoftMask => {
+                self.profile_version >= M4_FAST_PROFILE_VERSION && parameter == 0
+            }
         }
     }
 }

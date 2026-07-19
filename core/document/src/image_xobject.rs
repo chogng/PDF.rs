@@ -228,6 +228,8 @@ pub enum ImageXObjectPhase {
     Object,
     /// A one-level indirect device ColorSpace object is being reopened.
     ColorSpace,
+    /// One proof-bound grayscale image soft mask is being reopened or decoded.
+    SoftMask,
     /// The exact encoded stream payload is being acquired and decoded.
     Payload,
     /// A proof-bearing decoded image was published.
@@ -331,6 +333,7 @@ pub struct AcquiredImageXObject {
     indexed_lookup_object: Option<AttestedObject>,
     indexed_lookup: Option<IndexedLookup>,
     indexed_high_value: Option<u8>,
+    soft_mask: Vec<AcquiredSoftMask>,
     width: u32,
     height: u32,
     color_space: ImageXObjectColorSpace,
@@ -340,6 +343,12 @@ pub struct AcquiredImageXObject {
     decoded: DecodedStream,
     limits: ImageXObjectLimits,
     stats: ImageXObjectStats,
+}
+
+struct AcquiredSoftMask {
+    object: AttestedObject,
+    stride_bytes: u64,
+    decoded: DecodedStream,
 }
 
 impl AcquiredImageXObject {
@@ -411,6 +420,33 @@ impl AcquiredImageXObject {
     /// Borrows the exact Indexed lookup table, when present.
     pub fn indexed_lookup_bytes(&self) -> Option<&[u8]> {
         self.indexed_lookup.as_ref().map(IndexedLookup::bytes)
+    }
+
+    /// Returns the proof-bound grayscale soft-mask object, when present.
+    pub const fn soft_mask_object(&self) -> Option<&AttestedObject> {
+        match self.soft_mask.as_slice() {
+            [mask] => Some(&mask.object),
+            [] => None,
+            _ => None,
+        }
+    }
+
+    /// Borrows tightly packed 8-bit grayscale soft-mask samples, when present.
+    pub fn soft_mask_decoded_bytes(&self) -> Option<&[u8]> {
+        match self.soft_mask.as_slice() {
+            [mask] => Some(mask.decoded.bytes()),
+            [] => None,
+            _ => None,
+        }
+    }
+
+    /// Returns the tightly packed grayscale soft-mask row bytes, when present.
+    pub const fn soft_mask_stride_bytes(&self) -> Option<u64> {
+        match self.soft_mask.as_slice() {
+            [mask] => Some(mask.stride_bytes),
+            [] => None,
+            _ => None,
+        }
     }
 
     /// Returns the registered packed component width.
@@ -493,6 +529,10 @@ impl fmt::Debug for AcquiredImageXObject {
                     .map(AttestedObject::reference),
             )
             .field("indexed_high_value", &self.indexed_high_value)
+            .field(
+                "soft_mask_reference",
+                &self.soft_mask.first().map(|mask| mask.object.reference()),
+            )
             .field("width", &self.width)
             .field("height", &self.height)
             .field("color_space", &self.color_space)
@@ -575,6 +615,25 @@ struct ImageMetadata {
     layer_output_bytes: u64,
     total_output_bytes: u64,
     filter: RegisteredFilter,
+    soft_mask: Option<SoftMaskReference>,
+}
+
+#[derive(Clone, Copy)]
+struct SoftMaskReference {
+    target: ObjectRef,
+    offset: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImagePayloadRole {
+    Main,
+    SoftMask,
+}
+
+#[derive(Clone, Copy)]
+enum ImageInspection {
+    Main,
+    SoftMask { width: u32, height: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -592,6 +651,7 @@ struct ActiveImage {
     indexed_lookup: Option<IndexedLookup>,
     indexed_high_value: Option<u8>,
     metadata: ImageMetadata,
+    role: ImagePayloadRole,
 }
 
 impl ActiveImage {
@@ -623,6 +683,7 @@ enum ChildKind {
     IndexedBase,
     IccProfile,
     IndexedLookup,
+    SoftMask,
 }
 
 struct ChildState {
@@ -684,6 +745,7 @@ enum DecodeParametersOutcome {
 
 enum PayloadOutcome {
     Ready(Arc<AcquiredImageXObject>),
+    Continue,
     Pending {
         ticket: DataTicket,
         missing: SmallRanges,
@@ -735,6 +797,8 @@ pub struct AcquireImageXObjectJob {
     pending_indexed: Option<PendingIndexed>,
     indexed_lookup: Option<IndexedLookup>,
     active_indexed_lookup: Option<ActiveIndexedLookup>,
+    pending_main: Vec<ActiveImage>,
+    soft_mask: Vec<AcquiredSoftMask>,
     active: Option<ActiveImage>,
     stats: ImageXObjectStats,
     state: ImageJobState,
@@ -772,16 +836,27 @@ impl AcquireImageXObjectJob {
             ImageJobState::Ready(_) => ImageXObjectPhase::Ready,
             ImageJobState::Unsupported(_) => ImageXObjectPhase::Unsupported,
             ImageJobState::Failed(_) => ImageXObjectPhase::Failed,
-            ImageJobState::Active if self.active.is_some() => ImageXObjectPhase::Payload,
-            ImageJobState::Active if self.active_indexed_lookup.is_some() => {
-                ImageXObjectPhase::ColorSpace
-            }
-            ImageJobState::Active => match &self.child {
-                Some(child) if !matches!(child.kind, ChildKind::Image) => {
+            ImageJobState::Active => {
+                if let Some(active) = &self.active {
+                    if matches!(active.role, ImagePayloadRole::SoftMask) {
+                        ImageXObjectPhase::SoftMask
+                    } else {
+                        ImageXObjectPhase::Payload
+                    }
+                } else if self.active_indexed_lookup.is_some() {
                     ImageXObjectPhase::ColorSpace
+                } else {
+                    match &self.child {
+                        Some(child) if matches!(child.kind, ChildKind::SoftMask) => {
+                            ImageXObjectPhase::SoftMask
+                        }
+                        Some(child) if !matches!(child.kind, ChildKind::Image) => {
+                            ImageXObjectPhase::ColorSpace
+                        }
+                        Some(_) | None => ImageXObjectPhase::Object,
+                    }
                 }
-                Some(_) | None => ImageXObjectPhase::Object,
-            },
+            }
         }
     }
 
@@ -836,19 +911,24 @@ impl AcquireImageXObjectJob {
                 }
             }
             if self.active.is_some() {
-                return match self.poll_payload(source, cancellation) {
-                    PayloadOutcome::Ready(image) => self.ready(image),
-                    PayloadOutcome::Pending { ticket, missing } => ImageXObjectPoll::Pending {
-                        ticket,
-                        missing,
-                        checkpoint: self.context.payload_checkpoint(),
-                    },
-                    PayloadOutcome::Unsupported(unsupported) => self.unsupported(unsupported),
+                match self.poll_payload(source, cancellation) {
+                    PayloadOutcome::Ready(image) => return self.ready(image),
+                    PayloadOutcome::Continue => continue,
+                    PayloadOutcome::Pending { ticket, missing } => {
+                        return ImageXObjectPoll::Pending {
+                            ticket,
+                            missing,
+                            checkpoint: self.context.payload_checkpoint(),
+                        };
+                    }
+                    PayloadOutcome::Unsupported(unsupported) => {
+                        return self.unsupported(unsupported);
+                    }
                     PayloadOutcome::Failed(error) => {
                         let error = self.prioritize_runtime_error(source, cancellation, error);
-                        self.fail(error)
+                        return self.fail(error);
                     }
-                };
+                }
             }
 
             let retained_objects = match self.retained_object_bytes() {
@@ -925,9 +1005,15 @@ impl AcquireImageXObjectJob {
             return Err(self.internal_error(Some(object.object_span().start())));
         }
         match kind {
-            ChildKind::Image => match self.inspect_object(&object, None, source, cancellation)? {
+            ChildKind::Image => match self.inspect_object(
+                &object,
+                None,
+                ImageInspection::Main,
+                source,
+                cancellation,
+            )? {
                 MetadataOutcome::Ready(metadata) => {
-                    self.active = Some(ActiveImage {
+                    let active = ActiveImage {
                         object,
                         color_space_object: None,
                         color_space_base_object: None,
@@ -936,8 +1022,9 @@ impl AcquireImageXObjectJob {
                         indexed_lookup: None,
                         indexed_high_value: None,
                         metadata,
-                    });
-                    Ok(Ok(()))
+                        role: ImagePayloadRole::Main,
+                    };
+                    self.activate_main(active)
                 }
                 MetadataOutcome::IndirectColorSpace(reference) => {
                     if reference == object.reference() {
@@ -1058,7 +1145,153 @@ impl AcquireImageXObjectJob {
                 }
                 Ok(Ok(()))
             }
+            ChildKind::SoftMask => {
+                let main = self
+                    .pending_main
+                    .first()
+                    .ok_or_else(|| self.internal_error(None))?;
+                let inspection = ImageInspection::SoftMask {
+                    width: main.metadata.width,
+                    height: main.metadata.height,
+                };
+                match self.inspect_object(&object, None, inspection, source, cancellation)? {
+                    MetadataOutcome::Ready(metadata) => {
+                        if metadata.soft_mask.is_some() {
+                            return Err(self.internal_error(Some(object.object_span().start())));
+                        }
+                        self.active = Some(ActiveImage {
+                            object,
+                            color_space_object: None,
+                            color_space_base_object: None,
+                            icc_profile_object: None,
+                            indexed_lookup_object: None,
+                            indexed_lookup: None,
+                            indexed_high_value: None,
+                            metadata,
+                            role: ImagePayloadRole::SoftMask,
+                        });
+                        Ok(Ok(()))
+                    }
+                    MetadataOutcome::IndirectColorSpace(_) => Ok(Err(unsupported_color_space(
+                        object.reference(),
+                        object.object_span().start(),
+                    ))),
+                    MetadataOutcome::Unsupported(unsupported) => Ok(Err(unsupported)),
+                }
+            }
         }
+    }
+
+    fn activate_main(
+        &mut self,
+        active: ActiveImage,
+    ) -> Result<Result<(), ImageXObjectUnsupported>, DocumentError> {
+        let Some(soft_mask) = active.metadata.soft_mask else {
+            self.active = Some(active);
+            return Ok(Ok(()));
+        };
+        if soft_mask.target == active.object.reference() {
+            return Err(invalid_image(soft_mask.target, soft_mask.offset));
+        }
+        self.store_pending_main(active, soft_mask.target, soft_mask.offset)?;
+        self.start_child(soft_mask.target, ChildKind::SoftMask)?;
+        Ok(Ok(()))
+    }
+
+    fn store_pending_main(
+        &mut self,
+        active: ActiveImage,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Result<(), DocumentError> {
+        if !self.pending_main.is_empty() {
+            return Err(self.internal_error(Some(offset)));
+        }
+        let active_retained = active
+            .retained_prefix_bytes()
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        let existing = self.retained_object_bytes()?;
+        let nominal = u64::try_from(std::mem::size_of::<ActiveImage>())
+            .map_err(|_| self.internal_error(Some(offset)))?;
+        self.preflight_retained_state(existing, active_retained, nominal, reference, offset)?;
+        self.pending_main.try_reserve_exact(1).map_err(|_| {
+            DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectRetainedBytes,
+                self.limits.max_retained_bytes(),
+                existing,
+                active_retained.saturating_add(nominal),
+                reference,
+                Some(offset),
+            )
+        })?;
+        let allocated = retained_vec_bytes(&self.pending_main)
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        self.preflight_retained_state(existing, active_retained, allocated, reference, offset)?;
+        self.pending_main.push(active);
+        let retained = self.retained_object_bytes()?;
+        self.stats.peak_retained_bytes = self.stats.peak_retained_bytes.max(retained);
+        Ok(())
+    }
+
+    fn store_soft_mask(
+        &mut self,
+        mask: AcquiredSoftMask,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Result<(), DocumentError> {
+        if !self.soft_mask.is_empty() {
+            return Err(self.internal_error(Some(offset)));
+        }
+        let mask_retained =
+            soft_mask_retained_bytes(&mask).ok_or_else(|| self.internal_error(Some(offset)))?;
+        let existing = self.retained_object_bytes()?;
+        let nominal = u64::try_from(std::mem::size_of::<AcquiredSoftMask>())
+            .map_err(|_| self.internal_error(Some(offset)))?;
+        self.preflight_retained_state(existing, mask_retained, nominal, reference, offset)?;
+        self.soft_mask.try_reserve_exact(1).map_err(|_| {
+            DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectRetainedBytes,
+                self.limits.max_retained_bytes(),
+                existing,
+                mask_retained.saturating_add(nominal),
+                reference,
+                Some(offset),
+            )
+        })?;
+        let allocated =
+            retained_vec_bytes(&self.soft_mask).ok_or_else(|| self.internal_error(Some(offset)))?;
+        self.preflight_retained_state(existing, mask_retained, allocated, reference, offset)?;
+        self.soft_mask.push(mask);
+        let retained = self.retained_object_bytes()?;
+        self.stats.peak_retained_bytes = self.stats.peak_retained_bytes.max(retained);
+        Ok(())
+    }
+
+    fn preflight_retained_state(
+        &self,
+        existing: u64,
+        payload: u64,
+        allocation: u64,
+        reference: ObjectRef,
+        offset: u64,
+    ) -> Result<(), DocumentError> {
+        let attempted = payload
+            .checked_add(allocation)
+            .ok_or_else(|| self.internal_error(Some(offset)))?;
+        if existing
+            .checked_add(attempted)
+            .is_none_or(|total| total > self.limits.max_retained_bytes())
+        {
+            return Err(DocumentError::image_xobject_resource(
+                DocumentLimitKind::ImageXObjectRetainedBytes,
+                self.limits.max_retained_bytes(),
+                existing,
+                attempted,
+                reference,
+                Some(offset),
+            ));
+        }
+        Ok(())
     }
 
     fn inspect_color_space_object(
@@ -1292,9 +1525,15 @@ impl AcquireImageXObjectJob {
             .image_object
             .take()
             .ok_or_else(|| self.internal_error(None))?;
-        match self.inspect_object(&image_object, Some(resolved), source, cancellation)? {
+        match self.inspect_object(
+            &image_object,
+            Some(resolved),
+            ImageInspection::Main,
+            source,
+            cancellation,
+        )? {
             MetadataOutcome::Ready(metadata) => {
-                self.active = Some(ActiveImage {
+                let active = ActiveImage {
                     object: image_object,
                     color_space_object: self.color_space_object.take(),
                     color_space_base_object: self.color_space_base_object.take(),
@@ -1303,8 +1542,9 @@ impl AcquireImageXObjectJob {
                     indexed_lookup: self.indexed_lookup.take(),
                     indexed_high_value: resolved.indexed_high_value,
                     metadata,
-                });
-                Ok(Ok(()))
+                    role: ImagePayloadRole::Main,
+                };
+                self.activate_main(active)
             }
             MetadataOutcome::IndirectColorSpace(_) => {
                 Err(self.internal_error(Some(image_object.object_span().start())))
@@ -1610,6 +1850,7 @@ impl AcquireImageXObjectJob {
                         layer_output_bytes: active.expected_bytes,
                         total_output_bytes: active.expected_bytes,
                         filter: active.filter,
+                        soft_mask: None,
                     },
                     None,
                 ));
@@ -1699,6 +1940,7 @@ impl AcquireImageXObjectJob {
                         layer_output_bytes: active.expected_bytes,
                         total_output_bytes: active.expected_bytes,
                         filter: active.filter,
+                        soft_mask: None,
                     },
                     None,
                 ));
@@ -1728,6 +1970,7 @@ impl AcquireImageXObjectJob {
                         layer_output_bytes: active.expected_bytes,
                         total_output_bytes: active.expected_bytes,
                         filter: active.filter,
+                        soft_mask: None,
                     },
                     None,
                 ));
@@ -1885,9 +2128,9 @@ impl AcquireImageXObjectJob {
                 ));
             }
         };
-        let object_heap = match active.retained_prefix_bytes() {
-            Some(value) => value,
-            None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
+        let object_heap = match self.payload_retained_prefix_bytes(&active) {
+            Ok(value) => value,
+            Err(error) => return PayloadOutcome::Failed(error),
         };
         let preallocated = match object_heap.checked_add(plan_upper) {
             Some(value) => value,
@@ -2014,13 +2257,41 @@ impl AcquireImageXObjectJob {
                 Some(data_span.start()),
             ));
         }
-        self.stats.decoded_bytes = active.metadata.decoded_bytes;
+        self.stats.decoded_bytes = match self
+            .stats
+            .decoded_bytes
+            .checked_add(active.metadata.decoded_bytes)
+        {
+            Some(value) => value,
+            None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
+        };
         self.stats.decode_fuel = match self.stats.decode_fuel.checked_add(decode_fuel) {
             Some(value) => value,
             None => return PayloadOutcome::Failed(self.internal_error(Some(data_span.start()))),
         };
         self.stats.retained_bytes = retained;
         self.stats.peak_retained_bytes = self.stats.peak_retained_bytes.max(retained);
+        if active.role == ImagePayloadRole::SoftMask {
+            if let Err(error) = self.store_soft_mask(
+                AcquiredSoftMask {
+                    object: active.object,
+                    stride_bytes: active.metadata.stride_bytes,
+                    decoded,
+                },
+                reference,
+                data_span.start(),
+            ) {
+                return PayloadOutcome::Failed(error);
+            }
+            let Some(main) = self.pending_main.pop() else {
+                return PayloadOutcome::Failed(self.internal_error(Some(data_span.start())));
+            };
+            self.pending_main = Vec::new();
+            self.active = Some(main);
+            return PayloadOutcome::Continue;
+        }
+        let soft_mask = std::mem::take(&mut self.soft_mask);
+        let has_soft_mask = !soft_mask.is_empty();
         let image = AcquiredImageXObject {
             proof: self.proof,
             object: active.object,
@@ -2030,12 +2301,13 @@ impl AcquireImageXObjectJob {
             indexed_lookup_object: active.indexed_lookup_object,
             indexed_lookup: active.indexed_lookup,
             indexed_high_value: active.indexed_high_value,
+            soft_mask,
             width: active.metadata.width,
             height: active.metadata.height,
             color_space: active.metadata.color_space,
             bits_per_component: active.metadata.bits_per_component,
             stride_bytes: active.metadata.stride_bytes,
-            decode_context: decode_context(active.metadata),
+            decode_context: decode_context(active.metadata, has_soft_mask),
             decoded,
             limits: self.limits,
             stats: self.stats,
@@ -2047,6 +2319,7 @@ impl AcquireImageXObjectJob {
         &mut self,
         object: &AttestedObject,
         resolved_color_space: Option<ResolvedImageColorSpace>,
+        inspection: ImageInspection,
         source: &(dyn ByteSource + '_),
         cancellation: &(dyn DocumentCancellation + '_),
     ) -> Result<MetadataOutcome, DocumentError> {
@@ -2125,13 +2398,38 @@ impl AcquireImageXObjectJob {
                 mask.span().start(),
             ));
         }
-        if let Some(mask) = slots.soft_mask
-            && !matches!(mask.value(), SyntaxObject::Null)
+        let soft_mask = match (inspection, slots.soft_mask) {
+            (_, None) => None,
+            (_, Some(mask)) if matches!(mask.value(), SyntaxObject::Null) => None,
+            (ImageInspection::Main, Some(mask)) => match mask.value() {
+                SyntaxObject::Reference(target) => Some(SoftMaskReference {
+                    target: *target,
+                    offset: mask.span().start(),
+                }),
+                _ => {
+                    return Ok(unsupported(
+                        ImageXObjectUnsupportedKind::SoftMask,
+                        reference,
+                        mask.span().start(),
+                    ));
+                }
+            },
+            (ImageInspection::SoftMask { .. }, Some(mask)) => {
+                return Ok(unsupported(
+                    ImageXObjectUnsupportedKind::SoftMask,
+                    reference,
+                    mask.span().start(),
+                ));
+            }
+        };
+        if matches!(inspection, ImageInspection::SoftMask { .. })
+            && let Some(matte) = slots.matte
+            && !matches!(matte.value(), SyntaxObject::Null)
         {
             return Ok(unsupported(
                 ImageXObjectUnsupportedKind::SoftMask,
                 reference,
-                mask.span().start(),
+                matte.span().start(),
             ));
         }
 
@@ -2171,6 +2469,14 @@ impl AcquireImageXObjectJob {
             reference,
             height_value.span().start(),
         )?;
+        if let ImageInspection::SoftMask {
+            width: expected_width,
+            height: expected_height,
+        } = inspection
+            && (width != expected_width || height != expected_height)
+        {
+            return Err(invalid_image(reference, width_value.span().start()));
+        }
 
         let color_value = required_slot(slots.color_space, reference, dictionary_offset)?;
         let color_space = match color_value.value() {
@@ -2200,6 +2506,15 @@ impl AcquireImageXObjectJob {
             }
             _ => return Err(invalid_image(reference, color_value.span().start())),
         };
+        if matches!(inspection, ImageInspection::SoftMask { .. })
+            && color_space != ImageXObjectColorSpace::DeviceGray
+        {
+            return Ok(unsupported(
+                ImageXObjectUnsupportedKind::UnsupportedColorSpace,
+                reference,
+                color_value.span().start(),
+            ));
+        }
 
         let bits_value = required_slot(slots.bits_per_component, reference, dictionary_offset)?;
         let bits_per_component = match bits_value.value() {
@@ -2219,6 +2534,13 @@ impl AcquireImageXObjectJob {
             _ => return Err(invalid_image(reference, bits_value.span().start())),
         };
         if color_space.is_indexed() && bits_per_component == 16 {
+            return Ok(unsupported(
+                ImageXObjectUnsupportedKind::UnsupportedBitsPerComponent,
+                reference,
+                bits_value.span().start(),
+            ));
+        }
+        if matches!(inspection, ImageInspection::SoftMask { .. }) && bits_per_component != 8 {
             return Ok(unsupported(
                 ImageXObjectUnsupportedKind::UnsupportedBitsPerComponent,
                 reference,
@@ -2299,56 +2621,93 @@ impl AcquireImageXObjectJob {
                 }
                 RegisteredFilter::Identity
             }
-            Some(value) => match value.value() {
-                SyntaxObject::Name(name) if name.bytes() == b"FlateDecode" => {
-                    let parameters = match slots.decode_parameters {
-                        None => None,
-                        Some(parameters) => match parameters.value() {
-                            SyntaxObject::Null => None,
-                            SyntaxObject::Dictionary(dictionary) => {
-                                match self.decode_parameters(
-                                    dictionary,
-                                    reference,
-                                    color_space,
-                                    bits_per_component,
-                                    width,
-                                    parameters.span().start(),
-                                )? {
-                                    DecodeParametersOutcome::Ready(parameters) => Some(parameters),
-                                    DecodeParametersOutcome::Unsupported(unsupported) => {
-                                        return Ok(MetadataOutcome::Unsupported(unsupported));
+            Some(value) => {
+                let filter_value = match value.value() {
+                    SyntaxObject::Array(values) if values.values().len() == 1 => {
+                        let filter_value = &values.values()[0];
+                        self.charge_metadata(reference, filter_value.span().start())?;
+                        filter_value
+                    }
+                    SyntaxObject::Array(_) => {
+                        return Ok(unsupported(
+                            ImageXObjectUnsupportedKind::UnsupportedFilter,
+                            reference,
+                            value.span().start(),
+                        ));
+                    }
+                    _ => value,
+                };
+                match filter_value.value() {
+                    SyntaxObject::Name(name) if name.bytes() == b"FlateDecode" => {
+                        let parameters = match slots.decode_parameters {
+                            None => None,
+                            Some(parameters) => {
+                                let parameters = match parameters.value() {
+                                    SyntaxObject::Array(values) if values.values().len() == 1 => {
+                                        let parameters = &values.values()[0];
+                                        self.charge_metadata(reference, parameters.span().start())?;
+                                        parameters
+                                    }
+                                    SyntaxObject::Array(_) => {
+                                        return Ok(unsupported(
+                                        ImageXObjectUnsupportedKind::UnsupportedDecodeParameters,
+                                        reference,
+                                        parameters.span().start(),
+                                    ));
+                                    }
+                                    _ => parameters,
+                                };
+                                match parameters.value() {
+                                    SyntaxObject::Null => None,
+                                    SyntaxObject::Dictionary(dictionary) => {
+                                        match self.decode_parameters(
+                                            dictionary,
+                                            reference,
+                                            color_space,
+                                            bits_per_component,
+                                            width,
+                                            parameters.span().start(),
+                                        )? {
+                                            DecodeParametersOutcome::Ready(parameters) => {
+                                                Some(parameters)
+                                            }
+                                            DecodeParametersOutcome::Unsupported(unsupported) => {
+                                                return Ok(MetadataOutcome::Unsupported(
+                                                    unsupported,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    SyntaxObject::Reference(_) => {
+                                        return Ok(indirect_metadata(
+                                            reference,
+                                            parameters.span().start(),
+                                        ));
+                                    }
+                                    _ => {
+                                        return Err(invalid_image(
+                                            reference,
+                                            parameters.span().start(),
+                                        ));
                                     }
                                 }
                             }
-                            SyntaxObject::Reference(_) => {
-                                return Ok(indirect_metadata(reference, parameters.span().start()));
-                            }
-                            SyntaxObject::Array(_) => {
-                                return Ok(unsupported(
-                                    ImageXObjectUnsupportedKind::UnsupportedDecodeParameters,
-                                    reference,
-                                    parameters.span().start(),
-                                ));
-                            }
-                            _ => {
-                                return Err(invalid_image(reference, parameters.span().start()));
-                            }
-                        },
-                    };
-                    RegisteredFilter::Flate { parameters }
+                        };
+                        RegisteredFilter::Flate { parameters }
+                    }
+                    SyntaxObject::Name(_) => {
+                        return Ok(unsupported(
+                            ImageXObjectUnsupportedKind::UnsupportedFilter,
+                            reference,
+                            filter_value.span().start(),
+                        ));
+                    }
+                    SyntaxObject::Reference(_) => {
+                        return Ok(indirect_metadata(reference, filter_value.span().start()));
+                    }
+                    _ => return Err(invalid_image(reference, filter_value.span().start())),
                 }
-                SyntaxObject::Name(_) | SyntaxObject::Array(_) => {
-                    return Ok(unsupported(
-                        ImageXObjectUnsupportedKind::UnsupportedFilter,
-                        reference,
-                        value.span().start(),
-                    ));
-                }
-                SyntaxObject::Reference(_) => {
-                    return Ok(indirect_metadata(reference, value.span().start()));
-                }
-                _ => return Err(invalid_image(reference, value.span().start())),
-            },
+            }
         };
 
         let pixels = u64::from(width)
@@ -2412,6 +2771,7 @@ impl AcquireImageXObjectJob {
             layer_output_bytes,
             total_output_bytes,
             filter,
+            soft_mask,
         }))
     }
 
@@ -2459,9 +2819,12 @@ impl AcquireImageXObjectJob {
             };
             *slot = Some((*value, entry.value().span().start()));
         }
-        if colors.is_some_and(|(value, _)| value != i64::from(color_space.source_components()))
-            || bits.is_some_and(|(value, _)| value != i64::from(bits_per_component))
-            || columns.is_some_and(|(value, _)| value != i64::from(width))
+        let predictor_value = predictor.map_or(1, |(value, _)| value);
+        if predictor_value != 1
+            && (colors
+                .is_some_and(|(value, _)| value != i64::from(color_space.source_components()))
+                || bits.is_some_and(|(value, _)| value != i64::from(bits_per_component))
+                || columns.is_some_and(|(value, _)| value != i64::from(width)))
         {
             let mismatch_offset = colors
                 .filter(|(value, _)| *value != i64::from(color_space.source_components()))
@@ -2477,7 +2840,7 @@ impl AcquireImageXObjectJob {
             ));
         }
         match PredictorParameters::new(
-            predictor.map_or(1, |(value, _)| value),
+            predictor_value,
             i64::from(color_space.source_components()),
             i64::from(bits_per_component),
             i64::from(width),
@@ -2521,6 +2884,7 @@ impl AcquireImageXObjectJob {
                 b"ImageMask" => Some(&mut slots.image_mask),
                 b"Mask" => Some(&mut slots.mask),
                 b"SMask" => Some(&mut slots.soft_mask),
+                b"Matte" => Some(&mut slots.matte),
                 b"Decode" => Some(&mut slots.decode),
                 b"Interpolate" => Some(&mut slots.interpolate),
                 b"Filter" => Some(&mut slots.filter),
@@ -2574,7 +2938,9 @@ impl AcquireImageXObjectJob {
     }
 
     fn retained_object_bytes(&self) -> Result<u64, DocumentError> {
-        let mut retained = 0_u64;
+        let mut retained = retained_vec_bytes(&self.pending_main)
+            .and_then(|value| value.checked_add(retained_vec_bytes(&self.soft_mask)?))
+            .ok_or_else(|| self.internal_error(None))?;
         for object in [
             self.image_object.as_ref(),
             self.color_space_object.as_ref(),
@@ -2610,6 +2976,45 @@ impl AcquireImageXObjectJob {
                 )
                 .ok_or_else(|| self.internal_error(None))?;
         }
+        if let Some(main) = self.pending_main.first() {
+            retained = retained
+                .checked_add(
+                    main.retained_prefix_bytes()
+                        .ok_or_else(|| self.internal_error(None))?,
+                )
+                .ok_or_else(|| self.internal_error(None))?;
+        }
+        if let Some(mask) = self.soft_mask.first() {
+            retained = retained
+                .checked_add(
+                    soft_mask_retained_bytes(mask).ok_or_else(|| self.internal_error(None))?,
+                )
+                .ok_or_else(|| self.internal_error(None))?;
+        }
+        Ok(retained)
+    }
+
+    fn payload_retained_prefix_bytes(&self, active: &ActiveImage) -> Result<u64, DocumentError> {
+        let mut retained = active
+            .retained_prefix_bytes()
+            .and_then(|value| value.checked_add(retained_vec_bytes(&self.pending_main)?))
+            .and_then(|value| value.checked_add(retained_vec_bytes(&self.soft_mask)?))
+            .ok_or_else(|| self.internal_error(None))?;
+        if let Some(main) = self.pending_main.first() {
+            retained = retained
+                .checked_add(
+                    main.retained_prefix_bytes()
+                        .ok_or_else(|| self.internal_error(None))?,
+                )
+                .ok_or_else(|| self.internal_error(None))?;
+        }
+        if let Some(mask) = self.soft_mask.first() {
+            retained = retained
+                .checked_add(
+                    soft_mask_retained_bytes(mask).ok_or_else(|| self.internal_error(None))?,
+                )
+                .ok_or_else(|| self.internal_error(None))?;
+        }
         Ok(retained)
     }
 
@@ -2626,6 +3031,8 @@ impl AcquireImageXObjectJob {
                 self.active_indexed_lookup
                     .as_ref()
                     .map(|active| &active.object),
+                self.pending_main.first().map(|active| &active.object),
+                self.soft_mask.first().map(|mask| &mask.object),
             ]
             .into_iter()
             .flatten()
@@ -3225,6 +3632,8 @@ impl SharedAttestedRevisionIndex {
             pending_indexed: None,
             indexed_lookup: None,
             active_indexed_lookup: None,
+            pending_main: Vec::new(),
+            soft_mask: Vec::new(),
             active: None,
             stats: ImageXObjectStats::default(),
             state: ImageJobState::Active,
@@ -3243,6 +3652,7 @@ struct ImageSlots<'a> {
     image_mask: Option<&'a Located<SyntaxObject>>,
     mask: Option<&'a Located<SyntaxObject>>,
     soft_mask: Option<&'a Located<SyntaxObject>>,
+    matte: Option<&'a Located<SyntaxObject>>,
     decode: Option<&'a Located<SyntaxObject>>,
     interpolate: Option<&'a Located<SyntaxObject>>,
     filter: Option<&'a Located<SyntaxObject>>,
@@ -3364,12 +3774,28 @@ fn canonical_filter_plan(filter: RegisteredFilter) -> Result<FilterPlan, DecodeE
     }
 }
 
-fn decode_context(metadata: ImageMetadata) -> u64 {
+fn retained_vec_bytes<T>(values: &Vec<T>) -> Option<u64> {
+    u64::try_from(values.capacity())
+        .ok()?
+        .checked_mul(u64::try_from(std::mem::size_of::<T>()).ok()?)
+}
+
+fn soft_mask_retained_bytes(mask: &AcquiredSoftMask) -> Option<u64> {
+    mask.object
+        .syntax_heap_bytes()
+        .checked_add(mask.decoded.attestation().plan_retained_heap_bytes())
+        .and_then(|value| {
+            value.checked_add(mask.decoded.attestation().peak_retained_capacity_bytes())
+        })
+}
+
+fn decode_context(metadata: ImageMetadata, has_soft_mask: bool) -> u64 {
     (DECODE_CONTEXT_VERSION << 56)
         | (metadata.color_space.context_code() << 48)
         | (u64::from(metadata.bits_per_component) << 40)
         | (metadata.filter.context_code() << 32)
         | (1 << 24)
+        | (u64::from(has_soft_mask) << 16)
 }
 
 fn numeric_is_exact(value: &SyntaxObject, expected_one: bool) -> bool {

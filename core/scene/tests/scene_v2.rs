@@ -987,6 +987,56 @@ fn source_identity_rejects_conflicting_decoded_payloads() {
 }
 
 #[test]
+fn soft_mask_bytes_are_canonical_identity_and_image_budget_input() {
+    let source_key = GraphicsResourceSource::new(ObjectRef::new(13, 0).unwrap(), 42, 8);
+    let build = |mask, max_image_bytes| {
+        let limits = GraphicsSceneLimits::validate(GraphicsSceneLimitConfig {
+            max_image_bytes,
+            ..GraphicsSceneLimitConfig::default()
+        })
+        .unwrap();
+        let mut builder = GraphicsSceneBuilder::new_v2(binding(2), geometry(), limits);
+        let image = ImageResource::new_with_soft_mask(
+            source_key,
+            1,
+            1,
+            ImageColorSpace::DeviceGray,
+            8,
+            false,
+            vec![127],
+            Some(vec![mask]),
+        )
+        .unwrap();
+        builder
+            .draw_image(
+                image,
+                Matrix::IDENTITY,
+                SceneUnit::ONE,
+                BlendMode::Normal,
+                SceneBounds::Page,
+                source(0),
+            )
+            .map(|()| builder.finish().unwrap())
+    };
+
+    let first = build(0, 2).expect("color and alpha bytes fit exact image budget");
+    let second = build(255, 2).expect("alternate alpha byte fits exact image budget");
+    assert_ne!(
+        first.canonical_json_bytes().unwrap(),
+        second.canonical_json_bytes().unwrap()
+    );
+    assert!(
+        String::from_utf8(first.canonical_json_bytes().unwrap())
+            .unwrap()
+            .contains("\"soft_mask_hex\":\"00\"")
+    );
+    assert_eq!(
+        build(0, 1).unwrap_err().code(),
+        SceneErrorCode::ResourceLimit
+    );
+}
+
+#[test]
 fn post_close_segments_require_explicit_normalized_subpath_restart() {
     let start = PathSegment::MoveTo(point("0", "0"));
     let line = PathSegment::LineTo(point("1", "0"));

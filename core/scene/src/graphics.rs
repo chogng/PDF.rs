@@ -605,7 +605,7 @@ impl GraphicsResourceSource {
     }
 }
 
-/// Basic unmasked decoded image.
+/// Basic decoded image with an optional same-size 8-bit grayscale soft mask.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImageResource {
     source: GraphicsResourceSource,
@@ -615,6 +615,7 @@ pub struct ImageResource {
     bits_per_component: u8,
     interpolate: bool,
     decoded: Arc<Vec<u8>>,
+    soft_mask: Option<Arc<Vec<u8>>>,
 }
 
 impl ImageResource {
@@ -627,6 +628,33 @@ impl ImageResource {
         bits_per_component: u8,
         interpolate: bool,
         decoded: Vec<u8>,
+    ) -> Result<Self, SceneError> {
+        Self::new_with_soft_mask(
+            source,
+            width,
+            height,
+            color_space,
+            bits_per_component,
+            interpolate,
+            decoded,
+            None,
+        )
+    }
+
+    /// Creates one exact 8-bit decoded image with an optional 8-bit alpha plane.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "image construction keeps identity, geometry, color, sampling, pixels, and alpha explicit"
+    )]
+    pub fn new_with_soft_mask(
+        source: GraphicsResourceSource,
+        width: u32,
+        height: u32,
+        color_space: ImageColorSpace,
+        bits_per_component: u8,
+        interpolate: bool,
+        decoded: Vec<u8>,
+        soft_mask: Option<Vec<u8>>,
     ) -> Result<Self, SceneError> {
         if width == 0 || height == 0 || bits_per_component != 8 {
             return Err(SceneError::for_code(
@@ -644,6 +672,18 @@ impl ImageResource {
                 None,
             ));
         }
+        let mask_bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?;
+        if soft_mask
+            .as_ref()
+            .is_some_and(|mask| u64::try_from(mask.len()).unwrap_or(u64::MAX) != mask_bytes)
+        {
+            return Err(SceneError::for_code(
+                SceneErrorCode::InvalidCommandSequence,
+                None,
+            ));
+        }
         Ok(Self {
             source,
             width,
@@ -652,6 +692,10 @@ impl ImageResource {
             bits_per_component,
             interpolate,
             decoded: Arc::new(exact_vec(decoded)?),
+            soft_mask: match soft_mask {
+                Some(mask) => Some(Arc::new(exact_vec(mask)?)),
+                None => None,
+            },
         })
     }
 
@@ -690,8 +734,32 @@ impl ImageResource {
         &self.decoded
     }
 
+    /// Borrows the optional same-size 8-bit grayscale alpha plane.
+    pub fn soft_mask(&self) -> Option<&[u8]> {
+        self.soft_mask.as_deref().map(Vec::as_slice)
+    }
+
+    pub(crate) fn payload_bytes(&self) -> Result<u64, SceneError> {
+        u64::try_from(self.decoded.len())
+            .ok()
+            .and_then(|decoded| {
+                decoded.checked_add(
+                    self.soft_mask
+                        .as_ref()
+                        .map_or(0, |mask| u64::try_from(mask.len()).unwrap_or(u64::MAX)),
+                )
+            })
+            .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None))
+    }
+
     pub(crate) fn retained_bytes(&self) -> Result<u64, SceneError> {
-        vec_capacity_bytes(&self.decoded)
+        let decoded = vec_capacity_bytes(&self.decoded)?;
+        match &self.soft_mask {
+            Some(mask) => decoded
+                .checked_add(vec_capacity_bytes(mask)?)
+                .ok_or_else(|| SceneError::for_code(SceneErrorCode::NumericOverflow, None)),
+            None => Ok(decoded),
+        }
     }
 }
 
@@ -961,7 +1029,8 @@ impl GraphicsResource {
                 left.segments().len().max(right.segments().len())
             }
             (Self::Image(left), Self::Image(right)) => {
-                left.decoded().len().max(right.decoded().len())
+                usize::try_from(left.payload_bytes()?.max(right.payload_bytes()?))
+                    .map_err(|_| SceneError::for_code(SceneErrorCode::NumericOverflow, None))?
             }
             (Self::GlyphOutline(left), Self::GlyphOutline(right)) => left
                 .outline()

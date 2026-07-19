@@ -399,11 +399,19 @@ pub(crate) fn rasterize_image(
     if decoded_bytes != u64::try_from(image.decoded().len()).unwrap_or(u64::MAX) {
         return Err(ImageFailure::InvalidImage);
     }
+    let soft_mask_bytes = match image.soft_mask() {
+        Some(mask) if u64::try_from(mask.len()).ok() == Some(source_pixels) => source_pixels,
+        Some(_) => return Err(ImageFailure::InvalidImage),
+        None => 0,
+    };
+    let total_decoded_bytes = decoded_bytes
+        .checked_add(soft_mask_bytes)
+        .ok_or(ImageFailure::NumericOverflow)?;
     work.stats.decoded_bytes = work.ensure(
         ImageLimitKind::DecodedBytes,
         limits.max_decoded_bytes,
         0,
-        decoded_bytes,
+        total_decoded_bytes,
     )?;
 
     let output_pixels = u64::from(output_width)
@@ -532,6 +540,10 @@ pub(crate) fn rasterize_image(
                     let completed = work.guard_sample(source_index.is_some())?;
                     let composed = match source_index {
                         Some(source_index) => {
+                            let alpha = multiply_alpha(
+                                alpha,
+                                source_alpha(image, source_index, components)?,
+                            )?;
                             let source =
                                 source_pixel(image, source_index)?.with_constant_alpha(alpha);
                             blend_mode.source_over(source, backdrop_pixel)
@@ -624,11 +636,19 @@ pub(crate) fn paint_image(
     if decoded_bytes != u64::try_from(image.decoded().len()).unwrap_or(u64::MAX) {
         return Err(ImageFailure::InvalidImage);
     }
+    let soft_mask_bytes = match image.soft_mask() {
+        Some(mask) if u64::try_from(mask.len()).ok() == Some(source_pixels) => source_pixels,
+        Some(_) => return Err(ImageFailure::InvalidImage),
+        None => 0,
+    };
+    let total_decoded_bytes = decoded_bytes
+        .checked_add(soft_mask_bytes)
+        .ok_or(ImageFailure::NumericOverflow)?;
     work.stats.decoded_bytes = work.ensure(
         ImageLimitKind::DecodedBytes,
         limits.max_decoded_bytes,
         0,
-        decoded_bytes,
+        total_decoded_bytes,
     )?;
 
     let output_pixels = u64::from(output_width)
@@ -712,6 +732,10 @@ pub(crate) fn paint_image(
                     let completed = work.guard_sample(source_index.is_some())?;
                     let composed = match source_index {
                         Some(source_index) => {
+                            let alpha = multiply_alpha(
+                                alpha,
+                                source_alpha(image, source_index, components)?,
+                            )?;
                             let source =
                                 source_pixel(image, source_index)?.with_constant_alpha(alpha);
                             blend_mode.source_over(source, backdrop_pixel)
@@ -807,6 +831,36 @@ fn source_pixel(image: &ImageResource, index: usize) -> Result<ReferenceSrgbQ16,
         },
     };
     Ok(ReferenceColorProfile::ReferenceColorV1.convert(color))
+}
+
+fn source_alpha(
+    image: &ImageResource,
+    component_index: usize,
+    components: u64,
+) -> Result<NormalizedQ16, ImageFailure> {
+    let Some(mask) = image.soft_mask() else {
+        return Ok(NormalizedQ16::ONE);
+    };
+    let components = usize::try_from(components).map_err(|_| ImageFailure::NumericOverflow)?;
+    let pixel_index = component_index
+        .checked_div(components)
+        .ok_or(ImageFailure::InvalidImage)?;
+    let sample = *mask.get(pixel_index).ok_or(ImageFailure::InvalidImage)?;
+    let bits = (u32::from(sample) * (1 << 16) + u32::from(u8::MAX / 2)) / u32::from(u8::MAX);
+    NormalizedQ16::from_bits(bits).ok_or(ImageFailure::NumericOverflow)
+}
+
+fn multiply_alpha(
+    left: NormalizedQ16,
+    right: NormalizedQ16,
+) -> Result<NormalizedQ16, ImageFailure> {
+    let bits = u64::from(left.bits())
+        .checked_mul(u64::from(right.bits()))
+        .and_then(|value| value.checked_add(1 << 15))
+        .map(|value| value / (1 << 16))
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(ImageFailure::NumericOverflow)?;
+    NormalizedQ16::from_bits(bits).ok_or(ImageFailure::NumericOverflow)
 }
 
 fn averaged_pixel(sums: [u64; 4]) -> Result<PremultipliedRgbaQ16, ImageFailure> {

@@ -34,10 +34,11 @@ use pdf_rs_document::{
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
-    BlendMode, DashPatternBuilder, DeviceColor, FillRule, GlyphPainting, GraphicsCommand,
-    GraphicsResource, GraphicsSceneLimitConfig, GraphicsSceneLimits, ImageColorSpace, LineCap,
-    LineJoin, Matrix, PageGeometry, PageRotation as ScenePageRotation, PathResourceBuilder,
-    PathSegment, SceneBinding, SceneRect, SceneScalar, SceneUnit, SceneVersion,
+    BlendMode, DashPatternBuilder, DeviceColor, FillRule, GlyphPainting, GraphicsCapability,
+    GraphicsCommand, GraphicsResource, GraphicsSceneLimitConfig, GraphicsSceneLimits,
+    ImageColorSpace, LineCap, LineJoin, Matrix, PageGeometry, PageRotation as ScenePageRotation,
+    PathResourceBuilder, PathSegment, SceneBinding, SceneRect, SceneScalar, SceneUnit,
+    SceneVersion,
 };
 use pdf_rs_syntax::SyntaxLimits;
 use pdf_rs_xref::{
@@ -1139,6 +1140,61 @@ fn image_xobjects_publish_ctm_sampling_paint_provenance_and_exact_cache_identity
     assert_eq!(page.image_stats().encoded_bytes(), 6);
     assert_eq!(page.image_stats().decoded_bytes(), 6);
     assert!(page.image_stats().cache_retained_bytes() > 0);
+}
+
+#[test]
+fn image_soft_mask_reaches_scene_alpha_and_aggregate_decoded_budget() {
+    let objects = [
+        (5, image_object(5, b"/SMask 6 0 R", &[255, 0, 0, 0, 0, 255])),
+        (6, packed_gray_image_object(6, 2, 1, 8, &[0, 255])),
+    ];
+    let (mut job, store) = image_job(
+        b"/Im0 Do",
+        b"<< /XObject << /Im0 5 0 R >> >>",
+        &objects,
+        0x64,
+        ContentImageLimits::default(),
+    );
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("supported image soft mask must publish: {outcome:?}"),
+    };
+    let graphics = page.scene().graphics().expect("graphics-v2 Scene");
+    let GraphicsResource::Image(image) = graphics.resources()[0].resource() else {
+        panic!("soft-mask resource must remain an image");
+    };
+    assert_eq!(image.decoded(), [255, 0, 0, 0, 0, 255]);
+    assert_eq!(image.soft_mask(), Some([0, 255].as_slice()));
+    assert!(
+        graphics
+            .requirements()
+            .iter()
+            .any(|requirement| requirement.capability() == GraphicsCapability::SoftMask)
+    );
+    assert_eq!(page.image_stats().decoded_bytes(), 8);
+
+    let limits = ContentImageLimits::validate(ContentImageLimitConfig {
+        max_decoded_bytes: 7,
+        ..ContentImageLimitConfig::default()
+    })
+    .unwrap();
+    let (mut limited, store) = image_job(
+        b"/Im0 Do",
+        b"<< /XObject << /Im0 5 0 R >> >>",
+        &objects,
+        0x67,
+        limits,
+    );
+    match limited.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Failed(ContentVmFailure::Vm(error)) => {
+            let limit = error.image_limit().expect("decoded-byte limit evidence");
+            assert_eq!(limit.kind(), ContentImageLimitKind::DecodedBytes);
+            assert_eq!(limit.limit(), 7);
+            assert_eq!(limit.consumed(), 0);
+            assert_eq!(limit.attempted(), 8);
+        }
+        outcome => panic!("one-less soft-mask decoded budget must fail: {outcome:?}"),
+    }
 }
 
 #[test]

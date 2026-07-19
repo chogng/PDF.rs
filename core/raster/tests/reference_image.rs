@@ -351,6 +351,24 @@ fn alpha_and_multiply_are_applied_before_sample_averaging() {
 }
 
 #[test]
+fn soft_mask_modulates_alpha_in_the_reference_rust_kernel() {
+    let image = ImageResource::new_with_soft_mask(
+        GraphicsResourceSource::new(ObjectRef::new(10, 0).unwrap(), 43, 8),
+        2,
+        1,
+        ImageColorSpace::DeviceRgb,
+        8,
+        false,
+        vec![255, 0, 0, 0, 0, 255],
+        Some(vec![0, 255]),
+    )
+    .unwrap();
+    let raster = raster(&image, Matrix::IDENTITY, 2, 1, &[white(), white()]).unwrap();
+    assert_eq!(rgba(&raster), vec![[255, 255, 255, 255], [0, 0, 255, 255]]);
+    assert_eq!(raster.stats().decoded_bytes(), 8);
+}
+
+#[test]
 fn singular_point_and_line_collapses_are_valid_no_ops() {
     let normal = image(1, 1, ImageColorSpace::DeviceGray, false, vec![0]);
     for transform in [

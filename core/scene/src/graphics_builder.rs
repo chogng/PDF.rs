@@ -418,6 +418,9 @@ impl GraphicsSceneBuilder {
         validate_nonempty_bounds(bounds)?;
         let parameter = image_parameter(&image);
         let mut capabilities = vec![(GraphicsCapability::Image, parameter)];
+        if image.soft_mask().is_some() {
+            capabilities.push((GraphicsCapability::SoftMask, 0));
+        }
         append_alpha_blend_capabilities(&mut capabilities, alpha, blend_mode);
         self.append_with_resources(
             vec![GraphicsResource::Image(image)],
@@ -1600,7 +1603,7 @@ fn resource_totals(resources: &[GraphicsResource]) -> Result<(u64, u64), SceneEr
             }
             GraphicsResource::Image(image) => {
                 image_bytes = image_bytes
-                    .checked_add(u64::try_from(image.decoded().len()).map_err(|_| internal())?)
+                    .checked_add(image.payload_bytes()?)
                     .ok_or_else(internal)?;
             }
             GraphicsResource::GlyphOutline(glyph) => {

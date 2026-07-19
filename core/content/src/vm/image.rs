@@ -855,19 +855,36 @@ impl ImageRuntime {
     ) -> Result<(), ContentVmFailure> {
         let packed_len =
             u64::try_from(acquired.decoded_bytes().len()).map_err(|_| vm_failure(source))?;
-        if acquired.stats().decoded_bytes() != packed_len {
+        let soft_mask_packed_len = acquired
+            .soft_mask_decoded_bytes()
+            .map_or(Ok(0_u64), |bytes| u64::try_from(bytes.len()))
+            .map_err(|_| vm_failure(source))?;
+        let acquired_decoded_len = packed_len
+            .checked_add(soft_mask_packed_len)
+            .ok_or_else(|| vm_failure(source))?;
+        if acquired.stats().decoded_bytes() != acquired_decoded_len {
             return Err(vm_failure(source));
         }
         let decoded_len = u64::from(acquired.width())
             .checked_mul(u64::from(acquired.height()))
             .and_then(|pixels| pixels.checked_mul(u64::from(acquired.components())))
             .ok_or_else(|| vm_failure(source))?;
+        let soft_mask_len = if acquired.soft_mask_decoded_bytes().is_some() {
+            u64::from(acquired.width())
+                .checked_mul(u64::from(acquired.height()))
+                .ok_or_else(|| vm_failure(source))?
+        } else {
+            0
+        };
+        let total_decoded_len = decoded_len
+            .checked_add(soft_mask_len)
+            .ok_or_else(|| vm_failure(source))?;
         self.profile
             .content_limits()
             .preflight(
                 ContentImageLimitKind::DecodedBytes,
                 self.stats.decoded_bytes(),
-                decoded_len,
+                total_decoded_len,
                 Some(source),
             )
             .map_err(ContentVmFailure::Vm)?;
@@ -888,12 +905,23 @@ impl ImageRuntime {
         if decoded.len() != decoded_slots {
             return Err(vm_failure(source));
         }
+        let allocation_consumed = self
+            .stats
+            .decoded_bytes()
+            .checked_add(decoded_len)
+            .ok_or_else(|| vm_failure(source))?;
+        let soft_mask = normalize_soft_mask(
+            acquired,
+            self.profile.content_limits().max_decoded_bytes(),
+            allocation_consumed,
+            source,
+        )?;
         let resource_source = GraphicsResourceSource::new(
             acquired.reference(),
             acquired.proof().revision_startxref(),
             acquired.decode_context(),
         );
-        let resource = ImageResource::new(
+        let resource = ImageResource::new_with_soft_mask(
             resource_source,
             acquired.width(),
             acquired.height(),
@@ -901,6 +929,7 @@ impl ImageRuntime {
             8,
             acquired.interpolate(),
             decoded,
+            soft_mask,
         )
         .map_err(ContentVmFailure::Scene)?;
         let entry = self
@@ -916,7 +945,7 @@ impl ImageRuntime {
         }
         let retained = cache_retained_bytes(&self.images).ok_or_else(|| vm_failure(source))?;
         self.stats
-            .record_acquisition(decoded_len, retained, acquired.stats())
+            .record_acquisition(total_decoded_len, retained, acquired.stats())
             .ok_or_else(|| vm_failure(source))
     }
 
@@ -1052,6 +1081,50 @@ fn normalize_image_samples(
         _ => return Err(vm_failure(source)),
     }
     Ok(())
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "soft-mask normalization preserves the complete VM failure contract"
+)]
+fn normalize_soft_mask(
+    acquired: &pdf_rs_document::AcquiredImageXObject,
+    allocation_limit: u64,
+    allocation_consumed: u64,
+    source: ContentOperatorSource,
+) -> Result<Option<Vec<u8>>, ContentVmFailure> {
+    let Some(packed) = acquired.soft_mask_decoded_bytes() else {
+        if acquired.soft_mask_stride_bytes().is_some() || acquired.soft_mask_object().is_some() {
+            return Err(vm_failure(source));
+        }
+        return Ok(None);
+    };
+    let width = usize::try_from(acquired.width()).map_err(|_| vm_failure(source))?;
+    let height = usize::try_from(acquired.height()).map_err(|_| vm_failure(source))?;
+    let stride = acquired
+        .soft_mask_stride_bytes()
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| vm_failure(source))?;
+    let expected = stride
+        .checked_mul(height)
+        .ok_or_else(|| vm_failure(source))?;
+    if stride != width || packed.len() != expected || acquired.soft_mask_object().is_none() {
+        return Err(vm_failure(source));
+    }
+    let mut mask = Vec::new();
+    mask.try_reserve_exact(packed.len()).map_err(|_| {
+        ContentVmFailure::Vm(ContentVmError::image_resource(
+            ContentImageLimit::new(
+                ContentImageLimitKind::DecodedAllocation,
+                allocation_limit,
+                allocation_consumed,
+                u64::try_from(packed.len()).unwrap_or(u64::MAX),
+            ),
+            Some(source),
+        ))
+    })?;
+    mask.extend_from_slice(packed);
+    Ok(Some(mask))
 }
 
 #[allow(

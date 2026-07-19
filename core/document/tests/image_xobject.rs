@@ -807,7 +807,7 @@ fn unsupported_image_profiles_are_typed_and_never_publish() {
             ImageXObjectUnsupportedKind::ExplicitMask,
         ),
         (
-            b"/Type /XObject /Subtype /Image /SMask 8 0 R",
+            b"/Type /XObject /Subtype /Image /SMask << >>",
             b"x",
             ImageXObjectUnsupportedKind::SoftMask,
         ),
@@ -842,7 +842,7 @@ fn unsupported_image_profiles_are_typed_and_never_publish() {
             ImageXObjectUnsupportedKind::UnsupportedDecodeParameters,
         ),
         (
-            b"/Type /XObject /Subtype /Image /Width 2 /Height 3 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms [<< /Predictor 1 >>]",
+            b"/Type /XObject /Subtype /Image /Width 2 /Height 3 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms [<< /Predictor 1 >> << /Predictor 1 >>]",
             FLATE_RGB_2X3,
             ImageXObjectUnsupportedKind::UnsupportedDecodeParameters,
         ),
@@ -1147,6 +1147,105 @@ fn large_xobject_dictionary_is_indexed_once_for_many_distinct_lookups() {
         error.limit().expect("index-byte limit evidence").kind(),
         DocumentLimitKind::PageXObjectIndexBytes
     );
+}
+
+#[test]
+fn same_size_gray_soft_mask_is_proof_bound_decoded_and_retained() {
+    let main = zlib_stored(&[10, 20, 30, 40, 50, 60]);
+    let mask = zlib_stored(&[0, 255]);
+    let fixture = resource_fixture(
+        b"<< /XObject << /Im0 4 0 R >> >>",
+        vec![
+            (
+                4,
+                stream_body(
+                    4,
+                    b"/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 5 0 R /Filter [/FlateDecode] /DecodeParms [<< /Colors 3 /BitsPerComponent 4 /Columns 2 >>]",
+                    &main,
+                ),
+            ),
+            (
+                5,
+                stream_body(
+                    5,
+                    b"/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [0 1] /Filter /FlateDecode /DecodeParms << /Predictor 1 /Colors 1 /BitsPerComponent 8 /Columns 2 >>",
+                    &mask,
+                ),
+            ),
+        ],
+        6,
+        0xf2,
+    );
+    let prepared = prepare(&fixture, 15_101);
+    let mut job = prepared
+        .authority
+        .acquire_image_xobject(
+            lookup_image(&prepared),
+            image_context(15_141),
+            ImageXObjectLimits::default(),
+        )
+        .expect("valid soft-mask image job");
+    let image = match job.poll(&prepared.store, &DocumentNeverCancelled) {
+        ImageXObjectPoll::Ready(image) => image,
+        other => panic!("soft-mask image must be ready: {other:?}"),
+    };
+    assert_eq!(job.phase(), ImageXObjectPhase::Ready);
+    assert_eq!(image.decoded_bytes(), &[10, 20, 30, 40, 50, 60]);
+    assert_eq!(image.soft_mask_decoded_bytes(), Some([0, 255].as_slice()));
+    assert_eq!(image.soft_mask_stride_bytes(), Some(2));
+    assert_eq!(
+        image
+            .soft_mask_object()
+            .expect("proof-bound soft-mask object")
+            .reference(),
+        object_ref(5)
+    );
+    assert_eq!(image.stats().decoded_bytes(), 8);
+    assert!(image.stats().retained_bytes() >= 8);
+}
+
+#[test]
+fn matte_soft_mask_is_typed_unsupported_instead_of_rendered_with_wrong_colors() {
+    let fixture = resource_fixture(
+        b"<< /XObject << /Im0 4 0 R >> >>",
+        vec![
+            (
+                4,
+                stream_body(
+                    4,
+                    b"/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 5 0 R",
+                    &[10, 20, 30, 40, 50, 60],
+                ),
+            ),
+            (
+                5,
+                stream_body(
+                    5,
+                    b"/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Matte [0 0 0]",
+                    &[0, 255],
+                ),
+            ),
+        ],
+        6,
+        0xf3,
+    );
+    let prepared = prepare(&fixture, 15_201);
+    let mut job = prepared
+        .authority
+        .acquire_image_xobject(
+            lookup_image(&prepared),
+            image_context(15_241),
+            ImageXObjectLimits::default(),
+        )
+        .expect("valid soft-mask image job");
+    match job.poll(&prepared.store, &DocumentNeverCancelled) {
+        ImageXObjectPoll::Unsupported(unsupported) => {
+            assert_eq!(unsupported.kind(), ImageXObjectUnsupportedKind::SoftMask);
+            assert_eq!(unsupported.reference(), object_ref(5));
+            assert_eq!(unsupported.offset(), offset_of(&fixture.bytes, b"[0 0 0]"));
+        }
+        other => panic!("Matte soft mask must not publish wrong pixels: {other:?}"),
+    }
 }
 
 #[test]

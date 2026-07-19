@@ -1189,7 +1189,7 @@ pub(crate) fn draw_image(
                         image_coordinates(origin, vx, vy, determinant, point, image)?
                     {
                         let (red, green, blue) = image_color(image, x, y)?;
-                        let alpha = q16(alpha);
+                        let alpha = multiply(q16(alpha), image_alpha(image, x, y)?);
                         accumulated[0] += u64::from(multiply(red, alpha));
                         accumulated[1] += u64::from(multiply(green, alpha));
                         accumulated[2] += u64::from(multiply(blue, alpha));
@@ -1280,6 +1280,19 @@ fn image_color(image: &ImageResource, x: u32, y: u32) -> Result<(u32, u32, u32),
         },
     };
     Ok(color(device_color))
+}
+
+fn image_alpha(image: &ImageResource, x: u32, y: u32) -> Result<u32, FastRasterError> {
+    let Some(mask) = image.soft_mask() else {
+        return Ok(Q16_ONE);
+    };
+    let index = u64::from(y)
+        .checked_mul(u64::from(image.width()))
+        .and_then(|value| value.checked_add(u64::from(x)))
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(numeric)?;
+    let sample = *mask.get(index).ok_or_else(invalid_resource)?;
+    Ok((u32::from(sample) * Q16_ONE + u32::from(u8::MAX / 2)) / u32::from(u8::MAX))
 }
 
 fn average_samples(total: u64) -> u32 {

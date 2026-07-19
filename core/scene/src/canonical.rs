@@ -329,7 +329,13 @@ fn write_graphics_resource(
             })?;
             writer.push(b",\"decoded_hex\":\"")?;
             writer.push_hex(image.decoded())?;
-            writer.push(b"\",\"height\":")?;
+            writer.push(b"\"")?;
+            if let Some(mask) = image.soft_mask() {
+                writer.push(b",\"soft_mask_hex\":\"")?;
+                writer.push_hex(mask)?;
+                writer.push(b"\"")?;
+            }
+            writer.push(b",\"height\":")?;
             writer.push_u32(image.height())?;
             writer.push(b",\"interpolate\":")?;
             write_bool(writer, image.interpolate())?;

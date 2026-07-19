@@ -176,7 +176,7 @@ fn first_profile_matches_the_registered_requirement_predicate_independently() {
 }
 
 #[test]
-fn m4_fast_profile_admits_only_registered_isolated_groups() {
+fn m4_fast_profile_admits_registered_isolated_groups_and_image_soft_masks() {
     let profile = CapabilityProfile::m4_fast_v1();
     assert_eq!(profile.profile_version(), 2);
     assert_eq!(profile.policy_version(), 2);
@@ -192,7 +192,8 @@ fn m4_fast_profile_admits_only_registered_isolated_groups() {
             1,
             ProductStatus::Unsupported,
         ),
-        (GraphicsCapability::SoftMask, 0, ProductStatus::Unsupported),
+        (GraphicsCapability::SoftMask, 0, ProductStatus::Supported),
+        (GraphicsCapability::SoftMask, 1, ProductStatus::Unsupported),
     ] {
         let scene = scene(&[RequirementSpec {
             capability,
