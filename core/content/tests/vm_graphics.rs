@@ -22,15 +22,15 @@ use pdf_rs_content::{
 };
 use pdf_rs_document::{
     AcquiredPageContent, AttestRevisionJob, CandidateRevisionIndex, DocumentCancellation,
-    FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind, FormXObjectJobContext,
-    FormXObjectPoll, ImageXObjectJobContext, ImageXObjectLimits,
-    NeverCancelled as DocumentNeverCancelled, PageColorSpaceLookupLimits, PageContentJobContext,
-    PageContentLimits, PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits,
-    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
-    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
-    PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits, PageXObjectLookupLimits,
-    PageXObjectLookupOutcome, RevisionAttestationJobContext, RevisionAttestationLimits,
-    RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
+    FontResourceJobContext, FontResourceLimits, FontResourceUnsupportedKind,
+    FormXObjectCheckpoints, FormXObjectJobContext, FormXObjectPoll, ImageXObjectJobContext,
+    ImageXObjectLimits, NeverCancelled as DocumentNeverCancelled, PageColorSpaceLookupLimits,
+    PageContentJobContext, PageContentLimits, PageContentPoll, PageExtGStateLookupLimits,
+    PageFontLookupLimits, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
+    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
+    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
+    PageXObjectLookupLimits, PageXObjectLookupOutcome, RevisionAttestationJobContext,
+    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_scene::{
@@ -422,6 +422,110 @@ fn form_object(number: u32, dictionary_entries: &[u8], content: &[u8]) -> Vec<u8
     object.extend_from_slice(content);
     object.extend_from_slice(b"\nendstream\nendobj\n");
     object
+}
+
+fn recursive_form_page_job(
+    acquired: AcquiredPageContent,
+    authority: SharedAttestedRevisionIndex,
+    seed: u64,
+    form_ext_gstates: bool,
+    form_color_spaces: bool,
+    page_ext_gstates: bool,
+) -> InterpretPageJob {
+    let image_profile = ContentImageProfile::new(
+        authority.clone(),
+        PageXObjectLookupLimits::default(),
+        ImageXObjectJobContext::new(
+            JobId::new(seed),
+            ResumeCheckpoint::new(seed + 1),
+            ResumeCheckpoint::new(seed + 2),
+            ResumeCheckpoint::new(seed + 3),
+            RequestPriority::VisiblePage,
+        ),
+        ImageXObjectLimits::default(),
+        ContentImageLimits::default(),
+    );
+    let font_profile = ContentFontProfile::new(
+        authority.clone(),
+        PageFontLookupLimits::default(),
+        font_context(seed + 100),
+        FontResourceLimits::default(),
+        ContentFontLimits::default(),
+    );
+    let mut form_profile = ContentFormProfile::new(
+        authority.clone(),
+        FormXObjectJobContext::new(
+            JobId::new(seed + 200),
+            FormXObjectCheckpoints::new(
+                ResumeCheckpoint::new(seed + 201),
+                ResumeCheckpoint::new(seed + 202),
+                ResumeCheckpoint::new(seed + 203),
+                ResumeCheckpoint::new(seed + 204),
+                ResumeCheckpoint::new(seed + 205),
+                ResumeCheckpoint::new(seed + 206),
+                ResumeCheckpoint::new(seed + 207),
+            ),
+            RequestPriority::VisiblePage,
+        ),
+        4,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile.clone(),
+        font_profile.clone(),
+        GraphicsSceneLimits::default(),
+    )
+    .expect("compatible bounded Form profile");
+    if form_ext_gstates {
+        form_profile = form_profile
+            .with_ext_gstates(ContentExtGStateAcquisitionProfile::new(
+                authority.clone(),
+                PageExtGStateLookupLimits::default(),
+                ContentExtGStateJobContext::new(
+                    JobId::new(seed + 300),
+                    ResumeCheckpoint::new(seed + 301),
+                    RequestPriority::VisiblePage,
+                ),
+            ))
+            .expect("matching Form ExtGState authority");
+    }
+    if form_color_spaces {
+        form_profile = form_profile
+            .with_color_spaces(ContentColorSpaceAcquisitionProfile::new(
+                authority.clone(),
+                PageColorSpaceLookupLimits::default(),
+                ContentColorSpaceJobContext::new(
+                    JobId::new(seed + 400),
+                    ResumeCheckpoint::new(seed + 401),
+                    RequestPriority::VisiblePage,
+                ),
+            ))
+            .expect("matching Form color-space authority");
+    }
+    let mut job = InterpretPageJob::new_graphics_v2_with_images_and_fonts(
+        acquired,
+        ContentLimits::default(),
+        ContentVmLimits::default(),
+        ContentGraphicsLimits::default(),
+        PagePropertyLookupLimits::default(),
+        image_profile,
+        font_profile,
+        GraphicsSceneLimits::default(),
+    );
+    if page_ext_gstates {
+        job = job.with_dynamic_ext_gstates(ContentExtGStateAcquisitionProfile::new(
+            authority,
+            PageExtGStateLookupLimits::default(),
+            ContentExtGStateJobContext::new(
+                JobId::new(seed + 500),
+                ResumeCheckpoint::new(seed + 501),
+                RequestPriority::VisiblePage,
+            ),
+        ));
+    }
+    job.with_forms(form_profile)
+        .expect("image-capable Page job accepts Form recursion")
 }
 
 fn image_job(
@@ -4810,11 +4914,15 @@ fn form_interpreter_uses_form_resources_matrix_and_caller_page_coordinates() {
             proof,
             FormXObjectJobContext::new(
                 JobId::new(35_001),
-                ResumeCheckpoint::new(35_002),
-                ResumeCheckpoint::new(35_003),
-                ResumeCheckpoint::new(35_004),
-                ResumeCheckpoint::new(35_005),
-                ResumeCheckpoint::new(35_006),
+                FormXObjectCheckpoints::new(
+                    ResumeCheckpoint::new(35_002),
+                    ResumeCheckpoint::new(35_003),
+                    ResumeCheckpoint::new(35_004),
+                    ResumeCheckpoint::new(35_005),
+                    ResumeCheckpoint::new(35_006),
+                    ResumeCheckpoint::new(35_007),
+                    ResumeCheckpoint::new(35_008),
+                ),
                 RequestPriority::VisiblePage,
             ),
         )
@@ -5044,11 +5152,15 @@ fn page_do_recursively_classifies_forms_and_imports_their_scenes() {
         authority,
         FormXObjectJobContext::new(
             JobId::new(36_201),
-            ResumeCheckpoint::new(36_202),
-            ResumeCheckpoint::new(36_203),
-            ResumeCheckpoint::new(36_204),
-            ResumeCheckpoint::new(36_205),
-            ResumeCheckpoint::new(36_206),
+            FormXObjectCheckpoints::new(
+                ResumeCheckpoint::new(36_202),
+                ResumeCheckpoint::new(36_203),
+                ResumeCheckpoint::new(36_204),
+                ResumeCheckpoint::new(36_205),
+                ResumeCheckpoint::new(36_206),
+                ResumeCheckpoint::new(36_207),
+                ResumeCheckpoint::new(36_208),
+            ),
             RequestPriority::VisiblePage,
         ),
         4,
@@ -5135,4 +5247,143 @@ fn page_do_recursively_classifies_forms_and_imports_their_scenes() {
         [first.x().scaled(), first.y().scaled()],
         [29_000_000_000, 36_000_000_000]
     );
+}
+
+#[test]
+fn indirect_rgb_group_color_space_and_outer_alpha_are_applied_at_do_boundary() {
+    let form = form_object(
+        5,
+        b"/BBox [0 0 10 10] \
+          /Resources << /ColorSpace << /CS0 7 0 R >> /ExtGState << /GS0 10 0 R >> >> \
+          /Group 6 0 R",
+        b"/CS0 cs .624 .796 .933 scn /Perceptual ri /GS0 gs 0 0 10 10 re f",
+    );
+    let input = acquire_with_objects(
+        b"/GS3 gs /Fm0 Do",
+        b"<< /XObject << /Fm0 5 0 R >> /ExtGState << /GS3 9 0 R >> >>",
+        &[
+            (5, form),
+            (
+                6,
+                indirect_object(
+                    6,
+                    b"<< /Type /Group /S /Transparency /CS 7 0 R /I false /K false >>",
+                ),
+            ),
+            (7, indirect_object(7, b"[/ICCBased 8 0 R]")),
+            (
+                8,
+                b"8 0 obj\n<< /N 3 /Length 0 >>\nstream\n\nendstream\nendobj\n".to_vec(),
+            ),
+            (9, indirect_object(9, b"<< /ca 0.7 /CA 0.7 /BM /Normal >>")),
+            (10, indirect_object(10, b"<< /ca 1 /CA 1 /BM /Normal >>")),
+        ],
+        0xf7,
+    );
+    let VmInput {
+        acquired,
+        authority,
+        store,
+    } = input;
+    let mut job = recursive_form_page_job(acquired, authority, 37_001, true, true, true);
+    let page = match job.poll(&store, &DocumentNeverCancelled) {
+        ContentVmPoll::Ready(page) => page,
+        outcome => panic!("proof-bound indirect RGB transparency group must render: {outcome:?}"),
+    };
+
+    let child = page.form_uses()[0].form();
+    assert!(
+        child
+            .scene()
+            .graphics()
+            .expect("graphics-v2 child Form")
+            .commands()
+            .iter()
+            .all(|record| !matches!(
+                record.command(),
+                GraphicsCommand::BeginIsolatedGroup { .. } | GraphicsCommand::EndIsolatedGroup
+            )),
+        "the child Scene must not consume invocation transparency"
+    );
+    let graphics = page.scene().graphics().expect("graphics-v2 Page");
+    let (group_alpha, group_blend) = graphics
+        .commands()
+        .iter()
+        .find_map(|record| match record.command() {
+            GraphicsCommand::BeginIsolatedGroup { alpha, blend_mode } => {
+                Some((*alpha, *blend_mode))
+            }
+            _ => None,
+        })
+        .expect("the Form Do boundary must own one group");
+    assert_eq!(group_alpha, SceneUnit::from_u16(45_875));
+    assert_eq!(group_blend, BlendMode::Normal);
+    assert_eq!(
+        graphics
+            .commands()
+            .iter()
+            .find_map(|record| match record.command() {
+                GraphicsCommand::Fill { paint, .. } => Some(paint.alpha()),
+                _ => None,
+            }),
+        Some(SceneUnit::ONE),
+        "the Form-local GS0 remains independent from the caller's alpha"
+    );
+}
+
+#[test]
+fn nonisolated_group_requires_backdrop_independent_normal_inner_blending() {
+    for (case, isolated) in [false, true].into_iter().enumerate() {
+        let form = form_object(
+            5,
+            format!(
+                "/BBox [0 0 10 10] /Resources << /ExtGState << /Inside 7 0 R >> >> \
+                 /Group << /Type /Group /S /Transparency /CS /DeviceRGB /I {isolated} >>"
+            )
+            .as_bytes(),
+            b"/Inside gs 0 0 10 10 re f",
+        );
+        let input = acquire_with_objects(
+            b"/Fm0 Do",
+            b"<< /XObject << /Fm0 5 0 R >> >>",
+            &[(5, form), (7, indirect_object(7, b"<< /BM /Multiply >>"))],
+            0xf8 + u8::try_from(case).unwrap(),
+        );
+        let VmInput {
+            acquired,
+            authority,
+            store,
+        } = input;
+        let mut job = recursive_form_page_job(
+            acquired,
+            authority,
+            38_001 + u64::try_from(case).unwrap() * 1_000,
+            true,
+            false,
+            false,
+        );
+        match (isolated, job.poll(&store, &DocumentNeverCancelled)) {
+            (false, ContentVmPoll::Unsupported(error)) => {
+                assert_eq!(error.kind(), ContentUnsupportedKind::FormXObject);
+                assert_eq!(error.source().page_operator_ordinal(), 0);
+            }
+            (true, ContentVmPoll::Ready(page)) => {
+                assert!(
+                    page.scene()
+                        .graphics()
+                        .expect("graphics-v2 Page")
+                        .commands()
+                        .iter()
+                        .any(|record| matches!(
+                            record.command(),
+                            GraphicsCommand::Fill { paint, .. }
+                                if paint.blend_mode() == BlendMode::Multiply
+                        ))
+                );
+            }
+            (expected_isolated, outcome) => panic!(
+                "group isolation distinction must be preserved ({expected_isolated}): {outcome:?}"
+            ),
+        }
+    }
 }

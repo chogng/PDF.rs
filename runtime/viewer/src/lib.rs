@@ -13,9 +13,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pdf_rs_bytes::{
-    ByteRange, DataTicket, JobId, RangeResponse, RangeStore, RequestPriority, ResumeCheckpoint,
-    SmallRanges, SourceIdentity, SourceRevision, SourceSnapshot, SourceStableId, SourceValidator,
-    SourceValidatorKind,
+    ByteRange, DataTicket, JobId, RangeResponse, RangeStore, RangeStoreLimitConfig,
+    RangeStoreLimits, RequestPriority, ResumeCheckpoint, SmallRanges, SourceError,
+    SourceErrorCategory, SourceIdentity, SourceRevision, SourceSnapshot, SourceStableId,
+    SourceValidator, SourceValidatorKind,
 };
 use pdf_rs_content::{
     ContentCancellation, ContentColorSpaceAcquisitionProfile, ContentColorSpaceJobContext,
@@ -27,18 +28,18 @@ use pdf_rs_content::{
 use pdf_rs_document::{
     AcquiredObjectJobContext, AcquiredPageCountPoll, AttestRevisionJob, CandidateRevisionIndex,
     DocumentCancellation, DocumentError, DocumentErrorCategory, DocumentLimits,
-    FontResourceJobContext, FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext,
-    ImageXObjectLimits, NeverCancelSourceRevisionChain, NeverCancelled, OpenSourceRevisionChainJob,
-    OpenStrictBaseRevisionJob, PageColorSpaceLookupLimits, PageContentJobContext,
-    PageContentLimits, PageContentPoll, PageExtGStateLookupLimits, PageFontLookupLimits, PageIndex,
-    PageIndexBuildPoll, PageIndexLimits, PageLookupPoll, PageMaterializationJobContext,
-    PageMaterializationLimits, PageMaterializationPoll, PagePropertyLookupLimits,
-    PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
-    SourceAcquiredDocument, SourceAcquiredDocumentLimits, SourceAcquiredRevisionChain,
-    SourceRevisionChainError, SourceRevisionChainErrorCategory, SourceRevisionChainJobContext,
-    SourceRevisionChainLimits, SourceRevisionChainPoll, StrictBaseOpenContext, StrictBaseOpenError,
-    StrictBaseOpenLimits, StrictBaseOpenPoll,
+    FontResourceJobContext, FontResourceLimits, FormXObjectCheckpoints, FormXObjectJobContext,
+    ImageXObjectJobContext, ImageXObjectLimits, NeverCancelSourceRevisionChain, NeverCancelled,
+    OpenSourceRevisionChainJob, OpenStrictBaseRevisionJob, PageColorSpaceLookupLimits,
+    PageContentJobContext, PageContentLimits, PageContentPoll, PageExtGStateLookupLimits,
+    PageFontLookupLimits, PageIndex, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
+    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
+    PagePropertyLookupLimits, PageTreeJobContext, PageTreeLimits, PageXObjectLookupLimits,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    SharedAttestedRevisionIndex, SourceAcquiredDocument, SourceAcquiredDocumentLimits,
+    SourceAcquiredRevisionChain, SourceRevisionChainError, SourceRevisionChainErrorCategory,
+    SourceRevisionChainJobContext, SourceRevisionChainLimits, SourceRevisionChainPoll,
+    StrictBaseOpenContext, StrictBaseOpenError, StrictBaseOpenLimits, StrictBaseOpenPoll,
 };
 use pdf_rs_fast_raster::fast::{
     FastRasterCancellation, FastRasterErrorCategory, FastRasterJob, FastRasterLimits,
@@ -902,11 +903,15 @@ fn render_strict_page(
         authority.clone(),
         FormXObjectJobContext::new(
             ids.form,
-            ResumeCheckpoint::new(ids.base + 9_001),
-            ResumeCheckpoint::new(ids.base + 9_002),
-            ResumeCheckpoint::new(ids.base + 9_003),
-            ResumeCheckpoint::new(ids.base + 9_004),
-            ResumeCheckpoint::new(ids.base + 9_005),
+            FormXObjectCheckpoints::new(
+                ResumeCheckpoint::new(ids.base + 9_001),
+                ResumeCheckpoint::new(ids.base + 9_002),
+                ResumeCheckpoint::new(ids.base + 9_003),
+                ResumeCheckpoint::new(ids.base + 9_004),
+                ResumeCheckpoint::new(ids.base + 9_005),
+                ResumeCheckpoint::new(ids.base + 9_006),
+                ResumeCheckpoint::new(ids.base + 9_007),
+            ),
             RequestPriority::FirstViewportResource,
         ),
         64,
@@ -1049,8 +1054,26 @@ fn source_snapshot(source: &[u8], source_len: u64) -> SourceSnapshot {
 }
 
 fn range_store(snapshot: SourceSnapshot) -> Result<RangeStore, NativeViewerError> {
-    RangeStore::new(snapshot, pdf_rs_bytes::RangeStoreLimits::default())
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::ResourceLimit))
+    let limits = RangeStoreLimits::validate(RangeStoreLimitConfig {
+        max_input_bytes: MAX_SOURCE_BYTES,
+        max_resident_bytes: 128 * 1024 * 1024,
+        ..RangeStoreLimitConfig::default()
+    })
+    .map_err(source_failure)?;
+    RangeStore::new(snapshot, limits).map_err(source_failure)
+}
+
+fn source_failure(error: SourceError) -> NativeViewerError {
+    let code = match error.category() {
+        SourceErrorCategory::Resource => NativeViewerErrorCode::ResourceLimit,
+        SourceErrorCategory::Integrity | SourceErrorCategory::Availability => {
+            NativeViewerErrorCode::Source
+        }
+        SourceErrorCategory::Input
+        | SourceErrorCategory::Lifecycle
+        | SourceErrorCategory::Internal => NativeViewerErrorCode::Internal,
+    };
+    NativeViewerError::new(code)
 }
 
 fn page_tree_context(job: JobId, seed: u64) -> PageTreeJobContext {
@@ -1077,18 +1100,14 @@ fn complete_pending(
     for range in missing.as_slice() {
         supply_range(store, snapshot, source, *range)?;
     }
-    let subscriptions = store
-        .take_subscriptions(ticket)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Source))?;
+    let subscriptions = store.take_subscriptions(ticket).map_err(source_failure)?;
     if subscriptions.len() != 1
         || subscriptions[0].job() != expected_job
         || subscriptions[0].checkpoint() != checkpoint
     {
         return Err(NativeViewerError::new(NativeViewerErrorCode::Internal));
     }
-    store
-        .release_ticket(ticket)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Source))
+    store.release_ticket(ticket).map_err(source_failure)
 }
 
 fn supply_range(
@@ -1105,11 +1124,8 @@ fn supply_range(
         .get(start..end)
         .ok_or_else(|| NativeViewerError::new(NativeViewerErrorCode::Source))?
         .to_vec();
-    let response = RangeResponse::new(snapshot, range, bytes)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Source))?;
-    store
-        .supply(response)
-        .map_err(|_| NativeViewerError::new(NativeViewerErrorCode::Source))?;
+    let response = RangeResponse::new(snapshot, range, bytes).map_err(source_failure)?;
+    store.supply(response).map_err(source_failure)?;
     Ok(())
 }
 
@@ -1119,7 +1135,7 @@ fn vm_pending_job(checkpoint: ResumeCheckpoint, jobs: RenderJobs) -> JobId {
         jobs.image
     } else if (501..=511).contains(&local) {
         jobs.font
-    } else if (9_001..=9_005).contains(&local) {
+    } else if (9_001..=9_007).contains(&local) {
         jobs.form
     } else {
         jobs.content

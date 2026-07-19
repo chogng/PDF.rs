@@ -105,20 +105,26 @@ impl ContentColorSpaceAcquisitionProfile {
 }
 
 struct ColorSpaceResource {
-    name: Vec<u8>,
+    selector: ColorSpaceSelector,
     kind: ContentColorSpaceKind,
     _definition: AttestedObject,
     _icc_profile: Option<AttestedObject>,
 }
 
+#[derive(Eq, PartialEq)]
+enum ColorSpaceSelector {
+    Name(Vec<u8>),
+    Reference(ObjectRef),
+}
+
 enum ActiveColorSpace {
     Definition {
-        name: Vec<u8>,
+        selector: ColorSpaceSelector,
         ordinal: u64,
         job: OpenAttestedObjectJob,
     },
     IccProfile {
-        name: Vec<u8>,
+        selector: ColorSpaceSelector,
         definition: AttestedObject,
         job: OpenAttestedObjectJob,
     },
@@ -146,21 +152,21 @@ impl ContentColorSpaceRuntime {
         source: &dyn ByteSource,
         cancellation: &dyn DocumentCancellation,
     ) -> ContentColorSpaceRuntimePoll {
-        if let Some(resource) = self.resources.iter().find(|resource| resource.name == name) {
+        if let Some(resource) = self
+            .resources
+            .iter()
+            .find(|resource| resource.selector.matches_name(name))
+        {
             return ContentColorSpaceRuntimePoll::Ready(resource.kind);
         }
         if self
             .active
             .as_ref()
-            .is_some_and(|active| active.name() != name)
+            .is_some_and(|active| !active.selector().matches_name(name))
         {
             return ContentColorSpaceRuntimePoll::Internal;
         }
         if self.active.is_none() {
-            let ordinal = match u64::try_from(self.resources.len()) {
-                Ok(value) if value < self.profile.lookup_limits.max_lookups() => value,
-                _ => return ContentColorSpaceRuntimePoll::ResourceLimit,
-            };
             let mut resolver = scope.color_space_resolver(self.profile.lookup_limits);
             let proof = match resolver.lookup_color_space(name, source, cancellation) {
                 Ok(value) => value,
@@ -173,29 +179,88 @@ impl ContentColorSpaceRuntime {
             {
                 return ContentColorSpaceRuntimePoll::Internal;
             }
-            let Some(context) = self.profile.context.object_context(
-                scope.defining_object(),
-                ordinal.checked_mul(2).unwrap_or(u64::MAX),
-                self.profile.lookup_limits.max_lookups(),
-            ) else {
-                return ContentColorSpaceRuntimePoll::Internal;
-            };
-            let job = match authority.open_object_with_attested_work_caps(proof.target(), context) {
-                Ok(value) => value,
-                Err(error) => return ContentColorSpaceRuntimePoll::Failed(error),
-            };
             let mut retained_name = Vec::new();
             if retained_name.try_reserve_exact(name.len()).is_err() {
                 return ContentColorSpaceRuntimePoll::ResourceLimit;
             }
             retained_name.extend_from_slice(name);
-            self.active = Some(ActiveColorSpace::Definition {
-                name: retained_name,
-                ordinal,
-                job,
-            });
+            if let Some(terminal) = self.start_definition(
+                scope,
+                ColorSpaceSelector::Name(retained_name),
+                proof.target(),
+            ) {
+                return terminal;
+            }
         }
+        self.poll_active(scope, source, cancellation)
+    }
 
+    pub(super) fn resolve_reference(
+        &mut self,
+        scope: &PageResourceScope,
+        reference: ObjectRef,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> ContentColorSpaceRuntimePoll {
+        if let Some(resource) = self
+            .resources
+            .iter()
+            .find(|resource| resource.selector.matches_reference(reference))
+        {
+            return ContentColorSpaceRuntimePoll::Ready(resource.kind);
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.selector().matches_reference(reference))
+        {
+            return ContentColorSpaceRuntimePoll::Internal;
+        }
+        if self.active.is_none()
+            && let Some(terminal) =
+                self.start_definition(scope, ColorSpaceSelector::Reference(reference), reference)
+        {
+            return terminal;
+        }
+        self.poll_active(scope, source, cancellation)
+    }
+
+    fn start_definition(
+        &mut self,
+        scope: &PageResourceScope,
+        selector: ColorSpaceSelector,
+        reference: ObjectRef,
+    ) -> Option<ContentColorSpaceRuntimePoll> {
+        let ordinal = match u64::try_from(self.resources.len()) {
+            Ok(value) if value < self.profile.lookup_limits.max_lookups() => value,
+            _ => return Some(ContentColorSpaceRuntimePoll::ResourceLimit),
+        };
+        let Some(context) = self.profile.context.object_context(
+            scope.defining_object(),
+            ordinal.checked_mul(2).unwrap_or(u64::MAX),
+            self.profile.lookup_limits.max_lookups(),
+        ) else {
+            return Some(ContentColorSpaceRuntimePoll::Internal);
+        };
+        let authority = self.profile.authority.as_attested();
+        let job = match authority.open_object_with_attested_work_caps(reference, context) {
+            Ok(value) => value,
+            Err(error) => return Some(ContentColorSpaceRuntimePoll::Failed(error)),
+        };
+        self.active = Some(ActiveColorSpace::Definition {
+            selector,
+            ordinal,
+            job,
+        });
+        None
+    }
+
+    fn poll_active(
+        &mut self,
+        scope: &PageResourceScope,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> ContentColorSpaceRuntimePoll {
         loop {
             let poll = match self
                 .active
@@ -227,50 +292,51 @@ impl ContentColorSpaceRuntime {
                         .take()
                         .expect("ready color-space object retains its stage");
                     match active {
-                        ActiveColorSpace::Definition { name, ordinal, .. } => {
-                            match classify_definition(&object) {
-                                DefinitionOutcome::Ready(kind) => {
-                                    return self.publish(name, kind, object, None);
-                                }
-                                DefinitionOutcome::IccBased(profile_reference) => {
-                                    let Some(context) = self.profile.context.object_context(
-                                        scope.defining_object(),
-                                        ordinal
-                                            .checked_mul(2)
-                                            .and_then(|value| value.checked_add(1))
-                                            .unwrap_or(u64::MAX),
-                                        self.profile.lookup_limits.max_lookups(),
-                                    ) else {
-                                        return ContentColorSpaceRuntimePoll::Internal;
-                                    };
-                                    let authority = self.profile.authority.as_attested();
-                                    let job = match authority.open_object_with_attested_work_caps(
-                                        profile_reference,
-                                        context,
-                                    ) {
-                                        Ok(value) => value,
-                                        Err(error) => {
-                                            return ContentColorSpaceRuntimePoll::Failed(error);
-                                        }
-                                    };
-                                    self.active = Some(ActiveColorSpace::IccProfile {
-                                        name,
-                                        definition: object,
-                                        job,
-                                    });
-                                }
-                                DefinitionOutcome::Unsupported => {
-                                    return ContentColorSpaceRuntimePoll::Unsupported;
-                                }
+                        ActiveColorSpace::Definition {
+                            selector, ordinal, ..
+                        } => match classify_definition(&object) {
+                            DefinitionOutcome::Ready(kind) => {
+                                return self.publish(selector, kind, object, None);
                             }
-                        }
+                            DefinitionOutcome::IccBased(profile_reference) => {
+                                let Some(context) = self.profile.context.object_context(
+                                    scope.defining_object(),
+                                    ordinal
+                                        .checked_mul(2)
+                                        .and_then(|value| value.checked_add(1))
+                                        .unwrap_or(u64::MAX),
+                                    self.profile.lookup_limits.max_lookups(),
+                                ) else {
+                                    return ContentColorSpaceRuntimePoll::Internal;
+                                };
+                                let authority = self.profile.authority.as_attested();
+                                let job = match authority
+                                    .open_object_with_attested_work_caps(profile_reference, context)
+                                {
+                                    Ok(value) => value,
+                                    Err(error) => {
+                                        return ContentColorSpaceRuntimePoll::Failed(error);
+                                    }
+                                };
+                                self.active = Some(ActiveColorSpace::IccProfile {
+                                    selector,
+                                    definition: object,
+                                    job,
+                                });
+                            }
+                            DefinitionOutcome::Unsupported => {
+                                return ContentColorSpaceRuntimePoll::Unsupported;
+                            }
+                        },
                         ActiveColorSpace::IccProfile {
-                            name, definition, ..
+                            selector,
+                            definition,
+                            ..
                         } => {
                             let Some(kind) = classify_icc_profile(&object) else {
                                 return ContentColorSpaceRuntimePoll::Unsupported;
                             };
-                            return self.publish(name, kind, definition, Some(object));
+                            return self.publish(selector, kind, definition, Some(object));
                         }
                     }
                 }
@@ -280,7 +346,7 @@ impl ContentColorSpaceRuntime {
 
     fn publish(
         &mut self,
-        name: Vec<u8>,
+        selector: ColorSpaceSelector,
         kind: ContentColorSpaceKind,
         definition: AttestedObject,
         icc_profile: Option<AttestedObject>,
@@ -289,7 +355,7 @@ impl ContentColorSpaceRuntime {
             return ContentColorSpaceRuntimePoll::ResourceLimit;
         }
         self.resources.push(ColorSpaceResource {
-            name,
+            selector,
             kind,
             _definition: definition,
             _icc_profile: icc_profile,
@@ -299,9 +365,27 @@ impl ContentColorSpaceRuntime {
 }
 
 impl ActiveColorSpace {
-    fn name(&self) -> &[u8] {
+    fn selector(&self) -> &ColorSpaceSelector {
         match self {
-            Self::Definition { name, .. } | Self::IccProfile { name, .. } => name,
+            Self::Definition { selector, .. } | Self::IccProfile { selector, .. } => selector,
+        }
+    }
+}
+
+impl ColorSpaceSelector {
+    fn matches_name(&self, name: &[u8]) -> bool {
+        match self {
+            Self::Name(value) => value == name,
+            Self::Reference(_) => false,
+        }
+    }
+
+    const fn matches_reference(&self, reference: ObjectRef) -> bool {
+        match self {
+            Self::Name(_) => false,
+            Self::Reference(value) => {
+                value.number() == reference.number() && value.generation() == reference.generation()
+            }
         }
     }
 }

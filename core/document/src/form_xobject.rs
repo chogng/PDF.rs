@@ -82,16 +82,47 @@ impl FormXObjectUnsupported {
     }
 }
 
-/// Runtime identity and exact checkpoints for one Form object, an optional indirect Resources
-/// dictionary, and payload acquisition.
+/// Runtime identity and exact checkpoints for one Form object, optional indirect Group and
+/// Resources dictionaries, and payload acquisition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormXObjectCheckpoints {
+    object_envelope: ResumeCheckpoint,
+    object_boundary: ResumeCheckpoint,
+    group_envelope: ResumeCheckpoint,
+    group_boundary: ResumeCheckpoint,
+    resources_envelope: ResumeCheckpoint,
+    resources_boundary: ResumeCheckpoint,
+    payload: ResumeCheckpoint,
+}
+
+impl FormXObjectCheckpoints {
+    /// Creates the complete ordered checkpoint set for one Form acquisition.
+    pub const fn new(
+        object_envelope: ResumeCheckpoint,
+        object_boundary: ResumeCheckpoint,
+        group_envelope: ResumeCheckpoint,
+        group_boundary: ResumeCheckpoint,
+        resources_envelope: ResumeCheckpoint,
+        resources_boundary: ResumeCheckpoint,
+        payload: ResumeCheckpoint,
+    ) -> Self {
+        Self {
+            object_envelope,
+            object_boundary,
+            group_envelope,
+            group_boundary,
+            resources_envelope,
+            resources_boundary,
+            payload,
+        }
+    }
+}
+
+/// Runtime identity, scheduling priority, and checkpoint set for one Form acquisition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormXObjectJobContext {
     job: JobId,
-    object_envelope_checkpoint: ResumeCheckpoint,
-    object_boundary_checkpoint: ResumeCheckpoint,
-    resources_envelope_checkpoint: ResumeCheckpoint,
-    resources_boundary_checkpoint: ResumeCheckpoint,
-    payload_checkpoint: ResumeCheckpoint,
+    checkpoints: FormXObjectCheckpoints,
     priority: RequestPriority,
 }
 
@@ -99,20 +130,12 @@ impl FormXObjectJobContext {
     /// Creates a context whose proof-preserving checkpoints remain runtime-owned.
     pub const fn new(
         job: JobId,
-        object_envelope_checkpoint: ResumeCheckpoint,
-        object_boundary_checkpoint: ResumeCheckpoint,
-        resources_envelope_checkpoint: ResumeCheckpoint,
-        resources_boundary_checkpoint: ResumeCheckpoint,
-        payload_checkpoint: ResumeCheckpoint,
+        checkpoints: FormXObjectCheckpoints,
         priority: RequestPriority,
     ) -> Self {
         Self {
             job,
-            object_envelope_checkpoint,
-            object_boundary_checkpoint,
-            resources_envelope_checkpoint,
-            resources_boundary_checkpoint,
-            payload_checkpoint,
+            checkpoints,
             priority,
         }
     }
@@ -124,27 +147,37 @@ impl FormXObjectJobContext {
 
     /// Returns the object-envelope checkpoint.
     pub const fn object_envelope_checkpoint(self) -> ResumeCheckpoint {
-        self.object_envelope_checkpoint
+        self.checkpoints.object_envelope
     }
 
     /// Returns the stream-boundary checkpoint.
     pub const fn object_boundary_checkpoint(self) -> ResumeCheckpoint {
-        self.object_boundary_checkpoint
+        self.checkpoints.object_boundary
+    }
+
+    /// Returns the indirect Group object envelope checkpoint.
+    pub const fn group_envelope_checkpoint(self) -> ResumeCheckpoint {
+        self.checkpoints.group_envelope
+    }
+
+    /// Returns the indirect Group object boundary checkpoint.
+    pub const fn group_boundary_checkpoint(self) -> ResumeCheckpoint {
+        self.checkpoints.group_boundary
     }
 
     /// Returns the indirect Resources object envelope checkpoint.
     pub const fn resources_envelope_checkpoint(self) -> ResumeCheckpoint {
-        self.resources_envelope_checkpoint
+        self.checkpoints.resources_envelope
     }
 
     /// Returns the indirect Resources object boundary checkpoint.
     pub const fn resources_boundary_checkpoint(self) -> ResumeCheckpoint {
-        self.resources_boundary_checkpoint
+        self.checkpoints.resources_boundary
     }
 
     /// Returns the exact payload checkpoint.
     pub const fn payload_checkpoint(self) -> ResumeCheckpoint {
-        self.payload_checkpoint
+        self.checkpoints.payload
     }
 
     /// Returns the scheduling priority copied to object and payload requests.
@@ -158,6 +191,8 @@ impl FormXObjectJobContext {
 pub enum FormXObjectPhase {
     /// Reopening and inspecting the Form stream object.
     Object,
+    /// Reopening an indirect transparency Group dictionary selected by the Form.
+    Group,
     /// Reopening an indirect Resources dictionary selected by the Form.
     Resources,
     /// Reading and decoding the exact Form content payload.
@@ -219,14 +254,43 @@ impl FormXObjectStats {
     }
 }
 
+/// Color-space declaration retained by one supported transparency group.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormTransparencyGroupColorSpace {
+    /// Direct `/DeviceRGB`.
+    DeviceRgb,
+    /// One proof-bound indirect color-space definition to classify before interpretation.
+    Indirect(ObjectRef),
+}
+
+/// Supported transparency-group metadata retained until the Form invocation boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormTransparencyGroup {
+    color_space: FormTransparencyGroupColorSpace,
+    isolated: bool,
+}
+
+impl FormTransparencyGroup {
+    /// Returns the group color-space declaration.
+    pub const fn color_space(self) -> FormTransparencyGroupColorSpace {
+        self.color_space
+    }
+
+    /// Reports the exact `/I` value; omission defaults to `false`.
+    pub const fn isolated(self) -> bool {
+        self.isolated
+    }
+}
+
 /// One proof-bearing decoded Form XObject and its resource scope.
 pub struct AcquiredFormXObject {
     proof: PageXObjectReference,
     resources: PageResourceScope,
     form_object: Option<AttestedObject>,
+    group_object: Option<AttestedObject>,
     bbox: PageRectangle,
     matrix: [PageCoordinate; 6],
-    simple_transparency_group: bool,
+    transparency_group: Option<FormTransparencyGroup>,
     content: DecodedStream,
     stats: FormXObjectStats,
 }
@@ -257,9 +321,9 @@ impl AcquiredFormXObject {
         self.matrix
     }
 
-    /// Reports the accepted DeviceRGB transparency-group declaration.
-    pub const fn simple_transparency_group(&self) -> bool {
-        self.simple_transparency_group
+    /// Returns the supported transparency-group declaration, when present.
+    pub const fn transparency_group(&self) -> Option<FormTransparencyGroup> {
+        self.transparency_group
     }
 
     /// Borrows the exact decoded Form content bytes.
@@ -279,6 +343,11 @@ impl AcquiredFormXObject {
         self.form_object.as_ref()
     }
 
+    /// Borrows the retained proof object for an indirect transparency Group dictionary.
+    pub const fn group_object(&self) -> Option<&AttestedObject> {
+        self.group_object.as_ref()
+    }
+
     /// Returns deterministic acquisition accounting.
     pub const fn stats(&self) -> FormXObjectStats {
         self.stats
@@ -292,7 +361,7 @@ impl fmt::Debug for AcquiredFormXObject {
             .field("reference", &self.reference())
             .field("bbox", &self.bbox)
             .field("matrix", &self.matrix)
-            .field("simple_transparency_group", &self.simple_transparency_group)
+            .field("transparency_group", &self.transparency_group)
             .field("content_len", &self.content.bytes().len())
             .field("stats", &self.stats)
             .field("content", &"[REDACTED]")
@@ -348,7 +417,8 @@ struct FormMetadata {
     matrix: [PageCoordinate; 6],
     resources: FormResourcesPlan,
     filter_plan: FilterPlan,
-    simple_transparency_group: bool,
+    transparency_group: Option<FormTransparencyGroup>,
+    group_reference: Option<(ObjectRef, u64)>,
 }
 
 enum FormResourcesPlan {
@@ -370,6 +440,7 @@ struct FormEntries<'a> {
 
 enum FormState {
     Object,
+    Group,
     Resources,
     Payload,
     Ready(Arc<AcquiredFormXObject>),
@@ -385,11 +456,13 @@ pub struct AcquireFormXObjectJob {
     context: FormXObjectJobContext,
     stats: FormXObjectStats,
     object_job: Option<OpenAttestedObjectJob>,
+    group_jobs: Vec<OpenAttestedObjectJob>,
     resources_job: Option<OpenAttestedObjectJob>,
     object: Option<AttestedObject>,
+    group_object: Option<AttestedObject>,
     resources_object: Option<AttestedObject>,
-    form_object_read_bytes: u64,
-    form_object_parse_bytes: u64,
+    dependency_prefix_read_bytes: u64,
+    dependency_prefix_parse_bytes: u64,
     metadata: Option<FormMetadata>,
     state: FormState,
 }
@@ -419,6 +492,7 @@ impl AcquireFormXObjectJob {
     pub const fn phase(&self) -> FormXObjectPhase {
         match self.state {
             FormState::Object => FormXObjectPhase::Object,
+            FormState::Group => FormXObjectPhase::Group,
             FormState::Resources => FormXObjectPhase::Resources,
             FormState::Payload => FormXObjectPhase::Payload,
             FormState::Ready(_) => FormXObjectPhase::Ready,
@@ -437,7 +511,7 @@ impl AcquireFormXObjectJob {
             FormState::Ready(form) => return FormXObjectPoll::Ready(Arc::clone(form)),
             FormState::Unsupported(value) => return FormXObjectPoll::Unsupported(*value),
             FormState::Failed(error) => return FormXObjectPoll::Failed(*error),
-            FormState::Object | FormState::Resources | FormState::Payload => {}
+            FormState::Object | FormState::Group | FormState::Resources | FormState::Payload => {}
         }
         if let Err(error) = runtime_guard(
             self.snapshot,
@@ -473,18 +547,27 @@ impl AcquireFormXObjectJob {
                         AttestedObjectPoll::Ready(object) => {
                             match inspect_form(&object, &mut self.stats, cancellation) {
                                 Ok(Ok(metadata)) => {
+                                    let group_reference =
+                                        metadata.group_reference.map(|(reference, _)| reference);
                                     let resources_reference = match metadata.resources {
                                         FormResourcesPlan::Direct { .. } => None,
                                         FormResourcesPlan::Indirect { reference, .. } => {
                                             Some(reference)
                                         }
                                     };
-                                    self.form_object_read_bytes = self.stats.object_read_bytes;
-                                    self.form_object_parse_bytes = self.stats.object_parse_bytes;
+                                    self.dependency_prefix_read_bytes =
+                                        self.stats.object_read_bytes;
+                                    self.dependency_prefix_parse_bytes =
+                                        self.stats.object_parse_bytes;
                                     self.object_job = None;
                                     self.object = Some(object);
                                     self.metadata = Some(metadata);
-                                    if let Some(reference) = resources_reference {
+                                    if let Some(reference) = group_reference {
+                                        if let Err(error) = self.start_group_job(reference) {
+                                            return self.fail(error);
+                                        }
+                                        self.state = FormState::Group;
+                                    } else if let Some(reference) = resources_reference {
                                         if let Err(error) = self.start_resources_job(reference) {
                                             return self.fail(error);
                                         }
@@ -499,20 +582,96 @@ impl AcquireFormXObjectJob {
                         }
                     }
                 }
-                FormState::Resources => {
-                    let Some(job) = self.resources_job.as_mut() else {
+                FormState::Group => {
+                    let Some(job) = self.group_jobs.first_mut() else {
                         return self.fail(internal(self.proof.target(), None));
                     };
                     let outcome = job.poll(source, cancellation);
                     self.stats.object_read_bytes = match self
-                        .form_object_read_bytes
+                        .dependency_prefix_read_bytes
                         .checked_add(job.stats().read_bytes())
                     {
                         Some(value) => value,
                         None => return self.fail(internal(self.proof.target(), None)),
                     };
                     self.stats.object_parse_bytes = match self
-                        .form_object_parse_bytes
+                        .dependency_prefix_parse_bytes
+                        .checked_add(job.stats().parse_bytes())
+                    {
+                        Some(value) => value,
+                        None => return self.fail(internal(self.proof.target(), None)),
+                    };
+                    match outcome {
+                        AttestedObjectPoll::Pending {
+                            ticket,
+                            missing,
+                            checkpoint,
+                        } => {
+                            return FormXObjectPoll::Pending {
+                                ticket,
+                                missing,
+                                checkpoint,
+                            };
+                        }
+                        AttestedObjectPoll::Failed(error) => return self.fail(error),
+                        AttestedObjectPoll::Ready(object) => {
+                            let expected = match self
+                                .metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.group_reference)
+                            {
+                                Some((reference, _)) => reference,
+                                None => return self.fail(internal(self.proof.target(), None)),
+                            };
+                            let group = match object.value() {
+                                IndirectObjectValue::Direct(value) => validate_group(value.value()),
+                                IndirectObjectValue::Stream(_) => None,
+                            };
+                            if object.reference() != expected || group.is_none() {
+                                return self.unsupported(FormXObjectUnsupported::new(
+                                    FormXObjectUnsupportedKind::UnsupportedGroup,
+                                    expected,
+                                    object.object_span().start(),
+                                ));
+                            }
+                            let Some(metadata) = self.metadata.as_mut() else {
+                                return self.fail(internal(self.proof.target(), None));
+                            };
+                            metadata.transparency_group = group;
+                            metadata.group_reference = None;
+                            self.group_jobs = Vec::new();
+                            self.group_object = Some(object);
+                            self.dependency_prefix_read_bytes = self.stats.object_read_bytes;
+                            self.dependency_prefix_parse_bytes = self.stats.object_parse_bytes;
+                            let resources_reference = match metadata.resources {
+                                FormResourcesPlan::Direct { .. } => None,
+                                FormResourcesPlan::Indirect { reference, .. } => Some(reference),
+                            };
+                            if let Some(reference) = resources_reference {
+                                if let Err(error) = self.start_resources_job(reference) {
+                                    return self.fail(error);
+                                }
+                                self.state = FormState::Resources;
+                            } else {
+                                self.state = FormState::Payload;
+                            }
+                        }
+                    }
+                }
+                FormState::Resources => {
+                    let Some(job) = self.resources_job.as_mut() else {
+                        return self.fail(internal(self.proof.target(), None));
+                    };
+                    let outcome = job.poll(source, cancellation);
+                    self.stats.object_read_bytes = match self
+                        .dependency_prefix_read_bytes
+                        .checked_add(job.stats().read_bytes())
+                    {
+                        Some(value) => value,
+                        None => return self.fail(internal(self.proof.target(), None)),
+                    };
+                    self.stats.object_parse_bytes = match self
+                        .dependency_prefix_parse_bytes
                         .checked_add(job.stats().parse_bytes())
                     {
                         Some(value) => value,
@@ -719,6 +878,11 @@ impl AcquireFormXObjectJob {
                             retained_scope.checked_add(object.syntax_heap_bytes())
                         })
                         .and_then(|value| {
+                            self.group_object.as_ref().map_or(Some(value), |object| {
+                                value.checked_add(object.syntax_heap_bytes())
+                            })
+                        })
+                        .and_then(|value| {
                             value.checked_add(decoded.attestation().plan_retained_heap_bytes())
                         })
                         .and_then(|value| {
@@ -736,9 +900,10 @@ impl AcquireFormXObjectJob {
                         proof: self.proof,
                         resources,
                         form_object,
+                        group_object: self.group_object.take(),
                         bbox: metadata.bbox,
                         matrix: metadata.matrix,
-                        simple_transparency_group: metadata.simple_transparency_group,
+                        transparency_group: metadata.transparency_group,
                         content: decoded,
                         stats: self.stats,
                     });
@@ -780,6 +945,45 @@ impl AcquireFormXObjectJob {
             ),
             caps,
         )?);
+        Ok(())
+    }
+
+    fn start_group_job(&mut self, reference: ObjectRef) -> Result<(), DocumentError> {
+        if reference == self.proof.target() {
+            return Err(invalid_form(reference, self.object_offset()));
+        }
+        let authority = self.authority.as_attested();
+        let offset = authority.attestation(reference)?.xref_offset();
+        let object_limits = authority.object_limits();
+        let syntax_limits = authority.syntax_limits();
+        let retained = syntax_limits
+            .max_owned_bytes()
+            .checked_add(syntax_limits.max_container_bytes())
+            .ok_or_else(|| internal(reference, Some(offset)))?;
+        let caps = ObjectWorkCaps::new_with_retained_bytes(
+            object_limits.max_total_read_bytes(),
+            object_limits.max_total_parse_bytes(),
+            retained.min(MAX_RETAINED_BYTES),
+        )
+        .map_err(|_| internal(reference, Some(offset)))?;
+        self.group_jobs.try_reserve_exact(1).map_err(|_| {
+            DocumentError::for_code(
+                DocumentErrorCode::ResourceLimit,
+                Some(reference),
+                Some(offset),
+            )
+        })?;
+        let job = authority.open_object(
+            reference,
+            AttestedObjectJobContext::new(
+                self.context.job(),
+                self.context.group_envelope_checkpoint(),
+                self.context.group_boundary_checkpoint(),
+                self.context.priority(),
+            ),
+            caps,
+        )?;
+        self.group_jobs.push(job);
         Ok(())
     }
 
@@ -837,6 +1041,8 @@ impl SharedAttestedRevisionIndex {
         let checkpoints = [
             context.object_envelope_checkpoint(),
             context.object_boundary_checkpoint(),
+            context.group_envelope_checkpoint(),
+            context.group_boundary_checkpoint(),
             context.resources_envelope_checkpoint(),
             context.resources_boundary_checkpoint(),
             context.payload_checkpoint(),
@@ -879,11 +1085,13 @@ impl SharedAttestedRevisionIndex {
             context,
             stats: FormXObjectStats::default(),
             object_job: Some(object),
+            group_jobs: Vec::new(),
             resources_job: None,
             object: None,
+            group_object: None,
             resources_object: None,
-            form_object_read_bytes: 0,
-            form_object_parse_bytes: 0,
+            dependency_prefix_read_bytes: 0,
+            dependency_prefix_parse_bytes: 0,
             metadata: None,
             state: FormState::Object,
         })
@@ -1006,11 +1214,21 @@ fn inspect_form(
             }
         },
     };
-    let simple_transparency_group = match entries.group {
-        None => false,
-        Some(value) => match validate_group(value.value()) {
-            Some(simple) => simple,
-            None => {
+    let (transparency_group, group_reference) = match entries.group {
+        None => (None, None),
+        Some(value) => match value.value() {
+            SyntaxObject::Dictionary(_) => match validate_group(value.value()) {
+                Some(group) => (Some(group), None),
+                None => {
+                    return Ok(Err(FormXObjectUnsupported::new(
+                        FormXObjectUnsupportedKind::UnsupportedGroup,
+                        reference,
+                        value.span().start(),
+                    )));
+                }
+            },
+            SyntaxObject::Reference(group) => (None, Some((*group, value.span().start()))),
+            _ => {
                 return Ok(Err(FormXObjectUnsupported::new(
                     FormXObjectUnsupportedKind::UnsupportedGroup,
                     reference,
@@ -1024,7 +1242,8 @@ fn inspect_form(
         matrix,
         resources,
         filter_plan,
-        simple_transparency_group,
+        transparency_group,
+        group_reference,
     }))
 }
 
@@ -1123,42 +1342,79 @@ fn parse_coordinate(value: &SyntaxObject) -> Option<PageCoordinate> {
     }
 }
 
-fn validate_group(value: &SyntaxObject) -> Option<bool> {
+fn validate_group(value: &SyntaxObject) -> Option<FormTransparencyGroup> {
     let SyntaxObject::Dictionary(dictionary) = value else {
         return None;
     };
-    let mut group_type = false;
-    let mut subtype = false;
-    let mut color_space = false;
+    let mut group_type = None;
+    let mut subtype = None;
+    let mut color_space = None;
+    let mut isolated = None;
+    let mut knockout = None;
     for entry in dictionary.entries() {
         match entry.key().value().bytes() {
             b"Type" => {
-                group_type = matches!(entry.value().value(), SyntaxObject::Name(name) if name.bytes() == b"Group");
-            }
-            b"S" => {
-                subtype = matches!(
-                    entry.value().value(),
-                    SyntaxObject::Name(name) if name.bytes() == b"Transparency"
-                );
-            }
-            b"CS" => {
-                color_space = matches!(
-                    entry.value().value(),
-                    SyntaxObject::Name(name) if name.bytes() == b"DeviceRGB"
-                );
-            }
-            b"I" | b"K" => {
-                if !matches!(
-                    entry.value().value(),
-                    SyntaxObject::Boolean(false) | SyntaxObject::Null
-                ) {
+                if group_type.is_some() {
                     return None;
                 }
+                group_type = Some(matches!(
+                    entry.value().value(),
+                    SyntaxObject::Name(name) if name.bytes() == b"Group"
+                ));
+            }
+            b"S" => {
+                if subtype.is_some() {
+                    return None;
+                }
+                subtype = Some(matches!(
+                    entry.value().value(),
+                    SyntaxObject::Name(name) if name.bytes() == b"Transparency"
+                ));
+            }
+            b"CS" => {
+                if color_space.is_some() {
+                    return None;
+                }
+                color_space = Some(match entry.value().value() {
+                    SyntaxObject::Name(name) if name.bytes() == b"DeviceRGB" => {
+                        FormTransparencyGroupColorSpace::DeviceRgb
+                    }
+                    SyntaxObject::Reference(reference) => {
+                        FormTransparencyGroupColorSpace::Indirect(*reference)
+                    }
+                    _ => return None,
+                });
+            }
+            b"I" => {
+                if isolated.is_some() {
+                    return None;
+                }
+                isolated = Some(match entry.value().value() {
+                    SyntaxObject::Boolean(value) => *value,
+                    SyntaxObject::Null => false,
+                    _ => return None,
+                });
+            }
+            b"K" => {
+                if knockout.is_some() {
+                    return None;
+                }
+                knockout = Some(match entry.value().value() {
+                    SyntaxObject::Boolean(value) => *value,
+                    SyntaxObject::Null => false,
+                    _ => return None,
+                });
             }
             _ => return None,
         }
     }
-    (group_type && subtype && color_space).then_some(true)
+    if !group_type.unwrap_or(false) || !subtype.unwrap_or(false) || knockout.unwrap_or(false) {
+        return None;
+    }
+    Some(FormTransparencyGroup {
+        color_space: color_space?,
+        isolated: isolated.unwrap_or(false),
+    })
 }
 
 struct FormDecodeCancellationAdapter<'a>(&'a dyn DocumentCancellation);

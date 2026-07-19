@@ -596,7 +596,8 @@ impl ImageRuntime {
                     Err(error) => {
                         return ImagePlanningPoll::Failed(ContentVmFailure::Scene(error));
                     }
-                };
+                }
+                .with_invocation_source(source);
                 if let Some(ext_gstate_profile) = profile.ext_gstate_profile.clone() {
                     job = job.with_dynamic_ext_gstates(ext_gstate_profile);
                 }

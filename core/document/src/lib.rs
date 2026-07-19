@@ -134,8 +134,10 @@ pub use font_resource::{
 };
 pub use font_resource_limits::{FontResourceLimitConfig, FontResourceLimits};
 pub use form_xobject::{
-    AcquireFormXObjectJob, AcquiredFormXObject, FormXObjectJobContext, FormXObjectPhase,
-    FormXObjectPoll, FormXObjectStats, FormXObjectUnsupported, FormXObjectUnsupportedKind,
+    AcquireFormXObjectJob, AcquiredFormXObject, FormTransparencyGroup,
+    FormTransparencyGroupColorSpace, FormXObjectCheckpoints, FormXObjectJobContext,
+    FormXObjectPhase, FormXObjectPoll, FormXObjectStats, FormXObjectUnsupported,
+    FormXObjectUnsupportedKind,
 };
 pub use image_xobject::{
     AcquireImageXObjectJob, AcquiredImageXObject, ImageXObjectColorSpace, ImageXObjectJobContext,

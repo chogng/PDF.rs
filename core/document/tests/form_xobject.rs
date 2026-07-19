@@ -7,12 +7,13 @@ use pdf_rs_bytes::{
 };
 use pdf_rs_document::{
     AcquiredFormXObject, AttestRevisionJob, CandidateRevisionIndex, DocumentLimits,
-    FormXObjectJobContext, FormXObjectPoll, FormXObjectUnsupportedKind, MaterializedPage,
-    NeverCancelled as DocumentNeverCancelled, PageIndexBuildPoll, PageIndexLimits, PageLookupPoll,
-    PageMaterializationJobContext, PageMaterializationLimits, PageMaterializationPoll,
-    PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits, PageXObjectLookupLimits,
-    PageXObjectLookupOutcome, PageXObjectReference, RevisionAttestationJobContext,
-    RevisionAttestationLimits, RevisionAttestationPoll, RevisionId, SharedAttestedRevisionIndex,
+    FormXObjectCheckpoints, FormXObjectJobContext, FormXObjectPoll, FormXObjectUnsupportedKind,
+    MaterializedPage, NeverCancelled as DocumentNeverCancelled, PageIndexBuildPoll,
+    PageIndexLimits, PageLookupPoll, PageMaterializationJobContext, PageMaterializationLimits,
+    PageMaterializationPoll, PageTreeJobContext, PageTreeLimitConfig, PageTreeLimits,
+    PageXObjectLookupLimits, PageXObjectLookupOutcome, PageXObjectReference,
+    RevisionAttestationJobContext, RevisionAttestationLimits, RevisionAttestationPoll, RevisionId,
+    SharedAttestedRevisionIndex,
 };
 use pdf_rs_object::ObjectLimits;
 use pdf_rs_syntax::{ObjectRef, SyntaxLimits};
@@ -222,11 +223,15 @@ fn materialization_context(seed: u64) -> PageMaterializationJobContext {
 fn form_context(seed: u64) -> FormXObjectJobContext {
     FormXObjectJobContext::new(
         JobId::new(seed),
-        ResumeCheckpoint::new(seed + 1),
-        ResumeCheckpoint::new(seed + 2),
-        ResumeCheckpoint::new(seed + 3),
-        ResumeCheckpoint::new(seed + 4),
-        ResumeCheckpoint::new(seed + 5),
+        FormXObjectCheckpoints::new(
+            ResumeCheckpoint::new(seed + 1),
+            ResumeCheckpoint::new(seed + 2),
+            ResumeCheckpoint::new(seed + 3),
+            ResumeCheckpoint::new(seed + 4),
+            ResumeCheckpoint::new(seed + 5),
+            ResumeCheckpoint::new(seed + 6),
+            ResumeCheckpoint::new(seed + 7),
+        ),
         RequestPriority::VisiblePage,
     )
 }
@@ -384,7 +389,14 @@ fn identity_form_retains_geometry_payload_and_its_own_resource_scope() {
             -4_000_000_000
         ]
     );
-    assert!(form.simple_transparency_group());
+    let group = form
+        .transparency_group()
+        .expect("transparency-group metadata");
+    assert!(!group.isolated());
+    assert_eq!(
+        group.color_space(),
+        pdf_rs_document::FormTransparencyGroupColorSpace::DeviceRgb
+    );
     assert_eq!(form.resources().defining_object(), form.reference());
     assert_eq!(
         form.resources().ancestor_lookup_chain(),
@@ -414,6 +426,79 @@ fn identity_form_retains_geometry_payload_and_its_own_resource_scope() {
     };
     assert_eq!(nested_proof.target(), ObjectRef::new(5, 0).unwrap());
     assert_eq!(nested_proof.scope_defining_object(), form.reference());
+}
+
+#[test]
+fn indirect_transparency_group_preserves_proof_isolation_and_color_space_identity() {
+    let fixture = form_fixture(
+        b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> \
+          /Group 5 0 R",
+        b"0 0 10 10 re f",
+        vec![
+            (
+                5,
+                b"5 0 obj\n<< /Type /Group /S /Transparency /CS 6 0 R /I true /K false >>\nendobj\n"
+                    .to_vec(),
+            ),
+            (6, b"6 0 obj\n/DeviceRGB\nendobj\n".to_vec()),
+        ],
+        7,
+        81,
+    );
+    let prepared = prepare(&fixture, 13_501);
+    let form = acquire_ready(&prepared, 13_601);
+    let group = form
+        .transparency_group()
+        .expect("transparency-group metadata");
+
+    assert!(group.isolated());
+    assert_eq!(
+        group.color_space(),
+        pdf_rs_document::FormTransparencyGroupColorSpace::Indirect(ObjectRef::new(6, 0).unwrap())
+    );
+    assert_eq!(
+        form.group_object()
+            .expect("indirect Group proof object")
+            .reference(),
+        ObjectRef::new(5, 0).unwrap()
+    );
+}
+
+#[test]
+fn duplicate_or_knockout_group_semantics_are_typed_unsupported() {
+    for (case, group) in [
+        (
+            0_u8,
+            b"/Group << /Type /Group /S /Transparency /CS /DeviceRGB /I false /I true >>"
+                .as_slice(),
+        ),
+        (
+            1,
+            b"/Group << /Type /Group /S /Transparency /CS /DeviceRGB /K true >>".as_slice(),
+        ),
+    ] {
+        let fixture = form_fixture(
+            &[
+                b"/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> ".as_slice(),
+                group,
+            ]
+            .concat(),
+            b"",
+            vec![],
+            5,
+            82 + case,
+        );
+        let prepared = prepare(&fixture, 13_701 + u64::from(case) * 100);
+        match acquire(&prepared, 13_801 + u64::from(case) * 100) {
+            FormXObjectPoll::Unsupported(unsupported) => {
+                assert_eq!(
+                    unsupported.kind(),
+                    FormXObjectUnsupportedKind::UnsupportedGroup
+                );
+            }
+            outcome => panic!("unsupported group semantics must be typed: {outcome:?}"),
+        }
+    }
 }
 
 #[test]

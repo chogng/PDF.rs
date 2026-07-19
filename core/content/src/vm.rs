@@ -5,22 +5,25 @@ use std::sync::Arc;
 use pdf_rs_bytes::{ByteSource, DataTicket, ResumeCheckpoint, SmallRanges, SourceSnapshot};
 use pdf_rs_document::{
     AcquiredFormXObject, AcquiredPageContent, DocumentCancellation, FontResourceJobContext,
-    FontResourceLimits, FormXObjectJobContext, ImageXObjectJobContext, ImageXObjectLimits,
-    PageFontLookupLimits, PageFontLookupOutcome, PageFontLookupStats, PagePropertyLookupLimits,
-    PagePropertyLookupStats, PageResourceScope, PageXObjectLookupLimits, PageXObjectLookupOutcome,
-    PageXObjectLookupStats, SharedAttestedRevisionIndex,
+    FontResourceLimits, FormTransparencyGroupColorSpace, FormXObjectJobContext,
+    ImageXObjectJobContext, ImageXObjectLimits, PageFontLookupLimits, PageFontLookupOutcome,
+    PageFontLookupStats, PagePropertyLookupLimits, PagePropertyLookupStats, PageResourceScope,
+    PageXObjectLookupLimits, PageXObjectLookupOutcome, PageXObjectLookupStats,
+    SharedAttestedRevisionIndex,
 };
 use pdf_rs_font::{GlyphId, OutlineSegment};
 use pdf_rs_scene::{
-    CommandSource, DashPattern, DashPatternBuilder, FillRule, GlyphOutline, GlyphPainting,
-    GlyphUse, GraphicsSceneBuilder, GraphicsSceneLimits, LineStyle, Matrix, PageGeometry,
-    PageRotation as ScenePageRotation, Paint, PathResource, PathResourceBuilder, PathSegment,
-    Scene, SceneBinding, SceneBounds, SceneBuilder, SceneError, SceneLimits, ScenePoint, SceneRect,
-    SceneScalar, SceneUnit,
+    BlendMode, CommandSource, DashPattern, DashPatternBuilder, FillRule, GlyphOutline,
+    GlyphPainting, GlyphUse, GraphicsCommand, GraphicsSceneBuilder, GraphicsSceneLimits, LineStyle,
+    Matrix, PageGeometry, PageRotation as ScenePageRotation, Paint, PathResource,
+    PathResourceBuilder, PathSegment, Scene, SceneBinding, SceneBounds, SceneBuilder, SceneError,
+    SceneLimits, ScenePoint, SceneRect, SceneScalar, SceneUnit,
 };
 use pdf_rs_syntax::ObjectRef;
 
-use crate::color_space::{ContentColorSpaceRuntime, ContentColorSpaceRuntimePoll, device_space};
+use crate::color_space::{
+    ContentColorSpaceKind, ContentColorSpaceRuntime, ContentColorSpaceRuntimePoll, device_space,
+};
 use crate::ext_gstate::{ContentExtGStateRuntime, ContentExtGStateRuntimePoll, ResolvedExtGState};
 use crate::scanner::{ScanTerminal, run_scan};
 use crate::{
@@ -419,6 +422,8 @@ pub struct InterpretFormJob {
     ext_gstate_profile: Option<ContentExtGStateProfile>,
     ext_gstate_runtime: Option<ContentExtGStateRuntime>,
     color_space_runtime: Option<ContentColorSpaceRuntime>,
+    invocation_source: Option<ContentOperatorSource>,
+    group_color_space_ready: bool,
     program: Option<ContentProgram>,
     plan: Option<ExecutionPlan>,
     scan_peak_retained: u64,
@@ -959,6 +964,8 @@ impl InterpretFormJob {
             ext_gstate_profile: None,
             ext_gstate_runtime: None,
             color_space_runtime: None,
+            invocation_source: None,
+            group_color_space_ready: false,
             program: None,
             plan: None,
             scan_peak_retained: 0,
@@ -994,6 +1001,11 @@ impl InterpretFormJob {
         self
     }
 
+    pub(super) const fn with_invocation_source(mut self, source: ContentOperatorSource) -> Self {
+        self.invocation_source = Some(source);
+        self
+    }
+
     /// Enables recursively bounded nested Form XObjects within this Form scope.
     pub fn with_forms(mut self, profile: ContentFormProfile) -> Result<Self, ContentVmError> {
         let runtime = self
@@ -1025,6 +1037,9 @@ impl InterpretFormJob {
             FormJobState::Unsupported(error) => return ContentFormPoll::Unsupported(*error),
             FormJobState::Failed(error) => return ContentFormPoll::Failed(*error),
             FormJobState::Pending => {}
+        }
+        if let Some(outcome) = self.poll_group_color_space(source, cancellation) {
+            return outcome;
         }
         let report = {
             let acquired = self
@@ -1142,6 +1157,89 @@ impl InterpretFormJob {
         self.color_space_runtime.take();
         self.program.take();
         self.plan.take();
+    }
+
+    fn poll_group_color_space(
+        &mut self,
+        source: &dyn ByteSource,
+        cancellation: &dyn DocumentCancellation,
+    ) -> Option<ContentFormPoll> {
+        if self.group_color_space_ready {
+            return None;
+        }
+        let acquired = Arc::clone(
+            self.acquired
+                .as_ref()
+                .expect("pending Form interpretation retains its acquisition"),
+        );
+        let Some(group) = acquired.transparency_group() else {
+            self.group_color_space_ready = true;
+            return None;
+        };
+        let operator_source = self.invocation_source.unwrap_or_else(|| {
+            ContentOperatorSource::new(crate::DecodedSpan::new(acquired.reference(), 0, 0, 0), 0)
+        });
+        let FormTransparencyGroupColorSpace::Indirect(reference) = group.color_space() else {
+            self.group_color_space_ready = true;
+            return None;
+        };
+        let Some(runtime) = self.color_space_runtime.as_mut() else {
+            let unsupported = ContentUnsupported::new(
+                ContentUnsupportedKind::ColorSpaceProfileRequired,
+                operator_source,
+            );
+            self.clear_transient();
+            self.state = FormJobState::Unsupported(unsupported);
+            return Some(ContentFormPoll::Unsupported(unsupported));
+        };
+        match runtime.resolve_reference(acquired.resources(), reference, source, cancellation) {
+            ContentColorSpaceRuntimePoll::Ready(ContentColorSpaceKind::Rgb) => {
+                self.group_color_space_ready = true;
+                None
+            }
+            ContentColorSpaceRuntimePoll::Ready(_) | ContentColorSpaceRuntimePoll::Unsupported => {
+                let unsupported = ContentUnsupported::new(
+                    ContentUnsupportedKind::ColorSpaceResource,
+                    operator_source,
+                );
+                self.clear_transient();
+                self.state = FormJobState::Unsupported(unsupported);
+                Some(ContentFormPoll::Unsupported(unsupported))
+            }
+            ContentColorSpaceRuntimePoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            } => Some(ContentFormPoll::Pending {
+                ticket,
+                missing,
+                checkpoint,
+            }),
+            ContentColorSpaceRuntimePoll::Failed(error) => {
+                let failure = ContentVmFailure::Document(error);
+                self.clear_transient();
+                self.state = FormJobState::Failed(failure);
+                Some(ContentFormPoll::Failed(failure))
+            }
+            ContentColorSpaceRuntimePoll::ResourceLimit => {
+                let failure = ContentVmFailure::Vm(ContentVmError::new(
+                    ContentVmErrorCode::ResourceLimit,
+                    Some(operator_source),
+                ));
+                self.clear_transient();
+                self.state = FormJobState::Failed(failure);
+                Some(ContentFormPoll::Failed(failure))
+            }
+            ContentColorSpaceRuntimePoll::Internal => {
+                let failure = ContentVmFailure::Vm(vm_error(
+                    ContentVmErrorCode::InternalState,
+                    operator_source,
+                ));
+                self.clear_transient();
+                self.state = FormJobState::Failed(failure);
+                Some(ContentFormPoll::Failed(failure))
+            }
+        }
     }
 }
 
@@ -1277,7 +1375,6 @@ struct FormEnvelope {
     source: ContentOperatorSource,
     command_source: CommandSource,
     bounds: SceneBounds,
-    simple_transparency_group: bool,
     retained_bytes: u64,
 }
 
@@ -1402,16 +1499,6 @@ enum ExecutionAction {
         source: CommandSource,
     },
     Restore {
-        bounds: SceneBounds,
-        source: CommandSource,
-    },
-    BeginGroup {
-        alpha: SceneUnit,
-        blend_mode: pdf_rs_scene::BlendMode,
-        bounds: SceneBounds,
-        source: CommandSource,
-    },
-    EndGroup {
         bounds: SceneBounds,
         source: CommandSource,
     },
@@ -2974,29 +3061,11 @@ fn append_form_prologue(
         accounting,
     )
     .map_err(ContentVmFailure::Vm)?;
-    if form.simple_transparency_group() {
-        push_execution_action(
-            actions,
-            ExecutionAction::BeginGroup {
-                alpha: SceneUnit::ONE,
-                blend_mode: pdf_rs_scene::BlendMode::Normal,
-                bounds: SceneBounds::Page,
-                source: command_source,
-            },
-            program_bytes,
-            other_capacity,
-            vm_limits,
-            source,
-            accounting,
-        )
-        .map_err(ContentVmFailure::Vm)?;
-    }
     accounting.max_graphics_depth = accounting.max_graphics_depth.max(1);
     Ok(Some(FormEnvelope {
         source,
         command_source,
         bounds,
-        simple_transparency_group: form.simple_transparency_group(),
         retained_bytes,
     }))
 }
@@ -3024,20 +3093,6 @@ fn append_form_epilogue(
     )?
     .checked_add(envelope.retained_bytes)
     .ok_or_else(|| vm_error(ContentVmErrorCode::InternalState, envelope.source))?;
-    if envelope.simple_transparency_group {
-        push_execution_action(
-            actions,
-            ExecutionAction::EndGroup {
-                bounds: SceneBounds::Page,
-                source: envelope.command_source,
-            },
-            program_bytes,
-            other_capacity,
-            vm_limits,
-            envelope.source,
-            accounting,
-        )?;
-    }
     push_execution_action(
         actions,
         ExecutionAction::Restore {
@@ -5934,19 +5989,6 @@ fn materialize_execution_plan(
                     .expect("only graphics-v2 plans contain graphics actions")
                     .append_restore(bounds, source)
             }
-            ExecutionAction::BeginGroup {
-                alpha,
-                blend_mode,
-                bounds,
-                source,
-            } => scene
-                .graphics_mut()
-                .expect("only graphics-v2 plans contain group actions")
-                .begin_group(alpha, blend_mode, bounds, source),
-            ExecutionAction::EndGroup { bounds, source } => scene
-                .graphics_mut()
-                .expect("only graphics-v2 plans contain group actions")
-                .end_group(bounds, source),
             ExecutionAction::Clip {
                 path,
                 rule,
@@ -6035,10 +6077,36 @@ fn materialize_execution_plan(
                         result
                     }
                     ResolvedXObject::Form { proof, form } => {
-                        let result = scene
+                        let transparency_group = form.acquired_form().transparency_group();
+                        if transparency_group.is_some_and(|group| {
+                            !group.isolated()
+                                && (blend_mode != BlendMode::Normal
+                                    || !scene_is_normal_backdrop_independent(form.scene()))
+                        }) {
+                            return prioritize(
+                                snapshot,
+                                byte_source,
+                                cancellation,
+                                Some(source),
+                                RunTerminal::Unsupported(ContentUnsupported::new(
+                                    ContentUnsupportedKind::FormXObject,
+                                    source,
+                                )),
+                            );
+                        }
+                        let builder = scene
                             .graphics_mut()
-                            .expect("XObject plans require the graphics-v2 Scene")
-                            .append_scene(form.scene());
+                            .expect("XObject plans require the graphics-v2 Scene");
+                        let result = (|| {
+                            if transparency_group.is_some() {
+                                builder.begin_group(alpha, blend_mode, bounds, command_source)?;
+                            }
+                            builder.append_scene(form.scene())?;
+                            if transparency_group.is_some() {
+                                builder.end_group(bounds, command_source)?;
+                            }
+                            Ok(())
+                        })();
                         if result.is_ok() {
                             form_uses.push(ResolvedFormUse::new(source, proof, form));
                         }
@@ -6140,14 +6208,46 @@ fn materialize_execution_plan(
     })
 }
 
+fn scene_is_normal_backdrop_independent(scene: &Scene) -> bool {
+    let Some(graphics) = scene.graphics() else {
+        return false;
+    };
+    graphics
+        .commands()
+        .iter()
+        .all(|record| match record.command() {
+            GraphicsCommand::Save
+            | GraphicsCommand::Restore
+            | GraphicsCommand::Clip { .. }
+            | GraphicsCommand::EndIsolatedGroup => true,
+            GraphicsCommand::Fill { paint, .. } | GraphicsCommand::Stroke { paint, .. } => {
+                paint.blend_mode() == BlendMode::Normal
+            }
+            GraphicsCommand::FillStroke { fill, stroke, .. } => {
+                fill.blend_mode() == BlendMode::Normal && stroke.blend_mode() == BlendMode::Normal
+            }
+            GraphicsCommand::DrawImage { blend_mode, .. }
+            | GraphicsCommand::BeginIsolatedGroup { blend_mode, .. } => {
+                *blend_mode == BlendMode::Normal
+            }
+            GraphicsCommand::DrawGlyphRun(run) => {
+                run.painting()
+                    .fill()
+                    .is_none_or(|paint| paint.blend_mode() == BlendMode::Normal)
+                    && run
+                        .painting()
+                        .stroke()
+                        .is_none_or(|(paint, _)| paint.blend_mode() == BlendMode::Normal)
+            }
+        })
+}
+
 fn action_operator_source(action: &ExecutionAction) -> ContentOperatorSource {
     let source = match action {
         ExecutionAction::BeginMarkedContent { source, .. }
         | ExecutionAction::EndMarkedContent { source }
         | ExecutionAction::Save { source, .. }
         | ExecutionAction::Restore { source, .. }
-        | ExecutionAction::BeginGroup { source, .. }
-        | ExecutionAction::EndGroup { source, .. }
         | ExecutionAction::Clip { source, .. }
         | ExecutionAction::Fill { source, .. }
         | ExecutionAction::Stroke { source, .. }
