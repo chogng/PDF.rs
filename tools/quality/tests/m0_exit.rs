@@ -1,4 +1,9 @@
 const PLAN: &str = include_str!("../../../plan/r0.toml");
+const M4_PLAN: &str = include_str!("../../../plan/m4.toml");
+const M5_PLAN: &str = include_str!("../../../plan/m5.toml");
+const M6_PLAN: &str = include_str!("../../../plan/m6.toml");
+const POST_R0_FONT_TEXT_PLAN: &str = include_str!("../../../plan/post-r0-font-text.toml");
+const R0_RELEASE_PROFILE: &str = include_str!("../../../release/profiles/r0.toml");
 const SPEC_MAP: &str = include_str!("../../../docs/traceability/spec-map.toml");
 const FEATURE_MAP: &str = include_str!("../../../docs/traceability/feature-map.toml");
 const BASELINE_LEDGER: &str = include_str!("../../../docs/traceability/baseline-ledger.toml");
@@ -17,7 +22,7 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         .split("[[milestone]]")
         .next()
         .expect("the plan has a top-level header");
-    assert_line(plan_header, "version = \"0.4.0\"");
+    assert_line(plan_header, "version = \"0.5.0\"");
     assert_line(plan_header, "status = \"active\"");
     assert_line(plan_header, "last_updated = 2026-07-18");
 
@@ -159,6 +164,121 @@ fn m0_exit_is_recorded_with_reproducible_evidence_and_bounded_claims() {
         assert!(!document.contains("remain M0-blocking"));
         assert!(!document.contains("not the M0 external baseline runner exit condition"));
     }
+}
+
+#[test]
+fn font_text_roadmap_closes_post_r0_delivery_gaps_without_widening_r0() {
+    let root = PLAN
+        .split("[post_r0_font_text]")
+        .nth(1)
+        .expect("root roadmap must register the Post-R0 Font/Text milestone");
+    for required in [
+        "title = \"Post-R0 advanced font, text, shaping, and structure\"",
+        "advanced simple-font encodings, CMaps, CID collections, and CID-to-glyph mappings beyond the R0 matrix",
+        "authoring-only shaping, font subsetting/embedding, encoding, ToUnicode generation, and writer round trip",
+        "separate controlled-font-fallback decision plus conditional bundled-font/system-font implementation gate",
+        "execution_plan = \"plan/post-r0-font-text.toml\"",
+    ] {
+        assert!(
+            root.contains(required),
+            "missing root Post-R0 delivery contract: {required}"
+        );
+    }
+
+    let work_items = POST_R0_FONT_TEXT_PLAN
+        .split("[[work_item]]")
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(work_items.len(), 12);
+    for (index, expected) in (1..=12)
+        .map(|value| format!("id = \"FT1-{value:02}\""))
+        .enumerate()
+    {
+        assert_line(work_items[index], &expected);
+    }
+
+    let advanced_encoding = array_record(POST_R0_FONT_TEXT_PLAN, "[[work_item]]", "FT1-02");
+    for required in [
+        "Advanced font encoding and CID mapping closure",
+        "BaseEncoding/Differences and symbolic-font cases",
+        "CIDFontType0/CFF and CIDFontType2 combinations",
+        "Registry/Ordering/Supplement",
+        "usecmap depth/cycles",
+        "aggregate CJK coverage cannot hide a failed family",
+    ] {
+        assert!(advanced_encoding.contains(required));
+    }
+
+    let vertical = array_record(POST_R0_FONT_TEXT_PLAN, "[[work_item]]", "FT1-04");
+    for required in [
+        "depends_on = [\"FT1-01\", \"FT1-02\"]",
+        "Identity-V",
+        "W2/DW2",
+        "vertical origins",
+        "glyph orientation",
+    ] {
+        assert!(vertical.contains(required));
+    }
+
+    let shaping = array_record(POST_R0_FONT_TEXT_PLAN, "[[work_item]]", "FT1-08");
+    for required in [
+        "Authoring-only shaping contract and dependency gate",
+        "script, language, direction, OpenType features, variation coordinates",
+        "dependency-ledger review",
+        "parser, document reader, Content VM, Scene replay, text extraction, selection, copy, and search cannot call the shaper",
+        "Arabic joining",
+        "Indic reordering",
+    ] {
+        assert!(shaping.contains(required));
+    }
+    let authored_writer = array_record(POST_R0_FONT_TEXT_PLAN, "[[work_item]]", "FT1-09");
+    for required in [
+        "depends_on = [\"FT1-08\"]",
+        "start_gates = [\"M8 ChangeSet/incremental-writer and reopen-validation contracts frozen\"]",
+        "subset only used glyph closure",
+        "CMap/encoding, ToUnicode",
+        "reopen generated documents through the normal reader",
+    ] {
+        assert!(authored_writer.contains(required));
+    }
+
+    let fallback_decision = array_record(POST_R0_FONT_TEXT_PLAN, "[[work_item]]", "FT1-10");
+    for required in [
+        "fail-closed, bundled fixed font pack, and system-font adapter",
+        "complete platform-font fingerprints",
+        "System font enumeration alone",
+        "Record one terminal decision",
+        "activates FT1-11 but does not enable fallback by default",
+    ] {
+        assert!(fallback_decision.contains(required));
+    }
+    let fallback_implementation = array_record(POST_R0_FONT_TEXT_PLAN, "[[work_item]]", "FT1-11");
+    for required in [
+        "condition = \"Required only when FT1-10 approves",
+        "Keep fallback disabled by default",
+        "complete font-environment fingerprint",
+        "core owns deterministic candidate scoring and rejection",
+        "must not call authoring shaping for already positioned PDF text",
+        "kill switch, and rollback drill",
+    ] {
+        assert!(fallback_implementation.contains(required));
+    }
+
+    for required in [
+        "beyond the frozen R0 matrix",
+        "authoring-only Unicode shaping",
+        "System-font fallback",
+    ] {
+        assert!(
+            M6_PLAN.contains(required),
+            "M6 must explicitly exclude Post-R0 scope: {required}"
+        );
+    }
+    assert!(M4_PLAN.contains("system-font fallback"));
+    assert!(M4_PLAN.contains("advanced text"));
+    assert!(M5_PLAN.contains("M5 adds no CMap, ToUnicode, Unicode semantic model"));
+    assert!(M5_PLAN.contains("Any Native font/text capability expansion"));
+    assert!(!R0_RELEASE_PROFILE.contains("\"ft1."));
 }
 
 fn array_record<'a>(document: &'a str, header: &str, id: &str) -> &'a str {

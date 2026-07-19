@@ -14,7 +14,7 @@ principles = [
   "Do not shape, reorder, normalize, or replace glyphs and advances in the rendering path for PDF text that is already positioned by the content stream.",
   "Keep missing and non-embedded fonts fail-closed in R0; no system-font enumeration, substitution, download, or platform shaping may make an otherwise unsupported page eligible.",
   "Generate every R0 text interaction from bounded Native semantic data and versioned protocol messages, never from OCR, final pixels, DOM text guessing, or an external PDF engine.",
-  "Exclude RTL, vertical CIDFont, ActualText replacement semantics, Tagged PDF reading order, and structure-derived accessibility from R0.",
+  "Exclude encoding/CMap/CID families beyond the frozen R0 matrix, RTL, vertical CIDFont, ActualText replacement semantics, Tagged PDF reading order, authoring shaping, controlled fallback, and structure-derived accessibility from R0.",
 ]
 
 registered_scope = [
@@ -28,8 +28,8 @@ registered_scope = [
 ]
 
 excluded_scope = [
-  "RTL or bidi logical-order reconstruction, vertical CMaps and CIDFont metrics/orientation, ActualText replacement, Tagged PDF structure order, and a complete screen-reader accessibility tree.",
-  "Shaping of existing PDF text, authoring/reflow/editing, arbitrary content rewriting, OCR, semantic inference from raster pixels, and platform text rendering.",
+  "Encoding/CMap/CID collections outside the release-r0-v1 matrix, RTL or bidi logical-order reconstruction, vertical CMaps and CIDFont metrics/orientation, ActualText replacement, Tagged PDF structure order, and a complete screen-reader accessibility tree.",
+  "Shaping of existing PDF text, authoring-only Unicode shaping, font subsetting/embedding and writer integration, reflow/editing, arbitrary content rewriting, OCR, semantic inference from raster pixels, and platform text rendering.",
   "System-font fallback, uncontrolled Standard 14 substitution, font downloads, platform font database dependence, external PDF engines, and silent glyph replacement.",
   "Retroactive widening of M3, M4, or M5 evidence, and relabelling provisional implementation profile names as milestone maturity without registered review.",
 ]

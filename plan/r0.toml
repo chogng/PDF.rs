@@ -1,8 +1,8 @@
 schema = 1
 id = "r0-development-plan"
-version = "0.4.0"
+version = "0.5.0"
 status = "active"
-planning_basis = "RPE-ARCH-001 v0.3, sections 2.6, 7.1-7.4, and 15.3 including the 2026-07-18 Font/Text staging clarification"
+planning_basis = "RPE-ARCH-001 v0.3, sections 2.6, 7.1-7.4, and 15.3 including the 2026-07-18 Font/Text staging and Post-R0 closure clarification"
 last_updated = 2026-07-18
 max_parallel_milestones = 2
 max_parallel_work_items_per_milestone = 3
@@ -23,7 +23,8 @@ assumptions = [
   "M5 may start only after the protocol and surface schema are frozen, and may not exit before M4 CapabilityDecision and Native RenderPlan contracts are accepted.",
   "M6 starts only after both the M4 desktop and M5 browser vertical-slice exit gates pass.",
   "M4 and M5 do not expand CMap, ToUnicode, Unicode semantics, text interaction protocol, or advanced text capability; M6 owns the R0 horizontal font/text closure.",
-  "RTL, vertical CIDFont, ActualText, Tagged PDF, structure-derived accessibility, and any controlled font fallback decision are Post-R0 FT1 work.",
+  "Advanced encodings beyond the R0 matrix, RTL, vertical CIDFont, ActualText, Tagged PDF, structure-derived accessibility, authoring-only shaping, and controlled font fallback are Post-R0 FT1 work.",
+  "FT1 does not enable system fonts by implication: fail-closed remains the default and a signed decision gate must activate each independently profiled bundled-font or system-font implementation path.",
 ]
 
 [capacity.role_fte]
@@ -233,18 +234,20 @@ execution_plan = "plan/m6.toml"
 
 [post_r0_font_text]
 id = "FT1"
-title = "Post-R0 advanced text semantics and structure"
+title = "Post-R0 advanced font, text, shaping, and structure"
 owner_role = "font-text-a11y"
-reviewer_roles = ["spec-conformance", "quality-corpus", "runtime-platform"]
+reviewer_roles = ["spec-conformance", "quality-corpus", "runtime-platform", "baseline-release"]
 dependencies = ["M6"]
-max_parallel_work_items = 2
+max_parallel_work_items = 3
 deliverables = [
+  "advanced simple-font encodings, CMaps, CID collections, and CID-to-glyph mappings beyond the R0 matrix",
   "RTL and bidi logical-order interaction",
   "vertical CMap and CIDFont metrics/orientation",
   "ActualText replacement semantics",
   "Tagged PDF structure order and accessibility tree",
-  "separate controlled-font-fallback decision gate",
+  "authoring-only shaping, font subsetting/embedding, encoding, ToUnicode generation, and writer round trip",
+  "separate controlled-font-fallback decision plus conditional bundled-font/system-font implementation gate",
 ]
-exit_gate = "Each Post-R0 text capability advances on independent O0-O3, fuzz, holdout, platform, accessibility, and product-purity evidence without widening release-r0-v1."
+exit_gate = "Each Post-R0 encoding, text, shaping, authoring, accessibility, and approved fallback capability advances on independent O0-O3, fuzz, holdout, platform, dependency, round-trip, and product-purity evidence without widening release-r0-v1."
 status = "planned"
 execution_plan = "plan/post-r0-font-text.toml"

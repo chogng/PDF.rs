@@ -47,5 +47,6 @@ resources, product Session/IPC, or browser and desktop integration.
 
 The [font/text roadmap audit](font-text-roadmap-audit.md) records the current implementation and
 evidence boundary, the M4/M5 non-expansion decision, the executable M6 and Post-R0 delivery plans,
-the shaping and system-font-fallback policies, and the deferred traceability updates that must not
-rewrite the stored, superseded hash-bound M4 candidate.
+the advanced encoding/CID matrix, the authoring-only shaping/writer boundary, the controlled
+system-font-fallback decision and conditional implementation gates, and the deferred traceability
+updates that must not rewrite the stored, superseded hash-bound M4 candidate.

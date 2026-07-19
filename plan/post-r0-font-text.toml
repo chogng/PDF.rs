@@ -1,31 +1,36 @@
 schema = 1
 milestone = "FT1"
-title = "Post-R0 advanced text semantics and structure"
+title = "Post-R0 advanced font, text, shaping, and structure"
 status = "planned"
 depends_on = ["M6"]
-exit_gate = "RTL, vertical CIDFont, ActualText, and Tagged PDF capabilities are independently profiled and verified across semantic, geometry, interaction, accessibility, corpus, and platform gates without widening R0 or enabling uncontrolled fallback."
-max_parallel_work_items = 2
+exit_gate = "Advanced encodings, RTL, vertical CIDFont, ActualText, Tagged PDF, and authored-text shaping are independently profiled and verified; the fallback decision is closed and any approved implementation passes its own deterministic product gate without widening R0 or enabling uncontrolled substitution."
+max_parallel_work_items = 3
 
 principles = [
   "Start only after M6/R0 exits; never use FT1 work to retroactively claim R0 support.",
-  "Give RTL, vertical CIDFont, ActualText, Tagged PDF, and any font fallback separate feature and CapabilityProfile identities so one successful area cannot hide another failure.",
+  "Give advanced encodings, RTL, vertical CIDFont, ActualText, Tagged PDF, authored-text shaping, and any approved font fallback separate feature and CapabilityProfile identities so one successful area cannot hide another failure.",
   "Preserve the rendering-chain invariant: existing PDF character codes, glyph choices, Tj/TJ advances, text matrices, and vertical metrics remain authoritative; shaping is not applied to already positioned PDF glyph runs.",
+  "Place Unicode shaping behind an authoring-only interface that produces a new PDF text run, embedded subset, widths, encoding, and ToUnicode map; no read/render call graph may reach it.",
   "Treat visual order, source order, logical order, structure order, and replacement text as distinct data with explicit transformations and provenance.",
-  "Keep system-font fallback fail-closed by default; FT1 contains a decision gate, not an implicit promise to enable host-dependent substitution.",
+  "Keep system-font fallback fail-closed by default; FT1 contains both a decision gate and a conditional implementation gate, and the implementation gate is inactive unless the architecture decision explicitly approves one bounded option.",
+  "Keep PDF font, CMap, CID, Unicode, positioning, fallback selection, and writer semantics project-owned; approved leaf libraries may own table parsing or shaping algorithms only through bounded, replaceable adapters.",
 ]
 
 registered_scope = [
+  "Advanced simple-font encodings, embedded and predefined CMaps beyond the R0 matrix, CID collection mappings, non-Identity CIDToGIDMap forms, and the associated ToUnicode/Unicode confidence behavior.",
   "RTL/bidi logical-order reconstruction and selection/copy/search behavior over already positioned horizontal PDF text.",
   "Vertical Type0 CMaps and CIDFont metrics/orientation, including registered Identity-V/predefined maps and W2/DW2 behavior.",
   "ActualText marked-content replacement semantics with source/geometry/provenance mappings.",
   "Tagged PDF structure trees, MCID/ParentTree association, role mapping, structure order, Alt/Lang metadata, and a platform accessibility tree.",
-  "A separate controlled-font-fallback decision record and, only if approved, an independently registered deterministic fallback capability.",
+  "An authoring-only Unicode shaping, subsetting, embedding, encoding, widths, and ToUnicode generation pipeline for newly written PDF text.",
+  "A separate controlled-font-fallback decision record and, only if approved, an independently registered deterministic bundled-font or platform-font capability.",
 ]
 
 excluded_scope = [
-  "Authoring, editing, reflow, content rewriting, and shaping new Unicode into newly generated PDF text.",
+  "A full editing or reflow product UI, arbitrary content rewriting, and automatic reshaping of existing PDF text.",
   "OCR, translation, layout reconstruction unrelated to PDF text/structure semantics, and semantic inference from final pixels.",
   "Uncontrolled host font substitution, external PDF engines, remote rendering, and silent fallback that changes glyph identity or metrics.",
+  "Network font download, unbounded font-directory watching, and font discovery or shaping in the browser main thread.",
 ]
 
 [[work_item]]
@@ -34,20 +39,35 @@ title = "Advanced text profile and order-model freeze"
 lane = "font-text-governance"
 status = "planned"
 depends_on = []
-outcome = "Separate profile contracts define RTL, vertical, ActualText, Tagged PDF, accessibility, and fallback decisions plus their order/provenance model."
+outcome = "Separate profile contracts define advanced encodings, RTL, vertical, ActualText, Tagged PDF, accessibility, authored-text shaping, and fallback decisions plus their order/provenance model."
 acceptance = [
-  "Register separate feature, spec-map, and CapabilityProfile records for RTL, vertical CIDFont, ActualText, Tagged PDF structure, and any approved fallback capability.",
+  "Register separate feature, spec-map, and CapabilityProfile records for advanced encoding families, RTL, vertical CIDFont, ActualText, Tagged PDF structure, authored-text shaping, and any approved fallback capability.",
   "Define source, visual, logical, structure, and replacement-text orders plus stable mappings among them; no single order field silently changes meaning by document type.",
   "Freeze per-capability supported/excluded combinations, corpus strata, low-confidence policy, budgets, browser/desktop behavior, and maturity gates.",
-  "Document that shaping existing PDF-positioned glyphs is prohibited and that shaping new authored text requires a different future capability.",
+  "Freeze two disjoint APIs and dependency graphs: PDF positioned-glyph replay/extraction never shapes, while authoring shaping accepts Unicode and emits a newly encoded PDF run.",
 ]
 
 [[work_item]]
 id = "FT1-02"
+title = "Advanced font encoding and CID mapping closure"
+lane = "font-encoding"
+status = "planned"
+depends_on = ["FT1-01"]
+outcome = "Registered Post-R0 encoding families map PDF bytes to character codes, CIDs, glyphs, and Unicode with bounded data provenance and explicit confidence."
+acceptance = [
+  "Freeze a versioned matrix for simple BaseEncoding/Differences and symbolic-font cases, embedded CMaps, predefined CMap collections, Registry/Ordering/Supplement compatibility, usecmap inheritance, one-to-four-byte codespaces, and registered writing modes.",
+  "Support the registered CIDFontType0/CFF and CIDFontType2 combinations, CIDToGIDMap Identity and bounded stream forms, missing-CID/glyph policy, collection Unicode maps, and ToUnicode precedence without conflating CID, glyph id, or Unicode.",
+  "Generated glyph-name, encoding, CMap, and CID collection data carries approved source/license records, generator versions, input/output hashes, deterministic ordering, update policy, and replacement tests; no table is copied from the adjacent PDFium checkout.",
+  "Normative and malformed cases cover overlapping codespaces, range overflow, duplicate/conflicting mappings, usecmap depth/cycles, supplements, multi-scalar and non-BMP Unicode, unknown mappings, cancellation, fuel, allocation, retained bytes, and deterministic diagnostics.",
+  "Each encoding/collection family has its own denominator, O0/O1 expectations, canonical mapping diff, fuzz/minimization, disjoint holdouts, independent review, and CapabilityDecision behavior; aggregate CJK coverage cannot hide a failed family.",
+]
+
+[[work_item]]
+id = "FT1-03"
 title = "RTL and bidi semantic interaction"
 lane = "text-direction"
 status = "planned"
-depends_on = ["FT1-01"]
+depends_on = ["FT1-01", "FT1-02"]
 outcome = "Horizontal RTL and mixed-direction text expose deterministic visual/logical mappings for selection, copy, search, and links without changing rendered glyph positions."
 acceptance = [
   "Bidi processing consumes Unicode TextAtoms and PDF geometry after glyph rendering decisions; it does not reshape, replace, or reposition the source glyph run.",
@@ -57,25 +77,25 @@ acceptance = [
 ]
 
 [[work_item]]
-id = "FT1-03"
+id = "FT1-04"
 title = "Vertical CMap and CIDFont"
 lane = "font-vertical"
 status = "planned"
-depends_on = ["FT1-01"]
+depends_on = ["FT1-01", "FT1-02"]
 outcome = "Registered vertical CMaps and CIDFonts render and expose semantic geometry using PDF vertical metrics and orientation rules."
 acceptance = [
-  "Support the registered Identity-V and predefined vertical CMaps, variable-length code boundaries, CIDToGIDMap behavior, W2/DW2 metrics, vertical origins, and glyph orientation.",
+  "Support the registered Identity-V, embedded, and predefined vertical CMaps, variable-length code boundaries, vertical usecmap inheritance, CIDToGIDMap behavior, W2/DW2 metrics, vertical origins, and glyph orientation.",
   "WritingMode, baseline, quad, source order, line clustering, selection, copy, search, and link geometry represent vertical text without axis-aligned approximations.",
   "Vertical metrics and orientation remain PDF/font-data driven; system layout APIs and shaping do not override PDF positions.",
   "CJK vertical normative cases, generated CMap data provenance, malformed/budget/fuzz coverage, Reference/Fast differential pixels, text diff, E2E, and holdouts satisfy the vertical profile.",
 ]
 
 [[work_item]]
-id = "FT1-04"
+id = "FT1-05"
 title = "ActualText replacement semantics"
 lane = "text-replacement"
 status = "planned"
-depends_on = ["FT1-01", "FT1-02", "FT1-03"]
+depends_on = ["FT1-01", "FT1-03", "FT1-04"]
 outcome = "ActualText supplies bounded replacement semantics while retaining the source atoms, marked-content scope, geometry, confidence, and provenance it replaces."
 acceptance = [
   "Parse ActualText from registered marked-content property forms with nesting, inheritance/reference, malformed-input, recursion, string, atom, and retained-byte limits.",
@@ -85,11 +105,11 @@ acceptance = [
 ]
 
 [[work_item]]
-id = "FT1-05"
+id = "FT1-06"
 title = "Tagged PDF structure and reading order"
 lane = "text-structure"
 status = "planned"
-depends_on = ["FT1-01", "FT1-04"]
+depends_on = ["FT1-01", "FT1-05"]
 outcome = "A bounded structure model links StructTreeRoot, ParentTree, MCIDs, roles, language, alternatives, and content geometry into explainable reading order."
 acceptance = [
   "Parse registered structure elements, kids, object references, ParentTree/StructParents, MCID associations, role maps, namespace policy, Alt, ActualText, Lang, and artifact handling with cycle/depth/node/byte limits.",
@@ -99,11 +119,11 @@ acceptance = [
 ]
 
 [[work_item]]
-id = "FT1-06"
+id = "FT1-07"
 title = "Advanced text platform accessibility"
 lane = "platform-accessibility"
 status = "planned"
-depends_on = ["FT1-02", "FT1-03", "FT1-04", "FT1-05"]
+depends_on = ["FT1-03", "FT1-04", "FT1-05", "FT1-06"]
 outcome = "Desktop and browser expose coherent RTL/vertical interaction and a structure-derived accessibility tree with stable focus and lifecycle behavior."
 acceptance = [
   "Visual text spans remain geometry-driven and aria-hidden where appropriate; the accessibility tree derives from structure, ActualText, Alt, Lang, roles, and logical/structure order.",
@@ -113,29 +133,75 @@ acceptance = [
 ]
 
 [[work_item]]
-id = "FT1-07"
+id = "FT1-08"
+title = "Authoring-only shaping contract and dependency gate"
+lane = "font-shaping"
+status = "planned"
+depends_on = ["FT1-01", "FT1-02"]
+outcome = "A bounded authoring interface turns Unicode runs into glyph clusters without becoming reachable from existing-PDF rendering or extraction."
+acceptance = [
+  "Define inputs for Unicode, script, language, direction, OpenType features, variation coordinates, selected font identity, cancellation, and hard byte/scalar/glyph/fuel/retained-memory limits; define outputs for glyph ids, clusters, advances, offsets, missing-glyph diagnostics, and exact font provenance.",
+  "Select a repository-owned implementation or an approved leaf shaping library through ADR and dependency-ledger review covering semantic ownership, license/SBOM, source/checksum, Wasm/native support, budget and cancellation adapters, unsafe/build-script closure, replacement plan, and conformance versioning.",
+  "Compile-time dependency-direction tests and runtime trace tests prove that parser, document reader, Content VM, Scene replay, text extraction, selection, copy, and search cannot call the shaper.",
+  "Normative script cases cover Arabic joining, Indic reordering, combining marks, ligatures, kerning, variation/features, RTL clusters, vertical authoring where registered, malformed fonts, missing glyphs, cancellation, and deterministic repeated output.",
+]
+
+[[work_item]]
+id = "FT1-09"
+title = "Authored text embedding and writer integration"
+lane = "font-authoring"
+status = "planned"
+depends_on = ["FT1-08"]
+start_gates = ["M8 ChangeSet/incremental-writer and reopen-validation contracts frozen"]
+outcome = "New Unicode text is shaped, subsetted, embedded, encoded, and reopened as a self-consistent PDF run without changing existing content."
+acceptance = [
+  "Start writer integration only after the M8 ChangeSet/incremental-writer object and reopen-validation contracts are frozen; shaping-library integration alone cannot satisfy this work item.",
+  "Choose fonts before shaping, preserve cluster-to-Unicode mappings, subset only used glyph closure, emit deterministic embedded font programs, widths and vertical metrics where registered, CMap/encoding, ToUnicode, resource names, content operators, and cache/provenance identities.",
+  "Round-trip tests reopen generated documents through the normal reader and compare Unicode, glyph ids, cluster mappings, advances, quads, pixels, object ownership, and unchanged-object hashes; cross-processor offline opening is separately observed.",
+  "O0/O1 script fixtures, shaping conformance data, subset validation, malformed/adversarial inputs, fuzz/minimization, deterministic byte output, size/performance budgets, independent review, and disjoint holdouts satisfy the authored-text profile.",
+]
+
+[[work_item]]
+id = "FT1-10"
 title = "Controlled font fallback decision gate"
 lane = "font-policy"
 status = "planned"
 depends_on = ["FT1-01"]
 outcome = "An explicit architecture and product decision either preserves fail-closed behavior or defines a deterministic, independently profiled fallback capability."
 acceptance = [
-  "Compare fail-closed, bundled fixed font pack, and platform adapter options for licensing, redistribution, glyph coverage, metrics fidelity, determinism, privacy, package size, cache identity, and update policy.",
-  "The default decision remains fail-closed unless an ADR names supported document/font classes, fixed font file hashes or platform fingerprints, selection rules, metric-compatibility thresholds, shaping boundary, diagnostics, and rollback.",
+  "Compare fail-closed, bundled fixed font pack, and system-font adapter options for licensing, redistribution, glyph coverage, metrics fidelity, determinism, privacy, package size, sandbox/font-access authority, cache identity, and update policy.",
+  "The default decision remains fail-closed unless an ADR names supported missing/non-embedded document and font classes, fixed font file hashes or complete platform-font fingerprints, selection rules, metric-compatibility thresholds, shaping boundary, diagnostics, telemetry, and rollback.",
   "System font enumeration alone, best-effort family-name matching, silent glyph substitution, and network font download cannot satisfy the capability gate.",
-  "If fallback is approved, it receives its own feature/profile, O0-O3 evidence, cross-platform holdouts, pixel/text differentials, performance/memory gates, SBOM/license closure, and renderer/cache epoch.",
+  "Record one terminal decision: fail-closed retained, fixed bundled pack approved, bounded system-font adapter approved, or both approved as separately named profiles; approval activates FT1-11 but does not enable fallback by default.",
 ]
 
 [[work_item]]
-id = "FT1-08"
+id = "FT1-11"
+title = "Controlled font fallback implementation and promotion"
+lane = "font-fallback"
+status = "planned"
+depends_on = ["FT1-10"]
+condition = "Required only when FT1-10 approves a bundled-font or system-font fallback profile; otherwise close as not-applicable with the fail-closed ADR."
+outcome = "Each approved fallback mode is explicit, deterministic within its declared environment, auditable, bounded, reversible, and incapable of altering embedded-font pages."
+acceptance = [
+  "Keep fallback disabled by default and authorize it only through a versioned CapabilityProfile and host policy; embedded-font success, malformed embedded fonts, and unsupported mappings never silently enter fallback.",
+  "The host adapter returns a bounded candidate manifest with canonical family/style metadata, face index, immutable font bytes or approved handle, file SHA-256, complete font-environment fingerprint, source class, license/provenance decision, and platform epoch; core owns deterministic candidate scoring and rejection.",
+  "The selected replacement must cover required character/glyph semantics and pass declared PDF-width, vertical-metric, bounding-box, and missing-glyph thresholds; ties, stale fingerprints, inaccessible files, changed fonts, or threshold failures return structured UnsupportedCapability.",
+  "Fallback reuses original PDF character boundaries, glyph positions, advances, Tj/TJ adjustments, and text matrices. It must not call authoring shaping for already positioned PDF text, and it must expose replacement provenance and confidence to text, pixels, diagnostics, and cache keys.",
+  "Bundled packs and system adapters have separate profiles, license/SBOM closures, sandbox and privacy tests, font-update/TOCTOU tests, platform matrices, O0-O3 pixel/text evidence, dangerous-false-positive gates, disjoint holdouts, performance/memory limits, renderer/cache epochs, kill switch, and rollback drill.",
+]
+
+[[work_item]]
+id = "FT1-12"
 title = "Advanced text maturity gate"
 lane = "font-text-quality"
 status = "planned"
-depends_on = ["FT1-02", "FT1-03", "FT1-04", "FT1-05", "FT1-06", "FT1-07"]
+depends_on = ["FT1-02", "FT1-03", "FT1-04", "FT1-05", "FT1-06", "FT1-07", "FT1-08", "FT1-09", "FT1-10"]
 outcome = "Each Post-R0 text capability advances only on its own evidence and supported combinations, with no aggregate metric masking a failed class."
 acceptance = [
-  "RTL, vertical, ActualText, Tagged PDF, accessibility, and any fallback profile have independent denominators, O0-O3 evidence, fuzz/minimization, disjoint holdouts, differential reports, and reviewer decisions.",
+  "Advanced encoding families, RTL, vertical, ActualText, Tagged PDF, accessibility, authored shaping/writing, and every approved fallback profile have independent denominators, O0-O3 evidence, fuzz/minimization, disjoint holdouts, differential reports, and reviewer decisions.",
   "Combination strata cover RTL plus ActualText, vertical plus ActualText, Tagged plus partial/malformed structure, annotations/links, rotated pages, forms/XObjects where registered, and low-confidence mappings.",
-  "Browser/desktop correctness, accessibility, stability, cancellation, memory, first-result search, interaction latency, dependency purity, and deterministic replay gates pass for every promoted profile.",
+  "Browser/desktop correctness, accessibility, stability, cancellation, memory, first-result search, interaction latency, authoring round trips, dependency purity, and deterministic replay gates pass for every promoted profile.",
+  "FT1-10 has a signed terminal ADR; if fallback remains fail-closed, FT1-11 is recorded not-applicable, and if any fallback mode is approved, that exact FT1-11 profile must pass before it is enabled.",
   "No FT1 evidence changes release-r0-v1 scope, status, hashes, or historic M3-M6 maturity claims.",
 ]

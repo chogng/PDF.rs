@@ -4,7 +4,8 @@
 - Repository revision audited: `4b235ab8b8d0bd11988bdb7ca10363ede0b0225b`
 - Local PDFium observation revision: `c040cf96106a87220b814a1a892649cf2d7f1934`
 - Scope: implementation, tests, milestone plans, capability/release profiles, protocol, platform surfaces, and RPE-ARCH-001
-- Decision: M4/M5 remain pixel-vertical-slice milestones; M6 owns R0 horizontal font/text semantics and interaction; FT1 owns advanced Post-R0 text/structure
+- Decision: M4/M5 remain pixel-vertical-slice milestones; M6 owns R0 horizontal font/text semantics and interaction; FT1 owns advanced Post-R0 encoding, text/structure, authoring shaping, and the conditional fallback track
+- Follow-up closure: the initial FT1 draft omitted executable advanced-encoding and shaping work and stopped fallback at a decision gate; the revised plan closes all three gaps without changing implementation or R0 scope
 
 This record is a roadmap and traceability audit, not capability-maturity evidence. It does not promote a profile, approve a release, or change a historic review.
 
@@ -17,8 +18,9 @@ This record is a roadmap and traceability audit, not capability-maturity evidenc
 | CMap and Unicode semantics | The document layer currently decodes simple text as fixed one-byte codes and Identity-H as fixed two-byte big-endian codes. It has no general codespace/usecmap/cidchar/cidrange layer and no ToUnicode semantic mapper. | M6-02/M6-03 |
 | Text semantic model | Scene glyphs retain outline, transform, glyph id, and character code. They do not retain Unicode sequence, mapping confidence, CID, quad, baseline, writing mode, font identity, MCID, or source/logical/visual order. | M6-05 |
 | Text product behavior | The canonical Engine protocol and browser/desktop surfaces have no text-page, selection, copy, search, or link messages/layers. Current product pages are Canvas/surface presentation. | M6-06 through M6-09 |
-| Advanced text/structure | RTL/bidi order, vertical CMaps/CIDFont metrics, ActualText replacement, Tagged PDF structure order, and structure-derived accessibility are not implemented or evidenced. | FT1, Post-R0 |
-| System-font fallback | No product font dependency or fallback is present. Unsupported/missing fonts remain explicit. | Keep fail-closed for R0; FT1-07 is a separate decision gate |
+| Advanced encodings and text/structure | Encoding/CMap/CID families beyond the R0 matrix, RTL/bidi order, vertical CMaps/CIDFont metrics, ActualText replacement, Tagged PDF structure order, and structure-derived accessibility are not implemented or evidenced. | FT1-02 through FT1-07, Post-R0 |
+| Shaping | No shaper dependency or authoring pipeline is present. Existing PDF text is already glyph-positioned and must not be reshaped; new Unicode authoring needs a separate font-selection, shaping, subset/embed, encoding/ToUnicode, writer, and reopen contract. | FT1-08/FT1-09, Post-R0 |
+| System-font fallback | No product font dependency or fallback is present. Unsupported/missing fonts remain explicit. | Keep fail-closed for R0; FT1-10 decides policy and conditionally activates FT1-11 |
 
 ## 2. Evidence boundary
 
@@ -91,7 +93,7 @@ The two branches must share source and geometry identities but must not be confl
 | M4 | Fast CPU, cache/scheduler/surface, desktop Native pixel loop against registered M3 graphics scope | Font/text expansion, semantic text protocol, selection/copy/search/links, system-font fallback |
 | M5 | Browser Native Worker, surface transports, thin viewer, three-engine pixel loop | Font/CMap/ToUnicode semantics in TS/main or Native; selection/copy/search/links; complete R0 text experience |
 | M6/R0 | Horizontal CMap, ToUnicode/encoding Unicode semantics, complete registered embedded horizontal font profile, TextAtom, selection, copy, search, links, protocol/platform/release evidence | RTL, vertical CIDFont, ActualText, Tagged PDF, structure-derived accessibility, shaping existing PDF text, system-font fallback |
-| FT1/Post-R0 | RTL/bidi, vertical CIDFont, ActualText, Tagged PDF/structure/accessibility; independent fallback decision gate | Retroactive R0 widening; authoring/reflow shaping; uncontrolled system fonts or external engine |
+| FT1/Post-R0 | Advanced encoding/CMap/CID families, RTL/bidi, vertical CIDFont, ActualText, Tagged PDF/structure/accessibility, authoring-only shaping/writer round trip, and a fallback decision plus conditional implementation | Retroactive R0 widening; reshaping existing PDF glyphs; uncontrolled system fonts, network fonts, or external engine |
 
 The executable plans are [`plan/m6.toml`](../../plan/m6.toml) and
 [`plan/post-r0-font-text.toml`](../../plan/post-r0-font-text.toml).
@@ -128,7 +130,7 @@ Shaping belongs to a different input/output contract:
 - editing or reflowing content;
 - generating a new PDF text run from Unicode.
 
-Those tasks require script/language/direction/features/font selection, cluster mappings, subset/embed, widths, ToUnicode generation, and writer integration. They are not an implementation detail of M6 extraction or rendering and need a future authoring capability and plan.
+Those tasks require script/language/direction/features/font selection, cluster mappings, subset/embed, widths, ToUnicode generation, and writer integration. They are not an implementation detail of M6 extraction or rendering. FT1-08 now owns the authoring-only shaper contract and dependency gate; FT1-09 owns subset/embed, PDF encoding and ToUnicode emission, writer integration, and normal-reader reopen verification. Writer integration cannot start before the M8 ChangeSet/incremental-writer contract is frozen.
 
 RTL semantic ordering in FT1 also occurs after the drawing decision: it derives visual/logical mappings for interaction while preserving the glyph geometry already specified by the PDF.
 
@@ -143,7 +145,9 @@ Reasons:
 - a best-effort match can make CapabilityDecision a dangerous false positive;
 - current M3 evidence and product provenance explicitly prove no system-font dependency.
 
-FT1-07 is intentionally a decision gate, not an implementation promise. A future fallback can be considered only with its own ADR and profile. A qualifying design must bind a fixed font pack or platform fingerprint, file hashes, selection rules, metric compatibility, diagnostics, platform matrix, licenses, privacy, cache epoch, O0-O3 evidence, holdouts, and rollback. System font enumeration alone does not qualify.
+FT1-10 is a decision gate with four explicit outcomes: retain fail-closed, approve a fixed bundled font pack, approve a bounded system-font adapter, or approve both as separate profiles. Approval does not enable fallback; it activates conditional work item FT1-11.
+
+FT1-11 requires the host to publish a bounded candidate manifest with exact font/environment identity while core owns deterministic selection and metric-compatibility rejection. It preserves PDF code boundaries, glyph positions, advances, `Tj`/`TJ`, and text matrices and cannot call the authoring shaper. Each approved fallback mode needs its own profile, O0-O3 evidence, cross-platform holdouts, pixel/text differentials, dangerous-false-positive gate, performance/memory limits, SBOM/license closure, renderer/cache epoch, kill switch, and rollback drill. If FT1-10 retains fail-closed, FT1-11 closes as not applicable; system-font enumeration alone never qualifies.
 
 ## 8. PDFium behavior comparison, not dependency
 
@@ -169,13 +173,19 @@ M6 cannot exit until:
 - product dependency, runtime trace, font access, network, and build scans prove no system-font or external-engine fallback;
 - fixed-hardware performance covers text-page construction and search first result in addition to rendering paths.
 
-FT1 applies the same discipline independently to RTL, vertical, ActualText, Tagged PDF, accessibility, and any approved fallback profile.
+FT1 applies the same discipline independently to every advanced encoding/collection family, RTL, vertical, ActualText, Tagged PDF, accessibility, authored shaping/writing, and any approved fallback profile. Its dependency graph additionally requires:
+
+- FT1-02 advanced encoding/CID closure before RTL or vertical promotion;
+- FT1-08 shaper contract/dependency approval before FT1-09 writer integration, and the M8 writer contract before that integration starts;
+- FT1-10 terminal fallback ADR before FT1-11, with FT1-11 required only for an approved exact fallback profile.
 
 ## 10. Audit validation result
 
 The following checks passed on the audited tree plus this documentation change:
 
 - strict TOML parsing for `plan/m4.toml`, `plan/m5.toml`, `plan/r0.toml`, both new plans, the capability ledger, and the R0 release profile;
+- the revised FT1 plan has twelve unique, dependency-ordered work items; its root-plan concurrency value matches, the M8 writer start gate is explicit, and no FT1 profile enters `release-r0-v1`;
+- `plan/m4.toml` and `plan/m5.toml` remain byte-unchanged by the Post-R0 follow-up, so neither milestone receives advanced font/text work;
 - `git diff --check` and local Markdown-link resolution;
 - all unit, integration, repository-policy, and doc tests for `pdf-rs-font`, `pdf-rs-document`, and `pdf-rs-content`;
 - the updated `m0_exit` roadmap-version/closure check;

@@ -5,6 +5,9 @@ status = "candidate"
 # The font/text entries below are R0 target contract names, not current
 # capability-maturity claims. M6-01 must register both profiles and their
 # evidence before this candidate can become release-eligible.
+# Post-R0 advanced encodings, vertical text, authored-text shaping, and every
+# bundled/system font fallback profile are intentionally absent. Their later
+# evidence cannot widen or retroactively reclassify release-r0-v1.
 capability_profiles = [
   "r0.syntax.v1",
   "r0.graphics.basic.v1",
