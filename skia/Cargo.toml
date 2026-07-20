@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+pdf-rs-skia-codec = { path = "codec" }
 pdf-rs-skia-core = { path = "core" }
 pdf-rs-skia-cpu = { path = "cpu" }
 pdf-rs-skia-error = { path = "error" }

@@ -8,6 +8,7 @@ members = [
     "skia/path",
     "skia/core",
     "skia/image",
+    "skia/codec",
     "skia/text",
     "skia/cpu",
     "skia/tessellation",

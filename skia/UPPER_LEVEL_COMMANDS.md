@@ -26,6 +26,15 @@ device，随后由内部 renderer 与 device 完成实际绘制。
 `RenderRequest` / `RenderTarget` 接口。本文用于约束该集成层未来应覆盖哪些能力，不能
 据此把下层类型泄露给 PDF.rs。
 
+### 位图输入
+
+上层收到 PNG、JPEG 或 WebP 的**已编码字节**时，应先通过 facade 导出的
+`ImageCodec::decode`（或带调用方配额的 `decode_with_limits`）解码为 `Image`，再登记并
+绘制。`Image` 本身只表示紧密排列、straight-alpha 的 RGBA8 像素，既不识别也不保存
+编码格式。`CodecLimits` 必须由处理不可信输入的上层按资源预算收紧；默认值只是通用
+安全上限。未来 PNG/JPEG/WebP 等编码输出也应放在 `skia/codec`，而不是给 `Image` 加入
+编码相关状态。
+
 ## 先看结论
 
 | 能力 | CPU `Canvas`（即时执行） | `DisplayListBuilder`（录制后由 CPU 回放） | `GpuCommandEncoder`（录制后提交后端） |

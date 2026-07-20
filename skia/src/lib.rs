@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub use pdf_rs_skia_codec::{CodecError, CodecErrorCode, CodecLimits, ImageCodec};
 pub use pdf_rs_skia_core::{
     BlendMode, Color, FontId, GlyphId, GlyphOutline, GlyphOutlineProvider, GlyphRun, OutlinePoint,
     OutlineSegment, Paint, PositionedGlyph, TextError, TextErrorCode, TextUnit,

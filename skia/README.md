@@ -1,8 +1,8 @@
 # Skia subsystem boundary
 
 `skia/` is an independently developed 2D graphics subsystem and reusable
-library. It owns portable geometry, paths, paints, images, text-glyph drawing
-contracts, display lists, and CPU/GPU execution. It is **not** an
+library. It owns portable geometry, paths, paints, image resources and codecs,
+text-glyph drawing contracts, display lists, and CPU/GPU execution. It is **not** an
 implementation detail of PDF.rs and it does not model PDF operators or objects.
 
 ```mermaid
@@ -11,6 +11,8 @@ flowchart LR
   other["Other library adapters"] --> api
   api --> geometry["Geometry"]
   api --> path["Path"]
+  api --> image["Image resources"]
+  api --> codec["Image codecs"]
   api --> core["Skia core semantics"]
   api --> cpu["Skia CPU executor"]
   api --> gpu["Skia GPU executor"]
@@ -19,7 +21,7 @@ flowchart LR
 ## Dependency rule
 
 - `skia/` (`pdf-rs-skia`) is the only public graphics API for consumers.
-  `skia/error`, `skia/geometry`, `skia/path`, `skia/core`, `skia/image`, and
+  `skia/error`, `skia/geometry`, `skia/path`, `skia/core`, `skia/image`, `skia/codec`, and
   executor crates are implementation crates;
   consumers must not depend on them directly. Skia crates may depend on each
   other, but never on a PDF.rs document crate or PDF semantic type.
@@ -32,6 +34,10 @@ flowchart LR
 - `skia/core` contains paint and backend-neutral display-list semantics. It
   depends on the foundational crates but never on an executor, platform
   graphics API, PDF parser, document model, or Scene.
+- `skia/image` owns the immutable RGBA8 resource representation. `skia/codec`
+  translates encoded, general-purpose image bytes into that representation; it
+  does not depend on rendering backends or PDF types. Future encoders belong in
+  `skia/codec` as well, not in the resource crate.
 - Every consumer, including PDF.rs, calls Skia only through its public API.
   Each consumer owns its source-domain adapter and reports its rendering
   intent, target description, and source data to the Skia upper integration
