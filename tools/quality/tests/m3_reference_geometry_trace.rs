@@ -191,14 +191,14 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
             .expect_array("clauses", clauses)
             .unwrap_or_else(|error| panic!("{id} clauses: {error}"));
         feature
-            .expect_array("modules", &["core/raster"])
+            .expect_array("modules", &["pdf-rs/raster"])
             .unwrap_or_else(|error| panic!("{id} modules: {error}"));
         feature
             .expect_array(
                 "tests",
                 &[
-                    "core/raster::reference_geometry_kernel",
-                    "core/raster::repository_policy",
+                    "pdf-rs/raster::reference_geometry_kernel",
+                    "pdf-rs/raster::repository_policy",
                     "tools/quality::m3_reference_geometry_trace",
                 ],
             )
@@ -240,12 +240,12 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
                 .array("implementation")
                 .expect("requirement implementation is typed")
                 .iter()
-                .any(|module| module == "core/raster"),
-            "{id} is missing core/raster"
+                .any(|module| module == "pdf-rs/raster"),
+            "{id} is missing pdf-rs/raster"
         );
         for test in [
-            "core/raster::reference_geometry_kernel",
-            "core/raster::repository_policy",
+            "pdf-rs/raster::reference_geometry_kernel",
+            "pdf-rs/raster::repository_policy",
             "tools/quality::m3_reference_geometry_trace",
         ] {
             assert!(
@@ -283,8 +283,8 @@ fn m3_geometry_plan_features_and_spec_links_are_exact() {
         )
         .expect("clip-state features are exact");
     for test in [
-        "core/raster::reference_geometry_kernel",
-        "core/raster::repository_policy",
+        "pdf-rs/raster::reference_geometry_kernel",
+        "pdf-rs/raster::repository_policy",
         "tools/quality::m3_reference_geometry_trace",
     ] {
         assert!(
@@ -334,11 +334,11 @@ fn m3_geometry_gate_is_selected_before_m2_replay_and_preserves_m1() {
     );
 
     assert_eq!(
-        file_sha256(&root.join("core/document/src/page_tree.rs")),
+        file_sha256(&root.join("pdf-rs/document/src/page_tree.rs")),
         M1_PAGE_TREE_HASH
     );
     assert_eq!(
-        file_sha256(&root.join("core/document/tests/page_tree_count.rs")),
+        file_sha256(&root.join("pdf-rs/document/tests/page_tree_count.rs")),
         M1_PAGE_TREE_TEST_HASH
     );
 }

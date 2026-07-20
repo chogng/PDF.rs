@@ -761,7 +761,7 @@ fn build_manifest(
             tier_value.line,
             entry_index,
         )?;
-        if tier != CorpusTier::T0 {
+        if !matches!(tier, CorpusTier::T0 | CorpusTier::T1) {
             return Err(manifest_error(
                 CorpusManifestErrorCode::InvalidValue,
                 Some(tier_value.line),
@@ -806,7 +806,8 @@ fn build_manifest(
             redistribution_value.line,
             entry_index,
         )?;
-        if access != AccessPolicy::Repository || redistribution != RedistributionPolicy::Prohibited
+        if access != AccessPolicy::Repository
+            || (tier == CorpusTier::T0 && redistribution != RedistributionPolicy::Prohibited)
         {
             return Err(manifest_error(
                 CorpusManifestErrorCode::InvalidValue,
@@ -1791,19 +1792,14 @@ mod tests {
     }
 
     #[test]
-    fn schema_one_rejects_non_t0_or_non_repository_policy() {
+    fn schema_one_admits_t1_repository_corpora_but_rejects_unapproved_tiers_or_access() {
         let source = canonical("object.pdf", HASH, 65_536);
         for (from, to) in [
-            ("tier = \"T0\"", "tier = \"T1\""),
             ("tier = \"T0\"", "tier = \"T2\""),
             ("tier = \"T0\"", "tier = \"T3\""),
             ("access = \"repository\"", "access = \"public\""),
             ("access = \"repository\"", "access = \"restricted\""),
             ("access = \"repository\"", "access = \"private\""),
-            (
-                "redistribution = \"prohibited\"",
-                "redistribution = \"allowed\"",
-            ),
         ] {
             let error = decode_manifest(
                 source.replacen(from, to, 1).as_bytes(),
@@ -1820,6 +1816,31 @@ mod tests {
             assert_eq!(error.diagnostic_id, "RPE-CORPUS-MANIFEST-0013");
             assert!(!error.to_string().contains(to));
         }
+
+        let t1 = source
+            .replacen("tier = \"T0\"", "tier = \"T1\"", 1)
+            .replacen(
+                "redistribution = \"prohibited\"",
+                "redistribution = \"allowed\"",
+                1,
+            );
+        assert!(decode_manifest(t1.as_bytes(), CorpusManifestLimits::default()).is_ok());
+
+        let t0_redistributable = source.replacen(
+            "redistribution = \"prohibited\"",
+            "redistribution = \"allowed\"",
+            1,
+        );
+        assert_eq!(
+            decode_manifest(
+                t0_redistributable.as_bytes(),
+                CorpusManifestLimits::default()
+            )
+            .err()
+            .unwrap()
+            .code,
+            CorpusManifestErrorCode::InvalidValue
+        );
     }
 
     #[test]

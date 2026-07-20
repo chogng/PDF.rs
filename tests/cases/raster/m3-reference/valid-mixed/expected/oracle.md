@@ -25,7 +25,7 @@ The frozen implementation is commit
 defined as SHA-256 over the exact stdout bytes, including each terminating LF, of:
 
 ```text
-git ls-tree -r --full-tree 8c3e28c8ce4cbe5113cc565a36744158e283a7fb -- core/raster
+git ls-tree -r --full-tree 8c3e28c8ce4cbe5113cc565a36744158e283a7fb -- pdf-rs/raster
 ```
 
 That byte stream hashes to

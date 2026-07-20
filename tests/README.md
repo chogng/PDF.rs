@@ -18,8 +18,15 @@ the manifest does not make the PDF redistributable.
 - `fuzz/`: registry and campaign contracts; M0 currently documents only a
   fixed deterministic parser-mutation smoke run by ordinary workspace tests,
   with no registered fuzz target or release-fuzz evidence.
-- `corpus/manifests/`: canonical hashed corpus indices; M0 currently contains
-  only the generated T0 object, while licensed T1-T3 indices remain pending.
+- `pdfium/`: imported PDFium compatibility suites. Each suite keeps its own
+  manifest and source-specific explanation together; the pinned T1 subset is
+  downloaded on demand by `scripts/fetch-pdfium-corpus.sh`.
+- `pdfrs/`: PDF.rs-owned product profiles derived from compatibility evidence.
+  These define the exact supported result and the exact stable capability
+  boundary for each imported sample; they are the regression contract that
+  product changes must update deliberately.
+- `corpus/manifests/`: project-owned canonical corpus indices. Larger T2-T3
+  indices remain pending.
 - `performance/`: benchmark-report contract fixtures; M0 currently contains
   only canonical synthetic pipeline validation data that is explicitly
   ineligible for performance decisions or release evidence.

@@ -284,6 +284,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-skia"
+version = "0.1.0"
+
+[[package]]
 name = "pdf-rs-surface"
 version = "0.1.0"
 dependencies = [

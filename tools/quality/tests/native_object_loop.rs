@@ -826,8 +826,8 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(candidate_feature.contains("owner = \"parser-security\""));
     assert!(candidate_feature.contains("state = \"PLANNED\""));
     assert!(candidate_feature.contains("profile = \"m1.strict-base-revision-index.v1\""));
-    assert!(candidate_feature.contains("modules = [\"core/document\"]"));
-    assert!(candidate_feature.contains("core/document::revision_index"));
+    assert!(candidate_feature.contains("modules = [\"pdf-rs/document\"]"));
+    assert!(candidate_feature.contains("pdf-rs/document::revision_index"));
     assert!(candidate_feature.contains("tools/quality::native_object_loop"));
     assert!(candidate_feature.contains("fuzz_targets = []"));
     assert!(candidate_feature.contains("benchmarks = []"));
@@ -841,9 +841,9 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(attestation_feature.contains("owner = \"parser-security\""));
     assert!(attestation_feature.contains("state = \"PLANNED\""));
     assert!(attestation_feature.contains("profile = \"m1.strict-base-revision-attestation.v1\""));
-    assert!(attestation_feature.contains("modules = [\"core/document\"]"));
-    assert!(attestation_feature.contains("core/document::revision_attestation"));
-    assert!(attestation_feature.contains("core/document::revision_attestation_limit_config"));
+    assert!(attestation_feature.contains("modules = [\"pdf-rs/document\"]"));
+    assert!(attestation_feature.contains("pdf-rs/document::revision_attestation"));
+    assert!(attestation_feature.contains("pdf-rs/document::revision_attestation_limit_config"));
     assert!(attestation_feature.contains("tools/quality::native_object_loop"));
     assert!(attestation_feature.contains("fuzz_targets = []"));
     assert!(attestation_feature.contains("benchmarks = []"));
@@ -853,9 +853,9 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(strict_open_feature.contains("owner = \"parser-security\""));
     assert!(strict_open_feature.contains("state = \"PLANNED\""));
     assert!(strict_open_feature.contains("profile = \"m1.strict-base-open.v1\""));
-    assert!(strict_open_feature.contains("modules = [\"core/document\"]"));
-    assert!(strict_open_feature.contains("core/document::strict_base_open"));
-    assert!(strict_open_feature.contains("core/document::repository_policy"));
+    assert!(strict_open_feature.contains("modules = [\"pdf-rs/document\"]"));
+    assert!(strict_open_feature.contains("pdf-rs/document::strict_base_open"));
+    assert!(strict_open_feature.contains("pdf-rs/document::repository_policy"));
     assert!(strict_open_feature.contains("tools/quality::native_object_loop"));
     assert!(strict_open_feature.contains("tools/quality::native_range_resume_loop"));
     assert!(strict_open_feature.contains("tools/quality::native_strict_open_runtime_loop"));
@@ -867,8 +867,8 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(access_feature.contains("owner = \"parser-security\""));
     assert!(access_feature.contains("state = \"PLANNED\""));
     assert!(access_feature.contains("profile = \"m1.attested-object-access.v1\""));
-    assert!(access_feature.contains("modules = [\"core/document\"]"));
-    assert!(access_feature.contains("core/document::attested_object_access"));
+    assert!(access_feature.contains("modules = [\"pdf-rs/document\"]"));
+    assert!(access_feature.contains("pdf-rs/document::attested_object_access"));
     assert!(access_feature.contains("tools/quality::native_object_loop"));
     assert!(access_feature.contains("fuzz_targets = []"));
     assert!(access_feature.contains("benchmarks = []"));
@@ -882,9 +882,9 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(chain_feature.contains("owner = \"parser-security\""));
     assert!(chain_feature.contains("state = \"PLANNED\""));
     assert!(chain_feature.contains("profile = \"m1.attested-reference-chain.v1\""));
-    assert!(chain_feature.contains("modules = [\"core/document\"]"));
-    assert!(chain_feature.contains("core/document::reference_chain_resolution"));
-    assert!(chain_feature.contains("core/document::reference_chain_limit_config"));
+    assert!(chain_feature.contains("modules = [\"pdf-rs/document\"]"));
+    assert!(chain_feature.contains("pdf-rs/document::reference_chain_resolution"));
+    assert!(chain_feature.contains("pdf-rs/document::reference_chain_limit_config"));
     assert!(chain_feature.contains("tools/quality::native_object_loop"));
     assert!(chain_feature.contains("fuzz_targets = []"));
     assert!(chain_feature.contains("benchmarks = []"));
@@ -897,12 +897,12 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(resident_feature.contains("profile = \"m1.attested-resident-footprint.v1\""));
     assert!(
         resident_feature
-            .contains("modules = [\"core/syntax\", \"core/object\", \"core/document\"]")
+            .contains("modules = [\"pdf-rs/syntax\", \"pdf-rs/object\", \"pdf-rs/document\"]")
     );
-    assert!(resident_feature.contains("core/syntax::parser_behavior"));
-    assert!(resident_feature.contains("core/object::object_behavior"));
-    assert!(resident_feature.contains("core/document::attested_object_access"));
-    assert!(resident_feature.contains("core/document::reference_chain_resolution"));
+    assert!(resident_feature.contains("pdf-rs/syntax::parser_behavior"));
+    assert!(resident_feature.contains("pdf-rs/object::object_behavior"));
+    assert!(resident_feature.contains("pdf-rs/document::attested_object_access"));
+    assert!(resident_feature.contains("pdf-rs/document::reference_chain_resolution"));
     assert!(resident_feature.contains("tools/quality::native_object_loop"));
     assert!(resident_feature.contains("fuzz_targets = []"));
     assert!(resident_feature.contains("benchmarks = []"));
@@ -920,12 +920,12 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     ] {
         assert!(page_count_feature.contains(clause));
     }
-    assert!(page_count_feature.contains("modules = [\"core/document\"]"));
-    assert!(page_count_feature.contains("core/document::page_tree_count"));
-    assert!(page_count_feature.contains("core/document::page_tree_limit_config"));
-    assert!(page_count_feature.contains("core/document::repository_policy"));
-    assert!(page_count_feature.contains("core/document::local_repair_open"));
-    assert!(page_count_feature.contains("core/document::acquired_services"));
+    assert!(page_count_feature.contains("modules = [\"pdf-rs/document\"]"));
+    assert!(page_count_feature.contains("pdf-rs/document::page_tree_count"));
+    assert!(page_count_feature.contains("pdf-rs/document::page_tree_limit_config"));
+    assert!(page_count_feature.contains("pdf-rs/document::repository_policy"));
+    assert!(page_count_feature.contains("pdf-rs/document::local_repair_open"));
+    assert!(page_count_feature.contains("pdf-rs/document::acquired_services"));
     assert!(page_count_feature.contains("tools/quality::native_object_loop"));
     assert!(page_count_feature.contains("tools/quality::m1_document_service_differential"));
     assert!(page_count_feature.contains("tools/quality::m1_document_service_maturity"));
@@ -1039,7 +1039,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     let page_tree_requirement = record_with_id(SPEC_MAP, "requirement", "RPE-ARCH-001/5.8-5.9")
         .expect("the document-model and page-tree requirement must exist");
     assert!(page_tree_requirement.contains("\"core.strict-page-count\""));
-    assert!(page_tree_requirement.contains("core/document::page_tree_count"));
+    assert!(page_tree_requirement.contains("pdf-rs/document::page_tree_count"));
     assert!(page_tree_requirement.contains("tools/baseline::pdfium_page_count_real_adapter"));
     assert!(page_tree_requirement.contains("tools/baseline::repository_pdfium_page_count_probe"));
     assert!(page_tree_requirement.contains("tools/quality::native_object_loop"));
@@ -1068,7 +1068,7 @@ fn native_object_loop_traceability_is_explicit_and_non_differential() {
     assert!(xref_requirement.contains("\"core.attested-reference-chain-resolution\""));
     assert!(xref_requirement.contains("\"core.attested-resident-footprint\""));
     assert!(xref_requirement.contains("\"runtime.strict-base-open-coordinator\""));
-    assert!(xref_requirement.contains("\"core/document\""));
+    assert!(xref_requirement.contains("\"pdf-rs/document\""));
     assert!(xref_requirement.contains("runtime/session::strict_base_open_coordinator"));
     assert!(xref_requirement.contains("tools/quality::native_strict_open_runtime_loop"));
     assert!(xref_requirement.contains("header-to-startxref"));

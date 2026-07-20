@@ -15,7 +15,7 @@ interpretation = "R1 accepts only the explicitly bounded local whitespace, direc
 
 [provenance]
 kind = "self-authored-source-case"
-source = "core/document/tests/local_repair_open.rs"
+source = "pdf-rs/document/tests/local_repair_open.rs"
 sha256 = "sha256:7c39ec0be194abe61da79df409488d01b3bfc072c5704781cf5521f43303b0d9"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = false
@@ -73,7 +73,7 @@ renderer_epoch = "bytes-and-objects-v1"
 mode = "exact"
 
 [runners]
-native = ["core/document::local_repair_open"]
+native = ["pdf-rs/document::local_repair_open"]
 external_observation = []
 
 [history]

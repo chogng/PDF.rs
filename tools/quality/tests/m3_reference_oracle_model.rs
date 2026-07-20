@@ -444,15 +444,15 @@ fn reviewed_o3_mixed_is_hash_bound_without_independent_pixel_derivation() {
             "--full-tree",
             IMPLEMENTATION_COMMIT,
             "--",
-            "core/raster",
+            "pdf-rs/raster",
         ])
         .output()
-        .expect("git can enumerate the frozen core/raster implementation");
+        .expect("git can enumerate the frozen pdf-rs/raster implementation");
     assert!(implementation_listing.status.success());
     assert_eq!(
         hex_digest(
             &sha256(&implementation_listing.stdout)
-                .expect("bounded core/raster listing fits SHA-256 framing")
+                .expect("bounded pdf-rs/raster listing fits SHA-256 framing")
         ),
         "0088e35c0824ab38b7e2ba41ff56c89d9bf246b611e968cee19cc36475327f5b",
         "Reference identity must hash the exact git ls-tree stdout bytes"

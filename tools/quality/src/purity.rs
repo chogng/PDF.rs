@@ -107,57 +107,57 @@ const THIRD_PARTY_PRODUCT_PACKAGES: &[ThirdPartyProductPackage; 7] = &[
 const PRODUCT_PACKAGE_COUNT: usize = 24;
 const PRODUCT_PACKAGES: &[ProductPackage; PRODUCT_PACKAGE_COUNT] = &[
     ProductPackage {
-        manifest: "core/bytes/Cargo.toml",
+        manifest: "pdf-rs/bytes/Cargo.toml",
         package_name: "pdf-rs-bytes",
         crate_name: "pdf_rs_bytes",
     },
     ProductPackage {
-        manifest: "core/content/Cargo.toml",
+        manifest: "pdf-rs/content/Cargo.toml",
         package_name: "pdf-rs-content",
         crate_name: "pdf_rs_content",
     },
     ProductPackage {
-        manifest: "core/document/Cargo.toml",
+        manifest: "pdf-rs/document/Cargo.toml",
         package_name: "pdf-rs-document",
         crate_name: "pdf_rs_document",
     },
     ProductPackage {
-        manifest: "core/filters/Cargo.toml",
+        manifest: "pdf-rs/filters/Cargo.toml",
         package_name: "pdf-rs-filters",
         crate_name: "pdf_rs_filters",
     },
     ProductPackage {
-        manifest: "core/fast-raster/Cargo.toml",
+        manifest: "pdf-rs/fast-raster/Cargo.toml",
         package_name: "pdf-rs-fast-raster",
         crate_name: "pdf_rs_fast_raster",
     },
     ProductPackage {
-        manifest: "core/font/Cargo.toml",
+        manifest: "pdf-rs/font/Cargo.toml",
         package_name: "pdf-rs-font",
         crate_name: "pdf_rs_font",
     },
     ProductPackage {
-        manifest: "core/object/Cargo.toml",
+        manifest: "pdf-rs/object/Cargo.toml",
         package_name: "pdf-rs-object",
         crate_name: "pdf_rs_object",
     },
     ProductPackage {
-        manifest: "core/raster/Cargo.toml",
+        manifest: "pdf-rs/raster/Cargo.toml",
         package_name: "pdf-rs-raster",
         crate_name: "pdf_rs_raster",
     },
     ProductPackage {
-        manifest: "core/scene/Cargo.toml",
+        manifest: "pdf-rs/scene/Cargo.toml",
         package_name: "pdf-rs-scene",
         crate_name: "pdf_rs_scene",
     },
     ProductPackage {
-        manifest: "core/syntax/Cargo.toml",
+        manifest: "pdf-rs/syntax/Cargo.toml",
         package_name: "pdf-rs-syntax",
         crate_name: "pdf_rs_syntax",
     },
     ProductPackage {
-        manifest: "core/xref/Cargo.toml",
+        manifest: "pdf-rs/xref/Cargo.toml",
         package_name: "pdf-rs-xref",
         crate_name: "pdf_rs_xref",
     },
@@ -2640,22 +2640,22 @@ mod tests {
     fn ignores_tool_only_baseline_and_accepts_native_product_manifests() {
         assert_eq!(PRODUCT_PACKAGES.len(), PRODUCT_PACKAGE_COUNT);
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
-            manifest: "core/content/Cargo.toml",
+            manifest: "pdf-rs/content/Cargo.toml",
             package_name: "pdf-rs-content",
             crate_name: "pdf_rs_content",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
-            manifest: "core/fast-raster/Cargo.toml",
+            manifest: "pdf-rs/fast-raster/Cargo.toml",
             package_name: "pdf-rs-fast-raster",
             crate_name: "pdf_rs_fast_raster",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
-            manifest: "core/raster/Cargo.toml",
+            manifest: "pdf-rs/raster/Cargo.toml",
             package_name: "pdf-rs-raster",
             crate_name: "pdf_rs_raster",
         }));
         assert!(PRODUCT_PACKAGES.contains(&ProductPackage {
-            manifest: "core/font/Cargo.toml",
+            manifest: "pdf-rs/font/Cargo.toml",
             package_name: "pdf-rs-font",
             crate_name: "pdf_rs_font",
         }));
@@ -2861,7 +2861,7 @@ mod tests {
     fn rejects_missing_raster_manifest_from_bidirectional_allowlist() {
         let root = temp_dir("missing-raster");
         write_product_manifests(&root);
-        let raster_manifest = root.join("core/raster/Cargo.toml");
+        let raster_manifest = root.join("pdf-rs/raster/Cargo.toml");
         fs::remove_file(&raster_manifest).unwrap();
 
         let violations = check_product_manifests(&root).unwrap_err();

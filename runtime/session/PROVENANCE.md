@@ -281,8 +281,8 @@ negative cases reject oversized headers or bodies and malformed, mismatched, or 
 # External observations and dependencies
 
 No PDFium, external engine, third-party implementation source, external output, or external or
-non-loopback network service was used. Product dependencies are the in-repository `core/bytes`, `runtime/cache`, and
-`core/document` crates. Object, syntax, and xref crates are test-only dependencies used to assemble
+non-loopback network service was used. Product dependencies are the in-repository `pdf-rs/bytes`, `runtime/cache`, and
+`pdf-rs/document` crates. Object, syntax, and xref crates are test-only dependencies used to assemble
 project-authored structural fixtures; the loopback host uses only the Rust standard library and
 project-authored bytes.
 

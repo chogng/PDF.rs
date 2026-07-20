@@ -1,0 +1,51 @@
+schema = 1
+id = "pdfium-t1-2026-05-14-v1"
+version = "1"
+
+[[entry]]
+sha256 = "sha256:1c12e0d5882c21368169ea4b332de7e4550fde4fad3a8db1d427802c805e67d4"
+path = "pdfium/bug_883026.pdf"
+tier = "T1"
+page_count = 1
+license_expression = "BSD-3-Clause"
+source = "pdfium_tests@a0cdeeeac46f1b2272094ee498cd59a30ce1c073:pdfium/bug_883026.pdf"
+access = "repository"
+redistribution = "allowed"
+features = ["raster.path"]
+max_bytes = 21022
+
+[[entry]]
+sha256 = "sha256:373039bcc17f2f8d21a978bd75313b6c4c4691a914b4927f431a4513865d1733"
+path = "pdfium/bug_583804.pdf"
+tier = "T1"
+page_count = 1
+license_expression = "BSD-3-Clause"
+source = "pdfium_tests@a0cdeeeac46f1b2272094ee498cd59a30ce1c073:pdfium/bug_583804.pdf"
+access = "repository"
+redistribution = "allowed"
+features = ["raster.transparency"]
+max_bytes = 125935
+
+[[entry]]
+sha256 = "sha256:46d388b39a2f9ed920c3518eafec3023be4f52a0a0e8176fbe51524fc9104894"
+path = "pdfium/bug_493126_endobj_bug_weirdWS.pdf"
+tier = "T1"
+page_count = 1
+license_expression = "BSD-3-Clause"
+source = "pdfium_tests@a0cdeeeac46f1b2272094ee498cd59a30ce1c073:pdfium/bug_493126_endobj_bug_weirdWS.pdf"
+access = "repository"
+redistribution = "allowed"
+features = ["syntax.whitespace", "xref.table"]
+max_bytes = 315081
+
+[[entry]]
+sha256 = "sha256:577da10930607fbd9d52a6839b78b7825f9d8adc25d49d22b176e472ad6b6129"
+path = "pdfium/bug_880920.pdf"
+tier = "T1"
+page_count = 1
+license_expression = "BSD-3-Clause"
+source = "pdfium_tests@a0cdeeeac46f1b2272094ee498cd59a30ce1c073:pdfium/bug_880920.pdf"
+access = "repository"
+redistribution = "allowed"
+features = ["raster.shading"]
+max_bytes = 9745

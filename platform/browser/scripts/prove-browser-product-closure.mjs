@@ -25,7 +25,7 @@ const EXCLUDED_PREFIXES = Object.freeze([
 const ISOLATED_BROWSER_WORKSPACE = `[workspace]
 resolver = "3"
 members = [
-    "core/*",
+    "pdf-rs/*",
     "platform/browser/worker",
     "runtime/cache",
     "runtime/engine",

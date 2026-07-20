@@ -2956,7 +2956,7 @@ mod tests {
             let evidence = root.join("evidence");
             fs::create_dir_all(&traceability).unwrap();
             fs::create_dir_all(&evidence).unwrap();
-            for package in ["core/test", "tools/quality"] {
+            for package in ["pdf-rs/test", "tools/quality"] {
                 fs::create_dir_all(root.join(package)).unwrap();
                 fs::write(
                     root.join(package).join("Cargo.toml"),
@@ -3141,7 +3141,7 @@ mod tests {
             fs::write(
                 &profile_path,
                 format!(
-                    "schema = 1\nversion = \"test\"\nstatus = \"active\"\n\n[[profile]]\nid = \"m1.test.v1\"\nowner = \"quality-corpus\"\nstate = \"DIFFERENTIAL\"\nfeature = \"core.test\"\nrequirements = [\"RPE-TEST/1\"]\nsupported = [\"strict test\"]\nexcluded = [\"other behavior\"]\npolicy = \"Only registered evidence may promote this fixture.\"\ntarget = \"core/test::run\"\nreference = \"{profile_reference}\"\no0_cases = [\"{o0}\"]\no1_cases = [\"{profile_o1}\"]\no2_adjudications = [\"{o2}\"]\nindependent_review = \"{review}\"\nfuzz_targets = [\"fuzz.m1\"]\nfuzz_minimizer = \"{minimizer}\"\nholdout_manifest = \"{holdout}\"\nbenchmark_report = \"{benchmark}\"\ndifferential_report = \"{differential}\"\nbaseline_fingerprint = \"{fingerprint}\"\n"
+                    "schema = 1\nversion = \"test\"\nstatus = \"active\"\n\n[[profile]]\nid = \"m1.test.v1\"\nowner = \"quality-corpus\"\nstate = \"DIFFERENTIAL\"\nfeature = \"core.test\"\nrequirements = [\"RPE-TEST/1\"]\nsupported = [\"strict test\"]\nexcluded = [\"other behavior\"]\npolicy = \"Only registered evidence may promote this fixture.\"\ntarget = \"pdf-rs/test::run\"\nreference = \"{profile_reference}\"\no0_cases = [\"{o0}\"]\no1_cases = [\"{profile_o1}\"]\no2_adjudications = [\"{o2}\"]\nindependent_review = \"{review}\"\nfuzz_targets = [\"fuzz.m1\"]\nfuzz_minimizer = \"{minimizer}\"\nholdout_manifest = \"{holdout}\"\nbenchmark_report = \"{benchmark}\"\ndifferential_report = \"{differential}\"\nbaseline_fingerprint = \"{fingerprint}\"\n"
                 ),
             )
             .unwrap();
@@ -3235,7 +3235,7 @@ mod tests {
         let fuzz_targets = quoted_array(spec.fuzz_targets.iter().copied());
         let benchmarks = quoted_array(spec.benchmarks.iter().copied());
         let contents = format!(
-            "schema = {}\ntype = \"maturity-evidence\"\nid = \"evidence.{}\"\nprofile = \"m1.test.v1\"\nfeature = \"core.test\"\nrole = \"{}\"\noracle = \"{}\"\neligibility = {}\nregistered = {}\ngating = {}\nexternal_observation = {}\ntarget = \"core/test::run\"\nrequirements = [\"RPE-TEST/1\"]\nsubject_kind = \"{}\"\nsubjects = {}\nexecuted_tests = {}\ncross_references = {}\nfuzz_targets = {}\nbenchmarks = {}\nverdict = \"pass\"\n",
+            "schema = {}\ntype = \"maturity-evidence\"\nid = \"evidence.{}\"\nprofile = \"m1.test.v1\"\nfeature = \"core.test\"\nrole = \"{}\"\noracle = \"{}\"\neligibility = {}\nregistered = {}\ngating = {}\nexternal_observation = {}\ntarget = \"pdf-rs/test::run\"\nrequirements = [\"RPE-TEST/1\"]\nsubject_kind = \"{}\"\nsubjects = {}\nexecuted_tests = {}\ncross_references = {}\nfuzz_targets = {}\nbenchmarks = {}\nverdict = \"pass\"\n",
             spec.schema,
             spec.name,
             spec.role,
@@ -3291,7 +3291,7 @@ mod tests {
         );
         match spec.role {
             "reference-implementation" => vec![
-                emit_subject(root, "core/test/src/lib.rs", "pub fn run() {}\n"),
+                emit_subject(root, "pdf-rs/test/src/lib.rs", "pub fn run() {}\n"),
                 test_subject,
             ],
             "o0-case" | "o1-case" => {
@@ -3450,7 +3450,7 @@ mod tests {
         let fuzz_targets = quoted_array(spec.fuzz_targets.iter().copied());
         let benchmarks = quoted_array(spec.benchmarks.iter().copied());
         let mut contents = format!(
-            "schema = 1\ntype = \"maturity-subject-report\"\nid = \"subject.{}\"\nevidence_kind = \"{}\"\nfeature = \"core.test\"\ntarget = \"core/test::run\"\nexecuted_tests = [\"{}\"]\nfuzz_targets = {}\nbenchmarks = {}\nverdict = \"pass\"\n",
+            "schema = 1\ntype = \"maturity-subject-report\"\nid = \"subject.{}\"\nevidence_kind = \"{}\"\nfeature = \"core.test\"\ntarget = \"pdf-rs/test::run\"\nexecuted_tests = [\"{}\"]\nfuzz_targets = {}\nbenchmarks = {}\nverdict = \"pass\"\n",
             spec.name,
             subject_kind_for_role(spec.role),
             spec.executed_test,
@@ -3800,13 +3800,13 @@ mod tests {
     #[test]
     fn keeps_targets_symbolic_instead_of_content_addressed_or_file_shaped() {
         assert!(valid_symbolic_target(
-            "core/document::AttestedRevisionIndex::count_pages"
+            "pdf-rs/document::AttestedRevisionIndex::count_pages"
         ));
         for target in [
             "tests/evidence/report.toml",
-            "/core/document::count_pages",
-            "core/document::count_pages#sha256:deadbeef",
-            "core/document/count_pages.rs",
+            "/pdf-rs/document::count_pages",
+            "pdf-rs/document::count_pages#sha256:deadbeef",
+            "pdf-rs/document/count_pages.rs",
         ] {
             assert!(!valid_symbolic_target(target), "{target}");
         }

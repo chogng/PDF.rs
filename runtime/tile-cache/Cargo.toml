@@ -6,9 +6,9 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-bytes = { path = "../../pdf-rs/bytes" }
 pdf-rs-policy = { path = "../policy" }
 
 [dev-dependencies]
-pdf-rs-scene = { path = "../../core/scene" }
-pdf-rs-syntax = { path = "../../core/syntax" }
+pdf-rs-scene = { path = "../../pdf-rs/scene" }
+pdf-rs-syntax = { path = "../../pdf-rs/syntax" }

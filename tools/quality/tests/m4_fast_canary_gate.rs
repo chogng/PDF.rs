@@ -16,9 +16,9 @@ const PERFORMANCE: &[u8] =
     include_bytes!("../../../docs/traceability/evidence/m4/fast-cpu-canary/performance.toml");
 const PURITY: &[u8] =
     include_bytes!("../../../docs/traceability/evidence/m4/fast-cpu-canary/product-purity.toml");
-const FAST_KERNELS: &[u8] = include_bytes!("../../../core/fast-raster/src/fast/kernels.rs");
-const FAST_RENDER: &[u8] = include_bytes!("../../../core/fast-raster/src/fast/render.rs");
-const FAST_OWNED: &[u8] = include_bytes!("../../../core/fast-raster/src/fast/owned.rs");
+const FAST_KERNELS: &[u8] = include_bytes!("../../../pdf-rs/fast-raster/src/fast/kernels.rs");
+const FAST_RENDER: &[u8] = include_bytes!("../../../pdf-rs/fast-raster/src/fast/render.rs");
+const FAST_OWNED: &[u8] = include_bytes!("../../../pdf-rs/fast-raster/src/fast/owned.rs");
 const VIEWER: &[u8] = include_bytes!("../../../runtime/viewer/src/lib.rs");
 const ELECTRON_BRIDGE_RUST: &[u8] = include_bytes!("../../../platform/electron-bridge/src/lib.rs");
 const ELECTRON_BRIDGE_JS: &[u8] = include_bytes!("../../../platform/electron/src/bridge.mjs");

@@ -80,7 +80,7 @@ docs/
     ├── data-ledger.toml
     └── baseline-ledger.toml
 
-core/<module>/PROVENANCE.md
+pdf-rs/<module>/PROVENANCE.md
 tests/cases/<case-id>/case.toml
 tests/corpus/manifests/<corpus-id>.toml
 release/profiles/<release-profile>.toml
@@ -98,7 +98,7 @@ id = "ISO-32000-2:2020/11.6.5"
 snapshot_hash = "sha256:<licensed-local-snapshot-hash>"
 summary = "Soft-mask requirements"
 features = ["transparency.soft-mask.alpha", "transparency.soft-mask.luminosity"]
-implementation = ["core/scene", "core/reference", "core/fast_cpu"]
+implementation = ["pdf-rs/scene", "pdf-rs/reference", "pdf-rs/fast_cpu"]
 tests = [
   "transparency/soft-mask-alpha-001",
   "transparency/soft-mask-luminosity-004",
@@ -124,7 +124,7 @@ owner = "graphics"
 state = "CANARY"
 profile = "transparency.soft-mask.luminosity.v1"
 clauses = ["ISO-32000-2:2020/11.6.5"]
-modules = ["core/content", "core/scene", "core/reference", "core/fast_cpu"]
+modules = ["pdf-rs/content", "pdf-rs/scene", "pdf-rs/reference", "pdf-rs/fast_cpu"]
 tests = ["transparency/soft-mask-luminosity-004"]
 fuzz_targets = ["content_vm", "soft_mask_scene"]
 benchmarks = ["soft-mask-tile"]

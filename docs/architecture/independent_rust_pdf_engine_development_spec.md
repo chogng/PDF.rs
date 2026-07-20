@@ -42,7 +42,7 @@
 
 | 编号 | 决策 | 约束 |
 | --- | --- | --- |
-| AD-001 | 目录按职责命名，不使用 `pdf-` 前缀 | 例如 `core/syntax`、`runtime/cache`；发布包名可使用项目命名空间。 |
+| AD-001 | 目录按职责命名，不使用 `pdf-` 前缀 | 例如 `pdf-rs/syntax`、`runtime/cache`；发布包名可使用项目命名空间。 |
 | AD-002 | 核心实现自主开发 | 不把 Hayro、Vello、PDF.js 或其他完整 PDF/2D 引擎作为核心生产依赖。 |
 | AD-003 | 生产依赖按项目许可证兼容性审查 | 不预设 Apache-2.0 blanket deny；所有直接/传递依赖仍须进入 allowlist、SBOM 和再分发检查。 |
 | AD-004 | 先建立测试系统，再扩大功能覆盖 | 任何新特性必须先有规范映射、最小样例、预期结果和回归策略。 |
@@ -292,7 +292,7 @@ Profile loader 必须拒绝未知 mandatory 字段、缺失 hash/硬件池、空
 **示例：模块来源记录**
 
 ```text
-core/content/PROVENANCE.md
+pdf-rs/content/PROVENANCE.md
 
 # Scope
 Content stream parser and graphics-state interpreter.
@@ -359,7 +359,7 @@ tests/corpus ─► tools/baseline protocol ─► PDFium/other process
 
 ```text
 /
-├── core/
+├── pdf-rs/
 │   ├── bytes/
 │   ├── syntax/
 │   ├── xref/
@@ -823,7 +823,7 @@ R0 对缺失或非嵌入字体继续 fail-closed，并返回结构化 `Unsupport
 ### 7.2 字体模块划分
 
 ```text
-core/font/
+pdf-rs/font/
 ├── cmap/
 ├── encoding/
 ├── unicode/
@@ -975,7 +975,7 @@ PDF 语义符合性与项目 canonical raster 一致性必须分别报告。PDF 
 ### 8.3 Reference 实现分层
 
 ```text
-core/raster/reference/
+pdf-rs/raster/reference/
 ├── geometry/
 ├── flatten/
 ├── edge/
@@ -1050,7 +1050,7 @@ RenderConfigHash includes:
 GPU 后端不依赖 Vello。首个目标是浏览器 WebGPU；Native GPU 可复用 shader 和中间数据格式，再分别接入平台接口或经审核的低层绑定。GPU 后端只在 reference/fast CPU 已覆盖的特性上开放，并固定实现所依据的 WebGPU 规范快照 [R7]。
 
 ```text
-core/gpu/
+pdf-rs/gpu/
 ├── encode/
 ├── binning/
 ├── path/
@@ -1522,7 +1522,7 @@ watchdog_ms = 500       # outer safety only; not a semantic oracle
 ```text
 ["ISO-32000-2:2020/8.5.3"]
 status = "implemented"
-modules = ["core/content", "core/graphics", "core/raster/reference"]
+modules = ["pdf-rs/content", "pdf-rs/graphics", "pdf-rs/raster/reference"]
 tests = [
   "graphics/path/nonzero-fill-001",
   "graphics/path/evenodd-fill-002",

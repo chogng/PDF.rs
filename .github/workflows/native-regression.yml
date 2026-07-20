@@ -1,0 +1,28 @@
+name: Native portability and pixel regression
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.os }} Rust and exact pixel regression
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Verify formatting
+        run: cargo fmt --all --check
+      - name: Run portable Rust suite
+        run: cargo test --locked --workspace --exclude pdf-rs-quality
+      - name: Run exact Reference pixel regression suite
+        run: cargo test --locked --package pdf-rs-quality --test m3_reference_gate

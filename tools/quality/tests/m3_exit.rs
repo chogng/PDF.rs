@@ -22,7 +22,7 @@ const CAPABILITY_PROFILE_VERSION: &str = "0.4.0";
 const DATA_LEDGER_VERSION: &str = "0.12.0";
 const PROFILE_ID: &str = "m3.reference-raster-v1.v1";
 const FEATURE_ID: &str = "core.reference-raster-v1";
-const TARGET: &str = "core/raster::ReferenceRenderJob";
+const TARGET: &str = "pdf-rs/raster::ReferenceRenderJob";
 
 const REFERENCE_IMPLEMENTATION_COMMIT: &str = "8c3e28c8ce4cbe5113cc565a36744158e283a7fb";
 const REFERENCE_IMPLEMENTATION_TREE: &str = "724c2a646114a8aff0fabe29f6008a8b73802783";
@@ -61,19 +61,19 @@ const REQUIREMENTS: [&str; 14] = [
 ];
 
 const REFERENCE_SOURCES: [&str; 13] = [
-    "core/raster/src/lib.rs",
-    "core/raster/src/reference/color.rs",
-    "core/raster/src/reference/coverage.rs",
-    "core/raster/src/reference/error.rs",
-    "core/raster/src/reference/geometry.rs",
-    "core/raster/src/reference/glyph.rs",
-    "core/raster/src/reference/image.rs",
-    "core/raster/src/reference/limits.rs",
-    "core/raster/src/reference/mod.rs",
-    "core/raster/src/reference/model.rs",
-    "core/raster/src/reference/render.rs",
-    "core/raster/src/reference/stroke.rs",
-    "core/raster/src/reference/surface.rs",
+    "pdf-rs/raster/src/lib.rs",
+    "pdf-rs/raster/src/reference/color.rs",
+    "pdf-rs/raster/src/reference/coverage.rs",
+    "pdf-rs/raster/src/reference/error.rs",
+    "pdf-rs/raster/src/reference/geometry.rs",
+    "pdf-rs/raster/src/reference/glyph.rs",
+    "pdf-rs/raster/src/reference/image.rs",
+    "pdf-rs/raster/src/reference/limits.rs",
+    "pdf-rs/raster/src/reference/mod.rs",
+    "pdf-rs/raster/src/reference/model.rs",
+    "pdf-rs/raster/src/reference/render.rs",
+    "pdf-rs/raster/src/reference/stroke.rs",
+    "pdf-rs/raster/src/reference/surface.rs",
 ];
 
 const MATURITY_ARTIFACTS: [(&str, &str, &str, &str); 4] = [
@@ -617,7 +617,7 @@ fn mixed_o3_identity_is_canonical_and_reproducible_from_the_reviewed_git_tree() 
             "--full-tree",
             REFERENCE_IMPLEMENTATION_COMMIT,
             "--",
-            "core/raster",
+            "pdf-rs/raster",
         ],
     );
     assert!(
@@ -627,7 +627,7 @@ fn mixed_o3_identity_is_canonical_and_reproducible_from_the_reviewed_git_tree() 
     assert_eq!(
         digest(&ls_tree),
         REFERENCE_LS_TREE_SHA256,
-        "frozen core/raster ls-tree fingerprint changed"
+        "frozen pdf-rs/raster ls-tree fingerprint changed"
     );
 
     let identity_reference = manifest
@@ -659,7 +659,7 @@ fn mixed_o3_identity_is_canonical_and_reproducible_from_the_reviewed_git_tree() 
         REFERENCE_IMPLEMENTATION_TREE,
         REFERENCE_LS_TREE_SHA256,
         "git ls-tree -r --full-tree",
-        "-- core/raster",
+        "-- pdf-rs/raster",
         "including each terminating LF",
         "deliberately does not derive the final",
     ] {
@@ -1066,12 +1066,12 @@ fn generic_maturity_validator_accepts_all_five_truthfully_promoted_profiles() {
 fn m1_page_tree_and_m2_exit_evidence_remain_immutable_and_ci_precedes_m3() {
     let root = repository_root();
     assert_eq!(
-        digest_file(&root.join("core/document/src/page_tree.rs")),
+        digest_file(&root.join("pdf-rs/document/src/page_tree.rs")),
         M1_PAGE_TREE_SHA256,
         "accepted M1 page-tree implementation changed"
     );
     assert_eq!(
-        digest_file(&root.join("core/document/tests/page_tree_count.rs")),
+        digest_file(&root.join("pdf-rs/document/tests/page_tree_count.rs")),
         M1_PAGE_TREE_TEST_SHA256,
         "accepted M1 page-tree-count test changed"
     );
@@ -1685,7 +1685,7 @@ fn m3_plan_trace_and_ci_are_closed_only_after_replay_maturity_and_ship_review() 
         .expect("Reference feature requirements");
     let feature_tests = feature.array("tests").expect("Reference feature tests");
     for required in [
-        "core/raster::reference_integrated_renderer",
+        "pdf-rs/raster::reference_integrated_renderer",
         "tools/quality::m3_reference_gate",
         "tools/quality::m3_reference_oracle_model",
         "tools/quality::m3_reference_raster_trace",
@@ -2184,7 +2184,7 @@ fn expected_final_review_subject_paths() -> BTreeSet<String> {
         .map(str::to_owned),
     );
     expected.extend(REFERENCE_SOURCES.into_iter().map(str::to_owned));
-    expected.insert("core/raster/tests/reference_integrated_renderer.rs".to_owned());
+    expected.insert("pdf-rs/raster/tests/reference_integrated_renderer.rs".to_owned());
     expected.extend(
         MATURITY_ARTIFACTS
             .iter()
@@ -2248,13 +2248,13 @@ fn assert_reference_subjects(subjects: &[String]) {
         );
     }
     assert!(
-        paths.contains("core/raster/tests/reference_integrated_renderer.rs"),
+        paths.contains("pdf-rs/raster/tests/reference_integrated_renderer.rs"),
         "reference artifact is missing its executable integration test"
     );
     let production = paths
         .iter()
         .filter(|path| {
-            path.starts_with("core/raster/src/reference/") || **path == "core/raster/src/lib.rs"
+            path.starts_with("pdf-rs/raster/src/reference/") || **path == "pdf-rs/raster/src/lib.rs"
         })
         .copied()
         .collect::<BTreeSet<_>>();
@@ -2327,7 +2327,7 @@ fn assert_maturity_artifact(
     }
 
     let expected_tests: &[&str] = match role {
-        "reference-implementation" => &["core/raster::reference_integrated_renderer"],
+        "reference-implementation" => &["pdf-rs/raster::reference_integrated_renderer"],
         "o0-case" | "o1-case" => &[
             "tools/quality::m3_reference_gate",
             "tools/quality::m3_reference_oracle_model",

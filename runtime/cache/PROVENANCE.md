@@ -11,7 +11,7 @@ work coalescing, persistence, or cross-session sharing.
 `ReadySessionOwner` in `runtime/session` owns each Ready-store instance and drops it during its
 synchronous close boundary; a future complete session actor must compose that owner with every
 other session resource. Platform code may supply validated configuration but does not own cache
-semantics. `core/document` owns proof-bearing values, immutable revision identity, parser profiles,
+semantics. `pdf-rs/document` owns proof-bearing values, immutable revision identity, parser profiles,
 resolution profiles, and value-owned footprint evidence. Complete keys and deterministic eviction
 remain cache-owned; the cache does not weaken or reconstruct document proof.
 

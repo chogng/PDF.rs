@@ -15,7 +15,7 @@ interpretation = "R0 accepts the canonical header, traditional xref, trailer, an
 
 [provenance]
 kind = "self-authored-source-case"
-source = "core/document/tests/strict_base_open.rs"
+source = "pdf-rs/document/tests/strict_base_open.rs"
 sha256 = "sha256:3de176070ce5884fdbc0349bcea24ccf5a958f946b164ee5468ae7331fb3a7ce"
 license = "LicenseRef-PDF.rs-SelfAuthored-Test"
 redistributable = false
@@ -73,7 +73,7 @@ renderer_epoch = "bytes-and-objects-v1"
 mode = "exact"
 
 [runners]
-native = ["core/document::strict_base_open"]
+native = ["pdf-rs/document::strict_base_open"]
 external_observation = []
 
 [history]

@@ -1,0 +1,35 @@
+name: Nightly sanitizer fuzzing
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  address-sanitizer:
+    name: Linux AddressSanitizer fuzz campaigns
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install nightly Rust
+        run: rustup toolchain install nightly --profile minimal
+      - name: Install pinned cargo-fuzz
+        run: cargo +nightly install --locked --version 0.13.2 cargo-fuzz
+      - name: Run bounded document-service campaign
+        run: |
+          corpus="$(mktemp -d)"
+          cp tools/quality/fuzz/corpus/m1_document_services/* "$corpus"
+          cargo +nightly fuzz run --fuzz-dir tools/quality/fuzz --sanitizer address \
+            m1documentservices "$corpus" -- \
+            -max_total_time=300 -max_len=1048576 -timeout=1 -rss_limit_mb=512
+      - name: Run bounded Fast raster differential campaign
+        run: |
+          corpus="$(mktemp -d)"
+          cp tools/quality/fuzz/corpus/m4_fast_raster/* "$corpus"
+          cargo +nightly fuzz run --fuzz-dir tools/quality/fuzz --sanitizer address \
+            m4fastraster "$corpus" -- \
+            -max_total_time=300 -max_len=256 -timeout=1 -rss_limit_mb=512

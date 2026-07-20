@@ -282,26 +282,26 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
         .expect_array(
             "modules",
             &[
-                "core/font",
-                "core/document",
-                "core/content",
-                "core/scene",
-                "core/raster",
+                "pdf-rs/font",
+                "pdf-rs/document",
+                "pdf-rs/content",
+                "pdf-rs/scene",
+                "pdf-rs/raster",
                 "tools/quality",
             ],
         )
         .expect("modules");
     for test in [
-        "core/font::truetype",
-        "core/document::image_xobject",
-        "core/document::font_resource",
-        "core/content::vm_graphics",
-        "core/scene::scene_v2",
-        "core/raster::reference_geometry_kernel",
-        "core/raster::reference_color",
-        "core/raster::reference_image",
-        "core/raster::reference_glyph",
-        "core/raster::reference_integrated_renderer",
+        "pdf-rs/font::truetype",
+        "pdf-rs/document::image_xobject",
+        "pdf-rs/document::font_resource",
+        "pdf-rs/content::vm_graphics",
+        "pdf-rs/scene::scene_v2",
+        "pdf-rs/raster::reference_geometry_kernel",
+        "pdf-rs/raster::reference_color",
+        "pdf-rs/raster::reference_image",
+        "pdf-rs/raster::reference_glyph",
+        "pdf-rs/raster::reference_integrated_renderer",
         "tools/quality::m3_reference_gate",
         "tools/quality::m3_reference_oracle_model",
         "tools/quality::m3_reference_raster_trace",
@@ -365,7 +365,7 @@ fn m3_reference_plan_feature_and_spec_links_are_exact() {
             "{id} is missing the integrated feature"
         );
         for test in [
-            "core/raster::reference_integrated_renderer",
+            "pdf-rs/raster::reference_integrated_renderer",
             "tools/quality::m3_reference_gate",
             "tools/quality::m3_reference_oracle_model",
             "tools/quality::m3_reference_raster_trace",
@@ -462,11 +462,11 @@ fn m3_reference_ci_and_provenance_preserve_scope_and_m1() {
     }
 
     assert_eq!(
-        file_sha256(&root.join("core/document/src/page_tree.rs")),
+        file_sha256(&root.join("pdf-rs/document/src/page_tree.rs")),
         M1_PAGE_TREE_HASH
     );
     assert_eq!(
-        file_sha256(&root.join("core/document/tests/page_tree_count.rs")),
+        file_sha256(&root.join("pdf-rs/document/tests/page_tree_count.rs")),
         M1_PAGE_TREE_TEST_HASH
     );
 }

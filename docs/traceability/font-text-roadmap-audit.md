@@ -45,10 +45,10 @@ The independent review is milestone evidence for M3-09. It explicitly does not p
 
 The audited tree contains the following additional primitives:
 
-- [`core/font/src/model.rs`](../../core/font/src/model.rs) exposes `SimpleTrueTypeWinAnsiV1`, `SimpleType1CStandardV1`, and `CidFontType2IdentityV1`;
-- [`core/document/src/font_resource.rs`](../../core/document/src/font_resource.rs) acquires simple fonts and Identity-H Type0 descendants;
-- [`core/content/src/lib.rs`](../../core/content/src/lib.rs) and the text executor emit horizontally positioned glyph uses;
-- [`core/font/tests/`](../../core/font/tests/), [`core/document/tests/font_resource.rs`](../../core/document/tests/font_resource.rs), and [`core/content/tests/vm_graphics.rs`](../../core/content/tests/vm_graphics.rs) cover WinAnsi, Type1C, indirect font objects/encodings, and Identity-H rendering.
+- [`pdf-rs/font/src/model.rs`](../../pdf-rs/font/src/model.rs) exposes `SimpleTrueTypeWinAnsiV1`, `SimpleType1CStandardV1`, and `CidFontType2IdentityV1`;
+- [`pdf-rs/document/src/font_resource.rs`](../../pdf-rs/document/src/font_resource.rs) acquires simple fonts and Identity-H Type0 descendants;
+- [`pdf-rs/content/src/lib.rs`](../../pdf-rs/content/src/lib.rs) and the text executor emit horizontally positioned glyph uses;
+- [`pdf-rs/font/tests/`](../../pdf-rs/font/tests/), [`pdf-rs/document/tests/font_resource.rs`](../../pdf-rs/document/tests/font_resource.rs), and [`pdf-rs/content/tests/vm_graphics.rs`](../../pdf-rs/content/tests/vm_graphics.rs) cover WinAnsi, Type1C, indirect font objects/encodings, and Identity-H rendering.
 
 The implementation identifiers use an `m4.*` prefix, but [`plan/m4.toml`](../../plan/m4.toml) registers only the M3 Reference graphics subset and explicitly excludes system-font fallback, selection, copy, search, links, accessibility, advanced text, and the M6 release experience. A code-local profile string does not override the milestone plan or create maturity evidence.
 
@@ -153,11 +153,11 @@ FT1-11 requires the host to publish a bounded candidate manifest with exact font
 
 The adjacent PDFium checkout was inspected only to validate decomposition and edge-case categories:
 
-- `core/fpdfapi/font/cpdf_cmap.*` and `cpdf_cmapparser.*` separate CMap parsing/code-to-CID mapping;
-- `core/fpdfapi/font/cpdf_tounicodemap.*` separately parses Unicode mapping;
-- `core/fpdfapi/font/cpdf_cidfont.*` owns CID mapping, `CIDToGIDMap`, vertical writing, `W2`, and `DW2`;
-- `core/fpdftext/cpdf_textpage.*`, `cpdf_textpagefind.*`, and `cpdf_linkextract.*` build text semantics, search, ActualText behavior, bidi order, and detected links above font rendering;
-- `core/fpdfdoc/cpdf_structtree.*` and the public structure APIs treat Tagged PDF/ActualText structure as another subsystem;
+- `pdf-rs/fpdfapi/font/cpdf_cmap.*` and `cpdf_cmapparser.*` separate CMap parsing/code-to-CID mapping;
+- `pdf-rs/fpdfapi/font/cpdf_tounicodemap.*` separately parses Unicode mapping;
+- `pdf-rs/fpdfapi/font/cpdf_cidfont.*` owns CID mapping, `CIDToGIDMap`, vertical writing, `W2`, and `DW2`;
+- `pdf-rs/fpdftext/cpdf_textpage.*`, `cpdf_textpagefind.*`, and `cpdf_linkextract.*` build text semantics, search, ActualText behavior, bidi order, and detected links above font rendering;
+- `pdf-rs/fpdfdoc/cpdf_structtree.*` and the public structure APIs treat Tagged PDF/ActualText structure as another subsystem;
 - visible non-third-party HarfBuzz use is associated with font subsetting/editing support, while page rendering consumes PDF character positions; PDFium also contains system-font substitution, which PDF.rs deliberately does not adopt for R0.
 
 No PDFium source, table, data, library, executable, runtime output, build step, or API is introduced by this audit. `../pdfium` remains a development/CI behavioral reference under the existing product-purity policy.
@@ -193,7 +193,7 @@ The following checks passed on the audited tree plus this documentation change:
 
 Two existing evidence-closure checks are not green at the audited HEAD:
 
-- `m3_exit`: 9/11 pass; the Reference maturity subject bindings are stale after committed raster changes (the first direct failure is `core/raster/src/reference/color.rs`);
+- `m3_exit`: 9/11 pass; the Reference maturity subject bindings are stale after committed raster changes (the first direct failure is `pdf-rs/raster/src/reference/color.rs`);
 - `m4_exit`: the review-contract test passes, the final-review test remains intentionally ignored, and the automated candidate fails because committed `runtime/viewer/tests/native_preview.rs` no longer matches the stored candidate hash.
 
 Neither stale subject has an uncommitted change in this audit. Their latest commits are `8e5b100` (knockout-group raster work) and `bb35d2d` (viewer cancellation), respectively. The correct remedy is a separately authorized evidence replay/review or candidate supersession, not changing hashes in this roadmap audit.

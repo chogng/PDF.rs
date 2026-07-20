@@ -71,7 +71,7 @@ builder is only a byte-equality self-check: strict open, Page acquisition, Conte
 and Reference rendering consume the committed input bytes and manifest-owned budgets. Successful
 outputs compare byte-for-byte with committed canonical pixel artifacts. O0/O1 pixels remain
 independently modeled and forbid Reference generation; the mixed O3 pixel golden is separately
-bound to the reviewed `core/raster` implementation identity and hash-bound
+bound to the reviewed `pdf-rs/raster` implementation identity and hash-bound
 `spec-conformance`/`parser-security` review. Normalized schema-2 gate artifacts record the manifest
 hash, case and pixel oracle levels, expected pixel hash, and exact pass verdict. Non-Ready cases
 retain no pixel artifact, and CI runs the independent oracle model before two debug and two release

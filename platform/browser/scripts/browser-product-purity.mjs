@@ -2070,7 +2070,7 @@ const inspectCargoGraph = async (repositoryRoot, policy) => {
     if (
       manifestRelative.startsWith("../")
       || !(
-        manifestRelative.startsWith("core/")
+        manifestRelative.startsWith("pdf-rs/")
         || manifestRelative.startsWith("runtime/")
         || manifestRelative === "platform/browser/worker/Cargo.toml"
       )

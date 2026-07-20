@@ -1,0 +1,31 @@
+# PDF.rs-owned strict-open compatibility contract.
+#
+# Inputs remain in the pinned PDFium source suite. This file is the product
+# contract: a supported result is a feature promise, while every unsupported
+# result is an explicit current capability boundary that must not regress into
+# a crash, hang, or accidental success.
+schema = 1
+id = "pdfrs-strict-open-v1"
+source_suite = "pdfium-t1-2026-05-14-v1"
+source_manifest_hash = "sha256:9fba29083e7d58f5f2a2694b848961d9e0c3bfdf6339ec82a5a52a1d89a99814"
+
+[[case]]
+path = "pdfium/bug_493126_endobj_bug_weirdWS.pdf"
+terminal = "xref.invalid-entry"
+supported = false
+
+[[case]]
+path = "pdfium/bug_880920.pdf"
+terminal = "xref.unsupported-xref-stream"
+supported = false
+
+[[case]]
+path = "pdfium/bug_883026.pdf"
+terminal = "ready.page-count"
+supported = true
+page_count = 1
+
+[[case]]
+path = "pdfium/bug_583804.pdf"
+terminal = "document.unsupported-object-framing"
+supported = false

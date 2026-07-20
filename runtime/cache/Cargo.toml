@@ -6,10 +6,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-bytes = { path = "../../core/bytes" }
-pdf-rs-document = { path = "../../core/document" }
-pdf-rs-object = { path = "../../core/object" }
-pdf-rs-syntax = { path = "../../core/syntax" }
+pdf-rs-bytes = { path = "../../pdf-rs/bytes" }
+pdf-rs-document = { path = "../../pdf-rs/document" }
+pdf-rs-object = { path = "../../pdf-rs/object" }
+pdf-rs-syntax = { path = "../../pdf-rs/syntax" }
 
 [dev-dependencies]
-pdf-rs-xref = { path = "../../core/xref" }
+pdf-rs-xref = { path = "../../pdf-rs/xref" }

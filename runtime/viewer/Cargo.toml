@@ -6,14 +6,14 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-bytes = { path = "../../core/bytes" }
-pdf-rs-content = { path = "../../core/content" }
-pdf-rs-document = { path = "../../core/document" }
-pdf-rs-fast-raster = { path = "../../core/fast-raster" }
-pdf-rs-filters = { path = "../../core/filters" }
+pdf-rs-bytes = { path = "../../pdf-rs/bytes" }
+pdf-rs-content = { path = "../../pdf-rs/content" }
+pdf-rs-document = { path = "../../pdf-rs/document" }
+pdf-rs-fast-raster = { path = "../../pdf-rs/fast-raster" }
+pdf-rs-filters = { path = "../../pdf-rs/filters" }
 pdf-rs-policy = { path = "../policy" }
-pdf-rs-raster = { path = "../../core/raster" }
-pdf-rs-scene = { path = "../../core/scene" }
-pdf-rs-syntax = { path = "../../core/syntax" }
-pdf-rs-xref = { path = "../../core/xref" }
-pdf-rs-object = { path = "../../core/object" }
+pdf-rs-raster = { path = "../../pdf-rs/raster" }
+pdf-rs-scene = { path = "../../pdf-rs/scene" }
+pdf-rs-syntax = { path = "../../pdf-rs/syntax" }
+pdf-rs-xref = { path = "../../pdf-rs/xref" }
+pdf-rs-object = { path = "../../pdf-rs/object" }

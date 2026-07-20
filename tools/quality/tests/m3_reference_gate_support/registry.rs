@@ -397,7 +397,7 @@ fn validate_pixel_oracle(
             assert_eq!(
                 identity,
                 expected_identity.as_bytes(),
-                "mixed O3 identity must bind the reviewed core/raster implementation"
+                "mixed O3 identity must bind the reviewed pdf-rs/raster implementation"
             );
             assert!(manifest.string("pixel_oracle", "review_evidence").is_some());
             assert!(

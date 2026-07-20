@@ -316,7 +316,7 @@ fn m2_normative_cases_and_evidence_are_exact_and_content_addressed() {
         .expect_array(
             "reviewed_subject_commit_map",
             &[concat!(
-                "core/content/src/vm.rs@",
+                "pdf-rs/content/src/vm.rs@",
                 "ee6720f615cc3042638a957b85b377b3e0ab054c"
             )],
         )
@@ -326,7 +326,7 @@ fn m2_normative_cases_and_evidence_are_exact_and_content_addressed() {
             "reviewed_subjects",
             &[
                 concat!(
-                    "core/content/src/vm.rs@",
+                    "pdf-rs/content/src/vm.rs@",
                     "ee6720f615cc3042638a957b85b377b3e0ab054c",
                     "#sha256:2b866dca0b778c579a23db58f16b627fb338dcf83c4a34880c063c04c43c9eef"
                 ),
@@ -669,11 +669,11 @@ fn m2_ci_replays_fresh_profiles_before_exit_and_preserves_m1() {
     }
 
     assert_eq!(
-        digest_file(&root.join("core/document/src/page_tree.rs")),
+        digest_file(&root.join("pdf-rs/document/src/page_tree.rs")),
         M1_PAGE_TREE_SHA256
     );
     assert_eq!(
-        digest_file(&root.join("core/document/tests/page_tree_count.rs")),
+        digest_file(&root.join("pdf-rs/document/tests/page_tree_count.rs")),
         M1_PAGE_TREE_TEST_SHA256
     );
 }
@@ -717,10 +717,10 @@ verdict = "SHIP"
 implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
 ]
 reviewed_subjects = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -735,7 +735,7 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subjects = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -745,9 +745,9 @@ reviewed_subjects = [
     let scalar_map = format!(
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
-reviewed_subject_commit_map = "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}"
+reviewed_subject_commit_map = "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}"
 reviewed_subjects = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -759,10 +759,10 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{other_commit}",
+  "pdf-rs/content/src/vm.rs@{other_commit}",
 ]
 reviewed_subjects = [
-  "core/content/src/vm.rs@{other_commit}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{other_commit}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -777,10 +777,10 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
 ]
 reviewed_subjects = [
-  "core/content/src/vm.rs@{other_commit}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{other_commit}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -796,11 +796,11 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
 ]
 reviewed_subjects = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -815,11 +815,11 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
 ]
 reviewed_subjects = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
 ]
 "#
     );
@@ -835,7 +835,7 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
 ]
 reviewed_subjects = [
   "plan/m2.toml@{M2_CONTENT_VM_COMMIT}#sha256:{zero_hash}",
@@ -849,10 +849,10 @@ reviewed_subjects = [
         r#"implementation_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit = "{M2_CONTENT_VM_COMMIT}"
 reviewed_subject_commit_map = [
-  "core/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
+  "pdf-rs/content/src/vm.rs@{M2_CONTENT_VM_COMMIT}",
 ]
 reviewed_subjects = [
-  "core/content/src/vm.rs#sha256:{zero_hash}",
+  "pdf-rs/content/src/vm.rs#sha256:{zero_hash}",
 ]
 "#
     );

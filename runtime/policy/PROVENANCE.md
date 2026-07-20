@@ -8,10 +8,10 @@ allocation, scheduling, caching, or Surface publication.
 # Dependency direction
 
 The product dependency direction is
-`runtime/policy -> core/bytes + core/scene + runtime/protocol`. The protocol dependency is limited
+`runtime/policy -> pdf-rs/bytes + pdf-rs/scene + runtime/protocol`. The protocol dependency is limited
 to generated value types, bounds, hash domains, framing helpers, and `fixed_le_v1` encoders; policy
 does not depend on protocol transport state or platform adapters. The crate has no product
-dependency on `core/raster`, platform code, tools, or an external PDF engine.
+dependency on `pdf-rs/raster`, platform code, tools, or an external PDF engine.
 
 # Canonical identity
 

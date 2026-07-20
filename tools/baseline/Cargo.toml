@@ -9,13 +9,13 @@ publish = false
 pdf-rs-digest = { path = "../digest" }
 
 [dev-dependencies]
-pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-bytes = { path = "../../pdf-rs/bytes" }
 pdf-rs-compare = { path = "../compare" }
-pdf-rs-document = { path = "../../core/document" }
+pdf-rs-document = { path = "../../pdf-rs/document" }
 pdf-rs-generate = { path = "../generate" }
-pdf-rs-object = { path = "../../core/object" }
-pdf-rs-syntax = { path = "../../core/syntax" }
-pdf-rs-xref = { path = "../../core/xref" }
+pdf-rs-object = { path = "../../pdf-rs/object" }
+pdf-rs-syntax = { path = "../../pdf-rs/syntax" }
+pdf-rs-xref = { path = "../../pdf-rs/xref" }
 
 [[bin]]
 name = "pdf-rs-baseline-fixture"

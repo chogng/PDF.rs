@@ -22,43 +22,43 @@ const M1_PAGE_TREE_TEST_HASH: &str =
 
 const REVIEWED_SUBJECTS: [(&str, &str); 10] = [
     (
-        "core/raster/PROVENANCE.md",
+        "pdf-rs/raster/PROVENANCE.md",
         "1d0697c25e05f360d94cf41247b7cb82e41200bb5b2a18514873ef41bfe01475",
     ),
     (
-        "core/raster/src/reference/color.rs",
+        "pdf-rs/raster/src/reference/color.rs",
         "66c13e663d41e3b12dfa81f7e5d57feb383da17ec12a804a0961578edf1e10b8",
     ),
     (
-        "core/raster/src/reference/error.rs",
+        "pdf-rs/raster/src/reference/error.rs",
         "790c88e9e44473d5fae003e7abf249cd84efda1b113fa09d26cd5cbfc0daa6cc",
     ),
     (
-        "core/raster/src/reference/mod.rs",
+        "pdf-rs/raster/src/reference/mod.rs",
         "1a2e44993f84d9cd4c795c76b5cda543217ac1b7efdc6a69112b753fbe4326d4",
     ),
     (
-        "core/raster/src/reference/render.rs",
+        "pdf-rs/raster/src/reference/render.rs",
         "ee6a03c1b84d057d30f4a1d3e4170a11fe8fff050c64d93b6d0b48c3886ad3b3",
     ),
     (
-        "core/raster/tests/reference_color.rs",
+        "pdf-rs/raster/tests/reference_color.rs",
         "55923ce8b597113aa7392b6535764bdef2179c73a18db55aed6492ae9df8073d",
     ),
     (
-        "core/raster/tests/reference_scene_v2_boundary.rs",
+        "pdf-rs/raster/tests/reference_scene_v2_boundary.rs",
         "7c54a456bf8d9ec5cce7c7cfee97a491bbd029ac1eec849c3853bca4478dd24b",
     ),
     (
-        "core/scene/src/canonical.rs",
+        "pdf-rs/scene/src/canonical.rs",
         "6afc284c454f99ebec04f69b32e05e463d1103fd682d99f78605a4bf5eb52179",
     ),
     (
-        "core/scene/src/graphics.rs",
+        "pdf-rs/scene/src/graphics.rs",
         "75355cc04e50ec9547cc834c80d2137dcc4de1e3b01ca5562db65888ada6602c",
     ),
     (
-        "core/scene/tests/scene_v2.rs",
+        "pdf-rs/scene/tests/scene_v2.rs",
         "a65ae893520b047cc89b578c3ea2f9c7fd848022680da13b22386ce2433650da",
     ),
 ];
@@ -337,15 +337,15 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
         )
         .expect("feature clauses are exact");
     feature
-        .expect_array("modules", &["core/raster"])
+        .expect_array("modules", &["pdf-rs/raster"])
         .expect("feature modules are exact");
     feature
         .expect_array(
             "tests",
             &[
-                "core/raster::reference_color",
-                "core/raster::reference_scene_v2_boundary",
-                "core/raster::repository_policy",
+                "pdf-rs/raster::reference_color",
+                "pdf-rs/raster::reference_scene_v2_boundary",
+                "pdf-rs/raster::repository_policy",
                 "tools/quality::m3_reference_color_trace",
             ],
         )
@@ -371,9 +371,9 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
         ISO_SNAPSHOT,
         &[
             "core.reference-color-compositing",
-            "core/raster",
-            "core/raster::reference_color",
-            "core/raster::reference_scene_v2_boundary",
+            "pdf-rs/raster",
+            "pdf-rs/raster::reference_color",
+            "pdf-rs/raster::reference_scene_v2_boundary",
             "tools/quality::m3_reference_color_trace",
         ],
         &[
@@ -388,9 +388,9 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
         ISO_SNAPSHOT,
         &[
             "core.reference-color-compositing",
-            "core/raster",
-            "core/raster::reference_color",
-            "core/raster::reference_scene_v2_boundary",
+            "pdf-rs/raster",
+            "pdf-rs/raster::reference_color",
+            "pdf-rs/raster::reference_scene_v2_boundary",
             "tools/quality::m3_reference_color_trace",
         ],
         &[
@@ -434,9 +434,9 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
             ARCH_SNAPSHOT,
             &[
                 "core.reference-color-compositing",
-                "core/raster",
-                "core/raster::reference_color",
-                "core/raster::reference_scene_v2_boundary",
+                "pdf-rs/raster",
+                "pdf-rs/raster::reference_color",
+                "pdf-rs/raster::reference_scene_v2_boundary",
                 "tools/quality::m3_reference_color_trace",
             ],
             note_markers,
@@ -447,7 +447,7 @@ fn m3_color_plan_feature_and_spec_links_are_exact() {
 #[test]
 fn m3_color_provenance_and_ci_gate_preserve_scope_and_m1() {
     let root = repository_root();
-    let provenance = read_text(&root, "core/raster/PROVENANCE.md");
+    let provenance = read_text(&root, "pdf-rs/raster/PROVENANCE.md");
     for marker in [
         "`m3.reference-color-compositing.v1` remains `PLANNED`",
         "`reference-color-v1`",
@@ -503,11 +503,11 @@ fn m3_color_provenance_and_ci_gate_preserve_scope_and_m1() {
     );
 
     assert_eq!(
-        file_sha256(&root.join("core/document/src/page_tree.rs")),
+        file_sha256(&root.join("pdf-rs/document/src/page_tree.rs")),
         M1_PAGE_TREE_HASH
     );
     assert_eq!(
-        file_sha256(&root.join("core/document/tests/page_tree_count.rs")),
+        file_sha256(&root.join("pdf-rs/document/tests/page_tree_count.rs")),
         M1_PAGE_TREE_TEST_HASH
     );
 }

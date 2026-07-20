@@ -403,7 +403,12 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
     feature
         .expect_array(
             "modules",
-            &["core/document", "core/content", "core/scene", "core/raster"],
+            &[
+                "pdf-rs/document",
+                "pdf-rs/content",
+                "pdf-rs/scene",
+                "pdf-rs/raster",
+            ],
         )
         .expect("modules are exact");
     for marker in [
@@ -504,7 +509,7 @@ fn m3_basic_image_plan_feature_and_spec_links_are_exact() {
 #[test]
 fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
     let root = repository_root();
-    let content = read_text(&root, "core/content/PROVENANCE.md");
+    let content = read_text(&root, "pdf-rs/content/PROVENANCE.md");
     for marker in [
         "proof-bound Image XObject acquisition",
         "immutable semantic execution",
@@ -517,7 +522,7 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
             "Content provenance is missing {marker:?}"
         );
     }
-    let raster = read_text(&root, "core/raster/PROVENANCE.md");
+    let raster = read_text(&root, "pdf-rs/raster/PROVENANCE.md");
     for marker in [
         "`reference-image-v1`",
         "basic unmasked image",
@@ -544,13 +549,13 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
         !review.contains("bilinear"),
         "M3-08 review evidence must not claim unimplemented bilinear sampling"
     );
-    let document_image = read_text(&root, "core/document/src/image_xobject.rs");
+    let document_image = read_text(&root, "pdf-rs/document/src/image_xobject.rs");
     assert!(document_image.contains("SyntaxObject::Boolean(true) =>"));
     assert!(document_image.contains("ImageXObjectUnsupportedKind::Interpolation"));
-    let raster_image = read_text(&root, "core/raster/src/reference/image.rs");
+    let raster_image = read_text(&root, "pdf-rs/raster/src/reference/image.rs");
     assert!(raster_image.contains("if image.interpolate()"));
     assert!(raster_image.contains("ImageFailure::UnsupportedInterpolation"));
-    let raster_image_tests = read_text(&root, "core/raster/tests/reference_image.rs");
+    let raster_image_tests = read_text(&root, "pdf-rs/raster/tests/reference_image.rs");
     assert!(raster_image_tests.contains("interpolated_and_mismatched_inputs_fail_structurally"));
 
     let ci = read_text(&root, "scripts/ci.sh");
@@ -576,11 +581,11 @@ fn m3_basic_image_provenance_and_ci_gate_preserve_scope_and_m1() {
         "local and PR selections must both name the image trace"
     );
     assert_eq!(
-        file_sha256(&root.join("core/document/src/page_tree.rs")),
+        file_sha256(&root.join("pdf-rs/document/src/page_tree.rs")),
         M1_PAGE_TREE_HASH
     );
     assert_eq!(
-        file_sha256(&root.join("core/document/tests/page_tree_count.rs")),
+        file_sha256(&root.join("pdf-rs/document/tests/page_tree_count.rs")),
         M1_PAGE_TREE_TEST_HASH
     );
 }

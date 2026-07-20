@@ -1,0 +1,31 @@
+name: PDFium T1 corpus
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  strict-open:
+    name: Pinned PDFium T1 Rust behavior replay
+    runs-on: ubuntu-latest
+    env:
+      PDF_RS_PDFIUM_CORPUS_ROOT: ${{ runner.temp }}/pdf-rs-pdfium-tests
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Fetch pinned PDFium corpus objects
+        run: scripts/fetch-pdfium-corpus.sh "$PDF_RS_PDFIUM_CORPUS_ROOT"
+      - name: Verify manifest and run Rust behavior replay
+        run: |
+          cargo run --quiet --package pdf-rs-corpus -- \
+            validate tests/pdfium/t1/manifest.toml \
+            "$PDF_RS_PDFIUM_CORPUS_ROOT"
+          cargo test --locked --package pdf-rs-quality --test pdfrs_strict_open_v1

@@ -39,14 +39,14 @@ harness = false
 required-features = ["transport-fixture"]
 
 [dependencies]
-pdf-rs-bytes = { path = "../../core/bytes" }
+pdf-rs-bytes = { path = "../../pdf-rs/bytes" }
 pdf-rs-engine = { path = "../../runtime/engine" }
-pdf-rs-fast-raster = { path = "../../core/fast-raster" }
+pdf-rs-fast-raster = { path = "../../pdf-rs/fast-raster" }
 pdf-rs-policy = { path = "../../runtime/policy" }
 pdf-rs-protocol = { path = "../../runtime/protocol" }
-pdf-rs-scene = { path = "../../core/scene" }
+pdf-rs-scene = { path = "../../pdf-rs/scene" }
 pdf-rs-surface = { path = "../../runtime/surface" }
-pdf-rs-syntax = { path = "../../core/syntax" }
+pdf-rs-syntax = { path = "../../pdf-rs/syntax" }
 # Narrow Unix/macOS system boundary for socketpair, SCM_RIGHTS,
 # read-only shared-memory descriptors, and owned-FD cleanup. No raw libc calls.
 rustix = { version = "1.1.4", default-features = false, features = ["std", "fs", "net", "process", "shm"] }

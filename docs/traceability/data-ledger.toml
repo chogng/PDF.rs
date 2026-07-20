@@ -38,6 +38,23 @@ update_policy = "canonical re-encode, replay referenced generators, re-hash ever
 delete_policy = "retain while the M0 T0 corpus-validation contract is active"
 
 [[data]]
+id = "corpus.pdfium-t1-2026-05-14-v1"
+kind = "externally-sourced-pdf-compatibility-corpus-manifest"
+source = "tests/pdfium/t1/manifest.toml"
+acquired_at = 2026-07-20
+version = "pdfium_tests@a0cdeeeac46f1b2272094ee498cd59a30ce1c073"
+source_hash = "sha256:9fba29083e7d58f5f2a2694b848961d9e0c3bfdf6339ec82a5a52a1d89a99814"
+license_expression = "BSD-3-Clause"
+redistribution = "allowed by the pinned upstream repository license; corpus bytes are downloaded on demand and not vendored"
+contains_personal_data = false
+authored_by = "quality-corpus"
+format_schema = 1
+validated_by = "scripts/fetch-pdfium-corpus.sh ROOT && cargo run --quiet --package pdf-rs-corpus -- validate tests/pdfium/t1/manifest.toml ROOT && PDF_RS_PDFIUM_CORPUS_ROOT=ROOT cargo test --locked --package pdf-rs-quality --test pdfrs_strict_open_v1"
+owner = "quality-corpus"
+update_policy = "download the declared revision, re-hash every selected PDF and expected image, then update manifest, fetch list, runner expectations, and ledger hash together"
+delete_policy = "retain while the PDFium T1 Rust compatibility lane is active"
+
+[[data]]
 id = "benchmark.report.m0-synthetic-benchmark-replay-v1"
 kind = "project-authored-synthetic-benchmark-report"
 source = "tests/performance/m0-synthetic-benchmark-replay-v1.toml"

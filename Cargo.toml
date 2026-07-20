@@ -1,7 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "core/*",
+    "pdf-rs/*",
+    "skia",
     "platform/macos-spawn",
     "platform/desktop",
     "platform/browser/worker",

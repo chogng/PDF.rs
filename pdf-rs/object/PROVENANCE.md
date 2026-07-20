@@ -1,0 +1,381 @@
+# Scope
+
+`pdf-rs/object` is the single-indirect-object framing bootstrap for the Native product core. Its R0
+entry validates one xref-derived target against its exact object header, parses one direct value,
+and frames a stream with bounded resumable reads. An explicit R1 sibling exhausts that unchanged
+strict child before it may probe one bounded local object-header or direct stream-length repair and
+retains proof of every effective value. A staged path may stop after the stream dictionary,
+publish a direct value or indirect `/Length` dependency, and resume exact boundary validation only
+after a same-snapshot resolver supplies the referenced integer metadata. One strict compatibility
+entry parses a complete unfiltered object-stream payload from a fully framed container and exact
+source-bound `ByteSlice`. A consuming filtered sibling accepts only a move-only sealed
+`DecodedStream`, then retains the framed generation-zero `/ObjStm`, decode proof, and shared
+decoded-coordinate semantics inside one inseparable result. This crate does not itself decode
+filters and performs no file, network, callback, or async-runtime I/O.
+
+# Semantic owner
+
+Parser/Security owns indirect-object header validation, `/Length` declaration classification,
+same-snapshot length-claim checks, exact stream framing, source identity, deterministic budgets,
+cancellation, object-stream header/index validation, decoded-coordinate values, and stable object
+failures. `pdf-rs/filters` owns canonical filter plans, direct dictionary metadata interpretation,
+strict decode profiles, and sealed decode attestations. The object layer delegates canonicalization
+to `pdf-rs/filters`, exact-compares the transient expected plan with the attestation, and retains only
+the attested authority.
+`pdf-rs/bytes` owns immutable source snapshots and byte delivery, while `pdf-rs/syntax` owns direct
+object and keyword syntax. `pdf-rs/xref` is a sibling consumer of syntax rather than an object-crate
+dependency. `pdf-rs/document` composes one validated traditional base section into candidate
+physical intervals, attests top-level placement, and supplies proven bounds through
+`IndirectObjectTarget`. Future document/revision work owns complete reference graphs, revision
+precedence, and caching.
+
+# Normative sources
+
+- [RPE-ARCH-001, sections 4.3-4.5 and 5.1-5.4](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
+  defines the one-way `bytes -> syntax -> {xref, object}` dependency boundary, resumable
+  ByteSource jobs, source-located object values, exact xref-header validation, and stream spans.
+- [RPE-ARCH-001, section 5.6](../../docs/architecture/independent_rust_pdf_engine_development_spec.md)
+  requires decoded-coordinate separation, proof-bound filter orchestration, deterministic decode
+  budgets, and cooperative cancellation without exposing unauthenticated decoded bytes.
+- [RPE-STD-001, sections 3, 5-6, and 8-9](../../docs/standards/coding-standard.md) requires
+  one-way core dependencies, explicit parser states, stable structured errors, checked arithmetic,
+  bounded allocation, cancellation, and async-runtime-free core parsing.
+- [RPE-STD-002, sections 6-7](../../docs/standards/lifecycle-and-concurrency.md) defines cooperative
+  job cancellation, terminal outcomes, ticket behavior, and distinct resume checkpoints without
+  parser execution on data callbacks.
+- [RPE-STD-004, sections 7-8 and 13](../../docs/standards/traceability-and-provenance.md) defines this
+  module record, independent-implementation boundary, and dependency-direction governance.
+- [RPE-STD-005, sections 4-10](../../docs/standards/security-and-resource-budget.md) requires
+  deterministic input, stream, retry-work and allocation limits, fixed-interval cancellation,
+  immutable source validation, and checked object offsets and lengths.
+- [ISO 32000-1:2008, 7.5.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)
+  defines object-stream `/Type`, `/N`, `/First`, optional `/Extends`, generation-zero containers
+  and embedded objects, header object-number/relative-offset pairs, and the prohibition on stream
+  objects inside object streams. The authorized Adobe snapshot acquired on 2026-07-14 has SHA-256
+  `9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff`.
+
+The repository does not yet bind this bootstrap profile to an approved errata set or registered
+clause-level conformance cases. The hash-pinned source informs the implementation but this module
+makes no ISO or R0 semantic coverage claim.
+
+# Algorithms and derivations
+
+- An ordinary xref-entry object job binds a complete known-length `SourceSnapshot`, expected
+  `ObjectRef`, xref offset, an independent exclusive physical upper bound, and the revision
+  `startxref`. Its unchanged constructor requires
+  `xref_offset < object_upper_bound <= startxref < source_len`, rejects inconsistent geometry
+  before reading, and compares the complete snapshot on every poll. A distinct
+  `IndirectObjectTarget::at_xref_stream_anchor` constructor retains an explicit target kind for an
+  xref-stream container beginning at its own section anchor; it requires
+  `startxref < object_upper_bound <= source_len`. When the xref stream is itself the primary anchor,
+  `revision_startxref == startxref` and the independently supplied physical bound may follow it.
+  For a hybrid supplement, `revision_startxref > startxref` and the owning traditional primary
+  anchor must equal the exclusive `object_upper_bound`, so framing cannot cross into the primary
+  section. This alternate geometry does not relax or share the ordinary constructor's inequality
+  and does not itself prove `/Type /XRef`, stream framing, `/Length`, filter output, or self-entry
+  semantics.
+  The target kind survives into a completed object so later composition can enforce the intended
+  use. Envelope, payload-end, and terminal-boundary work remains capped by the physical bound.
+- The envelope range includes the byte immediately before a nonzero xref offset. That byte must be
+  one of the PDF whitespace bytes NUL, horizontal tab, line feed, form feed, carriage return, or
+  space; closing delimiters and all other bytes are rejected. The first parsed object-number span
+  must also begin exactly at the xref offset. Together with exact number, generation, and `obj`
+  checks, this prevents accepting leading trivia, obvious adjacent token continuations, or an
+  offset into the middle of a longer numeric token. It does not prove global top-level context.
+- Envelope windows grow geometrically from a bounded initial size. The parser recognizes one
+  direct value and a borrowed terminal keyword without speculative rollback. `endobj` completes a
+  direct object. Only a dictionary may precede `stream`, which must have a strict line ending.
+- A stream dictionary must contain exactly one `/Length`. Missing, duplicate, negative, or
+  ill-typed values are malformed. The compatibility `OpenObjectJob` accepts a nonnegative direct
+  integer and preserves `UnsupportedIndirectLength` for an indirect reference. The staged
+  `OpenObjectEnvelopeJob` instead returns `DeclaredStreamLength`, retaining the exact operand span
+  and either the checked direct value or referenced object without computing a payload end.
+- `StreamEnvelope::direct_length_claim` binds a direct value to the envelope's snapshot and owner.
+  For an indirect declaration, `ResolvedStreamLength::from_uncompressed_object` accepts only a
+  header-validated direct nonnegative integer `IndirectObject` and derives its snapshot, reference,
+  value, and physical value span; there is no public raw-value constructor. The envelope rejects a
+  different snapshot or reference as `RPE-OBJECT-0022`. A future document resolver remains
+  responsible for proving that this object is the effective revision definition selected for the
+  declared reference. `OpenStreamBoundaryJob` rechecks the claim against the declaration,
+  stream budget, checked payload-end arithmetic, and physical object bound before any source poll.
+  The envelope seals the original job context, object and syntax profiles, cumulative work caps,
+  and already-consumed stats; the boundary phase must inherit them and continues charging from the
+  envelope totals rather than resetting a second per-object budget. A consuming continuation
+  constructor may replace the sealed work caps only with equal or smaller nonzero caps that still
+  cover all envelope work already consumed. This lets a document composition parent subtract an
+  intervening indirect-`/Length` child's work before boundary polling without widening authority or
+  retroactively revoking charged work.
+- The framing algorithm never creates a request proportional to the declared `/Length` and never
+  requires the complete payload to be resident or contiguous. A bounded envelope window can
+  opportunistically overlap a payload prefix (or all of a small payload) because `data_start` is
+  unknown until the dictionary is parsed. After computing the payload span with checked
+  arithmetic, the job requests a separate small range beginning at the exact `data_end`. It
+  requires LF or CRLF, an immediately adjacent `endstream`, and a later `endobj`, and does not scan
+  nearby bytes to repair an incorrect length. The result retains only the payload span; callers
+  request and decode that range separately.
+- Envelope and terminal-boundary phases have distinct caller-owned checkpoints. Pending re-polls
+  preserve the same logical range/ticket and do not recharge read work. The first attempt of each
+  new logical exact request and each complete parse window is charged cumulatively across
+  geometric retries, including requests satisfied from an existing cache or ending in source
+  failure.
+- A successful envelope combines the syntax parser's allocator-reported scalar and container
+  capacity with checked arithmetic. `ObjectStats::retained_heap_bytes` is a historical gauge for
+  the latest accepted envelope rather than cumulative parse work or proof that the completed job
+  still owns the allocation, and the same value travels with a returned `IndirectObject`.
+  Discarded geometric attempts are not accumulated. A stream retains only its parsed dictionary
+  capacity while the boundary phase runs; after a later boundary failure the stats preserve the
+  accepted-envelope measurement even though the state has released the dictionary. Its opaque
+  payload length is reported separately and never counted as retained heap bytes.
+- `ObjectWorkCaps` lets a parent composition job lend a nonzero cumulative read/parse slice that
+  cannot exceed either the fixed object-work hard ceiling or the object's configured totals. Its
+  additive constructor can also lend an optional combined syntax retained-capacity ceiling,
+  including zero for allocation-free syntax. The legacy constructor and default object jobs remain
+  uncapped for retained capacity. A scoped read is charged before `ByteSource::poll`, a scoped parse
+  window is charged before parser invocation, and owned/container capacity is preflighted before
+  allocation and rechecked against allocator-reported capacity before adoption. Staged envelopes
+  seal the optional cap; boundary continuation may only keep or tighten it above already-retained
+  envelope capacity, and boundary parsing receives only the remaining slice. Strict, repair
+  candidate, and replay children preserve the same retained cap. The scoped caps do not weaken
+  per-object envelope, boundary, stream, source, or syntax limits, and lower retained-limit errors
+  keep exact `SyntaxLimit` context through `ObjectError::syntax_error`.
+- `OpenLocalObjectJob` accepts only an ordinary `XrefEntry` target and rejects an
+  `XrefStreamAnchor` at construction with stable `RPE-OBJECT-0027` unsupported policy. This keeps
+  header repair from rebuilding the anchor through the ordinary target constructor and silently
+  downgrading its geometry authority. Strict `OpenObjectJob` continues to support the explicit
+  xref-stream-anchor target. For accepted entry targets, local repair always polls one unchanged
+  strict child first. It enters repair only for an invalid expected header or a direct stream whose
+  declared boundary fails locally. Unsupported indirect lengths, resource exhaustion,
+  cancellation, snapshot/source failures, configuration, and internal failures remain terminal
+  and never enter a recovery path.
+- Header repair scans only a fixed caller-bounded delta around the declared xref offset for the
+  exact expected object number, generation, `obj` keyword, and following PDF whitespace. Matching
+  anchors, including later-invalid candidates, consume a fixed candidate budget. Exactly one
+  anchor must survive token checks, and the candidate is passed back through the normal object job
+  with the remaining cumulative read/parse caps; no scanned syntax is published directly.
+- Direct-length repair first replays the normally parsed stream envelope, preserving the declared
+  direct `/Length`, then scans a fixed length delta for LF or CRLF `endstream` anchors. Every
+  looks-like anchor consumes the candidate budget before normal boundary parsing, and each parse
+  receives at most the configured boundary window. Exactly one complete `endstream`/`endobj`
+  boundary may become the effective length. Missing, duplicate, invalid, negative, or indirect
+  `/Length` declarations are not repaired.
+- Repair scans retain their own configured byte and candidate ceilings. A parent may additionally
+  lend `ObjectRepairWorkCaps` for repair-only scan bytes and header/boundary candidates alongside
+  `ObjectWorkCaps`, which aggregates every scan exact-read with strict, corrected-header, and
+  envelope-replay reads while all validation children share one parse cap. Repair-only caps may be
+  zero: the unchanged strict child can still succeed, but any exhausted repair dimension fails
+  before the rejected scan read or candidate is accepted. Legacy constructors lend the configured
+  totals unchanged. Pending re-polls neither repeat nor recharge a scan. The successful
+  `LocallyFramedObject` is the only repaired publication surface: it delegates object semantics but
+  does not expose a bare `IndirectObject`, and it retains the source snapshot, declared/effective
+  offset or length, stable repair identifiers, scan evidence, and child work statistics.
+- Cancellation is checked before source polls and phase transitions. Syntax loops use fixed
+  256-iteration probes, and the object-owned `/Length` scan applies the same bound. Cancellation,
+  malformed input, unsupported behavior, resource exhaustion, source failure, and internal
+  failure remain separate terminal policies.
+- Syntax, a declared stream payload, or terminal framing that would require bytes beyond the
+  supplied candidate interval fails as `ObjectCrossesPhysicalBound` with diagnostic
+  `RPE-OBJECT-0021`, category `Syntax`, recovery `CorrectInput`, and the exclusive bound as its
+  offset. This distinguishes candidate-index geometry failure from source EOF, ordinary malformed
+  stream framing, and configured resource exhaustion.
+- `parse_unfiltered_object_stream` accepts only a complete `IndirectObjectValue::Stream` plus a
+  `ByteSlice` whose source identity and exact range equal the framed payload span. The container
+  must have generation zero and unique `/Type /ObjStm`, nonnegative `/N` and `/First`, no `/Filter`
+  or `/DecodeParms`, and an optional generation-zero `/Extends` reference. `/Extends` is retained
+  as provenance only and never changes xref lookup order; an immediate self-reference is rejected.
+- `parse_filtered_object_stream` consumes a move-only sealed `DecodedStream` with the complete
+  framed container. Before semantic parsing it rechecks the full `SourceSnapshot`, source identity,
+  owner, exact dictionary and encoded spans, exact encoded `ByteSlice` identity/range/length,
+  decoded length, and `M1StrictV1` profile. It passes the framed direct dictionary, attested decode
+  limits, and an object-cancellation adapter to `FilterPlan::from_pdf_dictionary`; the object crate
+  does not import or reproduce filter-name, chain, or predictor canonicalization rules. The
+  transient reconstructed plan must be nonempty and exactly equal to the attested plan, which is
+  the only retained canonical decode authority. A valid dictionary paired with a different proof
+  is the internal non-retryable `DecodeProofMismatch` diagnostic `RPE-OBJECT-0112`. Malformed
+  metadata remains syntax-classified, unsupported filters or parameters remain capability-classified,
+  canonical-plan resource dimensions remain distinct, and cancellation remains cancellation.
+- Both public entry points call one decoded-payload semantic implementation. The filtered result
+  owns its `IndirectObject`, `DecodedStream`, and `ObjectStream` without consuming extraction APIs.
+  A decoded-payload length resource failure is located at decoded offset zero rather than a
+  fabricated physical source position; dictionary metadata failures remain physically located.
+  Its checked retained-proof evidence adds framed syntax heap, decoder peak output capacity,
+  actual plan heap, parsed entry capacity, and parsed value capacity once each. RangeStore-owned
+  encoded backing is not double-counted.
+- The decoded header begins with `/N` nonzero object-number/relative-offset pairs. Any remaining
+  bytes before `/First` are retained as an uninterpreted decoded-coordinate extension span instead
+  of being mistaken for additional standard pairs. The first relative offset is zero; later offsets
+  are strictly increasing, all object numbers are unique, and every computed entry slot remains
+  inside the complete payload. Duplicate detection uses fallibly reserved working vectors plus
+  cancellable heapsort rather than hidden hash-table allocation.
+- Each entry slot is parsed as exactly one supported direct syntax object followed only by PDF
+  whitespace/comments. A trailing `stream` construct or second object is rejected. Physical
+  `Located` values are consumed internally and converted into `DecodedObjectSpan`,
+  `DecodedLocatedObject`, `DecodedArray`, and `DecodedDictionary`; no decoded offset is published as
+  a physical `ByteSpan`. Scalar capacity, allocator-reported syntax and decoded container capacity,
+  entry capacity, header/index working capacity, cumulative syntax windows, limits, and
+  fixed-interval cancellation are accounted separately. Syntax container capacity is bounded by a
+  real child limit, and recursive conversion reserves the still-live syntax container bytes when
+  checking its decoded-value peak. Lower syntax resource failures retain their exact kind, limit,
+  consumed, and attempted evidence while exposing their position only as a decoded coordinate.
+- The public one-shot poll keeps its ready value inline. A documented Clippy exception avoids an
+  additional infallible, untracked heap allocation solely to equalize enum variant sizes.
+  Object results and polls are move-only rather than exposing an unbudgeted deep `Clone`.
+  Diagnostics and Debug output expose references, offsets, spans, limits, and stable codes but not
+  object, dictionary, string, or stream bytes.
+
+# External observations
+
+No external PDF engine output or implementation source was used for this module. The repository's
+PDFium runner and local PDFium checkout remain separate development-only O4 observers and are not
+dependencies, normative inputs, or golden sources for this crate.
+
+# Dependencies and generated data
+
+The only crate dependencies are the in-repository `pdf-rs-bytes`, `pdf-rs-filters`, and
+`pdf-rs-syntax` lower-level product primitives. In particular, this crate does not depend on its
+sibling `pdf-rs/xref`, which preserves the architecture's declared dependency direction without an
+ADR. The implementation otherwise uses the Rust standard library and has no development
+dependency, external PDF/2D engine, generated table, committed corpus object, filesystem access,
+network access, unsafe code, or async runtime.
+
+Behavior tests assemble project-authored structural PDF bytes in memory, including the canonical
+612-byte generator geometry and a synthetic large stream whose middle payload is deliberately not
+supplied. No third-party code or data is introduced, so this crate adds no redistribution
+obligation beyond those already recorded for the repository.
+
+# Tests and fuzz targets
+
+Object behavior tests cover canonical objects 1-4, direct scalar/array/dictionary values, exact
+header and stream spans, xref-number/generation/token-boundary checks, two-phase Pending and stable
+tickets, disconnected envelope/boundary supply with a missing payload middle, request priority,
+direct `/Length` policies, strict LF/CRLF boundaries, incorrect lengths without repair scanning,
+cumulative read/parse budgets, exact retained scalar/container capacity for direct and stream
+objects, discarded-retry isolation, cancellation, full snapshot mismatch, one-shot lifecycle,
+and redacted diagnostics. They also prove that explicit primary and hybrid xref-stream-anchor
+targets may extend beyond their own stream anchor, carry their distinct kind through framing, and
+leave every invalid or widened ordinary xref-entry target rejected. Scoped-work tests cover
+positive minima and hard ceilings, zero and hard-ceiling-plus-one rejection, caps above configured
+totals, exact and one-less read/parse work
+for both direct and stream objects, getters, and equivalence of the legacy constructor with
+explicit configured-total caps. A framing matrix exhausts every initial envelope/boundary split and
+direct/stream candidate physical-bound cut for the bootstrap fixtures,
+and exact and one-less runtime resource boundaries. Physical-bound cases assert stable
+`RPE-OBJECT-0021` policy and terminal re-poll behavior. Staged-length tests cover direct versus
+indirect declaration classification, same-snapshot and exact-reference claim binding, stable
+`RPE-OBJECT-0022` mismatch policy, sparse envelope and exact-boundary Pending/resume checkpoints,
+a deliberately unsupplied large payload tail, terminal source change, cancellation, retained
+resolved-value provenance, and exact versus one-less aggregate work across both phases.
+Local-repair tests cover unchanged strict success, construction-time rejection of xref-stream
+anchors without target-kind downgrade, nearby exact-header correction, direct-length correction
+with LF/CRLF/bare-CR distinctions, combined offset and length evidence, ambiguous and missing
+candidates, strict failure allowlisting, same-snapshot Pending/resume and source change,
+configuration/checkpoint validation, exact and one-less scan/delta/candidate ceilings, invalid
+looks-like boundary attempts, per-candidate boundary caps, and exact versus one-less parent-lent
+aggregate read/parse totals spanning strict, candidate, replay, and repair-scan work.
+Parent repair-cap tests separately prove zero-cap strict success, exact offset-repair scan/header
+work, one-less pre-read rejection, zero header/boundary candidate rejection, caps above the
+configured profile, and hard-ceiling validation.
+Object-stream tests build containers through the public RangeStore and `OpenObjectJob` path, then
+cover exact physical payload binding, independent decoded coordinates, nested arrays/dictionaries
+and references, `/Extends` validation and self-loop rejection, uninterpreted header-extension
+bytes, duplicate numbers, zero/nonincreasing offsets, slot crossing, top-level indirect-reference
+and embedded-stream rejection, unsupported filters, foreign source slices, exact/one-less working,
+retained-entry, retained-value, and cumulative-syntax limits, immediate cancellation, and
+fixed-interval cancellation during long numeric header scans and recursive conversion without
+partial publication. Child syntax exhaustion verifies decoded coordinates and preserved lower
+resource-limit evidence.
+Filtered object-stream tests cover Flate and PNG-predictor proofs, inseparable retained ownership,
+decoded-coordinate entries and failures, exact combined retained evidence, foreign snapshots,
+wrong owners and dictionary spans, same-source wrong encoded slices, empty plans, absent filters,
+nonzero-generation containers, semantic budgets, cancellation before entry and during delegated
+metadata walking, and redacted Debug output. Adversarial cases cover wrong supported and unknown
+names, non-name and empty arrays, chain arity and genuinely decodable order mismatches, duplicate
+metadata, malformed parameter shapes, predictor/default mismatches, and unfiltered identity
+forgery. Positive parity cases retain array-filter `null` and empty direct parameter dictionaries
+as canonical no-parameter plans. The product object layer delegates canonicalization to
+`pdf-rs/filters` rather than duplicating those rules.
+Separate tests cover all limit-profile relationships and hard ceilings, lower source-error policy
+mapping, and repository dependency/purity rules. A `tools/quality` integration test generates the
+canonical PDF, parses its traditional xref section, and frames every in-use target while checking
+the expected physical ordering and stream payload span.
+
+No registered coverage-guided fuzz target, pinned conformance corpus, Range platform E2E, or
+Native/external-engine differential is claimed in this bootstrap slice.
+
+# Known deviations and unsupported cases
+
+- This is an object-framing and proof-bound object-stream component, not a complete object resolver.
+  A separate document slice now supplies effective uncompressed `/Length` evidence and binds
+  compressed xref rows to decoded entries. This crate can consume an already-sealed filtered proof,
+  but source-driven decode scheduling, xref and revision acquisition, aliased or compressed
+  `/Length`, general cycle state, caching,
+  encryption, content interpretation, and document-service integration remain unimplemented.
+- Filtered object-stream composition accepts only direct `/Filter` and `/DecodeParms` metadata
+  supported by `pdf-rs/filters`; indirect parameter resolution belongs to a future revision-aware
+  document composition job.
+- `/Extends` is retained and an immediate self-loop is rejected, but this component does not acquire
+  predecessor object streams or validate a transitive `/Extends` graph for cycles.
+- `IndirectObjectTarget` carries xref-derived geometry but is publicly constructible so the object
+  crate remains independent of its xref sibling. The object job therefore treats every target as
+  untrusted and revalidates source geometry, its independent physical upper bound, the preceding
+  PDF-whitespace byte, and the full object header. The product `pdf-rs/document` bootstrap now
+  derives candidate intervals for one strict traditional base section, while the quality loop
+  exercises the canonical xref-to-object path.
+- The one-byte predecessor check proves only an obvious local token boundary. It cannot prove that
+  a syntactically matching header is top-level rather than embedded after whitespace in a comment,
+  string, or stream. The candidate document index prevents a framed object from crossing the next
+  indexed physical offset but does not authenticate the offset's lexical context. Top-level
+  attestation remains a security-relevant gate before treating this bootstrap as a complete
+  resolver.
+- Only known-length immutable snapshots are accepted. Executable strict-policy regressions prove
+  that neither a correct object header one byte away nor a correct stream boundary one byte beyond
+  a wrong direct `/Length` is searched automatically; local R1 repair exists only through the
+  explicit sibling job. Document-layer rebuilt-geometry attestation now publishes a sealed
+  proof-bearing repaired typestate, but a single coordinator owning first-pass repair planning,
+  R2 repair, platform
+  Range scheduling/coalescing, cancellation delivery and ticket unsubscription, terminal
+  completion/cancel/close arbitration, and browser/desktop E2E remain future work.
+- Hard ceilings and default limits are bootstrap values, not a released `FuelSchedule` or
+  `ReleaseProfile` decision.
+- The lower syntax model still implements deep `Clone` for source-located objects. New object-layer
+  results are move-only, but callers can currently clone the borrowed lower model through its
+  public API without object-budget charging; a later syntax API cleanup must remove or replace
+  those clones with an explicitly fallible, budgeted operation.
+- No object cache, eviction policy, cross-job resident owner, or reservation is implemented here.
+  The successful-envelope heap gauge is only an admission-accounting input for a future owner.
+
+# History
+
+- 2026-07-13: Added bounded indirect-object and direct-length stream framing, resumable two-range
+  ByteSource state, deterministic limits, behavior tests, and repository purity governance.
+- 2026-07-13: Added canonical generated-PDF composition coverage through the external
+  `tools/quality` test boundary without changing the product dependency graph.
+- 2026-07-13: Added independent candidate physical bounds, PDF-whitespace predecessor policy,
+  stable `RPE-OBJECT-0021` crossing diagnostics, and document-index governance without claiming
+  top-level attestation.
+- 2026-07-13: Added parent-lent cumulative object work caps with pre-poll/pre-parse charging and
+  exact direct/stream boundary coverage.
+- 2026-07-13: Propagated successful syntax scalar/container heap capacity through object stats and
+  returned values without counting discarded retries or opaque stream payloads.
+- 2026-07-15: Added staged stream envelopes, explicit direct/indirect `/Length` dependencies,
+  same-snapshot resolver claim metadata, and resumable exact-boundary validation while preserving
+  the legacy direct-only framing contract.
+- 2026-07-15: Added bounded unfiltered object-stream parsing from exact framed source evidence,
+  separate decoded-coordinate values, and strict header, entry, capacity, and cancellation checks.
+- 2026-07-15: Added uninterpreted header-extension provenance, conversion-peak accounting and
+  cancellation evidence, numeric-scan probes, proof-preserving child limit mapping, strict
+  top-level member rules, and exact/one-less resource boundaries.
+- 2026-07-15: Added an explicit strict-first local R1 sibling for bounded expected-header and direct
+  stream-length repair, normal candidate revalidation, aggregate child work caps, proof-bearing
+  diagnostics, and exact scan/candidate/boundary resource regressions without changing R0 policy.
+- 2026-07-15: Extended parent-lent work caps across strict, candidate, replay, and repair-scan
+  reads, exposed aggregate local-object work gauges, and pinned exact and one-less parent slices.
+- 2026-07-15: Added independently parent-lent repair scan/header/boundary caps, including zero-cap
+  strict success and pre-work exhaustion semantics for document-wide first-pass accounting.
+- 2026-07-15: Added proof-bound filtered object-stream composition with a single shared
+  decoded-coordinate parser, strict geometry and dictionary-to-attestation authority checks,
+  retained proof ownership, and Flate/predictor adversaries without adding decode scheduling or
+  claiming M1 exit.
+- 2026-07-15: Added a consuming equal-or-tighter staged-boundary work-cap transition with exact,
+  one-less, cannot-widen, and cannot-revoke-consumed-work regressions for indirect-Length parents.
+- 2026-07-16: Added opt-in parent-lent syntax retained-capacity ceilings across one-shot, staged,
+  and repair validation children with exact lower-limit context and unchanged legacy work caps.
