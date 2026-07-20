@@ -1,8 +1,9 @@
 use pdf_rs_skia_core::{
     BlendMode, Color, DisplayList, DrawCommand, FillRule, GlyphOutline, GlyphOutlineProvider,
-    GlyphRun, Image, OutlinePoint, OutlineSegment, Paint, Path, PathBuilder, PathVerb, Point,
+    GlyphRun, OutlinePoint, OutlineSegment, Paint, Path, PathBuilder, PathVerb, Point,
     PositionedGlyph, Rect, Scalar, SkiaError, SkiaErrorCode, TextUnit, Transform,
 };
+use pdf_rs_skia_image::Image;
 
 /// Limits for one CPU-owned RGBA8 surface and Canvas state stack.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +127,7 @@ impl Surface {
                 DrawCommand::Restore => canvas.restore()?,
                 DrawCommand::ClipRect(rect) => canvas.clip_rect(ClipRect::new(rect))?,
                 DrawCommand::SetTransform(transform) => canvas.set_transform(transform),
+                DrawCommand::ConcatTransform(transform) => canvas.concat(transform)?,
                 DrawCommand::FillPath { path, rule, paint } => {
                     let path = list
                         .path(path)
@@ -334,7 +336,10 @@ impl Canvas<'_> {
                         / width,
                 )
                 .map_err(|_| SkiaError::new(SkiaErrorCode::NumericOverflow))?;
-                let color = image.color_at(source_x, source_y)?.with_opacity(opacity);
+                let [red, green, blue, alpha] = image
+                    .pixel_at(source_x, source_y)
+                    .ok_or(SkiaError::new(SkiaErrorCode::InvalidResource))?;
+                let color = Color::rgba(red, green, blue, alpha).with_opacity(opacity);
                 self.blend_color(x, y, color, blend_mode)?;
             }
         }
@@ -589,6 +594,18 @@ fn transformed_contours(path: &Path, transform: Transform) -> Result<Vec<Contour
                     transform.map_point(end)?,
                 )?;
             }
+            PathVerb::ConicTo(control, end, weight) => {
+                let start = *current
+                    .last()
+                    .ok_or(SkiaError::new(SkiaErrorCode::InvalidPath))?;
+                flatten_conic(
+                    &mut current,
+                    start,
+                    transform.map_point(control)?,
+                    transform.map_point(end)?,
+                    weight,
+                )?;
+            }
             PathVerb::CubicTo(first_control, second_control, end) => {
                 let start = *current
                     .last()
@@ -657,6 +674,71 @@ fn flatten_quad(
         )?;
     }
     Ok(())
+}
+
+fn flatten_conic(
+    output: &mut Vec<Point>,
+    start: Point,
+    control: Point,
+    end: Point,
+    weight: pdf_rs_skia_core::ConicWeight,
+) -> Result<(), SkiaError> {
+    output
+        .try_reserve(usize::try_from(CURVE_STEPS).unwrap_or(usize::MAX))
+        .map_err(|_| SkiaError::new(SkiaErrorCode::AllocationFailed))?;
+    for step in 1..=CURVE_STEPS {
+        push_point(
+            output,
+            Point::new(
+                conic_coordinate(start.x(), control.x(), end.x(), weight, step)?,
+                conic_coordinate(start.y(), control.y(), end.y(), weight, step)?,
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn conic_coordinate(
+    start: Scalar,
+    control: Scalar,
+    end: Scalar,
+    weight: pdf_rs_skia_core::ConicWeight,
+    step: i64,
+) -> Result<Scalar, SkiaError> {
+    let inverse = CURVE_STEPS
+        .checked_sub(step)
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let start_weight = i128::from(inverse)
+        .checked_mul(i128::from(inverse))
+        .and_then(|value| value.checked_mul(i128::from(1_i64 << 16)))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let control_weight = i128::from(2_i64)
+        .checked_mul(i128::from(inverse))
+        .and_then(|value| value.checked_mul(i128::from(step)))
+        .and_then(|value| value.checked_mul(i128::from(weight.bits())))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let end_weight = i128::from(step)
+        .checked_mul(i128::from(step))
+        .and_then(|value| value.checked_mul(i128::from(1_i64 << 16)))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let denominator = start_weight
+        .checked_add(control_weight)
+        .and_then(|value| value.checked_add(end_weight))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let numerator = i128::from(start.bits())
+        .checked_mul(start_weight)
+        .and_then(|value| {
+            i128::from(control.bits())
+                .checked_mul(control_weight)
+                .and_then(|middle| value.checked_add(middle))
+        })
+        .and_then(|value| {
+            i128::from(end.bits())
+                .checked_mul(end_weight)
+                .and_then(|last| value.checked_add(last))
+        })
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    rounded_scalar(numerator, denominator)
 }
 
 fn flatten_cubic(
@@ -1000,7 +1082,6 @@ fn rounded_div_signed(numerator: i128, denominator: i128) -> Result<i128, SkiaEr
             .map(|value| -(value / denominator))
     }
 }
-
 
 fn floor_q16(value: i32) -> i64 {
     floor_q16_i64(i64::from(value))

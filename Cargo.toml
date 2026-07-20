@@ -3,7 +3,11 @@ resolver = "3"
 members = [
     "pdf-rs/*",
     "skia",
+    "skia/error",
+    "skia/geometry",
+    "skia/path",
     "skia/core",
+    "skia/image",
     "skia/text",
     "skia/cpu",
     "skia/tessellation",

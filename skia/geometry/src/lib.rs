@@ -1,4 +1,4 @@
-use crate::{SkiaError, SkiaErrorCode};
+use pdf_rs_skia_error::{SkiaError, SkiaErrorCode};
 
 const FRACTION_BITS: i32 = 16;
 const SCALE: i64 = 1_i64 << FRACTION_BITS;

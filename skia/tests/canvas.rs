@@ -1,6 +1,6 @@
 use pdf_rs_skia::{
-    BlendMode, ClipRect, Color, FillRule, Image, Paint, PathBuilder, Point, Rect, Scalar,
-    SkiaErrorCode, Surface, SurfaceLimits, Transform,
+    BlendMode, ClipRect, Color, ConicWeight, FillRule, Image, ImageErrorCode, Paint, PathBuilder,
+    Point, Rect, Scalar, SkiaErrorCode, Surface, SurfaceLimits, Transform,
 };
 
 fn scalar(value: i32) -> Scalar {
@@ -178,6 +178,66 @@ fn oval_and_round_rect_conveniences_reach_the_cpu_rasterizer() {
 }
 
 #[test]
+fn conics_and_reversed_contours_preserve_fill_semantics() {
+    let mut quadratic_builder = PathBuilder::new(3).unwrap();
+    quadratic_builder.move_to(point(0, 4)).unwrap();
+    quadratic_builder.quad_to(point(4, 0), point(8, 4)).unwrap();
+    quadratic_builder.close().unwrap();
+    let quadratic = quadratic_builder.finish().unwrap();
+
+    let mut conic_builder = PathBuilder::new(3).unwrap();
+    conic_builder.move_to(point(0, 4)).unwrap();
+    conic_builder
+        .conic_to(point(4, 0), point(8, 4), ConicWeight::ONE)
+        .unwrap();
+    conic_builder.close().unwrap();
+    let conic = conic_builder.finish().unwrap();
+
+    let mut quadratic_surface = Surface::new(9, 5, SurfaceLimits::default()).unwrap();
+    quadratic_surface
+        .canvas()
+        .fill_path(
+            &quadratic,
+            FillRule::NonZero,
+            Paint::new(Color::rgba(0, 255, 0, 255)),
+        )
+        .unwrap();
+    let mut conic_surface = Surface::new(9, 5, SurfaceLimits::default()).unwrap();
+    conic_surface
+        .canvas()
+        .fill_path(
+            &conic,
+            FillRule::NonZero,
+            Paint::new(Color::rgba(0, 255, 0, 255)),
+        )
+        .unwrap();
+    assert_eq!(quadratic_surface.pixels(), conic_surface.pixels());
+
+    let mut outer_builder = PathBuilder::new(5).unwrap();
+    outer_builder.add_rect(rect(0, 0, 8, 8)).unwrap();
+    let outer = outer_builder.finish().unwrap();
+    let mut inner_builder = PathBuilder::new(5).unwrap();
+    inner_builder.add_rect(rect(2, 2, 6, 6)).unwrap();
+    let inner = inner_builder.finish().unwrap().reversed().unwrap();
+    let mut compound_builder = PathBuilder::new(11).unwrap();
+    compound_builder.append_path(&outer).unwrap();
+    compound_builder.append_path(&inner).unwrap();
+    let compound = compound_builder.finish().unwrap();
+
+    let mut surface = Surface::new(8, 8, SurfaceLimits::default()).unwrap();
+    surface
+        .canvas()
+        .fill_path(
+            &compound,
+            FillRule::NonZero,
+            Paint::new(Color::rgba(255, 0, 0, 255)),
+        )
+        .unwrap();
+    assert_eq!(pixel(&surface, 1, 1), [255, 0, 0, 255]);
+    assert_eq!(pixel(&surface, 3, 3), [0, 0, 0, 0]);
+}
+
+#[test]
 fn stroke_has_round_caps_and_joins_without_pdf_dependencies() {
     let mut path = PathBuilder::new(3).unwrap();
     path.move_to(point(1, 2)).unwrap();
@@ -228,6 +288,6 @@ fn rgba_images_scale_nearest_neighbor_and_keep_source_color_under_opacity() {
     assert_eq!(pixel(&surface, 3, 1), [0, 0, 255, 128]);
     assert_eq!(
         Image::from_rgba8(2, 2, vec![0; 3]).unwrap_err().code(),
-        SkiaErrorCode::InvalidImage
+        ImageErrorCode::InvalidPixels
     );
 }

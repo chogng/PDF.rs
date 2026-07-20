@@ -171,6 +171,6 @@ GPU encoder 也要求先调用 `add_path` / `add_image`。`GpuCommandLimits` 可
 6. 文本层只消费调用方已完成整形的 `GlyphRun`，不提供字体解析、fallback 或 shaping；
 7. 路径的几何布尔运算、stroke-to-path 和 path effects 尚未暴露；它们不能由像素混合模式替代。
 
-源码入口：CPU Canvas 在 `cpu/src/canvas.rs`，DisplayList 在 `core/src/display_list.rs`，
-GPU 命令层在 `gpu/src/lib.rs`，Metal 后端在 `gpu/metal/src/lib.rs`，路径 API 在
-`core/src/path.rs`。
+源码入口：Geometry 在 `geometry/src/lib.rs`，Path 在 `path/src/lib.rs`，CPU Canvas 在
+`cpu/src/canvas.rs`，DisplayList 在 `core/src/display_list.rs`，GPU 命令层在
+`gpu/src/lib.rs`，Metal 后端在 `gpu/metal/src/lib.rs`。

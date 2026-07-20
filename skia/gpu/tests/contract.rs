@@ -1,12 +1,13 @@
 use std::fmt;
 
 use pdf_rs_skia_core::{
-    BlendMode, Color, FillRule, Image, Paint, PathBuilder, Point, Rect, Scalar, Transform,
+    BlendMode, Color, FillRule, Paint, PathBuilder, Point, Rect, Scalar, Transform,
 };
 use pdf_rs_skia_gpu::{
     GpuBackend, GpuCommand, GpuCommandEncoder, GpuCommandErrorCode, GpuCommandLimits,
     GpuSurfaceDescriptor, software::SoftwareGpuBackend,
 };
+use pdf_rs_skia_image::Image;
 
 fn scalar(value: i32) -> Scalar {
     Scalar::from_i32(value).unwrap()

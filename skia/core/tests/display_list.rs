@@ -1,6 +1,6 @@
 use pdf_rs_skia_core::{
     Color, DisplayListBuilder, DrawCommand, FontId, GlyphId, GlyphRun, Paint, PositionedGlyph,
-    SkiaErrorCode, TextUnit,
+    Scalar, SkiaErrorCode, TextUnit, Transform,
 };
 
 fn glyph_run() -> GlyphRun {
@@ -50,6 +50,23 @@ fn stroke_command_rejects_non_positive_width() {
         .expect_err("zero stroke width must fail");
 
     assert_eq!(error.code(), SkiaErrorCode::InvalidGeometry);
+}
+
+#[test]
+fn display_list_records_generic_transform_concatenation() {
+    let mut builder = DisplayListBuilder::new(1).expect("valid limits");
+    let transform = Transform::translate(
+        Scalar::from_i32(3).expect("scalar"),
+        Scalar::from_i32(-2).expect("scalar"),
+    );
+    builder
+        .concat_transform(transform)
+        .expect("record transform");
+
+    assert_eq!(
+        builder.finish().commands(),
+        &[DrawCommand::ConcatTransform(transform)]
+    );
 }
 
 fn empty_path() -> pdf_rs_skia_core::Path {

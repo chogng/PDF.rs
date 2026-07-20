@@ -10,7 +10,8 @@
 
 use std::fmt;
 
-use pdf_rs_skia_core::{Path, PathVerb, Point};
+use pdf_rs_skia_geometry::Point;
+use pdf_rs_skia_path::{Path, PathVerb};
 
 /// Stable tessellation failure code.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -143,7 +144,7 @@ fn contour(path: &Path) -> Result<Vec<Point>, TessellationError> {
             PathVerb::MoveTo(point) if current.is_empty() => current.push(point),
             PathVerb::LineTo(point) if !current.is_empty() && !closed => current.push(point),
             PathVerb::Close if !current.is_empty() && !closed => closed = true,
-            PathVerb::QuadTo(..) | PathVerb::CubicTo(..) => {
+            PathVerb::QuadTo(..) | PathVerb::ConicTo(..) | PathVerb::CubicTo(..) => {
                 return Err(TessellationError::new(
                     TessellationErrorCode::UnsupportedTopology,
                 ));

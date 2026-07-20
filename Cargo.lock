@@ -394,12 +394,20 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-skia-core",
  "pdf-rs-skia-cpu",
+ "pdf-rs-skia-error",
+ "pdf-rs-skia-geometry",
+ "pdf-rs-skia-image",
+ "pdf-rs-skia-path",
 ]
 
 [[package]]
 name = "pdf-rs-skia-core"
 version = "0.1.0"
 dependencies = [
+ "pdf-rs-skia-error",
+ "pdf-rs-skia-geometry",
+ "pdf-rs-skia-image",
+ "pdf-rs-skia-path",
  "pdf-rs-skia-text",
 ]
 
@@ -408,6 +416,18 @@ name = "pdf-rs-skia-cpu"
 version = "0.1.0"
 dependencies = [
  "pdf-rs-skia-core",
+ "pdf-rs-skia-image",
+]
+
+[[package]]
+name = "pdf-rs-skia-error"
+version = "0.1.0"
+
+[[package]]
+name = "pdf-rs-skia-geometry"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-skia-error",
 ]
 
 [[package]]
@@ -416,7 +436,12 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-skia-core",
  "pdf-rs-skia-cpu",
+ "pdf-rs-skia-image",
 ]
+
+[[package]]
+name = "pdf-rs-skia-image"
+version = "0.1.0"
 
 [[package]]
 name = "pdf-rs-skia-metal"
@@ -425,6 +450,14 @@ dependencies = [
  "metal",
  "pdf-rs-skia-core",
  "pdf-rs-skia-gpu",
+]
+
+[[package]]
+name = "pdf-rs-skia-path"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-skia-error",
+ "pdf-rs-skia-geometry",
 ]
 
 [[package]]
@@ -439,7 +472,8 @@ dependencies = [
 name = "pdf-rs-skia-tessellation"
 version = "0.1.0"
 dependencies = [
- "pdf-rs-skia-core",
+ "pdf-rs-skia-geometry",
+ "pdf-rs-skia-path",
 ]
 
 [[package]]

@@ -15,7 +15,8 @@ pub mod software;
 
 use std::fmt;
 
-use pdf_rs_skia_core::{BlendMode, Color, FillRule, Image, Paint, Path, Point, Rect, Transform};
+use pdf_rs_skia_core::{BlendMode, Color, FillRule, Paint, Path, Point, Rect, Transform};
+use pdf_rs_skia_image::Image;
 
 /// Stable machine-readable GPU command recording failure.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -251,6 +252,16 @@ impl GpuCommandEncoder {
     /// Replaces the logical-to-target transform recorded into following draw commands.
     pub fn set_transform(&mut self, transform: Transform) {
         self.state.transform = transform;
+    }
+
+    /// Concatenates an affine transform onto the following draw commands.
+    pub fn concat_transform(&mut self, transform: Transform) -> Result<(), GpuCommandError> {
+        self.state.transform = self
+            .state
+            .transform
+            .concat(transform)
+            .map_err(|_| GpuCommandError::new(GpuCommandErrorCode::NumericOverflow))?;
+        Ok(())
     }
 
     /// Saves the current transform and target-space scissor state.

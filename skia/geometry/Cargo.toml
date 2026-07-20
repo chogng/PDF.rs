@@ -1,10 +1,10 @@
 [package]
-name = "pdf-rs-skia-tessellation"
+name = "pdf-rs-skia-geometry"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-skia-geometry = { path = "../geometry" }
-pdf-rs-skia-path = { path = "../path" }
+pdf-rs-skia-error = { path = "../error" }
+

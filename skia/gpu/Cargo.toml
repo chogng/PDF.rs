@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 pdf-rs-skia-core = { path = "../core" }
 pdf-rs-skia-cpu = { path = "../cpu", optional = true }
+pdf-rs-skia-image = { path = "../image" }
 
 [features]
 software = ["dep:pdf-rs-skia-cpu"]

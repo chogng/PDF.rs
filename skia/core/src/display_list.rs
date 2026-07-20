@@ -1,6 +1,5 @@
-use crate::{
-    Color, FillRule, Image, Paint, Path, Rect, Scalar, SkiaError, SkiaErrorCode, Transform,
-};
+use crate::{Color, FillRule, Paint, Path, Rect, Scalar, SkiaError, SkiaErrorCode, Transform};
+use pdf_rs_skia_image::Image;
 use pdf_rs_skia_text::GlyphRun;
 
 /// Command-buffer-local identifier for an immutable path resource.
@@ -28,6 +27,8 @@ pub enum DrawCommand {
     ClipRect(Rect),
     /// Replaces the transform for following draws.
     SetTransform(Transform),
+    /// Concatenates an affine transform onto the current drawing state.
+    ConcatTransform(Transform),
     /// Fills a registered path.
     FillPath {
         /// Local path resource.
@@ -164,6 +165,10 @@ impl DisplayListBuilder {
     /// Records a replacement canvas transform.
     pub fn set_transform(&mut self, transform: Transform) -> Result<(), SkiaError> {
         self.push(DrawCommand::SetTransform(transform))
+    }
+    /// Records an affine transform concatenation for following draws.
+    pub fn concat_transform(&mut self, transform: Transform) -> Result<(), SkiaError> {
+        self.push(DrawCommand::ConcatTransform(transform))
     }
     /// Records a fill of a registered path.
     pub fn fill_path(
