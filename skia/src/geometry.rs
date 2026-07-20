@@ -194,7 +194,8 @@ impl Transform {
         ))
     }
 
-    pub(crate) const fn is_axis_aligned(self) -> bool {
+    /// Returns whether this transform preserves axis-aligned rectangles.
+    pub const fn is_axis_aligned(self) -> bool {
         self.b.bits() == 0 && self.c.bits() == 0
     }
 }

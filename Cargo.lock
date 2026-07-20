@@ -288,6 +288,13 @@ name = "pdf-rs-skia"
 version = "0.1.0"
 
 [[package]]
+name = "pdf-rs-skia-gpu"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-skia",
+]
+
+[[package]]
 name = "pdf-rs-surface"
 version = "0.1.0"
 dependencies = [
