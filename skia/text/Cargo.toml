@@ -1,9 +1,8 @@
 [package]
-name = "pdf-rs-skia-core"
+name = "pdf-rs-skia-text"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-skia-text = { path = "../text" }

@@ -1,6 +1,7 @@
 use crate::{
     Color, FillRule, Image, Paint, Path, Rect, Scalar, SkiaError, SkiaErrorCode, Transform,
 };
+use pdf_rs_skia_text::GlyphRun;
 
 /// Command-buffer-local identifier for an immutable path resource.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -9,6 +10,10 @@ pub struct PathId(u32);
 /// Command-buffer-local identifier for an immutable image resource.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ImageId(u32);
+
+/// Command-buffer-local identifier for an immutable shaped glyph run.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct GlyphRunId(u32);
 
 /// Backend-neutral drawing operation in declaration order.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +57,13 @@ pub enum DrawCommand {
         /// Source paint and blend mode.
         paint: Paint,
     },
+    /// Draws one registered shaped glyph run.
+    DrawGlyphRun {
+        /// Local shaped glyph-run resource.
+        run: GlyphRunId,
+        /// Source paint and blend mode.
+        paint: Paint,
+    },
 }
 
 /// Immutable portable drawing list and the resources it owns.
@@ -60,6 +72,7 @@ pub struct DisplayList {
     commands: Vec<DrawCommand>,
     paths: Vec<Path>,
     images: Vec<Image>,
+    glyph_runs: Vec<GlyphRun>,
 }
 
 impl DisplayList {
@@ -75,6 +88,10 @@ impl DisplayList {
     pub fn image(&self, id: ImageId) -> Option<&Image> {
         self.images.get(usize::try_from(id.0).ok()?)
     }
+    /// Resolves a local shaped glyph-run resource.
+    pub fn glyph_run(&self, id: GlyphRunId) -> Option<&GlyphRun> {
+        self.glyph_runs.get(usize::try_from(id.0).ok()?)
+    }
 }
 
 /// Bounded recorder for one immutable [`DisplayList`].
@@ -83,6 +100,7 @@ pub struct DisplayListBuilder {
     commands: Vec<DrawCommand>,
     paths: Vec<Path>,
     images: Vec<Image>,
+    glyph_runs: Vec<GlyphRun>,
     max_items: usize,
 }
 
@@ -96,6 +114,7 @@ impl DisplayListBuilder {
             commands: Vec::new(),
             paths: Vec::new(),
             images: Vec::new(),
+            glyph_runs: Vec::new(),
             max_items,
         })
     }
@@ -117,6 +136,75 @@ impl DisplayListBuilder {
         self.images.push(image);
         Ok(ImageId(id))
     }
+    /// Registers immutable shaped glyph output.
+    pub fn add_glyph_run(&mut self, run: GlyphRun) -> Result<GlyphRunId, SkiaError> {
+        let id = self.resource_id(self.glyph_runs.len())?;
+        self.glyph_runs
+            .try_reserve(1)
+            .map_err(|_| SkiaError::new(SkiaErrorCode::AllocationFailed))?;
+        self.glyph_runs.push(run);
+        Ok(GlyphRunId(id))
+    }
+    /// Records a target-wide clear that ignores canvas state.
+    pub fn clear(&mut self, color: Color) -> Result<(), SkiaError> {
+        self.push(DrawCommand::Clear(color))
+    }
+    /// Records a canvas-state save.
+    pub fn save(&mut self) -> Result<(), SkiaError> {
+        self.push(DrawCommand::Save)
+    }
+    /// Records a canvas-state restore.
+    pub fn restore(&mut self) -> Result<(), SkiaError> {
+        self.push(DrawCommand::Restore)
+    }
+    /// Records an intersection clip rectangle.
+    pub fn clip_rect(&mut self, rect: Rect) -> Result<(), SkiaError> {
+        self.push(DrawCommand::ClipRect(rect))
+    }
+    /// Records a replacement canvas transform.
+    pub fn set_transform(&mut self, transform: Transform) -> Result<(), SkiaError> {
+        self.push(DrawCommand::SetTransform(transform))
+    }
+    /// Records a fill of a registered path.
+    pub fn fill_path(
+        &mut self,
+        path: PathId,
+        rule: FillRule,
+        paint: Paint,
+    ) -> Result<(), SkiaError> {
+        self.push(DrawCommand::FillPath { path, rule, paint })
+    }
+    /// Records a positive-width stroke of a registered path.
+    pub fn stroke_path(
+        &mut self,
+        path: PathId,
+        width: Scalar,
+        paint: Paint,
+    ) -> Result<(), SkiaError> {
+        if width.bits() <= 0 {
+            return Err(SkiaError::new(SkiaErrorCode::InvalidGeometry));
+        }
+        self.push(DrawCommand::StrokePath { path, width, paint })
+    }
+    /// Records one registered image draw.
+    pub fn draw_image(
+        &mut self,
+        image: ImageId,
+        destination: Rect,
+        opacity: u8,
+        paint: Paint,
+    ) -> Result<(), SkiaError> {
+        self.push(DrawCommand::DrawImage {
+            image,
+            destination,
+            opacity,
+            paint,
+        })
+    }
+    /// Records one registered shaped glyph run draw.
+    pub fn draw_glyph_run(&mut self, run: GlyphRunId, paint: Paint) -> Result<(), SkiaError> {
+        self.push(DrawCommand::DrawGlyphRun { run, paint })
+    }
     /// Records one command.
     pub fn push(&mut self, command: DrawCommand) -> Result<(), SkiaError> {
         if self.commands.len() == self.max_items {
@@ -134,6 +222,7 @@ impl DisplayListBuilder {
             commands: self.commands,
             paths: self.paths,
             images: self.images,
+            glyph_runs: self.glyph_runs,
         }
     }
     fn resource_id(&self, length: usize) -> Result<u32, SkiaError> {

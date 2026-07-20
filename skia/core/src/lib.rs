@@ -13,9 +13,12 @@ mod image;
 mod paint;
 mod path;
 
-pub use display_list::{DisplayList, DisplayListBuilder, DrawCommand, ImageId, PathId};
+pub use display_list::{DisplayList, DisplayListBuilder, DrawCommand, GlyphRunId, ImageId, PathId};
 pub use error::{SkiaError, SkiaErrorCode};
 pub use geometry::{Point, Rect, Scalar, Transform};
 pub use image::Image;
 pub use paint::{BlendMode, Color, Paint};
 pub use path::{FillRule, Path, PathBuilder, PathVerb};
+pub use pdf_rs_skia_text::{
+    FontId, GlyphId, GlyphRun, PositionedGlyph, TextError, TextErrorCode, TextUnit,
+};

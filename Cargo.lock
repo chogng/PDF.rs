@@ -399,6 +399,9 @@ dependencies = [
 [[package]]
 name = "pdf-rs-skia-core"
 version = "0.1.0"
+dependencies = [
+ "pdf-rs-skia-text",
+]
 
 [[package]]
 name = "pdf-rs-skia-cpu"
@@ -430,6 +433,10 @@ version = "0.1.0"
 dependencies = [
  "pdf-rs-skia-core",
 ]
+
+[[package]]
+name = "pdf-rs-skia-text"
+version = "0.1.0"
 
 [[package]]
 name = "pdf-rs-surface"

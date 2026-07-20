@@ -4,6 +4,7 @@ members = [
     "pdf-rs/*",
     "skia",
     "skia/core",
+    "skia/text",
     "skia/cpu",
     "skia/tessellation",
     "skia/gpu",
