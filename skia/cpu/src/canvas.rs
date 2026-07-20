@@ -334,7 +334,7 @@ impl Canvas<'_> {
                         / width,
                 )
                 .map_err(|_| SkiaError::new(SkiaErrorCode::NumericOverflow))?;
-                let color = with_opacity(image.color_at(source_x, source_y)?, opacity);
+                let color = image.color_at(source_x, source_y)?.with_opacity(opacity);
                 self.blend_color(x, y, color, blend_mode)?;
             }
         }
@@ -437,9 +437,7 @@ impl Canvas<'_> {
             self.surface.pixels[index + 2],
             self.surface.pixels[index + 3],
         );
-        let result = match blend_mode {
-            BlendMode::SourceOver => source_over(source, destination),
-        };
+        let result = source.composite(destination, blend_mode);
         self.surface.pixels[index..index + 4].copy_from_slice(&result.channels());
         Ok(())
     }
@@ -1003,38 +1001,6 @@ fn rounded_div_signed(numerator: i128, denominator: i128) -> Result<i128, SkiaEr
     }
 }
 
-fn source_over(source: Color, destination: Color) -> Color {
-    let [sr, sg, sb, sa] = source.channels().map(u32::from);
-    let [dr, dg, db, da] = destination.channels().map(u32::from);
-    let inverse_source_alpha = u32::from(u8::MAX) - sa;
-    let alpha = sa + rounded_div(da * inverse_source_alpha, u32::from(u8::MAX));
-    if alpha == 0 {
-        return Color::TRANSPARENT;
-    }
-    let channel = |source: u32, destination: u32| {
-        let source = rounded_div(source * sa, u32::from(u8::MAX));
-        let destination = rounded_div(destination * da, u32::from(u8::MAX));
-        let premultiplied =
-            source + rounded_div(destination * inverse_source_alpha, u32::from(u8::MAX));
-        u8::try_from(rounded_div(premultiplied * u32::from(u8::MAX), alpha)).unwrap_or(u8::MAX)
-    };
-    Color::rgba(
-        channel(sr, dr),
-        channel(sg, dg),
-        channel(sb, db),
-        u8::try_from(alpha).unwrap_or(u8::MAX),
-    )
-}
-
-fn with_opacity(color: Color, opacity: u8) -> Color {
-    let [red, green, blue, alpha] = color.channels();
-    let alpha = rounded_div(u32::from(alpha) * u32::from(opacity), u32::from(u8::MAX));
-    Color::rgba(red, green, blue, u8::try_from(alpha).unwrap_or(u8::MAX))
-}
-
-fn rounded_div(numerator: u32, denominator: u32) -> u32 {
-    (numerator + denominator / 2) / denominator
-}
 
 fn floor_q16(value: i32) -> i64 {
     floor_q16_i64(i64::from(value))
