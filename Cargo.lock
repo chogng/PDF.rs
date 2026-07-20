@@ -428,6 +428,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-skia-pdf"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-font",
+ "pdf-rs-skia",
+]
+
+[[package]]
 name = "pdf-rs-skia-tessellation"
 version = "0.1.0"
 dependencies = [

@@ -142,6 +142,42 @@ fn cubic_curves_and_sheared_rectangles_use_the_general_path_rasterizer() {
 }
 
 #[test]
+fn oval_and_round_rect_conveniences_reach_the_cpu_rasterizer() {
+    let mut oval_builder = PathBuilder::new(6).unwrap();
+    oval_builder.add_oval(rect(1, 1, 7, 5)).unwrap();
+    let oval = oval_builder.finish().unwrap();
+
+    let mut round_rect_builder = PathBuilder::new(10).unwrap();
+    round_rect_builder
+        .add_round_rect(rect(0, 0, 6, 6), scalar(2), scalar(2))
+        .unwrap();
+    let round_rect = round_rect_builder.finish().unwrap();
+
+    let mut surface = Surface::new(8, 6, SurfaceLimits::default()).unwrap();
+    let mut canvas = surface.canvas();
+    canvas
+        .fill_path(
+            &oval,
+            FillRule::NonZero,
+            Paint::new(Color::rgba(0, 255, 0, 255)),
+        )
+        .unwrap();
+    canvas
+        .fill_path(
+            &round_rect,
+            FillRule::NonZero,
+            Paint::new(Color::rgba(255, 0, 0, 255)),
+        )
+        .unwrap();
+    drop(canvas);
+
+    assert_eq!(pixel(&surface, 0, 0), [0, 0, 0, 0]);
+    assert_eq!(pixel(&surface, 3, 0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&surface, 7, 3), [0, 0, 0, 0]);
+    assert_eq!(pixel(&surface, 6, 3), [0, 255, 0, 255]);
+}
+
+#[test]
 fn stroke_has_round_caps_and_joins_without_pdf_dependencies() {
     let mut path = PathBuilder::new(3).unwrap();
     path.move_to(point(1, 2)).unwrap();

@@ -7,6 +7,7 @@ fn glyph_run() -> GlyphRun {
     GlyphRun::new(
         FontId::new(9),
         12 << 16,
+        1_000,
         vec![PositionedGlyph::new(
             GlyphId::new(3),
             TextUnit::ZERO,

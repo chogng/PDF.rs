@@ -7,6 +7,8 @@ pub enum SkiaErrorCode {
     NumericOverflow,
     /// A geometry value is invalid.
     InvalidGeometry,
+    /// A command refers to a missing display-list resource.
+    InvalidResource,
     /// A bitmap's dimensions and pixel buffer disagree.
     InvalidImage,
     /// A path operation violates contour ordering.
@@ -21,6 +23,8 @@ pub enum SkiaErrorCode {
     RestoreUnderflow,
     /// The requested operation needs a not-yet-implemented transform mode.
     UnsupportedTransform,
+    /// A glyph outline provider could not resolve requested text data.
+    TextResolverFailed,
 }
 
 /// Source-redacted graphics error.

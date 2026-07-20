@@ -16,7 +16,7 @@ pub struct ImageId(u32);
 pub struct GlyphRunId(u32);
 
 /// Backend-neutral drawing operation in declaration order.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrawCommand {
     /// Clears the entire target without inheriting state.
     Clear(Color),

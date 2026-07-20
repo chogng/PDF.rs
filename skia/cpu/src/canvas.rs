@@ -1,6 +1,7 @@
 use pdf_rs_skia_core::{
-    BlendMode, Color, FillRule, Image, Paint, Path, PathVerb, Point, Rect, Scalar, SkiaError,
-    SkiaErrorCode, Transform,
+    BlendMode, Color, DisplayList, DrawCommand, FillRule, GlyphOutline, GlyphOutlineProvider,
+    GlyphRun, Image, OutlinePoint, OutlineSegment, Paint, Path, PathBuilder, PathVerb, Point,
+    PositionedGlyph, Rect, Scalar, SkiaError, SkiaErrorCode, TextUnit, Transform,
 };
 
 /// Limits for one CPU-owned RGBA8 surface and Canvas state stack.
@@ -105,6 +106,58 @@ impl Surface {
             },
             saves: Vec::new(),
         }
+    }
+
+    /// Executes a portable display list with the supplied glyph-outline resolver.
+    ///
+    /// This is the CPU reference implementation of command-layer semantics.
+    /// It resolves all resources from the immutable list rather than accepting
+    /// backend-local handles.
+    pub fn execute_display_list(
+        &mut self,
+        list: &DisplayList,
+        glyphs: &impl GlyphOutlineProvider,
+    ) -> Result<(), SkiaError> {
+        let mut canvas = self.canvas();
+        for command in list.commands() {
+            match *command {
+                DrawCommand::Clear(color) => canvas.clear(color),
+                DrawCommand::Save => canvas.save()?,
+                DrawCommand::Restore => canvas.restore()?,
+                DrawCommand::ClipRect(rect) => canvas.clip_rect(ClipRect::new(rect))?,
+                DrawCommand::SetTransform(transform) => canvas.set_transform(transform),
+                DrawCommand::FillPath { path, rule, paint } => {
+                    let path = list
+                        .path(path)
+                        .ok_or(SkiaError::new(SkiaErrorCode::InvalidResource))?;
+                    canvas.fill_path(path, rule, paint)?;
+                }
+                DrawCommand::StrokePath { path, width, paint } => {
+                    let path = list
+                        .path(path)
+                        .ok_or(SkiaError::new(SkiaErrorCode::InvalidResource))?;
+                    canvas.stroke_path(path, width, paint)?;
+                }
+                DrawCommand::DrawImage {
+                    image,
+                    destination,
+                    opacity,
+                    paint,
+                } => {
+                    let image = list
+                        .image(image)
+                        .ok_or(SkiaError::new(SkiaErrorCode::InvalidResource))?;
+                    canvas.draw_image(image, destination, opacity, paint.blend_mode())?;
+                }
+                DrawCommand::DrawGlyphRun { run, paint } => {
+                    let run = list
+                        .glyph_run(run)
+                        .ok_or(SkiaError::new(SkiaErrorCode::InvalidResource))?;
+                    canvas.draw_glyph_run(run, glyphs, paint)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -288,6 +341,36 @@ impl Canvas<'_> {
         Ok(())
     }
 
+    /// Fills a shaped glyph run through a portable outline provider.
+    ///
+    /// The provider owns font lookup and outline extraction; this executor
+    /// turns its canvas-oriented design coordinates into core paths and uses
+    /// the same deterministic fill pipeline as ordinary vector graphics.
+    /// Missing glyphs are skipped so a caller can apply deterministic fallback.
+    pub fn draw_glyph_run(
+        &mut self,
+        run: &GlyphRun,
+        provider: &impl GlyphOutlineProvider,
+        paint: Paint,
+    ) -> Result<(), SkiaError> {
+        for glyph in run.glyphs() {
+            let Some(outline) = provider
+                .glyph_outline(run.font(), glyph.glyph())
+                .map_err(|_| SkiaError::new(SkiaErrorCode::TextResolverFailed))?
+            else {
+                continue;
+            };
+            if outline.font() != run.font() || outline.glyph() != glyph.glyph() {
+                return Err(SkiaError::new(SkiaErrorCode::TextResolverFailed));
+            }
+            let Some(path) = glyph_path(run, *glyph, &outline)? else {
+                continue;
+            };
+            self.fill_path(&path, FillRule::NonZero, paint)?;
+        }
+        Ok(())
+    }
+
     fn fill_contours(
         &mut self,
         contours: &[Contour],
@@ -400,6 +483,83 @@ const CURVE_STEPS: i64 = 16;
 struct Contour {
     points: Vec<Point>,
     closed: bool,
+}
+
+fn glyph_path(
+    run: &GlyphRun,
+    glyph: PositionedGlyph,
+    outline: &GlyphOutline,
+) -> Result<Option<Path>, SkiaError> {
+    if outline.segments().is_empty() {
+        return Ok(None);
+    }
+    let mut builder = PathBuilder::new(outline.segments().len())?;
+    for segment in outline.segments() {
+        match *segment {
+            OutlineSegment::MoveTo(point) => {
+                builder.move_to(scaled_outline_point(run, glyph, point)?)?
+            }
+            OutlineSegment::LineTo(point) => {
+                builder.line_to(scaled_outline_point(run, glyph, point)?)?
+            }
+            OutlineSegment::QuadTo { control, end } => builder.quad_to(
+                scaled_outline_point(run, glyph, control)?,
+                scaled_outline_point(run, glyph, end)?,
+            )?,
+            OutlineSegment::CubicTo {
+                first_control,
+                second_control,
+                end,
+            } => builder.cubic_to(
+                scaled_outline_point(run, glyph, first_control)?,
+                scaled_outline_point(run, glyph, second_control)?,
+                scaled_outline_point(run, glyph, end)?,
+            )?,
+            OutlineSegment::Close => builder.close()?,
+        }
+    }
+    builder.finish().map(Some)
+}
+
+fn scaled_outline_point(
+    run: &GlyphRun,
+    glyph: PositionedGlyph,
+    point: OutlinePoint,
+) -> Result<Point, SkiaError> {
+    Ok(Point::new(
+        scaled_text_coordinate(point.x(), glyph.x(), run)?,
+        scaled_text_coordinate(point.y(), glyph.y(), run)?,
+    ))
+}
+
+fn scaled_text_coordinate(
+    outline: TextUnit,
+    position: TextUnit,
+    run: &GlyphRun,
+) -> Result<Scalar, SkiaError> {
+    let design = i64::from(outline.bits())
+        .checked_add(i64::from(position.bits()))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let numerator = i128::from(design)
+        .checked_mul(i128::from(run.font_size_bits()))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let denominator = i128::from(64_i32)
+        .checked_mul(i128::from(run.units_per_em()))
+        .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?;
+    let rounded = if numerator >= 0 {
+        numerator
+            .checked_add(denominator / 2)
+            .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?
+            / denominator
+    } else {
+        -((-numerator
+            .checked_add(denominator / 2)
+            .ok_or(SkiaError::new(SkiaErrorCode::NumericOverflow))?)
+            / denominator)
+    };
+    i32::try_from(rounded)
+        .map(Scalar::from_bits)
+        .map_err(|_| SkiaError::new(SkiaErrorCode::NumericOverflow))
 }
 
 fn transformed_contours(path: &Path, transform: Transform) -> Result<Vec<Contour>, SkiaError> {

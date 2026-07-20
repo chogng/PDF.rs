@@ -1,0 +1,10 @@
+[package]
+name = "pdf-rs-skia-pdf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-font = { path = "../font" }
+pdf-rs-skia = { path = "../../skia" }
