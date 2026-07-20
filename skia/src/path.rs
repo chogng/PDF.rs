@@ -9,18 +9,22 @@ pub enum FillRule {
     NonZero,
 }
 
-/// One immutable line-path operation.
+/// One immutable vector-path operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PathVerb {
     /// Starts a new contour.
     MoveTo(Point),
     /// Appends a straight segment to the active contour.
     LineTo(Point),
+    /// Appends a quadratic Bézier segment to the active contour.
+    QuadTo(Point, Point),
+    /// Appends a cubic Bézier segment to the active contour.
+    CubicTo(Point, Point, Point),
     /// Closes the active contour to its starting point.
     Close,
 }
 
-/// Immutable path containing line contours.
+/// Immutable path containing line and Bézier contours.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Path {
     verbs: Vec<PathVerb>,
@@ -33,7 +37,7 @@ impl Path {
     }
 }
 
-/// Bounded, fallible builder for an immutable line path.
+/// Bounded, fallible builder for an immutable vector path.
 #[derive(Debug)]
 pub struct PathBuilder {
     verbs: Vec<PathVerb>,
@@ -67,6 +71,27 @@ impl PathBuilder {
             return Err(SkiaError::new(SkiaErrorCode::InvalidPath));
         }
         self.push(PathVerb::LineTo(point))
+    }
+
+    /// Appends a quadratic Bézier segment to the active contour.
+    pub fn quad_to(&mut self, control: Point, end: Point) -> Result<(), SkiaError> {
+        if !self.has_active_contour {
+            return Err(SkiaError::new(SkiaErrorCode::InvalidPath));
+        }
+        self.push(PathVerb::QuadTo(control, end))
+    }
+
+    /// Appends a cubic Bézier segment to the active contour.
+    pub fn cubic_to(
+        &mut self,
+        first_control: Point,
+        second_control: Point,
+        end: Point,
+    ) -> Result<(), SkiaError> {
+        if !self.has_active_contour {
+            return Err(SkiaError::new(SkiaErrorCode::InvalidPath));
+        }
+        self.push(PathVerb::CubicTo(first_control, second_control, end))
     }
 
     /// Closes the active contour.

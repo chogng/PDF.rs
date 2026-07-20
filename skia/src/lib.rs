@@ -11,10 +11,12 @@
 
 mod canvas;
 mod geometry;
+mod image;
 mod paint;
 mod path;
 
 pub use canvas::{Canvas, ClipRect, SkiaError, SkiaErrorCode, Surface, SurfaceLimits};
 pub use geometry::{Point, Rect, Scalar, Transform};
+pub use image::Image;
 pub use paint::{BlendMode, Color, Paint};
 pub use path::{FillRule, Path, PathBuilder, PathVerb};

@@ -166,6 +166,26 @@ impl Transform {
         )
     }
 
+    /// Creates an axis-aligned scale transform.
+    pub const fn scale(x: Scalar, y: Scalar) -> Self {
+        Self::new(x, Scalar::ZERO, Scalar::ZERO, y, Scalar::ZERO, Scalar::ZERO)
+    }
+
+    /// Returns the affine transform produced by applying `self` and then `next`.
+    ///
+    /// This order matches canvas state concatenation: `current.concat(next)`
+    /// maps a point through `current` before mapping it through `next`.
+    pub fn concat(self, next: Self) -> Result<Self, SkiaError> {
+        Ok(Self::new(
+            multiply_add(next.a, self.a, next.c, self.b)?,
+            multiply_add(next.b, self.a, next.d, self.b)?,
+            multiply_add(next.a, self.c, next.c, self.d)?,
+            multiply_add(next.b, self.c, next.d, self.d)?,
+            checked_affine(next.a, self.e, next.c, self.f, next.e).map(Scalar::from_bits)?,
+            checked_affine(next.b, self.e, next.d, self.f, next.f).map(Scalar::from_bits)?,
+        ))
+    }
+
     /// Maps a point with checked Q16.16 arithmetic.
     pub fn map_point(self, point: Point) -> Result<Point, SkiaError> {
         Ok(Point::new(
@@ -177,6 +197,22 @@ impl Transform {
     pub(crate) const fn is_axis_aligned(self) -> bool {
         self.b.bits() == 0 && self.c.bits() == 0
     }
+}
+
+fn multiply_add(
+    first_coefficient: Scalar,
+    first_value: Scalar,
+    second_coefficient: Scalar,
+    second_value: Scalar,
+) -> Result<Scalar, SkiaError> {
+    checked_affine(
+        first_coefficient,
+        first_value,
+        second_coefficient,
+        second_value,
+        Scalar::ZERO,
+    )
+    .map(Scalar::from_bits)
 }
 
 fn checked_affine(
