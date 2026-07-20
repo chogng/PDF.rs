@@ -5,6 +5,7 @@ members = [
     "skia",
     "skia/core",
     "skia/cpu",
+    "skia/tessellation",
     "skia/gpu",
     "skia/gpu/metal",
     "platform/macos-spawn",

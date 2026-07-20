@@ -425,6 +425,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-rs-skia-tessellation"
+version = "0.1.0"
+dependencies = [
+ "pdf-rs-skia-core",
+]
+
+[[package]]
 name = "pdf-rs-surface"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,9 @@
+[package]
+name = "pdf-rs-skia-tessellation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pdf-rs-skia-core = { path = "../core" }
