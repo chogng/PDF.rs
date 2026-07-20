@@ -49,7 +49,8 @@ impl Scalar {
         self.0
     }
 
-    pub(crate) const fn from_bits(bits: i32) -> Self {
+    /// Creates a scalar from exact Q16.16 storage for backend implementations.
+    pub const fn from_bits(bits: i32) -> Self {
         Self(bits)
     }
 }

@@ -1,56 +1,7 @@
-use std::fmt;
-
-use crate::{
-    BlendMode, Color, FillRule, Image, Paint, Path, PathVerb, Point, Rect, Scalar, Transform,
+use pdf_rs_skia_core::{
+    BlendMode, Color, FillRule, Image, Paint, Path, PathVerb, Point, Rect, Scalar, SkiaError,
+    SkiaErrorCode, Transform,
 };
-
-/// Stable machine-readable canvas failure code.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum SkiaErrorCode {
-    /// A coordinate or intermediate calculation overflowed.
-    NumericOverflow,
-    /// A geometry value is invalid.
-    InvalidGeometry,
-    /// A bitmap's dimensions and pixel buffer disagree.
-    InvalidImage,
-    /// A path operation violates contour ordering.
-    InvalidPath,
-    /// A configured resource ceiling is invalid.
-    InvalidLimits,
-    /// A resource ceiling was reached.
-    ResourceLimit,
-    /// A fallible allocation failed.
-    AllocationFailed,
-    /// A stack restore was requested without a matching save.
-    RestoreUnderflow,
-    /// The requested operation needs a not-yet-implemented transform mode.
-    UnsupportedTransform,
-}
-
-/// Source-redacted graphics error.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct SkiaError {
-    code: SkiaErrorCode,
-}
-
-impl SkiaError {
-    pub(crate) const fn new(code: SkiaErrorCode) -> Self {
-        Self { code }
-    }
-
-    /// Returns the stable failure code.
-    pub const fn code(self) -> SkiaErrorCode {
-        self.code
-    }
-}
-
-impl fmt::Display for SkiaError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?}", self.code)
-    }
-}
-
-impl std::error::Error for SkiaError {}
 
 /// Limits for one CPU-owned RGBA8 surface and Canvas state stack.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

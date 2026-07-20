@@ -1,6 +1,6 @@
 use std::fmt;
 
-use pdf_rs_skia::{
+use pdf_rs_skia_core::{
     BlendMode, Color, FillRule, Image, Paint, PathBuilder, Point, Rect, Scalar, Transform,
 };
 use pdf_rs_skia_gpu::{
@@ -201,7 +201,7 @@ fn software_replay_is_a_pixel_oracle_for_gpu_command_state() {
     assert_eq!(pixel(&surface, 0, 1), [255, 0, 0, 255]);
 }
 
-fn pixel(surface: &pdf_rs_skia::Surface, x: usize, y: usize) -> [u8; 4] {
+fn pixel(surface: &pdf_rs_skia_cpu::Surface, x: usize, y: usize) -> [u8; 4] {
     let offset = (y * surface.width() as usize + x) * 4;
     surface.pixels()[offset..offset + 4].try_into().unwrap()
 }

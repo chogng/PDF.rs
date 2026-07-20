@@ -6,7 +6,8 @@
 
 use std::fmt;
 
-use pdf_rs_skia::{Canvas, ClipRect, SkiaError, Surface, SurfaceLimits, Transform};
+use pdf_rs_skia_core::{Rect, SkiaError, Transform};
+use pdf_rs_skia_cpu::{Canvas, ClipRect, Surface, SurfaceLimits};
 
 use crate::{GpuBackend, GpuCommand, GpuCommandBuffer, GpuSurfaceDescriptor};
 
@@ -103,7 +104,7 @@ impl GpuBackend for SoftwareGpuBackend {
 fn with_state(
     canvas: &mut Canvas<'_>,
     transform: Transform,
-    clip: Option<pdf_rs_skia::Rect>,
+    clip: Option<Rect>,
     draw: impl FnOnce(&mut Canvas<'_>) -> Result<(), SkiaError>,
 ) -> Result<(), SoftwareGpuError> {
     canvas.save().map_err(map_error)?;

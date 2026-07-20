@@ -3,7 +3,10 @@ resolver = "3"
 members = [
     "pdf-rs/*",
     "skia",
+    "skia/core",
+    "skia/cpu",
     "skia/gpu",
+    "skia/gpu/metal",
     "platform/macos-spawn",
     "platform/desktop",
     "platform/browser/worker",

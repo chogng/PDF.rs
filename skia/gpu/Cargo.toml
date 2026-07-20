@@ -6,4 +6,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-pdf-rs-skia = { path = ".." }
+pdf-rs-skia-core = { path = "../core" }
+pdf-rs-skia-cpu = { path = "../cpu", optional = true }
+
+[features]
+software = ["dep:pdf-rs-skia-cpu"]

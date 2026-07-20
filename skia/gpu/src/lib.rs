@@ -10,11 +10,12 @@
 #![deny(missing_docs)]
 
 /// Deterministic CPU replay backend for GPU command conformance tests.
+#[cfg(feature = "software")]
 pub mod software;
 
 use std::fmt;
 
-use pdf_rs_skia::{BlendMode, Color, FillRule, Image, Paint, Path, Point, Rect, Transform};
+use pdf_rs_skia_core::{BlendMode, Color, FillRule, Image, Paint, Path, Point, Rect, Transform};
 
 /// Stable machine-readable GPU command recording failure.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

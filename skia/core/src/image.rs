@@ -43,7 +43,8 @@ impl Image {
         &self.pixels
     }
 
-    pub(crate) fn color_at(&self, x: u32, y: u32) -> Result<Color, SkiaError> {
+    /// Returns one source pixel for backend implementations.
+    pub fn color_at(&self, x: u32, y: u32) -> Result<Color, SkiaError> {
         let offset = u64::from(y)
             .checked_mul(u64::from(self.width))
             .and_then(|value| value.checked_add(u64::from(x)))
